@@ -1,0 +1,13 @@
+[package]
+name = "dhtool"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow = "1"
+upk = { path = "../upk" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+texpresso = "2"
+dhcook = { path = "../dhcook" }
+env_logger = "0.11"
+log = "0.4"

@@ -1,0 +1,28 @@
+[package]
+name = "dishonored"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "dishonored"
+path = "src/main.rs"
+
+[dependencies]
+bevy = { version = "0.19.1", features = ["wav", "debug"] }
+rodio = { version = "0.22", default-features = false, features = ["playback"] }
+indexmap = "2"
+nonmax = "0.5"
+bevy_rapier3d = { version = "0.36", features = ["parallel"] }
+dhcook = { path = "../dhcook" }
+anyhow = "1"
+log = "0.4"
+rand = "0.9"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+rayon = "1"
+# the cooked movies' frames (MJPEG)
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+
+# (local time for the saves' dates)
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Time"] }
