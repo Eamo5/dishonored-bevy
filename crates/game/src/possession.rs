@@ -23,11 +23,13 @@ impl Plugin for PossessionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Possession>()
             .init_resource::<PossessOverrides>()
+            .init_resource::<PossessionRestore>()
             .add_message::<PossessRequest>()
             .add_systems(OnEnter(GameState::InGame), |mut p: ResMut<Possession>, mut o: ResMut<PossessOverrides>| {
                 *p = Possession::default();
                 *o = PossessOverrides::default();
             })
+            .add_systems(Update, restore_possession.after(crate::swarm::restore_swarms).after(crate::save::restore_npcs).before(script_overrides).run_if(in_state(GameState::InGame)))
             .add_systems(Update, (script_overrides, start, ride).chain().run_if(in_state(GameState::InGame)));
     }
 }
@@ -52,7 +54,7 @@ pub struct Possession {
 #[derive(Resource, Default)]
 pub struct PossessOverrides(pub std::collections::HashMap<u32, PossessOverride>);
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PossessOverride {
     pub disallow: bool,
     /// seconds at levels 1 and 2 (0: the power's own)
@@ -114,7 +116,7 @@ pub struct Host {
 }
 
 /// The body Corvo has inside a creature.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct HostBody {
     /// the capsule's half segment and radius
     pub half: f32,
@@ -164,6 +166,69 @@ pub struct PossessRequest {
 /// The NPC Corvo is riding: its AI and movement are suspended.
 #[derive(Component)]
 pub struct Possessed;
+
+#[derive(Component)]
+pub(crate) struct RestoredRatHost;
+
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub(crate) enum SavedHost { Npc(u32), Rat, Fish(u32), Krust(u32) }
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct PossessionSave {
+    host: Option<SavedHost>,
+    left: f32,
+    level: u8,
+    exit_requested: bool,
+    warned: bool,
+    body: Option<HostBody>,
+    exit: Option<Vec3>,
+    overrides: std::collections::HashMap<u32, PossessOverride>,
+}
+
+impl PossessionSave {
+    pub(crate) fn level_return(mut self) -> Self {
+        self.host = None;
+        self
+    }
+    pub(crate) fn capture(pos: &Possession, overrides: &PossessOverrides, hosts: impl IntoIterator<Item = (Entity, SavedHost)>) -> Self {
+        Self { host: pos.host.and_then(|host| hosts.into_iter().find(|(e, _)| *e == host).map(|(_, key)| key)),
+            left: pos.left, level: pos.level, exit_requested: pos.exit_requested, warned: pos.warned, body: pos.body, exit: pos.exit, overrides: overrides.0.clone() }
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct PossessionRestore(pub Option<PossessionSave>);
+
+fn restore_possession(mut commands: Commands, mut pending: ResMut<PossessionRestore>, mut pos: ResMut<Possession>, mut overrides: ResMut<PossessOverrides>,
+    npcs: Query<(Entity, &crate::npc::FromSpawner)>, rats: Query<Entity, With<RestoredRatHost>>, fish: Query<(Entity, &crate::fish::Fish)>, krusts: Query<(Entity, &crate::krust::Krust)>,
+    mut player: Query<(&mut Player, &mut Collider, &mut KinematicCharacterController)>, mut arms: Query<&mut Visibility, With<crate::arms::ArmsRoot>>) {
+    let Some(saved) = pending.0.take() else { return };
+    overrides.0 = saved.overrides;
+    let host = saved.host.and_then(|key| match key {
+        SavedHost::Npc(id) => npcs.iter().find(|(_, s)| s.0 == id).map(|(e, _)| e),
+        SavedHost::Rat => rats.iter().next(),
+        SavedHost::Fish(id) => fish.iter().find(|(_, f)| f.index() == id).map(|(e, _)| e),
+        SavedHost::Krust(id) => krusts.iter().find(|(_, k)| k.index() == id).map(|(e, _)| e),
+    });
+    let Some(host) = host else { return };
+    let Ok((mut p, mut collider, mut controller)) = player.single_mut() else { return };
+    p.crouched = false;
+    p.velocity = Vec3::ZERO;
+    if let Some(body) = saved.body {
+        *collider = Collider::capsule_y(body.half, body.radius);
+    } else {
+        *collider = Collider::capsule_y(STAND_HALF, RADIUS);
+    }
+    fit_controller(&mut controller, saved.body);
+    commands.entity(host).insert(Possessed);
+    if matches!(saved.host, Some(SavedHost::Npc(_))) {
+        commands.entity(host).insert(ColliderDisabled);
+    } else {
+        commands.entity(host).insert(Visibility::Hidden);
+    }
+    for mut v in &mut arms { *v = Visibility::Hidden; }
+    *pos = Possession { host: Some(host), left: saved.left, level: saved.level, exit_requested: saved.exit_requested, warned: saved.warned, body: saved.body, exit: saved.exit };
+}
 
 /// The best host in front of the player: the original weighs distance against how far off
 /// the aim it is (`m_fDistanceWeight` 1, `m_fAngleWeight` 10) within a fraction of the view.
@@ -215,6 +280,73 @@ pub fn find_target<'a>(
     best.map(|b| b.1)
 }
 
+fn white_rat_duration(base: f32, white: bool, bonus: f32) -> f32 {
+    base + if white { bonus.max(0.0) } else { 0.0 }
+}
+
+#[cfg(test)]
+mod charm_tests {
+    use super::*;
+
+    #[test]
+    fn restoring_rat_possession_remaps_host_and_restores_creature_body() {
+        let mut old = World::new();
+        let host = old.spawn_empty().id();
+        let body = HostBody { half: 0.01, radius: 0.09, eye: 0.05, ground: 3.0, water: 3.0, swim: true, fish: false, rooted: false };
+        let pos = Possession { host: Some(host), left: 23.5, level: 1, warned: true, body: Some(body), exit: Some(Vec3::X), ..default() };
+        let mut overrides = PossessOverrides::default();
+        overrides.0.insert(7, PossessOverride { disallow: true, secs: [4.0, 8.0], level: 2, exit: Some(Vec3::Z) });
+        let saved = PossessionSave::capture(&pos, &overrides, [(host, SavedHost::Rat)]);
+        let level_return = PossessionSave::capture(&pos, &overrides, [(host, SavedHost::Rat)]).level_return();
+        assert!(level_return.host.is_none());
+        assert!(level_return.overrides[&7].disallow);
+        let saved = serde_json::from_slice::<PossessionSave>(&serde_json::to_vec(&saved).unwrap()).unwrap();
+        let mut app = App::new();
+        app.init_resource::<Possession>().init_resource::<PossessOverrides>()
+            .insert_resource(PossessionRestore(Some(saved))).add_systems(Update, restore_possession);
+        for _ in 0..5 { app.world_mut().spawn_empty(); }
+        let new_host = app.world_mut().spawn((RestoredRatHost, Visibility::Inherited)).id();
+        assert_ne!(host, new_host);
+        let player = app.world_mut().spawn((Player {
+            velocity: Vec3::Y, yaw: 0.0, pitch: 0.0, crouched: true, sprinting: false, grounded: true, lean: 0.0, noclip: false,
+            eye_height: 0.6, locked: false, air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0, fall_speed: 0.0,
+            power_jump: 0.0, pull: Vec3::ZERO,
+        }, Collider::capsule_y(STAND_HALF, RADIUS), KinematicCharacterController::default())).id();
+        let arms = app.world_mut().spawn((crate::arms::ArmsRoot, Visibility::Inherited)).id();
+        app.update();
+        let restored = app.world().resource::<Possession>();
+        assert_eq!(restored.host, Some(new_host));
+        assert_eq!(restored.left, 23.5);
+        assert!(restored.warned);
+        assert_eq!(restored.exit, Some(Vec3::X));
+        assert_eq!(restored.body.unwrap().radius, 0.09);
+        assert!(app.world().get::<Possessed>(new_host).is_some());
+        assert_eq!(app.world().get::<Visibility>(new_host), Some(&Visibility::Hidden));
+        assert_eq!(app.world().get::<Visibility>(arms), Some(&Visibility::Hidden));
+        assert!(!app.world().get::<Player>(player).unwrap().crouched);
+        assert_eq!(app.world().get::<Collider>(player).unwrap().as_capsule().unwrap().radius(), 0.09);
+        assert!(app.world().resource::<PossessOverrides>().0[&7].disallow);
+        // Human hosts use their stable spawner and restore a standing player
+        // collider while disabling the host's own collision.
+        let npc = app.world_mut().spawn((crate::npc::FromSpawner(42), Visibility::Inherited)).id();
+        let human = Possession { host: Some(host), left: 11.0, level: 2, ..default() };
+        app.world_mut().resource_mut::<PossessionRestore>().0 = Some(PossessionSave::capture(&human, &overrides, [(host, SavedHost::Npc(42))]));
+        app.update();
+        assert_eq!(app.world().resource::<Possession>().host, Some(npc));
+        assert_eq!(app.world().resource::<Possession>().left, 11.0);
+        assert!(app.world().get::<ColliderDisabled>(npc).is_some());
+        assert!(app.world().get::<Possessed>(npc).is_some());
+        assert_eq!(app.world().get::<Collider>(player).unwrap().as_capsule().unwrap().radius(), RADIUS);
+    }
+
+    #[test]
+    fn welcoming_host_only_extends_white_rats() {
+        assert_eq!(super::white_rat_duration(20.0, true, 10.0), 30.0);
+        assert_eq!(super::white_rat_duration(20.0, false, 10.0), 20.0);
+        assert_eq!(super::white_rat_duration(20.0, true, 0.0), 20.0);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn start(
     mut commands: Commands,
@@ -229,6 +361,9 @@ fn start(
     mut sfx: MessageWriter<PostEvent>,
     mut msgs: ResMut<HudMessages>,
     overrides: Res<PossessOverrides>,
+    white_rats: Query<(), With<crate::swarm::WhiteRat>>,
+    stats: Res<crate::gameplay::PlayerStats>,
+    settings: Res<crate::settings::Settings>,
 ) {
     let Some(r) = requests.read().last().copied() else { return };
     if pos.host.is_some() {
@@ -240,6 +375,8 @@ fn start(
         let ty = host.npc_type.and_then(|t| level.as_ref()?.scene.npc_types.get(t as usize)).and_then(|t| t.possess.clone());
         let body = HostBody::of(ty.as_ref(), host);
         let secs = ty.as_ref().map(|t| t.duration[(r.level.clamp(1, 2) - 1) as usize]).filter(|d| *d > 0.0).unwrap_or(data.0.possess_animal[(r.level.clamp(1, 2) - 1) as usize].max(20.0));
+        let secs = white_rat_duration(secs, white_rats.contains(r.host), data.attribute("WhiteRatPossessDurationBonus", settings.difficulty, &stats.powers, &stats.charms));
+        info!("possession: creature duration {secs:.2}s, white rat {}", white_rats.contains(r.host));
         let at = hg.translation();
         pt.translation = if host.rooted {
             at + host.seat

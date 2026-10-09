@@ -1049,28 +1049,36 @@ pub fn spawn_npcs(
     info!("spawned {n} NPCs");
 }
 
-/// Spawn requests from the level scripts (each spawner produces its NPC once).
+/// Spawn requests from the level scripts (a spawner makes one character at a time: another
+/// once its last is down, as the challenges' spawn points do wave after wave). What the scripts
+/// set on the spawner makes it (`SeqAct_ModifyProperty` `m_pPawnTweaks`: the wave's kind).
+#[allow(clippy::too_many_arguments)]
 fn spawn_requested(
     mut commands: Commands,
     mut requests: MessageReader<SpawnRequest>,
     level: Option<Res<LevelInfo>>,
     assets: Option<Res<GameAssets>>,
     mut wl: Option<ResMut<WorldLighting>>,
-    existing: Query<&FromSpawner>,
+    existing: Query<(&FromSpawner, &Npc)>,
     mut spawned: MessageWriter<NpcSpawned>,
-    settings: Res<crate::settings::Settings>,
+    (settings, vm): (Res<crate::settings::Settings>, Option<Res<crate::kismet::Vm>>),
 ) {
     let (Some(level), Some(assets)) = (level, assets) else {
         requests.clear();
         return;
     };
-    let mut done: Vec<u32> = existing.iter().map(|f| f.0).collect();
+    let mut done: Vec<u32> = existing.iter().filter(|(_, n)| !n.is_down()).map(|(f, _)| f.0).collect();
     for r in requests.read() {
         if done.contains(&r.0) {
             continue;
         }
         done.push(r.0);
-        if let Some(entity) = spawn_npc(&mut commands, &assets, &level.scene, wl.as_deref_mut(), r.0 as usize, settings.difficulty) {
+        // (the pawn the scripts gave the spawner: "DisTweaks_NPCPawn'Pkg.Group.Pwn_X'")
+        let tid = vm.as_ref().and_then(|v| v.spawn_props.get(&r.0)).and_then(|p| p.iter().rev().find(|(k, _)| k.eq_ignore_ascii_case("m_pPawnTweaks"))).and_then(|(_, v)| {
+            let path = v.split('\'').nth(1).unwrap_or(v);
+            level.scene.npc_types.iter().position(|t| t.name.eq_ignore_ascii_case(path)).map(|i| i as u32)
+        });
+        if let Some(entity) = spawn_npc_as(&mut commands, &assets, &level.scene, wl.as_deref_mut(), r.0 as usize, settings.difficulty, tid) {
             info!("script spawned {}", level.scene.spawners[r.0 as usize].name);
             spawned.write(NpcSpawned { spawner: r.0, entity });
         }
@@ -1078,9 +1086,14 @@ fn spawn_requested(
 }
 
 /// Spawn the NPC of spawner `si`.
-pub fn spawn_npc(commands: &mut Commands, assets: &GameAssets, scene: &dhcook::format::Scene, mut wl: Option<&mut WorldLighting>, si: usize, difficulty: u8) -> Option<Entity> {
+pub fn spawn_npc(commands: &mut Commands, assets: &GameAssets, scene: &dhcook::format::Scene, wl: Option<&mut WorldLighting>, si: usize, difficulty: u8) -> Option<Entity> {
+    spawn_npc_as(commands, assets, scene, wl, si, difficulty, None)
+}
+
+/// Spawn spawner `si`'s NPC, or one of another type it was given.
+pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook::format::Scene, mut wl: Option<&mut WorldLighting>, si: usize, difficulty: u8, as_type: Option<u32>) -> Option<Entity> {
     let sp = scene.spawners.get(si)?;
-    let tid = sp.npc_type?;
+    let tid = as_type.or(sp.npc_type)?;
     let Some(Some(vis)) = assets.npc_types.get(tid as usize) else { return None };
     let kind = kind_of(&vis.kind);
     let pos = Vec3::from(sp.position) + Vec3::Y * (NPC_CENTER + 0.05);
@@ -1333,6 +1346,24 @@ pub fn spawn_npc(commands: &mut Commands, assets: &GameAssets, scene: &dhcook::f
             }
         }
     }
+    // what it carries on its sockets (a tallboy's whale oil tanks and shields); the breakable
+    // ones can be struck (a tank, burst by a bullet or a bolt)
+    let mut breakable_parts = Vec::new();
+    for (ai, a) in ty.map(|t| t.attachments.as_slice()).unwrap_or(&[]).iter().enumerate() {
+        let (Some((joint, at)), Some(parts)) = (socket(&a.socket, &[], Transform::IDENTITY), assets.props.get(&a.prop)) else { continue };
+        let holder = commands.spawn((at, Visibility::default())).id();
+        commands.entity(joint).add_child(holder);
+        for (mesh, mat) in &parts.parts {
+            let mut ec = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), Transform::IDENTITY));
+            mat.apply(&mut ec);
+            let m = ec.id();
+            commands.entity(holder).add_child(m);
+        }
+        if a.breaks.is_some() || !a.instant.is_empty() {
+            commands.entity(holder).insert((Collider::ball(0.3), Sensor, CollisionGroups::new(GROUP_PROP, Group::ALL), crate::gameplay::Strikeable(holder)));
+            breakable_parts.push((holder, ai, a.health));
+        }
+    }
     // original animations
     let mut npc = npc;
     let clips = vis.anims.as_ref().and_then(|lib| NpcClips::resolve(lib).map(|c| (lib.clone(), c)));
@@ -1372,6 +1403,9 @@ pub fn spawn_npc(commands: &mut Commands, assets: &GameAssets, scene: &dhcook::f
             DespawnOnExit(GameState::InGame),
         ))
         .id();
+    for (holder, index, health) in breakable_parts {
+        commands.entity(holder).insert(crate::npcparts::NpcAttached { npc: e, npc_type: tid, index, health: health.max(1.0) });
+    }
     if let Some((lib, clips)) = clips {
         let lib: std::sync::Arc<CharAnims> = lib;
         let speed = |c: Option<ClipId>, lo: f32, hi: f32, def: f32| c.map(|c| lib.root_speed(c)).filter(|v| *v > 0.1).map(|v| v.clamp(lo, hi)).unwrap_or(def);
@@ -1457,27 +1491,36 @@ fn npc_hits(
         if npc.is_down() {
             continue;
         }
+        // (the scripts may spare someone physics' blows: `DisSeqAct_NPCIgnoreRBDamages`)
+        if h.kind == HitKind::Impact && npc.ignore_rb_damage {
+            continue;
+        }
+        if std::env::var("DH_HIT_LOG").is_ok() {
+            info!("hit {} ({}): {:?} {:.0} at health {:.0}", npc.name, npc.pawn, h.kind, h.damage, npc.health);
+        }
         // those who can fight turn on Corvo when he hurts them (the Tower's guards too)
-        if !npc.enemy && npc.fighter() && !matches!(h.kind, HitKind::ByOthers | HitKind::Rats | HitKind::Assassinate | HitKind::Fatality | HitKind::Choke | HitKind::SleepDart) {
+        if !npc.enemy && npc.fighter() && !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats | HitKind::Assassinate | HitKind::Fatality | HitKind::Choke | HitKind::SleepDart | HitKind::WallOfLight) {
             npc.enemy = true;
             stances.wronged(npc.spawner);
         }
         let pos = t.translation;
         let unaware = npc.alert != Alert::Combat;
         // kept alive by the scripts: no killing blow takes it
-        if npc.min_health > 0.0 && matches!(h.kind, HitKind::Assassinate | HitKind::Fatality | HitKind::Fire) {
+        if npc.min_health > 0.0 && matches!(h.kind, HitKind::Assassinate | HitKind::Fatality | HitKind::Fire | HitKind::WallOfLight) {
             npc.hit_react = 0.35;
             continue;
         }
         // Blood Thirst: melee builds adrenaline (a blow's damage twice over:
         // `m_fAdrenalineMultOnHit`)
         if stats.power("BloodThirsty") > 0 {
-            stats.adrenaline += match h.kind {
+            stats.gain_adrenaline(match h.kind {
                 HitKind::Sword => h.damage * 2.0,
                 HitKind::Assassinate => 60.0,
                 _ => 0.0,
-            };
+            });
         }
+        // (a kill counted by the blow's type and the victim, for the achievements' statistics)
+        let kills0 = stats.kills;
         if matches!(h.kind, HitKind::Sword | HitKind::Assassinate) {
             sfx.write(crate::audio::PostEvent::named("Snd_Imp_Sword_on_Body_cue_ak", Some(pos + Vec3::Y)));
             sfx.write(crate::audio::PostEvent::named("Snd_Phys_Flesh_Blood", Some(pos + Vec3::Y)));
@@ -1514,7 +1557,7 @@ fn npc_hits(
                 fx.write(crate::particles::SpawnEffect { follow: Some(e), secs: 1.6, ..crate::particles::SpawnEffect::at("immolation", Vec3::ZERO) });
                 noise.write(Noise { pos, radius: 14.0, combat: true });
             }
-            HitKind::Assassinate | HitKind::Fatality => {
+            HitKind::Assassinate | HitKind::Fatality | HitKind::WallOfLight => {
                 npc.health = 0.0;
                 npc.set_mode(Mode::Dead);
                 stats.kills += 1;
@@ -1526,7 +1569,7 @@ fn npc_hits(
                 }
                 noise.write(Noise { pos, radius: 5.0, combat: false });
             }
-            HitKind::ByOthers => {
+            HitKind::ByOthers | HitKind::EnemyExplosion => {
                 // another NPC's blow (or the level's rats): it fights back
                 npc.health = (npc.health - h.damage).max(npc.min_health);
                 npc.hurt_t = 0.0;
@@ -1562,9 +1605,24 @@ fn npc_hits(
                 }
             }
         }
+        if stats.kills > kills0 {
+            if h.kind == HitKind::GrenadeThrowback {
+                *stats.counters.entry("ePlayerStat_GrenadeThrowbackKill".into()).or_default() += 1;
+            }
+            // (`<stat>|<damage type>|<pawn tweak>`: the statistics filter on either)
+            let kind = crate::worlddamage::hit_type(h.kind, h.from.distance(pos), &crate::gamedata::Attrs::default());
+            *stats.counters.entry(format!("ePlayerStat_NumKills|{kind}|{}", npc.pawn)).or_default() += 1;
+            if npc.hostile() {
+                *stats.counters.entry(format!("ePlayerStat_HostileKill|{kind}|{}", npc.pawn)).or_default() += 1;
+            }
+            if unaware {
+                *stats.counters.entry("ePlayerStat_UnawareKill".into()).or_default() += 1;
+                *stats.counters.entry(format!("ePlayerStat_UnawareKill|{kind}|{}", npc.pawn)).or_default() += 1;
+            }
+        }
         // Shadow Kill: the unaware dead (every one at level 2) turn to ash
         let shadow = stats.power("ShadowKill");
-        if npc.mode == Mode::Dead && shadow > 0 && (unaware || shadow >= 2) && !matches!(h.kind, HitKind::Rats | HitKind::Fire | HitKind::ByOthers) {
+        if npc.mode == Mode::Dead && shadow > 0 && (unaware || shadow >= 2) && !matches!(h.kind, HitKind::Rats | HitKind::Fire | HitKind::ByOthers | HitKind::EnemyExplosion) {
             commands.entity(e).try_insert(Ashes(0.0));
             sfx.write(crate::audio::PostEvent::named("Snd_Power_Shadow_Kill", Some(pos)));
             fx.write(crate::particles::SpawnEffect { secs: 2.0, ..crate::particles::SpawnEffect::at("shadow_kill", pos) });
@@ -1589,7 +1647,13 @@ fn npc_hits(
     }
 }
 
-fn npc_hearing(mut noises: MessageReader<Noise>, mut npcs: Query<(&mut Npc, &Transform)>, level: Option<Res<LevelInfo>>, player: Query<&Transform, (With<Player>, Without<Npc>)>) {
+fn npc_hearing(
+    mut noises: MessageReader<Noise>,
+    mut npcs: Query<(&mut Npc, &Transform)>,
+    level: Option<Res<LevelInfo>>,
+    player: Query<&Transform, (With<Player>, Without<Npc>)>,
+    rooms: Res<crate::audiorooms::AudioRooms>,
+) {
     let corvo = player.single().ok().map(|t| t.translation);
     for n in noises.read() {
         // (his own noises: where he is)
@@ -1598,8 +1662,12 @@ fn npc_hearing(mut noises: MessageReader<Noise>, mut npcs: Query<(&mut Npc, &Tra
             if npc.is_down() || npc.kind == Kind::Story || matches!(npc.mode, Mode::Choked) {
                 continue;
             }
-            let d = t.translation.distance(n.pos);
-            if d > n.radius || npc.deaf {
+            // (from another room: through the doorways, muffled by each)
+            let (d, through) = match rooms.route(t.translation, n.pos, true) {
+                Some(r) => (r.dist, r.gain),
+                None => (t.translation.distance(n.pos), 1.0),
+            };
+            if d > n.radius * through || npc.deaf {
                 continue;
             }
             if his {
@@ -1935,6 +2003,7 @@ pub(crate) fn npc_brain(
     tc: Res<TimeControl>,
     trail: Res<PlayerTrail>,
     stats: Res<PlayerStats>,
+    attrs: Res<crate::gamedata::Attrs>,
     rapier: ReadRapierContext,
     mut hit_writer: MessageWriter<PlayerHit>,
     (mut noise, mut shots): (MessageWriter<Noise>, MessageWriter<NpcShot>),
@@ -2338,7 +2407,7 @@ pub(crate) fn npc_brain(
                         // its accuracy: `m_MaxAccuracy` close, falling to `m_MinAccuracy` at the
                         // end of its reach
                         let k = ((d - 2.5) / 27.5).clamp(0.0, 1.0);
-                        let chance = npc.arms.accuracy[0] + (npc.arms.accuracy[1] - npc.arms.accuracy[0]) * k;
+                        let chance = (npc.arms.accuracy[0] + (npc.arms.accuracy[1] - npc.arms.accuracy[0]) * k) * if npc.ranged == 1 { 1.0 - attrs.npc_gun_miss } else { 1.0 };
                         if rand::random::<f32>() < chance {
                             hit_writer.write(PlayerHit { npc: e, from: pos, damage: npc.arms.ranged, kick: false, big: false, push: false });
                         }

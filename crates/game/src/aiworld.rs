@@ -281,7 +281,7 @@ fn protect_neutrals(mut hits: MessageReader<NpcHit>, mut npcs: Query<(Entity, &m
     };
     let struck: Vec<(Entity, Vec3)> = hits
         .read()
-        .filter(|h| !matches!(h.kind, HitKind::ByOthers | HitKind::Rats))
+        .filter(|h| !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats))
         .filter_map(|h| npcs.get(h.npc).ok().filter(|(_, n, _)| !n.enemy).map(|(e, _, t)| (e, t.translation)))
         .collect();
     if struck.is_empty() {

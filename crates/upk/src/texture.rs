@@ -95,7 +95,14 @@ impl TfcCache {
         m.entry(name.to_ascii_lowercase())
             .or_insert_with(|| {
                 let p = self.dir.join(format!("{name}.tfc"));
-                p.exists().then_some(p)
+                // (a DLC package's textures may be in the game's caches:
+                // `DLC\PCConsole\DLCnn` -> `CookedPCConsole`)
+                let base = self.dir.join("..").join("..").join("..").join("CookedPCConsole").join(format!("{name}.tfc"));
+                if p.exists() {
+                    Some(p)
+                } else {
+                    base.exists().then_some(base)
+                }
             })
             .clone()
     }

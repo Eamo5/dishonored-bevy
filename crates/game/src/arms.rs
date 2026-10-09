@@ -471,6 +471,7 @@ fn pick(v: &[ClipId], i: usize) -> Option<ClipId> {
 #[allow(clippy::type_complexity)]
 fn animate_arms(
     stats: Res<PlayerStats>,
+    attrs: Res<crate::gamedata::Attrs>,
     powers: Res<Powers>,
     possession: Res<crate::possession::Possession>,
     player: Query<(&Player, &Sword, Option<&Choking>, Option<&crate::npc::Grabbed>)>,
@@ -668,7 +669,7 @@ fn animate_arms(
             };
             st.next_attack += 1;
             if let Some(cl) = cl {
-                anim.restart(cl, false, 1.35, 0.06);
+                anim.restart(cl, false, 1.35 * attrs.melee_rate, 0.06);
                 st.oneshot = true;
             }
         } else if sword.swing == 0.0 {

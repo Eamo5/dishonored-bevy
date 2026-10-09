@@ -23,7 +23,7 @@ impl Plugin for CombatPlugin {
             .add_systems(OnEnter(GameState::InGame), spawn_view_model.after(LevelSpawnSet).after(crate::player::spawn_player))
             .add_systems(
                 Update,
-                (sword_input, assassinating, chokehold, receive_hits, versus, animate_view_model, special_moves).chain().run_if(in_state(GameState::InGame)),
+                (sword_input, assassinating, chokehold, receive_hits, versus, animate_view_model, special_moves).chain().after(crate::gadgets::grenade_focus).run_if(in_state(GameState::InGame)),
             );
     }
 }
@@ -275,6 +275,7 @@ pub const CHOKE_TIME: f32 = 2.2;
 pub struct Choking {
     pub npc: Entity,
     pub t: f32,
+    pub duration: f32,
 }
 
 pub fn spawn_view_model(
@@ -422,7 +423,7 @@ fn sword_input(
     scripted: Option<Res<crate::script::Scripted>>,
     (mut stats, attrs, possession): (ResMut<PlayerStats>, Res<crate::gamedata::Attrs>, Res<crate::possession::Possession>),
     mut msgs: ResMut<HudMessages>,
-    (mut hits, mut noise, mut sfx): (MessageWriter<NpcHit>, MessageWriter<Noise>, MessageWriter<crate::audio::PostEvent>),
+    (mut hits, mut noise, mut sfx, mut rats): (MessageWriter<NpcHit>, MessageWriter<Noise>, MessageWriter<crate::audio::PostEvent>, MessageWriter<crate::swarm::KillRats>),
     mut player: Query<(Entity, &Transform, &mut Player, &mut Sword), Without<Npc>>,
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
     mut npcs: Query<(Entity, &mut Npc, &Transform), Without<Player>>,
@@ -431,6 +432,9 @@ fn sword_input(
     (mut versus, rigs, settings, data): (ResMut<Versus>, Query<&crate::anim::Animator, With<Npc>>, Res<crate::settings::Settings>, Res<crate::gamedata::Data>),
 ) {
     let Ok((pe, pt, mut p, mut sword)) = player.single_mut() else { return };
+    if std::env::var("DH_ATTACK_LOG").is_ok() && mouse.just_pressed(MouseButton::Left) {
+        info!("attack: versus {} busy {} carrying {} dead {} locked {} host {} unarmed {} sheathed {}", versus.npc.is_some(), held.busy(), carry.carrying(), stats.dead, p.locked, possession.host.is_some(), stats.unarmed, stats.sheathed);
+    }
     // locked blades: the presses are the lock's
     if versus.npc.is_some() {
         return;
@@ -584,9 +588,10 @@ fn sword_input(
     }
     stats.adrenaline = stats.adrenaline.min(attrs.adrenaline_max);
     if sword.swing > 0.0 {
-        sword.swing += dt;
+        sword.swing += dt * attrs.melee_rate;
         if !sword.hit_done && sword.swing > 0.13 {
             sword.hit_done = true;
+            rats.write(crate::swarm::KillRats { at: eye + fwd * 1.5, radius: 0.9, by_player: true, source: eye });
             if let Some((e, _)) = nearest_target(eye, fwd, 2.4, 0.55, npcs.iter()) {
                 let (_, mut npc, nt) = npcs.get_mut(e).unwrap();
                 let to_player = (pt.translation - nt.translation).with_y(0.0).normalize_or_zero();
@@ -643,7 +648,7 @@ fn sword_input(
             } else {
                 // the world: what the blade meets (a speaker, a crate the scripts listen to)
                 use crate::worlddamage::{Reach, WorldDamage};
-                world_hits.write(WorldDamage::player(Reach::Ray { from: eye, dir: fwd, len: 2.2 }, attrs.sword_damage, "DishonoredDamageType_FastHit"));
+                world_hits.write(WorldDamage::player(Reach::Ray { from: eye, dir: fwd, len: 2.2 }, attrs.sword_damage, "DisDamageType_FastHit_Right"));
             }
         }
         if sword.swing > 0.48 {
@@ -682,6 +687,7 @@ fn chokehold(
     time: Res<Time>,
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
     stats: Res<PlayerStats>,
+    (attrs, held, carry, possession): (Res<crate::gamedata::Attrs>, Res<crate::props::Held>, Res<crate::carry::Carry>, Res<crate::possession::Possession>),
     mut msgs: ResMut<HudMessages>,
     mut hits: MessageWriter<NpcHit>,
     mut player: Query<(Entity, &Transform, &mut Player, Option<&mut Choking>), Without<Npc>>,
@@ -699,7 +705,7 @@ fn chokehold(
     if let Some(mut ch) = choking {
         ch.t += time.delta_secs();
         // the hold must be kept: let go and the victim breaks free
-        if !keys.pressed(bind.key(crate::bindings::Act::Block)) && ch.t < CHOKE_TIME {
+        if !keys.pressed(bind.key(crate::bindings::Act::Block)) && ch.t < ch.duration {
             if let Ok((_, mut npc, _)) = npcs.get_mut(ch.npc) {
                 npc.mode = Mode::Combat;
                 npc.alert = Alert::Combat;
@@ -720,7 +726,7 @@ fn chokehold(
             nt.translation = nt.translation.lerp(Vec3::new(want.x, nt.translation.y, want.z), 0.3);
             npc.yaw = p.yaw;
             npc.mode = Mode::Choked;
-            if ch.t > CHOKE_TIME {
+            if ch.t >= ch.duration {
                 hits.write(NpcHit { npc: target, damage: 0.0, kind: HitKind::Choke, from: pt.translation });
                 p.locked = false;
                 commands.entity(pe).remove::<Choking>();
@@ -733,7 +739,7 @@ fn chokehold(
     }
     // a nonlethal takedown: hold GBA_Block (Ctrl) behind an unaware enemy (the pickpocketing
     // prompt on Use stands beside it, as the original's do)
-    if !keys.just_pressed(bind.key(crate::bindings::Act::Block)) {
+    if p.locked || held.busy() || carry.carrying() || possession.host.is_some() || !keys.just_pressed(bind.key(crate::bindings::Act::Block)) {
         return;
     }
     let Ok(cg) = cam.single() else { return };
@@ -753,7 +759,8 @@ fn chokehold(
     npc.mode = Mode::Choked;
     npc.attack_t = None;
     p.locked = true;
-    commands.entity(pe).insert(Choking { npc: e, t: 0.0 });
+    // The entry animation still plays; Strong Arms shortens the sustained hold.
+    commands.entity(pe).insert(Choking { npc: e, t: 0.0, duration: CHOKE_TIME - 1.5 + attrs.choke_time });
     msgs.push(format!("Choking {}...", npc.name));
 }
 
@@ -860,6 +867,7 @@ fn receive_hits(
     mut player: Query<(&Transform, &mut Player, &mut Sword)>,
     mut sfx: MessageWriter<crate::audio::PostEvent>,
     (mut versus, mut npcs, cam): (ResMut<Versus>, Query<(&mut Npc, &Transform), Without<Player>>, Query<&GlobalTransform, With<PlayerCamera>>),
+    attrs: Res<crate::gamedata::Attrs>,
 ) {
     use crate::audio::PostEvent;
     let Ok((pt, mut p, mut sword)) = player.single_mut() else { return };
@@ -917,7 +925,16 @@ fn receive_hits(
             }
             continue;
         }
-        stats.health = (stats.health - h.damage).max(0.0);
+        let plague = npcs.get(h.npc).is_ok_and(|(n, _)| n.pawn.to_ascii_lowercase().contains("weeper"));
+        let damage = if plague { (h.damage - attrs.plague_damage_reduction).max(0.0) } else { h.damage };
+        if damage <= 0.0 {
+            continue;
+        }
+        if plague {
+            stats.mana = (stats.mana + attrs.plague_mana).min(stats.max_mana);
+            stats.mana_cap = stats.mana_cap.max(stats.mana);
+        }
+        stats.take_damage(damage);
         stats.damage_flash = 1.0;
         stats.hit_from = Some(h.from);
         sfx.write(PostEvent::named("Snd_Imp_Sword_on_Body_cue_ak", None));

@@ -51,8 +51,11 @@ struct Tower {
     index: usize,
     origin: Vec3,
     arrow: Vec3,
-    /// where its tank sits (the tower is dark without one there), if it had one
+    /// where its tank sits (the tower is dark without one there), if it had one; its
+    /// receptacle, and whether the tank was looked for (the level's props come after it)
     tank: Option<Vec3>,
+    receptacle: Option<Vec3>,
+    tank_found: bool,
     yaw: f32,
     /// the beam's angle from straight down
     pitch: f32,
@@ -117,6 +120,7 @@ fn setup_towers(
         // its tank, if one sits in the receptacle
         let at = socket("Oil_Receptacle").or_else(|| socket("Battery_Socket")).map(|m| m.w_axis.truncate());
         let tank = at.filter(|a| props.iter().any(|(p, t)| level.scene.movables.get(p.index).is_some_and(|m| m.tank.is_some()) && t.translation.distance(*a) < 2.5));
+        let tank_found = props.iter().next().is_some();
         // the beam: the cone's mesh (1.87 m long, 0.54 across, pointing down its -Y)
         let mut cone = None;
         let mut cone_size = Vec3::new(0.54, 1.87, 0.54);
@@ -159,7 +163,7 @@ fn setup_towers(
             }
         }
         commands.spawn((
-            Tower { index: i, origin, arrow, tank, yaw, pitch, sweep: 0.0, state: State::Explore, lost: 0.0, warned: false, cone, cone_size, pivot, yaw0: yaw, head },
+            Tower { index: i, origin, arrow, tank, receptacle: at, tank_found, yaw, pitch, sweep: 0.0, state: State::Explore, lost: 0.0, warned: false, cone, cone_size, pivot, yaw0: yaw, head },
             Transform::from_translation(origin),
             DespawnOnExit(GameState::InGame),
         ));
@@ -192,7 +196,7 @@ fn towers(
     mut cones: Query<(&mut Transform, &mut Visibility), (Without<Player>, Without<crate::props::Prop>, Without<crate::npc::Npc>)>,
     player: Query<(Entity, &Transform), With<Player>>,
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
-    props: Query<(&crate::props::Prop, &Transform), (Without<Player>, Without<Tower>)>,
+    props: Query<(Entity, &crate::props::Prop, &Transform), (Without<Player>, Without<Tower>)>,
     (stats, mut blinding, mut sfx, mut fx): (Res<PlayerStats>, ResMut<Blinding>, MessageWriter<PostEvent>, MessageWriter<SpawnEffect>),
     mut vm: Option<ResMut<crate::kismet::Vm>>,
     (mut devices, npcs): (ResMut<crate::security::Devices>, Query<(&crate::npc::Npc, &Transform), (Without<Player>, Without<crate::props::Prop>, Without<Tower>)>),
@@ -269,7 +273,17 @@ fn towers(
         let p = |k: &str, v: f32| d.params.get(k).copied().unwrap_or(v);
         // dark without its tank, or turned off by the scripts; rewired, it turns on its owners
         let (on, hacked) = devices.state(&d.actor).unwrap_or((true, false));
-        let powered = on && t.tank.is_none_or(|a| props.iter().any(|(pr, pt)| level.scene.movables.get(pr.index).is_some_and(|m| m.tank.is_some()) && pt.translation.distance(a) < 2.5));
+        // (its tank: the one in its receptacle once the props are there)
+        if !t.tank_found && props.iter().next().is_some() {
+            t.tank_found = true;
+            t.tank = t.receptacle.filter(|a| props.iter().any(|(_, pr, pt)| level.scene.movables.get(pr.index).is_some_and(|m| m.tank.is_some()) && pt.translation.distance(*a) < 2.5));
+            if std::env::var("DH_TOWER_LOG").is_ok() {
+                let near = t.receptacle.and_then(|a| props.iter().filter(|(_, pr, _)| level.scene.movables.get(pr.index).is_some_and(|m| m.tank.is_some())).map(|(_, _, pt)| pt.translation.distance(a)).min_by(f32::total_cmp));
+                info!("watch tower {}: receptacle {:.2?}, nearest tank {near:.2?} m", d.actor, t.receptacle);
+            }
+        }
+        // (and its tank has oil left)
+        let powered = on && t.tank.is_none_or(|a| props.iter().any(|(e, pr, pt)| level.scene.movables.get(pr.index).is_some_and(|m| m.tank.is_some()) && pt.translation.distance(a) < 2.5 && devices.charged(e)));
         if let Some((_, mut v)) = t.cone.and_then(|c| cones.get_mut(c).ok()) {
             let want = if powered { Visibility::Inherited } else { Visibility::Hidden };
             if *v != want {
@@ -409,6 +423,11 @@ fn towers(
                 if std::env::var("DH_TOWER_LOG").is_ok() {
                     info!("watch tower {}: fires at {:.1}", d.actor, pt.translation);
                 }
+                // (each shot spends its tank's oil: `m_WatchtowerChargeCost`; the tank in its own
+                // socket, or in the receptacle feeding it)
+                if let Some(a) = t.tank.or_else(|| devices.feed_seat(&d.actor)) {
+                    devices.drains.push((a, 3));
+                }
                 t.state = if left > 1 {
                     State::Attack(p("m_fVolleyDelayBetweenShots", 0.2), left - 1)
                 } else {
@@ -485,7 +504,7 @@ fn fly_arrows(
             Some(at) => {
                 if let Some(b) = level.scene.security.get(a.tower).and_then(|d| d.blast.as_ref()) {
                     let damage = b.damage[settings.difficulty.min(3) as usize];
-                    blasts.write(crate::gadgets::Explosion { at, radius: b.radius, full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]) });
+                    blasts.write(crate::gadgets::Explosion { at, radius: b.radius, full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]), kind: crate::gameplay::HitKind::Explosion });
                 }
                 commands.entity(e).despawn();
             }

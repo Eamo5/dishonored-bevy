@@ -380,7 +380,7 @@ fn player_move(
             let hurt = 13.0 * attrs.fall_damage;
             if v > hurt {
                 let dmg = ((v - hurt) * 9.0).min(150.0);
-                stats.health = (stats.health - dmg).max(0.0);
+                stats.take_damage(dmg);
                 stats.damage_flash = 1.0;
                 if stats.health <= 0.0 {
                     stats.dead = true;
@@ -439,7 +439,8 @@ fn player_move(
     } else {
         attrs.walk
     };
-    let target = wish * speed;
+    let weapon_factor = if host.is_none() && !stats.unarmed && !stats.sheathed { attrs.weapon_speed } else { 1.0 };
+    let target = wish * speed * weapon_factor;
     let accel = if p.grounded { 14.0 } else { 3.0 };
     let horiz = Vec3::new(p.velocity.x, 0.0, p.velocity.z);
     let new_h = horiz + (target - horiz) * (accel * dt).min(1.0);
@@ -545,13 +546,16 @@ fn mantle(
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
     rapier: ReadRapierContext,
     stats: Res<PlayerStats>,
+    attrs: Res<crate::gamedata::Attrs>,
     mut q: Query<(Entity, &mut Player, &mut Transform), Without<PlayerCamera>>,
     mut spot: ResMut<MantleSpot>,
 ) {
     spot.0 = false;
     let Ok((e, mut p, mut t)) = q.single_mut() else { return };
     if let Some((from, to, k)) = p.mantle {
-        let nk = (k + time.delta_secs() / 0.42).min(1.0);
+        // Acrobat modifies MantleAnimRate; the head's additive mantle clip uses
+        // this same progress, keeping its motion in step with the faster climb.
+        let nk = (k + time.delta_secs() * attrs.mantle_rate.max(0.01) / 0.42).min(1.0);
         // up first, then forward
         let up = (nk / 0.6).min(1.0);
         let fwd = ((nk - 0.45) / 0.55).clamp(0.0, 1.0);

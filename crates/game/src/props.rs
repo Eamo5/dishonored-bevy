@@ -62,6 +62,8 @@ pub struct Prop {
     offset: Vec3,
     /// still settling where the level put it
     settling: bool,
+    /// hanging by joints (`Movable::joints`) the scripts haven't destroyed
+    hung: bool,
 }
 
 impl Prop {
@@ -88,9 +90,41 @@ pub struct PropKnocks(pub Vec<(u32, f32)>);
 
 /// `SeqAct_SetPhysics` on props: falling (`PHYS_RigidBody`), held still (`PHYS_None`), or
 /// moved by a matinee (`PHYS_Interpolating`).
-fn script_physics(mut commands: Commands, vm: Option<ResMut<crate::kismet::Vm>>, level: Option<Res<LevelInfo>>, props: Query<&Prop>) {
+fn script_physics(mut commands: Commands, vm: Option<ResMut<crate::kismet::Vm>>, level: Option<Res<LevelInfo>>, mut props: Query<&mut Prop>, mut bodies: Query<(&Transform, &mut Velocity), Without<Prop>>) {
     let (Some(mut vm), Some(level)) = (vm, level) else { return };
     let g = vm.g.clone();
+    // the scripts' physics bursts (`RB_RadialImpulseActor`): the loose things in reach are
+    // thrown outward (an impulse over their weight, or a speed outright), less at the edge
+    for (at, [radius, strength, vel_change, linear]) in std::mem::take(&mut vm.impulses) {
+        for p in &props {
+            let Some(m) = level.scene.movables.get(p.index).filter(|m| !m.fixed) else { continue };
+            let Some(b) = p.body else { continue };
+            let Ok((bt, mut v)) = bodies.get_mut(b) else { continue };
+            let to = bt.translation - at;
+            let d = to.length();
+            if d > radius {
+                continue;
+            }
+            let fade = if linear > 0.0 { 1.0 - d / radius.max(0.01) } else { 1.0 };
+            let dv = strength * 0.01 * fade / if vel_change > 0.0 { 1.0 } else { MASS[m.weight.min(3) as usize] };
+            v.linear += to.normalize_or(Vec3::Y) * dv;
+            commands.entity(b).try_insert((RigidBody::Dynamic, Sleeping { sleeping: false, ..default() }));
+        }
+    }
+    // the joints the scripts destroyed: what hung by them falls
+    if !vm.joints_broken.is_empty() {
+        for mut p in &mut props {
+            let Some(m) = level.scene.movables.get(p.index) else { continue };
+            if !p.hung || !m.joints.iter().all(|j| vm.joints_broken.contains(j)) {
+                continue;
+            }
+            p.hung = false;
+            p.settling = false;
+            if let Some(b) = p.body {
+                commands.entity(b).try_insert((RigidBody::Dynamic, Sleeping { sleeping: false, ..default() }));
+            }
+        }
+    }
     // velocities the scripts give things (`SeqAct_SetVelocity`)
     for (a, vel) in std::mem::take(&mut vm.velocities) {
         let Some(ka) = g.actors.get(a as usize) else { continue };
@@ -144,7 +178,7 @@ fn prop_events(mut taken: ResMut<PropsTaken>, mut blasts: ResMut<TankBlasts>, mu
 fn burst_tanks(mut q: ResMut<TankBlasts>, settings: Res<crate::settings::Settings>, mut blasts: MessageWriter<crate::gadgets::Explosion>) {
     for (at, b) in q.0.drain(..) {
         let damage = b.damage[settings.difficulty.min(3) as usize];
-        blasts.write(crate::gadgets::Explosion { at, radius: b.radius.max(1.0), full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]) });
+        blasts.write(crate::gadgets::Explosion { at, radius: b.radius.max(1.0), full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]), kind: HitKind::Explosion });
     }
 }
 
@@ -207,7 +241,7 @@ fn setup_props(
     for (i, m) in scene.movables.iter().enumerate() {
         let Some(&(e, t, col)) = by_index.get(&m.instance) else { continue };
         // (settling at the start makes no sound)
-        let mut prop = Prop { index: i, health: m.health.max(1.0), body: None, last_vel: Vec3::ZERO, thrown: false, quiet: 1.0, released: 0.0, offset: Vec3::ZERO, settling: true };
+        let mut prop = Prop { index: i, health: m.health.max(1.0), body: None, last_vel: Vec3::ZERO, thrown: false, quiet: 1.0, released: 0.0, offset: Vec3::ZERO, settling: true, hung: !m.joints.is_empty() };
         if m.fixed {
             // a breakable in the way: weapons wear it down (its collider goes with it)
             // (the scripts may remove it as the level starts: `try_`)
@@ -235,8 +269,9 @@ fn setup_props(
                 .try_remove::<crate::footsteps::ColliderSurfaces>()
                 .try_insert((
                     at,
-                    // (a whale oil tank stays seated in its receptacle until taken)
-                    if m.tank.is_some() { RigidBody::Fixed } else { RigidBody::Dynamic },
+                    // (a whale oil tank stays seated in its receptacle until taken, a PA speaker
+                    // hangs by its joint)
+                    if m.tank.is_some() || prop.hung { RigidBody::Fixed } else { RigidBody::Dynamic },
                     shape,
                     ColliderMassProperties::Mass(MASS[m.weight.min(3) as usize]),
                     CollisionGroups::new(GROUP_PROP, with),
@@ -260,7 +295,7 @@ fn setup_props(
 
 /// Looking at a light prop: [Use] picks it up; held: [Use] drops it, [Attack] throws it.
 #[allow(clippy::too_many_arguments)]
-fn prop_focus(
+pub(crate) fn prop_focus(
     mut commands: Commands,
     mut taken: ResMut<PropsTaken>,
     (keys, mouse, bind): (Res<ButtonInput<KeyCode>>, Res<ButtonInput<MouseButton>>, Res<Bindings>),
@@ -269,6 +304,7 @@ fn prop_focus(
     mut focus: ResMut<InteractFocus>,
     mut held: ResMut<Held>,
     mut props: Query<&mut Prop>,
+    grenades: Query<(), With<crate::gadgets::Grenade>>,
     strikeables: Query<&Strikeable>,
     mut bodies: Query<(&mut Velocity, &mut GravityScale, &mut CollisionGroups)>,
     player: Query<(Entity, &Player)>,
@@ -279,6 +315,11 @@ fn prop_focus(
     let Some(level) = level else { return };
     let (Ok((pe, p)), Ok(c)) = (player.single(), cam.single()) else { return };
     let use_key = bind.key(Act::Use);
+    // Live grenades share the carrying context, but their fuse and release are
+    // handled by `gadgets`. Do not clear that hold or take a prop behind one.
+    if held.0.or(focus.1).is_some_and(|e| grenades.contains(e)) {
+        return;
+    }
     // in hand
     if let Some(e) = held.0 {
         let Ok(mut prop) = props.get_mut(e) else {
@@ -402,7 +443,7 @@ fn prop_impacts(
     npcs: Query<(Entity, &Transform), (With<Npc>, Without<Prop>)>,
     (mut sfx, mut noise, mut fx, mut stagger): (MessageWriter<PostEvent>, MessageWriter<Noise>, MessageWriter<SpawnEffect>, MessageWriter<NpcStagger>),
     mut tank_blasts: ResMut<TankBlasts>,
-    (mut knocks, mut world_hits): (ResMut<PropKnocks>, MessageWriter<crate::worlddamage::WorldDamage>),
+    (mut knocks, mut world_hits, mut npc_hits): (ResMut<PropKnocks>, MessageWriter<crate::worlddamage::WorldDamage>, MessageWriter<crate::gameplay::NpcHit>),
 ) {
     let (Some(level), Some(assets)) = (level, assets) else { return };
     let dt = time.delta_secs();
@@ -461,15 +502,20 @@ fn prop_impacts(
         if !prop.settling {
             knocks.0.push((m.instance, speed));
         }
-        // a thrown thing's blow on what it struck (`DisDamageType_Impact`: a PA speaker's
-        // scripts count three)
-        if prop.thrown && speed > 3.0 {
+        // the blow of a knock (`DisDamageType_Impact`): on what a thrown thing struck (a PA
+        // speaker's scripts count three), and on itself (a fallen speaker breaks)
+        if speed > 3.0 {
             use crate::worlddamage::{Reach, WorldDamage};
-            world_hits.write(WorldDamage::player(Reach::Near { at, radius: 0.5, full: 0.5 }, speed * 10.0, "DisDamageType_Impact"));
+            if prop.thrown {
+                world_hits.write(WorldDamage::player(Reach::Near { at, radius: 0.5, full: 0.5 }, speed * 10.0, "DisDamageType_Impact"));
+            } else if let Some(b) = prop.body {
+                world_hits.write(WorldDamage { reach: Reach::Hit { collider: b, at }, damage: speed * 10.0, kind: "DisDamageType_Impact", by_player: false });
+            }
         }
-        // a thrown prop that strikes someone staggers them
+        // a thrown prop that strikes someone staggers and hurts them (`m_Damage`)
         if let (Some((ne, _)), true) = (body_hit, prop.thrown) {
             stagger.write(NpcStagger { npc: ne, secs: 0.6, parried: false });
+            npc_hits.write(crate::gameplay::NpcHit { npc: ne, damage: m.damage, kind: crate::gameplay::HitKind::Impact, from: at });
             noise.write(Noise { pos: at, radius: 6.0, combat: true });
         }
         // (settling as the level starts breaks nothing)
@@ -565,6 +611,7 @@ fn prop_hits(
     mut bodies: Query<&mut Velocity>,
     (mut sfx, mut noise, mut fx): (MessageWriter<PostEvent>, MessageWriter<Noise>, MessageWriter<SpawnEffect>),
     mut tank_blasts: ResMut<TankBlasts>,
+    vm: Option<ResMut<crate::kismet::Vm>>,
 ) {
     let (Some(level), Some(assets)) = (level, assets) else {
         struck.clear();
@@ -575,12 +622,24 @@ fn prop_hits(
         .read()
         .map(|s| {
             let dmg = match s.kind {
-                HitKind::Explosion | HitKind::Fire => 999.0,
+                HitKind::Explosion | HitKind::EnemyExplosion | HitKind::GrenadeThrowback | HitKind::StickyGrenade | HitKind::ExplosiveBullet | HitKind::Fire => 999.0,
                 _ => s.damage,
             };
             (s.target, dmg, s.at)
         })
         .collect();
+    // the scripts' damage (`SeqAct_ModifyHealth`: a fallen PA speaker's), no knock with it
+    let mut scripted: Vec<Entity> = Vec::new();
+    if let Some(mut vm) = vm {
+        for (insts, dmg) in std::mem::take(&mut vm.prop_damage) {
+            for (e, p, t) in &props {
+                if level.scene.movables.get(p.index).is_some_and(|m| insts.contains(&m.instance)) {
+                    hits.push((e, dmg, t.translation));
+                    scripted.push(e);
+                }
+            }
+        }
+    }
     for b in blasts.read() {
         for (e, _, t) in &props {
             let d = t.translation.distance(b.at);
@@ -593,7 +652,7 @@ fn prop_hits(
         let Ok((_, mut prop, t)) = props.get_mut(e) else { continue };
         let Some(m) = level.scene.movables.get(prop.index) else { continue };
         // knocked
-        if let Some(Ok(mut v)) = prop.body.map(|b| bodies.get_mut(b)) {
+        if let Some(Ok(mut v)) = prop.body.filter(|_| !scripted.contains(&e)).map(|b| bodies.get_mut(b)) {
             let push = (t.translation - from).normalize_or(Vec3::Y);
             v.linear += (push + Vec3::Y * 0.3) * (dmg * 0.4).clamp(1.0, 8.0) / MASS[m.weight.min(3) as usize].sqrt();
         }

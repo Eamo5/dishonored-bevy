@@ -62,6 +62,7 @@ pub struct Fish {
 }
 
 impl Fish {
+    pub fn index(&self) -> u32 { self.index }
     pub fn describe(&self) -> String {
         format!("#{} {:?} speed {:.1}", self.index, self.doing, self.vel.length())
     }

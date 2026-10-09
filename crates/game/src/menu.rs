@@ -51,6 +51,11 @@ enum Page {
     Controls,
     Load,
     Save,
+    /// the downloadable content (`t_DownloadableContent_Caps`), the Dunwall City Trials'
+    /// challenges, one challenge's modes
+    Dlc,
+    Challenges,
+    Challenge(usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -113,6 +118,8 @@ enum Action {
     Resume,
     QuitToMenu,
     QuitGame,
+    /// a challenge (`DisDLC05GameInfo.m_Challenges`), in expert mode or not
+    StartChallenge(usize, bool),
 }
 
 #[derive(Resource)]
@@ -357,12 +364,18 @@ struct MenuRoot;
 #[derive(Component)]
 pub struct MenuItem(pub usize);
 
-fn enter_level(level: Option<Res<LevelInfo>>, mut menu: ResMut<Menu>, vm: Option<ResMut<Vm>>) {
+fn enter_level(level: Option<Res<LevelInfo>>, mut menu: ResMut<Menu>, vm: Option<ResMut<Vm>>, mut launch: ResMut<crate::challenge::ChallengeLaunch>) {
     let main = level.as_ref().is_some_and(|l| l.scene.name.eq_ignore_ascii_case(MENU_MAP));
     *menu = Menu::default();
     if main {
         menu.open = Some(MenuKind::Main);
         menu.page = Page::Title;
+        // (back from a challenge's results to the challenges)
+        if std::mem::take(&mut launch.back_to_challenges) {
+            menu.page = Page::Challenges;
+            menu.stack = vec![Page::Main, Page::Dlc];
+            menu.started = true;
+        }
         if let Some(mut vm) = vm {
             vm.remote_event("StartCam_Play");
         }
@@ -380,10 +393,11 @@ fn open_pause(
     store: Res<crate::store::Store>,
     (time, data, mut dead_t): (Res<Time<Real>>, Res<crate::gamedata::Data>, Local<f32>),
     note: Res<crate::notescreen::NoteScreen>,
+    challenge: Res<crate::challenge::Challenge>,
 ) {
     // dead (or the scripts ended it): the game over menu, once the death has faded
-    // (`m_fDeathFadeDelay`)
-    if stats.dead || stats.game_over.is_some() {
+    // (`m_fDeathFadeDelay`); in a challenge its scripts decide (`challenge`)
+    if (stats.dead || stats.game_over.is_some()) && !challenge.active() {
         *dead_t += time.delta_secs();
         let delay = if stats.game_over.is_some() { 0.0 } else { data.pawn("m_fDeathFadeDelay", 5.0) };
         if *dead_t >= delay && menu.open.is_none() {
@@ -528,7 +542,7 @@ fn adjust(s: &mut Settings, o: Opt, dir: f32) {
     }
 }
 
-fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::gamedata::Data) -> Vec<(String, Action)> {
+fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::gamedata::Data, profile: &crate::challenge::ChallengeProfile) -> Vec<(String, Action)> {
     let has_saves = slots.any();
     match (menu.open, menu.page) {
         (_, Page::Title) => vec![("Press any key".into(), Action::Page(Page::Main))],
@@ -543,9 +557,35 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
             if has_saves {
                 v.push(("Load".into(), Action::Page(Page::Load)));
             }
+            // (`t_DownloadableContent_Caps`: the installed DLC)
+            if !data.0.challenges.is_empty() {
+                v.push(("Downloadable Content".into(), Action::Page(Page::Dlc)));
+            }
             v.push(("Options".into(), Action::Page(Page::Options)));
             v.push(("Quit Game".into(), Action::QuitGame));
             v
+        }
+        (_, Page::Dlc) => vec![(data.text("DisDLC05MoviePlayerChallengeMenu_Texts", "t_DLC05_Name"), Action::Page(Page::Challenges)), ("Back".into(), Action::Back)],
+        (_, Page::Challenges) => {
+            // each challenge with its stars (its medals reached by the best score)
+            let mut v: Vec<(String, Action)> = data
+                .0
+                .challenges
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let best = profile.best.get(&c.id).copied().unwrap_or(0);
+                    let stars = c.medals.iter().filter(|m| **m > 0 && best >= **m as i64).count();
+                    (format!("{}   {}", c.name, "*".repeat(stars)), Action::Page(Page::Challenge(i)))
+                })
+                .collect();
+            v.push(("Back".into(), Action::Back));
+            v
+        }
+        (_, Page::Challenge(i)) => {
+            let base = "DisDLC05MoviePlayerChallengeMenu_Texts";
+            let start = data.text(base, "t_StartChallenge");
+            vec![(start.clone(), Action::StartChallenge(i, false)), (format!("{}{start}", data.text(base, "t_ExpertModeTitle")), Action::StartChallenge(i, true)), ("Back".into(), Action::Back)]
         }
         // (`SetGameOverMenu`: `t_ContinueFromLastSave`, `t_LoadASpecificSave`,
         // `t_BackToMainMenu`, `t_BackToWindows`)
@@ -695,7 +735,7 @@ fn menu_input(
     (mut save, mut load, slots): (MessageWriter<SaveRequest>, MessageWriter<LoadRequest>, Res<SaveSlots>),
     hovered: Query<(&Interaction, &MenuItem), Changed<Interaction>>,
     (vm, mut campaign, scripted, mut intro): (Option<ResMut<Vm>>, ResMut<crate::gameplay::Campaign>, Option<Res<crate::script::Scripted>>, ResMut<crate::movie::IntroPending>),
-    data: Res<crate::gamedata::Data>,
+    (data, mut launch): (Res<crate::gamedata::Data>, ResMut<crate::challenge::ChallengeLaunch>),
 ) {
     let Some(kind) = menu.open else { return };
     // binding a key: the next one pressed (Escape cancels)
@@ -939,6 +979,15 @@ fn menu_input(
         Action::QuitGame => {
             exit.write(AppExit::Success);
         }
+        Action::StartChallenge(i, expert) => {
+            if let Some(c) = data.0.challenges.get(i) {
+                config.map = c.map.clone();
+                config.spawn_index = None;
+                launch.expert = expert;
+                menu.open = None;
+                next.set(GameState::Loading);
+            }
+        }
     }
 }
 
@@ -952,7 +1001,7 @@ fn menu_build(
     mut ui: ResMut<UiImages>,
     mut images: ResMut<Assets<Image>>,
     roots: Query<Entity, With<MenuRoot>>,
-    data: Res<crate::gamedata::Data>,
+    (data, profile): (Res<crate::gamedata::Data>, Res<crate::challenge::ChallengeProfile>),
 ) {
     if !menu.dirty && !(settings.is_changed() && menu.page == Page::Options) {
         return;
@@ -962,7 +1011,7 @@ fn menu_build(
         commands.entity(e).despawn();
     }
     let Some(kind) = menu.open else { return };
-    menu.items = items(&menu, &settings, &slots, &data);
+    menu.items = items(&menu, &settings, &slots, &data, &profile);
     if menu.sel >= menu.items.len() {
         menu.sel = 0;
     }

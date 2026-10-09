@@ -299,7 +299,8 @@ fn breathe(
             let step = attrs.drown_step.max(0.1);
             while swim.drown_t >= step {
                 swim.drown_t -= step;
-                stats.health = (stats.health - attrs.drown_damage * 0.1 * stats.max_health).max(0.0);
+                let damage = attrs.drown_damage * 0.1 * stats.max_health;
+                stats.take_damage(damage);
                 stats.damage_flash = 1.0;
                 if stats.health <= 0.0 {
                     stats.dead = true;

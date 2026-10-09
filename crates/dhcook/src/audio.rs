@@ -180,12 +180,63 @@ pub struct PlayDef {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct AudioIndex {
+    /// the rooms' reverbs (`Init.bnk`'s effect share sets, by the environment's id: the
+    /// `DishonoredAudioVolume`'s `m_Environment`)
+    #[serde(default)]
+    pub environments: HashMap<u32, Reverb>,
     pub events: Vec<EventDef>,
     /// media id -> cooked file (relative to the cache)
     pub media: HashMap<u32, String>,
     /// media id -> length in seconds
     #[serde(default)]
     pub durations: HashMap<u32, f32>,
+}
+
+/// A room's reverb (a Wwise RoomVerb or Matrix Reverb effect): its decay (seconds to fall 60
+/// dB), how much faster the highs die (`HFDamping` / `HFRatio`), its diffusion (0..100), the
+/// level of its tail and early reflections (dB).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq)]
+pub struct Reverb {
+    pub decay: f32,
+    pub hf: f32,
+    pub diffusion: f32,
+    pub wet_db: f32,
+    pub er_db: f32,
+}
+
+/// The effect share sets of a bank (`HIRC` type 18) that are reverbs, by id.
+pub fn environments(d: &[u8]) -> HashMap<u32, Reverb> {
+    let mut out = HashMap::new();
+    let mut p = 0;
+    while p + 8 <= d.len() {
+        let (tag, n) = (&d[p..p + 4], u32_at(d, p + 4).unwrap_or(0) as usize);
+        if tag == b"HIRC" {
+            let mut q = p + 12;
+            let count = u32_at(d, p + 8).unwrap_or(0);
+            for _ in 0..count {
+                let (Some(&ty), Some(size)) = (d.get(q), u32_at(d, q + 1)) else { break };
+                let (id, s) = (u32_at(d, q + 5).unwrap_or(0), q + 9);
+                let f = |i: usize| u32_at(d, s + 8 + i * 4).map(f32::from_bits).unwrap_or(0.0);
+                if ty == 18 {
+                    match u32_at(d, s) {
+                        // RoomVerb: decay, HF damping, diffusion, stereo width, three filters
+                        // (gain, freq, Q), front, rear, centre, LFE, dry, ER, reverb levels
+                        Some(0x0076_0003) => {
+                            out.insert(id, Reverb { decay: f(0), hf: f(1), diffusion: f(2), er_db: f(18), wet_db: f(19) });
+                        }
+                        // Matrix Reverb: reverb time, HF ratio, delays (u32), dry, wet levels
+                        Some(0x0073_0003) => {
+                            out.insert(id, Reverb { decay: f(0), hf: f(1), diffusion: 100.0, er_db: -96.0, wet_db: f(4) });
+                        }
+                        _ => {}
+                    }
+                }
+                q += 5 + size as usize;
+            }
+        }
+        p += 8 + n;
+    }
+    out
 }
 
 /// A sound switch container: group type (u32), group, default switch, continuous
@@ -433,15 +484,22 @@ fn base_start(kind: u8, d: &[u8]) -> usize {
 impl Wwise {
     /// Index every Wwise package of the cooked directory.
     pub fn load(cooked: &Path) -> Result<Wwise> {
-        let mut files: Vec<PathBuf> = std::fs::read_dir(cooked)?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| {
+        let bank_files = |dir: &Path| -> Vec<PathBuf> {
+            let mut f: Vec<PathBuf> = std::fs::read_dir(dir)
+                .map(|l| l.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+                .unwrap_or_default();
+            f.retain(|p| {
                 let n = p.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
                 n.ends_with(".pck") || (n.starts_with("bk_") && n.ends_with(".int"))
-            })
-            .collect();
-        files.sort();
+            });
+            f.sort();
+            f
+        };
+        // the game's banks, then the installed DLC's that are played (Dunwall City Trials)
+        let mut files = bank_files(cooked);
+        for dir in crate::resolver::dlc_dirs(cooked).into_iter().filter(|d| d.file_name().is_some_and(|n| AUDIO_DLC.iter().any(|a| n.eq_ignore_ascii_case(a)))) {
+            files.extend(bank_files(&dir));
+        }
         let mut w = Wwise { files: Vec::new(), media: HashMap::new(), nodes: HashMap::new(), banks: HashMap::new() };
         for path in files {
             let fi = w.files.len();
@@ -888,6 +946,9 @@ pub fn convert_wem(wem: &[u8]) -> Result<(Vec<u8>, &'static str)> {
 }
 
 /// Cook every event and its media into `root/audio`.
+/// The DLC whose banks the audio cook takes (those whose maps are cooked).
+const AUDIO_DLC: &[&str] = &["DLC05"];
+
 pub fn cook(cooked: &Path, root: &Path, progress: &(dyn Fn(f32, &str) + Sync)) -> Result<AudioIndex> {
     let w = Wwise::load(cooked)?;
     let dir = root.join("audio");
@@ -954,7 +1015,8 @@ pub fn cook(cooked: &Path, root: &Path, progress: &(dyn Fn(f32, &str) + Sync)) -
             None => failed += 1,
         }
     }
-    log::info!("audio: {} events, {} media files ({failed} failed)", index.events.len(), index.media.len());
+    index.environments = std::fs::read(cooked.join("Init.bnk")).map(|d| environments(&d)).unwrap_or_default();
+    log::info!("audio: {} events, {} media files ({failed} failed), {} room reverbs", index.events.len(), index.media.len(), index.environments.len());
     std::fs::write(dir.join("index.json"), serde_json::to_vec(&index)?)?;
     envelopes(root, &index)?;
     Ok(index)

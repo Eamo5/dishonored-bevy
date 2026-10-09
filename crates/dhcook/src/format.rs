@@ -44,6 +44,8 @@ pub struct Scene {
     /// The swarm rat character (index into `npc_types`).
     #[serde(default)]
     pub rat_type: Option<u32>,
+    #[serde(default)]
+    pub white_rat_material: Option<u32>,
     /// Security systems: walls of light, arc pylons, watchtowers, alarm bells and the whale
     /// oil receptacles and tanks that power them.
     #[serde(default)]
@@ -116,6 +118,19 @@ pub struct Scene {
     /// points
     #[serde(default)]
     pub ai_markers: AiMarkers,
+    /// the rooms and doorways of the sound propagation (`DishonoredAudioVolume`,
+    /// `DishonoredAudioPortal`)
+    #[serde(default)]
+    pub reflections: Vec<Reflection>,
+    #[serde(default)]
+    pub lens_flares: Vec<LensFlareDef>,
+    /// the Dunwall City Trials' scoring rule sets the level scripts use
+    #[serde(default)]
+    pub challenge_rules: Vec<RulesetDef>,
+    #[serde(default)]
+    pub audio_cells: Vec<AudioCell>,
+    #[serde(default)]
+    pub audio_portals: Vec<AudioPortal>,
     /// places characters stop at on their rounds (`DisNPCDistractor`)
     #[serde(default)]
     pub distractors: Vec<Distractor>,
@@ -637,6 +652,11 @@ pub struct KActor {
     /// a tripwire or a launcher (`scene.traps`)
     #[serde(default)]
     pub trap: Option<u32>,
+    /// a physics burst (`RB_RadialImpulseActor`'s component): its reach (m), strength (UE
+    /// units), whether it sets speeds outright (`bVelChange`) and fades with distance
+    /// (`ImpulseFalloff` linear, else constant)
+    #[serde(default)]
+    pub impulse: Option<[f32; 4]>,
     /// an animated usable object (`scene.usables`)
     #[serde(default)]
     pub usable: Option<u32>,
@@ -739,6 +759,9 @@ pub struct NpcType {
     /// what it can take and deal (its attributes and arms)
     #[serde(default)]
     pub stats: Option<NpcStats>,
+    /// what it carries on its sockets (a tallboy's tanks)
+    #[serde(default)]
+    pub attachments: Vec<NpcAttachment>,
 }
 
 /// A character's numbers and arms. Its attributes are those of its pawn's attribute tweak
@@ -838,6 +861,20 @@ pub struct GrenadeThrow {
     /// someone (`m_fDetonationDelay`, `m_fMinDetonationDelayAfterHit`)
     pub fuse: [f32; 2],
     pub blast: TrapBlast,
+}
+
+/// A part a character carries on a socket of its skeleton (its pawn's `m_pAttachmentsTweaks`: a
+/// tallboy's whale oil tanks and shields): its look (`scene.props`, by name); a breakable one's
+/// health (`m_Health`), the blows that break it outright (`m_pInstantBreakDamageTypes`) and those
+/// it shrugs off (`m_pImmuneToDamageTypes`), and what happens when it breaks (a tank's blast).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct NpcAttachment {
+    pub socket: String,
+    pub prop: String,
+    pub health: f32,
+    pub instant: Vec<String>,
+    pub immune: Vec<String>,
+    pub breaks: Option<BreakStep>,
 }
 
 /// One of a character's weapons (a `DisTweaks_Wep*`): its item attribute tweak's damage by
@@ -1102,6 +1139,10 @@ pub struct GoreLod {
 pub struct TextureRef {
     pub name: String,
     pub file: String,
+    /// a render target (`TextureRenderTarget2D`: a scene capture's): its size, or the share of
+    /// the screen it is (`m_ResolutionType`: `TRT_HALFSIZE` 0.5)
+    #[serde(default)]
+    pub render_target: Option<[f32; 3]>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1159,6 +1200,10 @@ pub struct MaterialDef {
 /// events of its tweaks.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct DoorSounds {
+    /// how much it muffles the sound through its doorway when shut, for Corvo and for the AI
+    /// (its tweak's `m_fPlayerSoundOcclusion`, `m_fAISoundOcclusion`)
+    #[serde(default)]
+    pub occlusion: [f32; 2],
     pub open: Vec<(f32, String)>,
     pub close: Vec<(f32, String)>,
     pub locked: String,
@@ -1309,6 +1354,53 @@ pub struct Instance {
     /// lights it is not lit by at all (`IrrelevantLights`)
     #[serde(default)]
     pub irrelevant_lights: Vec<u32>,
+    /// the reflections it shows in (its component's `ReflectionChannels`, `REFLECT_*` bits)
+    #[serde(default)]
+    pub reflect: u16,
+}
+
+/// `RenderingChannelContainer`'s fields, as bits (`Instance::reflect`, `Reflection::channels`).
+pub const REFLECT_CHANNELS: [&str; 17] = ["BSP", "Static", "Dynamic", "Skeletal", "Foliage", "Particles", "Sprites", "Decals", "Group_1", "Group_2", "Group_3", "Group_4", "Group_5", "Group_6", "Group_7", "Group_8", "Group_9"];
+
+/// A lens flare (`LensFlareSource`: a candle's glow): its `LensFlare`'s source element, drawn
+/// over the scene (`SDPG_Foreground`) facing the view, faded as it is hidden, shaded as
+/// `LensFlare_PMAT` does: a round glow `max(0, 1 - 2|uv - 1/2|)^power`, dimmer away from the
+/// screen's middle, in the element's colour times the material's, clamped, added.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct LensFlareDef {
+    pub position: [f32; 3],
+    /// the element's size (m), opacity and colour (`Size` x `Scaling`, `Alpha`, `Color`)
+    pub size: f32,
+    pub alpha: f32,
+    pub color: [f32; 3],
+    /// its scale and opacity by the view's distance (UE units: `DistMap_Scale`, `DistMap_Alpha`)
+    #[serde(default)]
+    pub dist_scale: Option<Dist>,
+    #[serde(default)]
+    pub dist_alpha: Option<Dist>,
+    /// the radial distance to the screen's corner (`bNormalizeRadialDistance`)
+    pub normalize: bool,
+    /// the material's colour (`L_LensFlare_Color` times its alpha), `L_LensFlare_Power`,
+    /// `L_Radial_Distance_Factor`, opacity range (`L_Minimum_Opacity`, `L_Maximum_Opacity`)
+    pub tint: [f32; 3],
+    pub power: f32,
+    pub radial: f32,
+    pub opacity: [f32; 2],
+    /// its pulse (`Lg_Enable_Glowing_LensFlare`: |range sin(2 pi speed t) + base|): speed,
+    /// range, base
+    #[serde(default)]
+    pub glow: Option<[f32; 3]>,
+}
+
+/// A planar reflection (`SceneCaptureReflectActor`): the render target it draws into (a texture
+/// the water's materials sample at the screen's place), its mirror plane, the channels it
+/// shows (`ReflectionChannels`: often only the meshes put in `Group_1`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct Reflection {
+    pub texture: u32,
+    pub point: [f32; 3],
+    pub normal: [f32; 3],
+    pub channels: u16,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -1480,6 +1572,29 @@ pub struct Volume {
     /// `m_bDisallowUnpossession`)
     #[serde(default)]
     pub no_unpossess: bool,
+}
+
+/// A room of the sound propagation (`DishonoredAudioVolume`): where it is, the reverb it gives
+/// (`m_Environment`), the ambience state entering it sets (`m_pSoundEvent`: the drone of the
+/// street, of an interior), inside or out (`m_VolumeKind`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AudioCell {
+    pub name: String,
+    pub hulls: Vec<Vec<[f32; 3]>>,
+    pub environment: String,
+    pub state_event: String,
+    pub interior: bool,
+}
+
+/// A doorway between two rooms (`DishonoredAudioPortal`): its rectangle, the rooms, how much it
+/// muffles what passes through for Corvo and for the AI (`m_fOcclusion_HeardByPlayer`,
+/// `m_fOcclusion_HeardByAI`; the scripts and the doors in it add theirs).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AudioPortal {
+    pub name: String,
+    pub corners: [[f32; 3]; 4],
+    pub cells: [Option<u32>; 2],
+    pub occlusion: [f32; 2],
 }
 
 /// A forbidden zone: the owning factions treat the forbidden ones found in it as enemies.
@@ -1764,6 +1879,10 @@ pub struct UsableStage {
 pub struct NavMesh {
     pub verts: Vec<[f32; 3]>,
     pub polys: Vec<NavPoly>,
+    /// the meshes riding movers (`ArkDynamicPylon`), the scripts join and part from the rest
+    /// (`ArkSeqAct_ChangePylonConnection`): the pylon's actor, its polygons (from, to)
+    #[serde(default)]
+    pub dynamic: Vec<(String, u32, u32)>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -1834,6 +1953,13 @@ pub struct Movable {
     /// is until the scripts destroy them
     #[serde(default)]
     pub joints: Vec<String>,
+    /// a whale oil tank's charge (`DisTweaks_WhaleOilBattery`): what it holds full
+    /// (`m_InitialNumberOfCharges`), and what a device it feeds spends killing someone
+    /// (`m_PawnChargeCost`), an animal (`m_AmbientAnimalChargeCost`), on a watchtower's shot
+    /// (`m_WatchtowerChargeCost`); and the delay before it sets off a tank by it
+    /// (`m_fExplosionChainTimer`)
+    #[serde(default)]
+    pub charges: Option<[f32; 5]>,
 }
 
 /// One of the contact system's intersections (striker against struck): its sound (volume
@@ -2362,6 +2488,15 @@ pub struct Audiograph {
 /// bone charms, upgrades and the craftsman's store (`cache/game/gamedata.json`).
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct GameData {
+    /// the Dunwall City Trials' challenges (`DisDLC05GameInfo.m_Challenges`)
+    #[serde(default)]
+    pub challenges: Vec<ChallengeDef>,
+    /// the player statistics the achievements read (`DisTweaks_PlayerStats.m_StatInfos`), and the
+    /// achievements (`m_Achievements`, by `EAchievement`)
+    #[serde(default)]
+    pub stat_infos: Vec<StatInfoDef>,
+    #[serde(default)]
+    pub achievements: Vec<AchievementDef>,
     pub actives: Vec<ActivePowerDef>,
     pub passives: Vec<PassivePowerDef>,
     /// player attributes (`m_HealthMax` -> `HealthMax`): easy, normal, hard, very hard
@@ -2430,6 +2565,33 @@ pub struct GameData {
 
 /// A time-varying material parameter (`ScalarParameterValues[].ParameterValueCurve`): its
 /// value before it plays and its keys (seconds, value; linear).
+/// What a player statistic counts (`DisTweaks_PlayerStats.m_StatInfos`): its statistic
+/// (`ePlayerStat_NumKills`...), its label, the blows' damage types it counts (none: any), the
+/// characters it counts only, and those it leaves out (pawn tweaks: the Prison's assassins).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct StatInfoDef {
+    pub stat: String,
+    pub text: String,
+    pub damage_types: Vec<String>,
+    pub tweaks: Vec<String>,
+    pub excluded: Vec<String>,
+}
+
+/// An achievement (`m_Achievements[EAchievement]`): judged when the scripts say
+/// (`m_bEvaluatedAtKismet`: `DisSeqAct_EvalAchievement`) or as the statistics change; its
+/// conditions, all to hold: a statistic (`stat_infos` index), the comparison
+/// (`eValueInequality_GreaterThan`...), the threshold.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AchievementDef {
+    pub name: String,
+    pub kismet: bool,
+    pub evals: Vec<(u32, String, f32)>,
+    /// each condition's streak (`m_fStreakValue`, `m_fStreakTime`): the statistic must rise by
+    /// so much within so many seconds (six kills in one, thirty metres in one); 0 none
+    #[serde(default)]
+    pub streaks: Vec<[f32; 2]>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct PostCurve {
     pub param: String,
@@ -2753,6 +2915,29 @@ pub struct Timelines {
     pub bounds: std::collections::HashMap<u16, [f32; 4]>,
     /// exported symbols: name -> sprite
     pub exports: std::collections::HashMap<String, u16>,
+    /// the text fields (`DefineEditText`), by character id
+    #[serde(default)]
+    pub texts: std::collections::HashMap<u16, EditTextDef>,
+}
+
+/// A movie's text field (`DefineEditText`): its box (stage units: x min, y min, x max, y max),
+/// font (its name: `$NormalFont`, `$TitleFont`...), size, colour (RGBA 0..1), alignment (0 left,
+/// 1 right, 2 centre, 3 justify), margins and leading, how it lays out, its initial text and the
+/// variable it shows.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct EditTextDef {
+    pub bounds: [f32; 4],
+    pub font: String,
+    pub size: f32,
+    pub color: [f32; 4],
+    pub align: u8,
+    pub margins: [f32; 2],
+    pub leading: f32,
+    pub multiline: bool,
+    pub wrap: bool,
+    pub html: bool,
+    pub text: String,
+    pub var: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -2814,4 +2999,46 @@ pub struct ShapeBitmap {
     pub bounds: Option<[f32; 4]>,
     #[serde(default)]
     pub repeat: bool,
+}
+
+/// A Dunwall City Trials challenge (`DisDLC05GameInfo.m_Challenges`): its names and words, its
+/// kind (`DDCT_Stealth`, `DDCT_Action`, `DDCT_Mobility`, `DDCT_Puzzle`), leaderboard, the scores
+/// of its three medals (normal and expert mode), its map (`m_LaunchCommand` "start <map>").
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ChallengeDef {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub expert_description: String,
+    pub kind: String,
+    pub leaderboard: String,
+    pub medals: [i32; 3],
+    pub expert_medals: [i32; 3],
+    pub map: String,
+    pub can_end_early: bool,
+}
+
+/// A Dunwall City Trials scoring rule set (`DisDLC05Tweaks_ChallengeScoringRuleset`): its
+/// rules and bonuses (`m_Rules`), its combo multipliers (`m_Multipliers`), and the statistics
+/// its results screen lists (`m_ResultsMenuStats`: lookup, name).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct RulesetDef {
+    pub name: String,
+    pub rules: Vec<ScoreRuleDef>,
+    pub multipliers: Vec<ScoreRuleDef>,
+    pub stats: Vec<(String, String)>,
+}
+
+/// One of a rule set's rules (`DisDLC05ScoringRule_*`, `..Bonus_*`, `..Modifier_*`,
+/// `DisDLC05ChallengeRule_Combo_*`): its name in the set, its entry (what the results call
+/// it), its class, its base gain (`m_iBaseGain`), its gains by victim (`m_NpcBaseGains`: the
+/// story group, gain, entry), its other numbers (`m_fTimeOut`, `m_fTimeBetweenTwoKill`...).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ScoreRuleDef {
+    pub name: String,
+    pub entry: String,
+    pub class: String,
+    pub base_gain: i32,
+    pub gains: Vec<(String, i32, String)>,
+    pub params: std::collections::BTreeMap<String, f32>,
 }

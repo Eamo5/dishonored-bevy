@@ -202,6 +202,11 @@ fn input(
         sfx.write(PostEvent::named("UI_Failure", None));
         return;
     }
+    if at_capacity(&stats, &attrs, &it.item) {
+        sfx.write(PostEvent::named("UI_Failure", None));
+        msgs.push("You cannot carry any more of this item");
+        return;
+    }
     if stats.coins < it.coins {
         sfx.write(PostEvent::named("UI_Failure", None));
         msgs.push("Not enough coins");
@@ -210,11 +215,9 @@ fn input(
     stats.coins -= it.coins;
     let q = it.quantity.max(1);
     match it.item.as_str() {
-        "Bolt_Ammo_twk" | "Bolts_Ammo_twk" => stats.bolts += q,
-        "SleepDart_Ammo_twk" => stats.sleep_darts += q,
-        "Bullets_Store_Ammo_twk" => stats.bullets += q,
-        "Elixir_Mana_twk" => stats.mana_elixirs = (stats.mana_elixirs + q).min(attrs.max_elixirs),
-        "Elixir_Health_twk" => stats.health_elixirs = (stats.health_elixirs + q).min(attrs.max_elixirs),
+        id if crate::gadgets::ammo_type(id).is_some() => { crate::gadgets::give_ammo(&mut stats, &attrs, crate::gadgets::ammo_type(id).unwrap(), q); }
+        "Elixir_Mana_twk" => { stats.give_elixirs(true, q, attrs.elixir_capacity(true)); }
+        "Elixir_Health_twk" => { stats.give_elixirs(false, q, attrs.elixir_capacity(false)); }
         "Rune_twk" => stats.runes += q,
         id if id.starts_with("Twk_Upgrade_") => stats.upgrades.push(id.to_string()),
         id if id.starts_with("BP_") => {
@@ -235,14 +238,41 @@ fn icon_of<'a>(data: &'a Data, it: &'a StoreItem) -> &'a str {
     data.0.upgrades.iter().find(|u| u.id == it.item).map(|u| u.icon.as_str()).filter(|i| !i.is_empty()).unwrap_or("Rune")
 }
 
+/// The purchase handler and help bar share the same inventory-capacity check.
+fn at_capacity(stats: &PlayerStats, attrs: &crate::gamedata::Attrs, item: &str) -> bool {
+    carried(stats, attrs, item).is_some_and(|(count, maximum)| maximum.is_some_and(|maximum| count >= maximum))
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+
+    #[test]
+    fn shop_capacity_matches_grants_for_every_ammunition_item() {
+        let mut stats = PlayerStats::default();
+        let mut attrs = crate::gamedata::Attrs::default();
+        for item in ["Bullets_Store_Ammo_twk", "ExplosiveBullets_Ammo_twk", "Bolt_Ammo_twk", "Bolts_Ammo_twk", "SleepDart_Ammo_twk", "Flare_Ammo_twk", "SpringRazor_Ammo_WithItem_twk", "Grenade_Ammo_WithItem_twk", "StickyGrenade_Ammo_WithItem_twk"] {
+            let ty = crate::gadgets::ammo_type(item).unwrap();
+            let cap = attrs.ammo_capacity[ty as usize];
+            *crate::gadgets::ammo_mut(&mut stats, ty, true).unwrap() = cap - 1;
+            assert!(!at_capacity(&stats, &attrs, item));
+            crate::gadgets::give_ammo(&mut stats, &attrs, ty, 5);
+            assert_eq!(carried(&stats, &attrs, item), Some((cap, Some(cap))));
+            assert!(at_capacity(&stats, &attrs, item));
+            attrs.ammo_capacity[ty as usize] += 1;
+            assert!(!at_capacity(&stats, &attrs, item));
+        }
+    }
+}
+
 /// How many of a store item Corvo carries, and the most he may (`Owned: n/max`).
 fn carried(stats: &PlayerStats, attrs: &crate::gamedata::Attrs, item: &str) -> Option<(u32, Option<u32>)> {
+    if let Some(ty) = crate::gadgets::ammo_type(item) {
+        return Some((crate::gadgets::ammo_count(stats, ty), Some(attrs.ammo_capacity[ty as usize])));
+    }
     Some(match item {
-        "Bolt_Ammo_twk" | "Bolts_Ammo_twk" => (stats.bolts, None),
-        "SleepDart_Ammo_twk" => (stats.sleep_darts, None),
-        "Bullets_Store_Ammo_twk" => (stats.bullets, None),
-        "Elixir_Mana_twk" => (stats.mana_elixirs, Some(attrs.max_elixirs)),
-        "Elixir_Health_twk" => (stats.health_elixirs, Some(attrs.max_elixirs)),
+        "Elixir_Mana_twk" => (stats.mana_elixirs, Some(attrs.elixir_capacity(true))),
+        "Elixir_Health_twk" => (stats.health_elixirs, Some(attrs.elixir_capacity(false))),
         "Rune_twk" => (stats.runes, None),
         id if id.starts_with("Twk_Upgrade_") || id.starts_with("BP_") => return None,
         id => (stats.items.get(id).copied().unwrap_or(0), None),
@@ -594,7 +624,8 @@ fn refresh(
             commands.spawn((TextSpan::new(data.text("DisGFxMoviePlayerBase_Texts", "t_Cost")), normal(23.0), TextColor(label), ChildOf(t)));
             commands.spawn((TextSpan::new(format!("{}\n", it.coins)), normal(23.0), TextColor(PALE), ChildOf(t)));
             commands.spawn((TextSpan::new(data.text("DisGFxMoviePlayerBase_Texts", "t_YouHave")), normal(23.0), TextColor(label), ChildOf(t)));
-            commands.spawn((TextSpan::new(stats.coins.to_string()), normal(23.0), TextColor(if affordable { PALE } else { Color::srgb(140.0 / 255.0, 25.0 / 255.0, 24.0 / 255.0) }), ChildOf(t)));
+            // (short of it, the banner turns red: `_cost_mc` "locked"; the coins stay legible on it)
+            commands.spawn((TextSpan::new(stats.coins.to_string()), normal(23.0), TextColor(PALE), ChildOf(t)));
         }
     }
     // its name and words (the scroll view: 327 x 185)
@@ -612,6 +643,6 @@ fn refresh(
     let p = off + Vec2::new(1184.0 - 520.0, 651.0 - 18.0) * s;
     let bar = commands.spawn((Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(520.0 * s), justify_content: JustifyContent::FlexEnd, column_gap: Val::Px(20.0 * s), ..default() }, Pickable::IGNORE, ChildOf(root))).id();
     let buy_words = data.text(S, if store.tab == 1 { "t_PurchaseUpgrade" } else { "t_Purchase" }).to_uppercase();
-    commands.spawn((BuyButton, Button, ChildOf(bar))).with_child((Text::new(format!("[Enter]  {buy_words}")), title(22.0), TextColor(if missing.is_none() && affordable && !owned(&stats, it) { PALE } else { PALE.with_alpha(0.4) })));
+    commands.spawn((BuyButton, Button, ChildOf(bar))).with_child((Text::new(format!("[Enter]  {buy_words}")), title(22.0), TextColor(if missing.is_none() && affordable && !owned(&stats, it) && !at_capacity(&stats, &attrs, &it.item) { PALE } else { PALE.with_alpha(0.4) })));
     commands.spawn((CloseButton, Button, ChildOf(bar))).with_child((Text::new(format!("[Esc]  {}", data.text("DisGFxMoviePlayerBase_Texts", "t_Exit").to_uppercase())), title(22.0), TextColor(PALE)));
 }

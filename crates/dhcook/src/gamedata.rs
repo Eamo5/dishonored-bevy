@@ -1,7 +1,7 @@
 //! Campaign-wide game data from the original tweak objects: Corvo's powers (active and
 //! passive), his attributes per difficulty, bone charms, upgrades and the stores.
 
-use crate::format::{ActivePowerDef, AttrMod, CharmDef, GameData, PassiveLevel, PassivePowerDef, StoreDef, StoreItem, UpgradeDef};
+use crate::format::{AchievementDef, ActivePowerDef, ChallengeDef, AttrMod, CharmDef, GameData, PassiveLevel, PassivePowerDef, StatInfoDef, StoreDef, StoreItem, UpgradeDef};
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -21,6 +21,113 @@ const ACTIVES: [(&str, &str, f32, [u32; 2]); 6] = [
 
 fn props(pkg: &Package, idx: i32) -> Option<Props> {
     upk::read_object(pkg, idx).ok().map(|o| o.props)
+}
+
+/// An enum's value names, in order (a `UEnum`'s names: the export ends with their count and
+/// the names).
+pub fn enum_names(pkg: &Package, name: &str) -> Vec<String> {
+    let Some(i) = (1..=pkg.exports.len() as i32).find(|&i| pkg.class_name(i) == "Enum" && pkg.obj_name(i) == name) else { return Vec::new() };
+    let Ok(d) = pkg.export_data(i) else { return Vec::new() };
+    let i32_at = |p: usize| i32::from_le_bytes([d[p], d[p + 1], d[p + 2], d[p + 3]]);
+    for p in 0..d.len().saturating_sub(4) {
+        let n = i32_at(p);
+        if (2..=400).contains(&n) && p + 4 + n as usize * 8 == d.len() {
+            let ids: Vec<i32> = (0..n as usize).map(|k| i32_at(p + 4 + k * 8)).collect();
+            if ids.iter().all(|&v| v >= 0 && (v as usize) < pkg.names.len()) {
+                return ids.iter().map(|&v| pkg.names[v as usize].clone()).collect();
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// The player statistics the achievements read and the achievements (`Twk_PlayerStats`).
+/// The Dunwall City Trials' challenges, as the challenge menu lists them
+/// (`DisDLC05GameInfo.m_Challenges`).
+fn challenges(game: &Package, d: &mut GameData) {
+    let Some(p) = game.find_export("Default__DisDLC05GameInfo").and_then(|i| props(game, i)) else { return };
+    let Some((c, off, sz)) = p.array("m_Challenges") else { return };
+    for s in upk::props::parse_struct_array(game, off, sz, c).unwrap_or_default() {
+        let text = |n: &str| match s.get(n) {
+            Some(Value::Str(t)) => t.clone(),
+            _ => String::new(),
+        };
+        let medals = |n: &str| {
+            let mut m = [0; 3];
+            for (k, v) in m.iter_mut().enumerate() {
+                if let Some(Value::Int(i)) = s.get_idx(n, k as i32) {
+                    *v = *i;
+                }
+            }
+            m
+        };
+        let launch = text("m_LaunchCommand");
+        d.challenges.push(ChallengeDef {
+            id: text("m_ID"),
+            name: text("m_Name"),
+            description: text("m_Description"),
+            expert_description: text("m_ExpertModeDesc"),
+            kind: s.name("m_Type").unwrap_or_default().to_string(),
+            leaderboard: s.name("m_Leaderboard").unwrap_or_default().to_string(),
+            medals: medals("m_NormalModeMedalThresholds"),
+            expert_medals: medals("m_ExpertModeMedalThresholds"),
+            map: launch.strip_prefix("start ").unwrap_or(&launch).trim().to_string(),
+            can_end_early: s.bool("m_bCanEndChallengeEarly").unwrap_or(false),
+        });
+    }
+    log::info!("{} challenges", d.challenges.len());
+}
+
+fn player_stats(game: &Package, startup: &Package, d: &mut GameData) {
+    let Some(p) = startup.find_export("Twk_PlayerStats.Twk_PlayerStats").and_then(|i| props(startup, i)) else { return };
+    let names_of = |pkg: &Package, props: &Props, name: &str| -> Vec<String> {
+        upk::props::object_array(pkg, props, name).into_iter().filter(|&o| o != 0).map(|o| pkg.obj_path(o).rsplit('.').next().unwrap_or("").to_string()).collect()
+    };
+    if let Some((c, off, sz)) = p.array("m_StatInfos") {
+        for s in upk::props::parse_struct_array(startup, off, sz, c).unwrap_or_default() {
+            let pair = |v: Option<&Value>| match v {
+                Some(Value::Struct(_, f)) => Props(f.clone()).name("m_TweaksName").filter(|n| *n != "None").map(str::to_string),
+                _ => None,
+            };
+            let excluded = match s.array("m_ExcludedTweaksNamePairs") {
+                Some((c, off, sz)) => upk::props::parse_struct_array(startup, off, sz, c).unwrap_or_default().iter().filter_map(|x| x.name("m_TweaksName").filter(|n| *n != "None").map(str::to_string)).collect(),
+                None => Vec::new(),
+            };
+            d.stat_infos.push(StatInfoDef {
+                stat: s.name("m_Stat").unwrap_or_default().to_string(),
+                text: match s.get("m_Text") {
+                    Some(Value::Str(t)) => t.clone(),
+                    _ => String::new(),
+                },
+                damage_types: names_of(startup, &s, "m_DamageTypes"),
+                tweaks: pair(s.get("m_TweaksNamePair")).into_iter().collect(),
+                excluded,
+            });
+        }
+    }
+    let names = enum_names(game, "EAchievement");
+    for (i, name) in names.iter().enumerate() {
+        if name.ends_with("_MAX") {
+            break;
+        }
+        let mut a = AchievementDef { name: name.clone(), ..Default::default() };
+        if let Some(Value::Struct(_, f)) = p.get_idx("m_Achievements", i as i32) {
+            let f = Props(f.clone());
+            a.kismet = matches!(f.get("m_bEvaluatedAtKismet"), Some(Value::Bool(true)));
+            if let Some((c, off, sz)) = f.array("m_StatEvals") {
+                for e in upk::props::parse_struct_array(startup, off, sz, c).unwrap_or_default() {
+                    let stat = match e.get("m_StatIndex") {
+                        Some(Value::Int(v)) => *v as u32,
+                        _ => 0,
+                    };
+                    a.evals.push((stat, e.name("m_eValueInequality").unwrap_or("eValueInequality_GreaterThan").to_string(), e.float("m_fThreshold").unwrap_or(0.0)));
+                    a.streaks.push([e.float("m_fStreakValue").unwrap_or(0.0), e.float("m_fStreakTime").unwrap_or(0.0)]);
+                }
+            }
+        }
+        d.achievements.push(a);
+    }
+    log::info!("player stats: {} statistics, {} achievements", d.stat_infos.len(), d.achievements.len());
 }
 
 fn object_name(pkg: &Package, o: i32) -> String {
@@ -502,6 +609,9 @@ fn arms(game: &Package, startup: &Package, d: &mut GameData) {
         }
         let f = startup.find_export(fire).and_then(|i| props(startup, i));
         for p in attack.iter().chain(f.iter()) {
+            if let Some(v) = p.float("m_fArrowFireSpeed") {
+                d.pawn.insert(format!("{key}.m_fArrowFireSpeed"), v);
+            }
             if let Some(v) = p.float("m_fCamRecoilOnFire") {
                 d.pawn.insert(format!("{key}.m_fCamRecoilOnFire"), v);
             }
@@ -510,6 +620,8 @@ fn arms(game: &Package, startup: &Package, d: &mut GameData) {
     for (path, class, key) in [
         ("Twk_Projectiles.Twk_Proj_BulletUpgraded", "Default__DisTweaks_Bullet", "bullet."),
         ("Twk_Projectiles.Twk_Proj_Arrow", "Default__DisTweaks_Arrow", "arrow."),
+        ("Twk_Projectiles.Twk_Proj_Arrow_Sleep", "Default__DisTweaks_Arrow", "arrow_sleep."),
+        ("Twk_Projectiles.Twk_Proj_Arrow_Flare", "Default__DisTweaks_Arrow_Flare", "arrow_flare."),
     ] {
         let def = game.find_export(class).and_then(|i| props(game, i));
         let obj = startup.find_export(path).and_then(|i| props(startup, i));
@@ -875,8 +987,15 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
     let game = Package::open(&cooked.join("DishonoredGame.upk")).context("DishonoredGame.upk")?;
     let startup = Package::open(&cooked.join("Startup.upk")).context("Startup.upk")?;
     let mut d = GameData { actives: actives(&game), passives: passives(&game), attributes: attributes(&game, &startup), charms: charms(&startup), upgrades: upgrades(&startup), stores: stores(cooked), ..Default::default() };
+    if let Ok(engine) = Package::open(&cooked.join("Engine.upk")) {
+        if let Some(gravity) = engine.find_export("Default__WorldInfo").and_then(|i| props(&engine, i)).and_then(|p| p.float("DefaultGravityZ")) {
+            d.pawn.insert("world.DefaultGravityZ".into(), gravity);
+        }
+    }
     arms(&game, &startup, &mut d);
     audiographs(cooked, &startup, &mut d);
+    player_stats(&game, &startup, &mut d);
+    challenges(&game, &mut d);
     // the player tweaks' class defaults (what Corvo's tweak leaves unchanged), and the
     // swimming state's
     if let Some(p) = game.find_export("Default__DisTweaks_PlayerPawn").and_then(|i| props(&game, i)) {

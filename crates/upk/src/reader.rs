@@ -110,7 +110,7 @@ impl<'a> Reader<'a> {
             }
             let b = self.bytes(len as usize)?;
             let b = &b[..b.len() - 1];
-            Ok(b.iter().map(|&c| c as char).collect())
+            Ok(b.iter().map(|&c| cp1252(c)).collect())
         } else {
             let n = (-len) as usize;
             if n > 1 << 20 {
@@ -144,5 +144,29 @@ impl<'a> Reader<'a> {
         let total = elem as usize * n as usize;
         let d = self.bytes(total)?;
         Ok((elem as usize, n as usize, d))
+    }
+}
+
+/// A byte of the code page the game's ANSI strings are in (Windows-1252): Latin-1 but for the
+/// typographic marks in 0x80-0x9F (the challenge "Assassin's Run" has a curly apostrophe).
+fn cp1252(c: u8) -> char {
+    const HIGH: [char; 32] = [
+        '\u{20AC}', '\u{81}', '\u{201A}', '\u{0192}', '\u{201E}', '\u{2026}', '\u{2020}', '\u{2021}', '\u{02C6}', '\u{2030}', '\u{0160}', '\u{2039}', '\u{0152}', '\u{8D}', '\u{017D}', '\u{8F}',
+        '\u{90}', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{2022}', '\u{2013}', '\u{2014}', '\u{02DC}', '\u{2122}', '\u{0161}', '\u{203A}', '\u{0153}', '\u{9D}', '\u{017E}', '\u{0178}',
+    ];
+    if (0x80..0xA0).contains(&c) {
+        HIGH[(c - 0x80) as usize]
+    } else {
+        c as char
+    }
+}
+
+#[cfg(test)]
+mod cp1252_tests {
+    #[test]
+    fn marks() {
+        assert_eq!(super::cp1252(0x92), '\u{2019}');
+        assert_eq!(super::cp1252(b'A'), 'A');
+        assert_eq!(super::cp1252(0xE9), '\u{e9}');
     }
 }

@@ -2467,6 +2467,7 @@ dependencies = [
  "rodio",
  "serde",
  "serde_json",
+ "ttf-parser",
  "windows-sys 0.59.0",
 ]
 

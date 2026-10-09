@@ -296,7 +296,7 @@ fn apply_ai_fx(
     colliders: Query<(&LevelInstance, &InstanceCollider)>,
     mut commands: Commands,
     mut devices: ResMut<crate::security::Devices>,
-    (mut stats, mut msgs, mut sfx): (ResMut<PlayerStats>, ResMut<HudMessages>, MessageWriter<crate::audio::PostEvent>),
+    (mut stats, mut msgs, mut sfx, attrs): (ResMut<PlayerStats>, ResMut<HudMessages>, MessageWriter<crate::audio::PostEvent>, Res<crate::gamedata::Attrs>),
     (mut noise, mut effects): (MessageWriter<crate::gameplay::Noise>, MessageWriter<crate::particles::SpawnEffect>),
     mut instances: Query<(Entity, &LevelInstance, &mut Transform, &mut Visibility), (Without<Npc>, Without<crate::player::Player>)>,
     mut spawned: Local<std::collections::HashSet<u32>>,
@@ -481,7 +481,7 @@ fn apply_ai_fx(
                     }
                 }
             }
-            AiFx::GivePickup(op) => give_pickup(&g.ops[op as usize].props, &data, &mut stats, &mut msgs, &mut vm),
+            AiFx::GivePickup(op) => give_pickup(&g.ops[op as usize].props, &data, &attrs, &mut stats, &mut msgs, &mut vm),
             AiFx::Noise { maker, at, radius, combat } => {
                 if let Some(pos) = at.iter().chain(maker.iter()).find_map(|v| place(v)) {
                     noise.write(crate::gameplay::Noise { pos, radius, combat });
@@ -833,6 +833,8 @@ fn script_time(
     mut tc: ResMut<crate::gameplay::TimeControl>,
     mut powers: ResMut<crate::powers::Powers>,
     mut stats: ResMut<PlayerStats>,
+    data: Res<crate::gamedata::Data>,
+    settings: Res<crate::settings::Settings>,
 ) {
     if let Some((_, t)) = tc.scripted.as_mut() {
         *t += time.delta_secs();
@@ -854,8 +856,13 @@ fn script_time(
         }
     }
     for (mana, n) in std::mem::take(&mut vm.elixirs) {
-        let e = if mana { &mut stats.mana_elixirs } else { &mut stats.health_elixirs };
-        *e = (*e as i32 + n).clamp(0, 10) as u32;
+        if n >= 0 {
+            let capacity = data.pawn(if mana { "m_nMaxManaElixir" } else { "m_nMaxHealthElixir" }, 10.0).max(0.0) as u32;
+            stats.give_elixirs(mana, n as u32, capacity);
+        } else {
+            let e = if mana { &mut stats.mana_elixirs } else { &mut stats.health_elixirs };
+            *e = e.saturating_sub(n.unsigned_abs());
+        }
     }
     for u in std::mem::take(&mut vm.upgrades) {
         if !stats.upgrades.contains(&u) {
@@ -866,16 +873,18 @@ fn script_time(
         stats.keys.retain(|x| !x.eq_ignore_ascii_case(&k));
     }
     for (put_away, upgrades) in std::mem::take(&mut vm.inventory_ops) {
-        stats.stash(put_away, upgrades);
+        stats.stash(put_away, upgrades, &data, settings.difficulty);
     }
+    let capacities = data.ammo_capacities(&stats, settings.difficulty);
     for (how, list) in std::mem::take(&mut vm.ammo_mods) {
         for (ty, n) in list {
+            let Some(&capacity) = capacities.get(ty as usize) else { continue };
             // (a gadget not had stays not had)
             let Some(v) = crate::gadgets::ammo_mut(&mut stats, ty, how != 1 || n > 0) else { continue };
             *v = match how {
-                1 => n.max(0) as u32,
+                1 => (n.max(0) as u32).min(capacity),
                 2 => v.saturating_sub(n.max(0) as u32),
-                _ => *v + n.max(0) as u32,
+                _ => v.saturating_add((n.max(0) as u32).min(capacity.saturating_sub(*v))),
             };
         }
     }
@@ -891,7 +900,10 @@ fn script_time(
                 None
             }
             "dishonoredwepsword" => {
+                // (put in his hand, he has it: a challenge's loadout after its inventory was
+                // emptied)
                 stats.sheathed = false;
+                stats.unarmed = false;
                 None
             }
             "dishonoredweppistol" => Some(crate::powers::Power::Pistol),
@@ -1102,7 +1114,7 @@ fn script_blasts(
         let Some(o) = g.ops.get(op as usize) else { continue };
         let f = |k: &str| if let Some(KVal::Float(v)) = o.props.get(k) { *v } else { 0.0 };
         let radius = f("blast_radius").max(1.0);
-        blasts.write(crate::gadgets::Explosion { at, radius, full: f("blast_full"), damage: f("blast_damage"), effect: "", player: None });
+        blasts.write(crate::gadgets::Explosion { at, radius, full: f("blast_full"), damage: f("blast_damage"), effect: "", player: None, kind: crate::gameplay::HitKind::Explosion });
         if let Some(KVal::Int(e)) = o.props.get("blast_effect") {
             fx.write(crate::particles::SpawnEffect { system: Some(*e as u32), ..crate::particles::SpawnEffect::at("", at) });
         }
@@ -1269,7 +1281,7 @@ fn nearest(points: &[[f32; 3]], at: Vec3) -> usize {
 }
 
 /// What a script hands Corvo: its pickup's contents (cooked onto the op).
-fn give_pickup(props: &std::collections::BTreeMap<String, KVal>, data: &crate::gamedata::Data, stats: &mut PlayerStats, msgs: &mut HudMessages, vm: &mut Vm) {
+fn give_pickup(props: &std::collections::BTreeMap<String, KVal>, data: &crate::gamedata::Data, attrs: &crate::gamedata::Attrs, stats: &mut PlayerStats, msgs: &mut HudMessages, vm: &mut Vm) {
     let s = |k: &str| match props.get(k) {
         Some(KVal::Str(v)) => v.clone(),
         _ => String::new(),
@@ -1294,8 +1306,8 @@ fn give_pickup(props: &std::collections::BTreeMap<String, KVal>, data: &crate::g
         for a in ammo {
             if let KVal::List(p) = a {
                 if let (Some(KVal::Int(ty)), Some(KVal::Int(n))) = (p.first(), p.get(1)) {
-                    let label = crate::gadgets::give_ammo(stats, *ty as u8, *n as u32);
-                    msgs.push(format!("{label} +{n}"));
+                    let (label, added) = crate::gadgets::give_ammo(stats, attrs, *ty as u8, (*n).max(0) as u32);
+                    if added > 0 { msgs.push(format!("{label} +{added}")); }
                     gave = true;
                 }
             }

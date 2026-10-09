@@ -275,6 +275,7 @@ fn apply_campaign(
                 info!("campaign: mission {tweak} begins");
                 stats.past_kills += stats.kills;
                 stats.past_knockouts += stats.knockouts;
+                stats.past_detected += stats.times_detected;
                 stats.kills = 0;
                 stats.knockouts = 0;
                 stats.times_detected = 0;

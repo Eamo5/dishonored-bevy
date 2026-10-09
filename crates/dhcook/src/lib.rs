@@ -212,6 +212,9 @@ struct Cooker<'a> {
     flee_keys: Vec<(kismet::ActorKey, Option<kismet::ActorKey>)>,
     /// physics joints: name, the actors they bind
     joint_keys: Vec<(String, Vec<kismet::ActorKey>)>,
+    /// the sound propagation's rooms by actor, and each doorway's rooms
+    audio_cell_keys: HashMap<kismet::ActorKey, u32>,
+    portal_cell_keys: Vec<[Option<kismet::ActorKey>; 2]>,
     /// distractors' scenes, cooked once the level scripts are: (distractor, MatineeData)
     pending_soirees: Vec<(usize, Obj)>,
     /// Height of the fog layer currently in `scene.fog`.
@@ -323,6 +326,8 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
         tether_keys: Vec::new(),
         flee_keys: Vec::new(),
         joint_keys: Vec::new(),
+        audio_cell_keys: HashMap::new(),
+        portal_cell_keys: Vec::new(),
         pending_soirees: Vec::new(),
         fog_height: 0.0,
         actor_refs: HashMap::new(),
@@ -405,6 +410,12 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
     for (sp, key) in c.scene.spawners.iter_mut().zip(c.spawner_keys.iter()) {
         sp.script_start = started.contains(key);
     }
+    // the doorways' rooms
+    for (p, keys) in c.portal_cell_keys.iter().enumerate() {
+        for (k, key) in keys.iter().enumerate() {
+            c.scene.audio_portals[p].cells[k] = key.as_ref().and_then(|key| c.audio_cell_keys.get(key)).copied();
+        }
+    }
     // the props the joints hold
     for (name, keys) in &c.joint_keys {
         let insts: Vec<u32> = keys.iter().filter_map(|k| c.actor_refs.get(k)).flat_map(|a| a.instances.iter().copied()).collect();
@@ -426,6 +437,30 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
         }
     }
     c.scene.kismet = kismet::cook(&levels, &c.actor_refs);
+    // the challenge's scoring rule sets the scripts name (Dunwall City Trials)
+    let mut sets: Vec<String> = Vec::new();
+    for op in &c.scene.kismet.ops {
+        let mut names: Vec<String> = Vec::new();
+        if let Some(KVal::Str(s)) = op.props.get("m_pRuleSetTweak") {
+            names.push(s.clone());
+        }
+        if op.class == "DisSeqAct_DLC05_TriggerCustomScoringRule" {
+            if let Some(KVal::List(l)) = op.props.get("Targets") {
+                names.extend(l.iter().filter_map(|v| if let KVal::Str(s) = v { Some(s.clone()) } else { None }));
+            }
+        }
+        for n in names {
+            if !sets.contains(&n) {
+                sets.push(n);
+            }
+        }
+    }
+    for n in sets {
+        match c.ruleset(&n) {
+            Some(r) => c.scene.challenge_rules.push(r),
+            None => log::warn!("{map}: scoring rule set {n} not found"),
+        }
+    }
     // the distractions' scenes join the matinees
     let soirees = std::mem::take(&mut c.pending_soirees);
     let mut soiree_ids: HashMap<(String, i32), Option<u32>> = HashMap::new();
@@ -779,6 +814,107 @@ impl<'a> Cooker<'a> {
         Chain(v)
     }
 
+    /// A challenge's scoring rule set (`DisDLC05Tweaks_ChallengeScoringRuleset`) by its path.
+    fn ruleset(&mut self, name: &str) -> Option<RulesetDef> {
+        let o = self.assets.find(name)?;
+        let p = o.props().ok()?;
+        let pkg = o.pkg.clone();
+        let rules = |field: &str, assets: &Assets| -> Vec<ScoreRuleDef> {
+            let Some((cnt, off, sz)) = p.array(field) else { return Vec::new() };
+            let mut out = Vec::new();
+            for s in upk::props::parse_struct_array(&pkg, off, sz, cnt).unwrap_or_default() {
+                let Some(ro) = s.object("m_Rule").filter(|r| *r != 0).and_then(|r| assets.resolve(&pkg, r)) else { continue };
+                let Ok(rp) = ro.props() else { continue };
+                let mut gains = Vec::new();
+                if let Some((gc, goff, gsz)) = rp.array("m_NpcBaseGains") {
+                    for g in upk::props::parse_struct_array(&ro.pkg, goff, gsz, gc).unwrap_or_default() {
+                        let group = g.object("m_pStoryGroup").filter(|x| *x != 0).map(|x| ro.pkg.obj_path(x)).unwrap_or_default();
+                        gains.push((group, g.int("m_iBaseGain").unwrap_or(0), g.name("m_EntryName").unwrap_or_default().to_string()));
+                    }
+                }
+                let mut params = std::collections::BTreeMap::new();
+                for q in &rp.0 {
+                    match &q.value {
+                        Value::Float(f) => {
+                            params.insert(q.name.clone(), *f);
+                        }
+                        Value::Int(i) if q.name != "m_iBaseGain" => {
+                            params.insert(q.name.clone(), *i as f32);
+                        }
+                        Value::Bool(b) => {
+                            params.insert(q.name.clone(), *b as u8 as f32);
+                        }
+                        _ => {}
+                    }
+                }
+                out.push(ScoreRuleDef {
+                    name: s.name("m_RuleName").unwrap_or_default().to_string(),
+                    entry: rp.name("m_EntryName").unwrap_or_default().to_string(),
+                    class: ro.class(),
+                    base_gain: rp.int("m_iBaseGain").unwrap_or(0),
+                    gains,
+                    params,
+                });
+            }
+            out
+        };
+        let mut stats = Vec::new();
+        if let Some((cnt, off, sz)) = p.array("m_ResultsMenuStats") {
+            for s in upk::props::parse_struct_array(&pkg, off, sz, cnt).unwrap_or_default() {
+                stats.push((s.name("m_StatLookup").unwrap_or_default().to_string(), s.name("m_StatName").unwrap_or_default().to_string()));
+            }
+        }
+        Some(RulesetDef { name: name.to_string(), rules: rules("m_Rules", self.assets), multipliers: rules("m_Multipliers", self.assets), stats })
+    }
+
+    /// A `LensFlare`'s source element at a place, and what its material makes of it.
+    fn lens_flare(&mut self, lf: &Obj, at: [f32; 3]) -> Option<LensFlareDef> {
+        let props = lf.props().ok()?;
+        let el = props.struct_props("SourceElement")?;
+        let dist = |n: &str, vector: bool| el.struct_props(n).and_then(|p| raw_distribution(lf, &p, None, vector));
+        // (a constant's value: its first entry)
+        let first = |d: Option<Dist>, n: usize, default: f32| -> Vec<f32> {
+            let t = d.map(|d| d.table).unwrap_or_default();
+            (0..n).map(|k| t.get(k).copied().unwrap_or(default)).collect()
+        };
+        let size = match el.get("Size") {
+            Some(Value::Vector(v)) => v[0],
+            _ => 1.0,
+        };
+        let scaling = first(dist("Scaling", false), 1, 1.0)[0];
+        let alpha = first(dist("Alpha", false), 1, 1.0)[0];
+        let c = first(dist("Color", true), 3, 1.0);
+        let mut f = LensFlareDef {
+            position: ue_point(at),
+            size: size * scaling * UNIT,
+            alpha,
+            color: [c[0], c[1], c[2]],
+            dist_scale: dist("DistMap_Scale", true),
+            dist_alpha: dist("DistMap_Alpha", false),
+            normalize: matches!(el.get("bNormalizeRadialDistance"), Some(Value::Bool(true))),
+            tint: [1.0; 3],
+            power: 5.0,
+            radial: 1.0,
+            opacity: [0.0, 1.0],
+            glow: None,
+        };
+        let mats = upk::props::object_array(&lf.pkg, &el, "LFMaterials");
+        if let Some(m) = mats.first().and_then(|m| self.assets.resolve(&lf.pkg, *m)) {
+            let rm = crate::materials::resolve_material(self.assets, &m);
+            let s = |n: &str, d: f32| rm.scalars.iter().find(|(k, _)| k == n).map(|(_, v)| *v).unwrap_or(d);
+            if let Some((_, c)) = rm.vectors.iter().find(|(k, _)| k == "L_LensFlare_Color") {
+                f.tint = [c[0] * c[3], c[1] * c[3], c[2] * c[3]];
+            }
+            f.power = s("L_LensFlare_Power", 5.0);
+            f.radial = s("L_Radial_Distance_Factor", 1.0);
+            f.opacity = [s("L_Minimum_Opacity", 0.0), s("L_Maximum_Opacity", 1.0)];
+            if rm.switches.iter().any(|(k, on)| k == "Lg_Enable_Glowing_LensFlare" && *on) {
+                f.glow = Some([s("L_LensFlare_Glowing_Speed", 0.5), s("Lg_LensFlare_Glowing_Range", 0.1), s("Lg_LensFlare_Glowing_Range_Visibility", 0.5)]);
+            }
+        }
+        Some(f)
+    }
+
     fn actor_matrix(&mut self, actor: &Obj) -> Mat4 {
         let ch = self.chain(actor);
         let loc = ch.vector("Location").unwrap_or([0.0; 3]);
@@ -826,6 +962,10 @@ impl<'a> Cooker<'a> {
                             d.breaks = self.last_break_step(&bc, "m_DoorBreakSteps");
                         }
                     }
+                }
+                if let Some(t) = tweak.as_ref() {
+                    let tc = self.chain(t);
+                    d.occlusion = [tc.float("m_fPlayerSoundOcclusion").unwrap_or(0.0), tc.float("m_fAISoundOcclusion").unwrap_or(0.0)];
                 }
                 d.locked_start = ch.bool("m_bLocked").unwrap_or(false);
                 d.keys = str_array(&ch, "m_MatchingKeys");
@@ -931,6 +1071,84 @@ impl<'a> Cooker<'a> {
                         position: ue_point(ch.vector("Location").unwrap_or([0.0; 3])),
                         yaw: ue_yaw_to_bevy(rot[1]),
                         area: [dir, f("m_fAmbushAreaLength", 1000.0) * UNIT, f("m_fAmbushAreaWidth", 200.0) * UNIT, f("m_fAmbushAreaTop", 300.0) * UNIT, f("m_fAmbushAreaBottom", -300.0) * UNIT],
+                    });
+                    Ok(())
+                }
+                "RB_RadialImpulseActor" => {
+                    // a physics burst the scripts set off (`SeqAct_Toggle`: `FireImpulse`)
+                    let ch = self.chain(&obj);
+                    if let Some(c) = ch.obj(self.assets, "ImpulseComponent") {
+                        let cc = self.chain(&c);
+                        let imp = [
+                            cc.float("ImpulseRadius").unwrap_or(200.0) * UNIT,
+                            cc.float("ImpulseStrength").unwrap_or(900.0),
+                            cc.bool("bVelChange").unwrap_or(false) as u8 as f32,
+                            (cc.name("ImpulseFalloff").unwrap_or("RIF_Linear") == "RIF_Linear") as u8 as f32,
+                        ];
+                        self.actor_ref(&obj).impulse = Some(imp);
+                    }
+                    Ok(())
+                }
+                "LensFlareSource" => {
+                    // a lens flare (a candle's glow): its flare's source element, its material
+                    let ch = self.chain(&obj);
+                    let at = ch.vector("Location").unwrap_or([0.0; 3]);
+                    if let Some(lf) = ch.obj(self.assets, "LensFlareComp").and_then(|c| self.chain(&c).obj(self.assets, "Template")) {
+                        if let Some(f) = self.lens_flare(&lf, at) {
+                            self.scene.lens_flares.push(f);
+                        }
+                    }
+                    Ok(())
+                }
+                "SceneCaptureReflectActor" => {
+                    // a planar reflection: its target, its plane (the actor's place, facing its
+                    // rotation: up by default), what it shows
+                    let ch = self.chain(&obj);
+                    if let Some(c) = ch.obj(self.assets, "SceneCapture") {
+                        let cc = self.chain(&c);
+                        if let Some(t) = cc.obj(self.assets, "TextureTarget") {
+                            let texture = self.texture(TexJob::Plain(t));
+                            let rot = ch.rotator("Rotation").unwrap_or([16384, 0, 0]);
+                            let (pitch, yaw) = (rot[0] as f32 * std::f32::consts::TAU / 65536.0, rot[1] as f32 * std::f32::consts::TAU / 65536.0);
+                            let dir = [pitch.cos() * yaw.cos(), pitch.cos() * yaw.sin(), pitch.sin()];
+                            let p = ue_point(ch.vector("Location").unwrap_or([0.0; 3]));
+                            let n = ue_point(dir);
+                            self.scene.reflections.push(Reflection { texture, point: p, normal: n, channels: reflect_bits(cc.get("ReflectionChannels"), 0b1010_1111) });
+                        }
+                    }
+                    Ok(())
+                }
+                "DishonoredAudioVolume" => {
+                    let hulls = self.brush_hulls(&obj);
+                    if !hulls.is_empty() {
+                        let ch = self.chain(&obj);
+                        let last = |p: Option<String>| p.map(|p| p.rsplit('.').next().unwrap_or(&p).to_string()).unwrap_or_default();
+                        self.audio_cell_keys.insert((obj.pkg.name.clone(), obj.idx), self.scene.audio_cells.len() as u32);
+                        self.scene.audio_cells.push(AudioCell {
+                            name: obj.name().to_string(),
+                            hulls,
+                            environment: ch.name("m_Environment").filter(|n| *n != "None").unwrap_or_default().to_string(),
+                            state_event: last(ch.obj_path("m_pSoundEvent")),
+                            interior: ch.name("m_VolumeKind") == Some("VK_INTERIOR"),
+                        });
+                    }
+                    Ok(())
+                }
+                "DishonoredAudioPortal" => {
+                    let ch = self.chain(&obj);
+                    let mut corners = [[0.0; 3]; 4];
+                    for (k, c) in corners.iter_mut().enumerate() {
+                        if let Some((_, Value::Vector(v))) = ch.get_idx_pkg("m_Corners", k as i32) {
+                            *c = ue_point(*v);
+                        }
+                    }
+                    let key = |k: &str| ch.get_pkg(k).and_then(|(pkg, v)| if let Value::Object(o) = v { (*o > 0).then(|| (pkg.name.clone(), *o)) } else { None });
+                    self.portal_cell_keys.push([key("m_pCellA"), key("m_pCellB")]);
+                    self.scene.audio_portals.push(AudioPortal {
+                        name: obj.name().to_string(),
+                        corners,
+                        cells: [None, None],
+                        occlusion: [ch.float("m_fOcclusion_HeardByPlayer").unwrap_or(0.0), ch.float("m_fOcclusion_HeardByAI").unwrap_or(0.0)],
                     });
                     Ok(())
                 }
@@ -1086,6 +1304,7 @@ impl<'a> Cooker<'a> {
         let hidden_comp = cch.bool("HiddenGame").unwrap_or(false);
         let collide = cch.bool("CollideActors").unwrap_or(true) && cch.bool("BlockActors").unwrap_or(true);
         let cast_shadow = cch.bool("CastShadow").unwrap_or(true);
+        let reflect = reflect_bits(cch.get("ReflectionChannels"), 0);
         // per-instance material overrides
         let mut overrides: Vec<Option<Obj>> = Vec::new();
         for i in 0..16 {
@@ -1256,6 +1475,7 @@ impl<'a> Cooker<'a> {
             sun_shadow,
             light_shadows: Vec::new(),
             irrelevant_lights: Vec::new(),
+            reflect,
         });
         Ok(())
     }
@@ -1388,6 +1608,7 @@ impl<'a> Cooker<'a> {
             sun_shadow: None,
             light_shadows: Vec::new(),
             irrelevant_lights: Vec::new(),
+            reflect: 0,
         });
         Ok(())
     }
@@ -1745,8 +1966,24 @@ impl<'a> Cooker<'a> {
             return id;
         }
         let id = self.scene.textures.len() as u32;
+        // a render target is drawn at run time (a scene capture's), nothing to cook
+        if let TexJob::Plain(o) = &job {
+            if o.class().starts_with("TextureRenderTarget") {
+                let ch = self.chain(o);
+                let share = match ch.name("m_ResolutionType") {
+                    Some("TRT_HALFSIZE") => 0.5,
+                    Some("TRT_QUARTERSIZE") => 0.25,
+                    Some("TRT_FULLSIZE") => 1.0,
+                    _ => 0.0,
+                };
+                let size = [ch.float("SizeX").unwrap_or(256.0), ch.float("SizeY").unwrap_or(256.0), share];
+                self.scene.textures.push(TextureRef { name: key.clone(), file: String::new(), render_target: Some(size) });
+                self.tex_ids.insert(key, id);
+                return id;
+            }
+        }
         let file = format!("textures/{}.tex", sanitize(&key));
-        self.scene.textures.push(TextureRef { name: key.clone(), file });
+        self.scene.textures.push(TextureRef { name: key.clone(), file, render_target: None });
         self.tex_ids.insert(key, id);
         self.tex_jobs.push((id, job));
         id
@@ -2037,10 +2274,10 @@ impl<'a> Cooker<'a> {
                 _ => None,
             }?;
             let cls = obj.class();
-            // scene capture targets: nothing is in their rendering channels, so they hold
-            // their clear colour
+            // scene capture targets: drawn at run time (`reflections`: the meshes in their
+            // channels, mirrored)
             if cls.starts_with("TextureRenderTarget") {
-                return Some(TEX_BLACK);
+                return Some(c.texture(TexJob::Plain(obj)));
             }
             if cube {
                 return c.cube_map(&obj);
@@ -2594,6 +2831,7 @@ impl<'a> Cooker<'a> {
         let possess = ch.obj(self.assets, "m_pPossessableTweaks").map(|t| self.possessable(&t));
         let sight = self.sight(tweak);
         let stats = Some(self.npc_stats(tweak));
+        let attachments = self.npc_attachments(&ch);
         self.scene.npc_types.push(NpcType {
             name,
             kind: kind.into(),
@@ -2613,8 +2851,46 @@ impl<'a> Cooker<'a> {
             head_slots,
             sight,
             stats,
+            attachments,
         });
         Ok(Some(id))
+    }
+
+    /// What a character carries on its sockets (`m_pAttachmentsTweaks`): each part's mesh (as a
+    /// named prop), a breakable one's health, the damage types breaking it outright or not
+    /// hurting it, and its last break step (a tallboy's tank: its blast).
+    fn npc_attachments(&mut self, ch: &Chain) -> Vec<NpcAttachment> {
+        let Some(at) = ch.obj(self.assets, "m_pAttachmentsTweaks") else { return Vec::new() };
+        let ac = self.chain(&at);
+        let Some((pkg, Value::Array { count, offset, size })) = ac.get_pkg("m_Attachments").map(|(p, v)| (p.clone(), v.clone())) else { return Vec::new() };
+        let mut out = Vec::new();
+        for s in parse_struct_array(&pkg, offset, size, count).unwrap_or_default() {
+            let socket = s.name("m_Socket").unwrap_or_default().to_string();
+            let Some(tw) = s.object("m_pAttachmentTweaks").and_then(|o| self.assets.resolve(&pkg, o)) else { continue };
+            let tc = self.chain(&tw);
+            let Some(mesh_obj) = tc.obj(self.assets, "m_pStaticMesh").filter(|m| m.class() == "StaticMesh") else { continue };
+            let prop = format!("att:{}", tw.path());
+            if !self.scene.props.iter().any(|p| p.name == prop) {
+                let Ok(Some((mesh, materials))) = self.cook_mesh(&mesh_obj) else { continue };
+                self.scene.props.push(PropDef { name: prop.clone(), mesh, materials });
+            }
+            // (damage types: class names)
+            let types = |c: &Chain, name: &str| -> Vec<String> {
+                c.0.iter()
+                    .find(|(_, p)| p.get(name).is_some())
+                    .map(|(p, props)| upk::props::object_array(p, props, name).into_iter().filter(|&o| o != 0).map(|o| p.obj_path(o).rsplit('.').next().unwrap_or("").to_string()).collect())
+                    .unwrap_or_default()
+            };
+            out.push(NpcAttachment {
+                socket,
+                prop,
+                health: tc.float("m_Health").unwrap_or(0.0),
+                instant: types(&tc, "m_pInstantBreakDamageTypes"),
+                immune: types(&tc, "m_pImmuneToDamageTypes"),
+                breaks: self.last_break_step(&tc, "m_Steps"),
+            });
+        }
+        out
     }
 
     /// A `DisAttribute` of a tweak (through its fallbacks): easy, normal, hard, very hard.
@@ -3402,6 +3678,7 @@ impl<'a> Cooker<'a> {
                 sun_shadow: None,
                 light_shadows: Vec::new(),
                 irrelevant_lights: Vec::new(),
+                reflect: 0,
             });
             let pickup = self.scene.pickups.len() as u32;
             self.scene.pickups.push(Pickup {
@@ -3944,6 +4221,31 @@ impl<'a> Cooker<'a> {
         Ok(())
     }
 
+    /// A brush volume's convex hulls, in the world (Bevy space).
+    fn brush_hulls(&mut self, actor: &Obj) -> Vec<Vec<[f32; 3]>> {
+        let ach = self.chain(actor);
+        let Some(comp) = ach.obj(self.assets, "BrushComponent") else { return Vec::new() };
+        let m = self.actor_matrix(actor);
+        let cch = self.chain(&comp);
+        let mut hulls = Vec::new();
+        if let Some((gpkg, Value::Struct(_, geom))) = cch.get_pkg("BrushAggGeom") {
+            let gpkg = gpkg.clone();
+            let geom = Props(geom.clone());
+            if let Some((c, off, sz)) = geom.array("ConvexElems") {
+                for elem in parse_struct_array(&gpkg, off, sz, c).unwrap_or_default() {
+                    if let Some((vc, voff, _)) = elem.array("VertexData") {
+                        let mut r = Reader::at(&gpkg.data, voff);
+                        let pts: Vec<[f32; 3]> = (0..vc).map_while(|_| r.vec3().ok()).map(|v| ue_point(m.transform_point3(Vec3::from(v)).to_array())).collect();
+                        if pts.len() >= 4 {
+                            hulls.push(pts);
+                        }
+                    }
+                }
+            }
+        }
+        hulls
+    }
+
     fn volume(&mut self, actor: &Obj) -> Result<()> {
         let cls = actor.class();
         if !matches!(cls.as_str(), "BlockingVolume" | "DishonoredWaterVolume" | "DisHideoutVolume" | "PhysicsVolume" | "KillVolume" | "DisDeathVolume" | "DisStealthVolume" | "DisForbiddenZone" | "DisTetherVolume" | "DisPossessionVolume")
@@ -3954,30 +4256,7 @@ impl<'a> Cooker<'a> {
             return Ok(());
         }
         let ach = self.chain(actor);
-        let Some(comp) = ach.obj(self.assets, "BrushComponent") else { return Ok(()) };
-        let m = self.actor_matrix(actor);
-        let cch = self.chain(&comp);
-        let mut hulls = Vec::new();
-        if let Some((gpkg, Value::Struct(_, geom))) = cch.get_pkg("BrushAggGeom") {
-            let gpkg = gpkg.clone();
-            let geom = Props(geom.clone());
-            if let Some((c, off, sz)) = geom.array("ConvexElems") {
-                for elem in parse_struct_array(&gpkg, off, sz, c)? {
-                    if let Some((vc, voff, _)) = elem.array("VertexData") {
-                        let mut r = Reader::at(&gpkg.data, voff);
-                        let mut pts = Vec::with_capacity(vc);
-                        for _ in 0..vc {
-                            let v = Vec3::from(r.vec3()?);
-                            let w = m.transform_point3(v);
-                            pts.push(ue_point(w.to_array()));
-                        }
-                        if pts.len() >= 4 {
-                            hulls.push(pts);
-                        }
-                    }
-                }
-            }
-        }
+        let hulls = self.brush_hulls(actor);
         if !hulls.is_empty() {
             let index = self.scene.volumes.len() as u32;
             self.actor_ref(actor).volume = Some(index);
@@ -4372,6 +4651,7 @@ impl<'a> Cooker<'a> {
         let id = self.scene.npc_types.len() as u32;
         self.pending_anims.push(PendingAnims::new(id as usize, sets, &bdata));
         self.scene.npc_types.push(NpcType {
+            attachments: Vec::new(),
             name: body.path(),
             kind: "device".into(),
             skeleton: Some(skeleton),
@@ -4830,6 +5110,10 @@ impl<'a> Cooker<'a> {
             surface,
             breaks,
             joints: Vec::new(),
+            charges: (actor.class() == "DisWhaleOilBattery").then(|| {
+                let f = |k: &str, d: f32| tc.float(k).unwrap_or(d);
+                [f("m_InitialNumberOfCharges", 50.0), f("m_PawnChargeCost", 4.0), f("m_AmbientAnimalChargeCost", 1.0), f("m_WatchtowerChargeCost", 1.0), f("m_fExplosionChainTimer", 0.33)]
+            }),
         });
     }
 
@@ -5536,6 +5820,7 @@ impl<'a> Cooker<'a> {
                                     .collect();
                             }
                             self.scene.npc_types.push(NpcType {
+                            attachments: Vec::new(),
                             name: "player_arms".into(),
                             kind: "player".into(),
                             skeleton: Some(skeleton),
@@ -5565,6 +5850,9 @@ impl<'a> Cooker<'a> {
             log::warn!("player arms mesh not found");
         }
         // the rats of swarms (and the Devouring Swarm): the crowd agent's mesh and animations
+        if let Some(mat) = self.assets.find("Npc_SmallRat.Materials.SmallRat2_inst") {
+            self.scene.white_rat_material = Some(self.material(&mat));
+        }
         if let (Some(obj), Some(comp)) = (
             self.assets.find("Npc_SmallRat.Mesh.Npc_SmallRat"),
             self.assets.find("RatSwarm.CrowdAgent_SmallRat.SkeletalMeshComponent0"),
@@ -5589,6 +5877,7 @@ impl<'a> Cooker<'a> {
                             self.pending_anims.push(pending);
                             self.scene.rat_type = Some(self.scene.npc_types.len() as u32);
                             self.scene.npc_types.push(NpcType {
+                                attachments: Vec::new(),
                                 name: "rat".into(),
                                 kind: "rat".into(),
                                 skeleton: Some(skeleton),
@@ -6541,11 +6830,20 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
     for m in ["Boyle", "Bridge", "BrothelExt", "BrothelInt", "LightHouseExt1", "LightHouseExt2", "LightHouseExt3", "OverseerExt", "OverseerInt1", "OverseerInt2", "Streets", "TowerReturnInt", "TowerReturnInt2"] {
         sources.push((format!("UI_Map_{m}_SF"), "maps", ""));
     }
+    // ... and Dunwall City Trials': the challenges' pictures, their briefings' and results'
+    // backgrounds
+    sources.push(("UI_ChallengesImages_DLC05_SF".into(), "dlc05", ""));
+    for c in ["Arena", "AssassinsTraining", "BendTimeMassacre", "ChainKill", "Countdown", "DropAttack", "MysteryMan", "OilRain", "Race", "Thief"] {
+        sources.push((format!("UI_ResBg_{c}_SF"), "dlc05", ""));
+        sources.push((format!("UI_Brf_{c}_SF"), "dlc05", ""));
+    }
     for (pkg_name, dir_name, prefix) in sources {
-        let Ok(pkg) = upk::Package::open(&cooked.join(format!("{pkg_name}.upk"))) else { continue };
+        // (the game's packages, or a DLC's, with its texture caches)
+        let Some(pdir) = std::iter::once(cooked.to_path_buf()).chain(crate::resolver::dlc_dirs(cooked)).find(|d| d.join(format!("{pkg_name}.upk")).exists()) else { continue };
+        let Ok(pkg) = upk::Package::open(&pdir.join(format!("{pkg_name}.upk"))) else { continue };
         let dir = root.join("ui").join(dir_name);
         std::fs::create_dir_all(&dir)?;
-        let tfc = upk::texture::TfcCache::new(cooked);
+        let tfc = upk::texture::TfcCache::new(&pdir);
         for idx in 1..=pkg.exports.len() as i32 {
             if pkg.class_name(idx) != "Texture2D" {
                 continue;
@@ -6578,8 +6876,17 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         // (the message boxes and help bar over every screen; the notes and tutorials read)
         ("DishonoredGame", "UI_Global."),
         ("DishonoredGame", "UI_Note."),
+        // Dunwall City Trials: its HUD, briefing, results and leaderboards
+        ("UI_HUD_DLC05_SF", ""),
+        ("UI_Brief_DLC05_SF", ""),
+        ("UI_Results_DLC05_SF", ""),
+        // (its challenge menu, in its menu map; its pause menu)
+        ("L_DLC05_MainMenu_P", "UI_ChallengesMenu_DLC05."),
+        ("UI_PauseMenu_DLC05_SF", "UI_PauseMenu_DLC05."),
     ] {
-        let Ok(pkg) = upk::Package::open(&cooked.join(format!("{pkg_name}.upk"))) else { continue };
+        // (the game's packages, or the DLC's)
+        let path = std::iter::once(cooked.to_path_buf()).chain(crate::resolver::dlc_dirs(cooked)).map(|d| d.join(format!("{pkg_name}.upk"))).find(|p| p.exists());
+        let Some(Ok(pkg)) = path.map(|p| upk::Package::open(&p)) else { continue };
         for idx in 1..=pkg.exports.len() as i32 {
             if pkg.class_name(idx) != "SwfMovie" {
                 continue;
@@ -6701,7 +7008,14 @@ fn inline_imports(movie: &swf::Movie, tl: &mut crate::format::Timelines, root: &
 /// `timeline.json`: its sprites' timelines).
 fn ui_images(cooked: &Path, pkg: &upk::Package, movie_path: &str, root: &Path) -> Result<usize> {
     let movie = swf::Movie::parse(&swf_movie(pkg, movie_path)?)?;
-    let name = movie_path.rsplit('.').next().unwrap_or(movie_path);
+    // (a DLC's movie by its name and the DLC's: `UI_HUD_DLC05.HUD` is `HUD_DLC05`)
+    let last = movie_path.rsplit('.').next().unwrap_or(movie_path);
+    let dlc = movie_path.split('.').next().and_then(|p| p.rsplit('_').next()).filter(|t| t.starts_with("DLC"));
+    let name_s = match dlc {
+        Some(t) => format!("{last}_{t}"),
+        None => last.to_string(),
+    };
+    let name = name_s.as_str();
     let dir = root.join("ui").join(name);
     std::fs::create_dir_all(&dir)?;
     let tfc = upk::texture::TfcCache::new(cooked);
@@ -6762,7 +7076,7 @@ fn ui_images(cooked: &Path, pkg: &upk::Package, movie_path: &str, root: &Path) -
     }
     // (its animated clips, played by the game's timeline player; the full-screen menus' vector
     // shapes drawn into images, the HUD's left as they are: their hit areas would show)
-    let raster = !matches!(name, "HUD" | "HUDFX");
+    let raster = !matches!(name, "HUD" | "HUDFX" | "HUD_DLC05");
     let mut vectors = Vec::new();
     // (the bitmaps saved above, for the shapes cut out of them)
     let cache: std::cell::RefCell<HashMap<u16, Option<(u32, u32, Vec<u8>)>>> = Default::default();
@@ -6811,4 +7125,21 @@ fn str_array(ch: &Chain, name: &str) -> Vec<String> {
         }
         _ => Vec::new(),
     }
+}
+
+/// A `RenderingChannelContainer`'s set fields as bits (`REFLECT_CHANNELS`), over the defaults.
+fn reflect_bits(v: Option<&Value>, default: u16) -> u16 {
+    let mut bits = default;
+    if let Some(Value::Struct(_, f)) = v {
+        for p in f {
+            if let (Some(i), Value::Bool(b)) = (REFLECT_CHANNELS.iter().position(|c| *c == p.name), &p.value) {
+                if *b {
+                    bits |= 1 << i;
+                } else {
+                    bits &= !(1 << i);
+                }
+            }
+        }
+    }
+    bits
 }

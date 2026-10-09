@@ -404,10 +404,13 @@ fn damage_type(kind: HitKind) -> &'static str {
         HitKind::Sword | HitKind::Choke => "DishonoredDamageType_FastHit",
         HitKind::Assassinate | HitKind::Fatality => "DisDamageType_Assassination",
         HitKind::Bullet => "DishonoredDamageType_Bullet",
-        HitKind::Explosion => "DishonoredDamageType_Explosion",
+        HitKind::Explosion | HitKind::EnemyExplosion | HitKind::GrenadeThrowback | HitKind::StickyGrenade | HitKind::ExplosiveBullet => "DishonoredDamageType_Explosion",
         HitKind::Windblast => "DisDamageType_WindBlast",
         HitKind::Rats => "DishonoredDamageType_Plague",
         HitKind::Bolt | HitKind::Fire | HitKind::SleepDart | HitKind::ByOthers => "DisDamageType_Arrow",
+        HitKind::Impact => "DisDamageType_Impact",
+        HitKind::SpringRazor => "DisDamageType_SpringRazor",
+        HitKind::WallOfLight => "DisDamageType_WallOfLight",
     }
 }
 

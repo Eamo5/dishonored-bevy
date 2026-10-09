@@ -274,7 +274,11 @@ fullscreen display, vertical sync and the crosshair.
 - **Notes read as `UI_Note` shows them** (`notescreen.rs`): a note or book picked up opens over
   the blurred game on the dimmed, drifting backdrop — its title dark on the brush, its words in
   the scrolling field — and a location map in its frame; Escape puts it away (it stays in the
-  journal).
+  journal). The field (`_common.AnalogScrollView`, turned a degree with its mask) scrolls with
+  the wheel (three lines a notch), the arrows / W S and Page Up / Down; the words are laid out
+  once to learn their lines and shown a window of whole lines at a time, tilted as the
+  original's (a turned node can't be clipped here: its overflow came out garbled), so the long
+  books read to their end.
 - **The menus' questions and the saving icon as `UI_Global` draws them** (`msgbox.rs`,
   `globalui.rs`): overwriting a save, loading one, leaving for the main menu or Windows,
   starting a new game over autosaves and restoring a category's settings ask first with the
@@ -295,6 +299,24 @@ fullscreen display, vertical sync and the crosshair.
   `PLAY AUDIOGRAPH` / `STOP AUDIOGRAPH` to replay it from there.
 - **Bone charms** (the 29 originals, found at random, worn up to the slot count), **stores**
   (Piero's workshop, Griff) with the original items, prices and blueprint requirements.
+  Acrobat's `MantleAnimRate` speeds up the climb and its head animation together.
+  Strong Arms shortens the choke hold and its progress indicator; Whirlwind speeds up
+  sword hits and their arm animation; Fleet Fighter removes the drawn-weapon movement
+  penalty. Healthy Appetite, Twist of Fortune (including automatic remedies), Unnerving
+  Target, Plague Resistant and Plague Affinity now feed their gameplay effects. Remaining
+  charm effects and original-game timing comparisons are still under audit.
+  Blood Thirst uses the original adrenaline cooldown and burn rate; Sustained Rage
+  extends the cooldown, Vengeance gains adrenaline from health actually lost (even if
+  healed that frame), and Carrion Killer gains it for player rat kills. Enemy blasts
+  and music boxes do not earn Corvo rat-kill adrenaline. Cooldowns and pending gains
+  survive saves. Script: `equipcharm NAME` equips a specific cooked charm for checks.
+  Full elixir inventories disable the shop's purchase action without spending coins.
+  Bolt movement, gravity and lifetime now stop during full Bend Time and advance at
+  the world's slowed rate during partial Bend Time.
+  Ordinary bolts can be recovered from surfaces, bodies, and the air. Reinforced Bolts
+  reduces the original 70% body-impact break chance to 20%; intact embedded bolts
+  follow the struck character's skeleton. Recovering a bolt respects the quiver's
+  capacity upgrades, and saves preserve both flying and embedded projectiles.
 - **AI**: factions from the original data (guards, thugs, assassins, weepers, wolfhounds,
   tallboys on stilts with bows), sight, hearing, searching, ranged weapons, alarm bells
   that call reinforcements; feuding factions fight each other; weepers lunge and seize
@@ -445,6 +467,16 @@ fullscreen display, vertical sync and the crosshair.
   picture (`_img_mc`: a rune, a charm, a note), popping in from the left at 250%, its parts
   drifting to and fro while it stays its `m_fTutorialWindowDuration` (10 s), with the
   window's notification sound.
+- **Grenade throwback**: armed projectiles can be picked up with Use, dropped with Use, or thrown with
+  primary attack without resetting their fuse or spending inventory ammunition. Enemy
+  grenades use difficulty-scaled damage and Clockwork Malfunction's additional fuse time;
+  returned grenade kills have their own statistic, while untouched enemy grenade kills
+  are not credited to Corvo. Sticky grenades and explosive bullets retain their damage types.
+  Saves retain live grenades (including carried ones), remaining fuses, attachment and
+  ownership, plus deployed springrazors and their arming/trigger timers. NPC references
+  remap by saved spawner; sticky grenades remain attached to world surfaces.
+  Loading also clears the opening matinee's stale fade override, avoiding a black
+  screen while the restored world and explosive fuses are already running.
 - **Cooking grenades**: the button held pulls the pin and the fuse burns in the hand — the
   HUD movie's `GrenadeCooking` gauge at the crosshair counts it in hundredths, pulsing every
   half second; let go, the grenade flies with what's left; `[F] Cancel Cooking` puts it back;
@@ -834,7 +866,8 @@ fullscreen display, vertical sync and the crosshair.
   flat triggers on the floor work.
 - **Saves** keep the scripts' cinematic mode and the HUD parts they hid (the Prison's health
   bar after waking), and put matinee movers' colliders back with them (a gate left open stays
-  open to walk through).
+  open to walk through). Loading a crouched save restores the stance, eye height and short
+  collision capsule, including in low passages.
 - **Particles**: mesh emitters' type data comes from the LOD's `TypeDataModule` (with its
   fixed Pitch / Yaw / Roll), and local-space emitters carry their particles when what they
   follow moves or turns; axis-locked sprites (`ParticleModuleOrientationAxisLock`
@@ -846,6 +879,159 @@ fullscreen display, vertical sync and the crosshair.
   listening to everything Corvo uses (`DisSeqEvent_Interact` without an originator) hear what,
   and compare its tweak lineage (`DisSeqCond_CompareTweaks` "Fallback Related": the sword is
   an `InventoryPickupSwordBase`) for "Take a weapon".
+- **Prefab scripts**: a prefab placed in a level runs its instance's copy of the prefab's
+  sequence (`TheWorld...Prefabs.PrefabSequence*`); the prefab's own sequences that come along
+  in the package are templates and are not cooked, and the instance's ops take what they leave
+  unset from their archetypes (the event a PA speaker posts, its damage thresholds and types),
+  following the chain of the prefab's edited versions.
+- **Damage to things** (`SeqEvent_TakeDamage`, UE3's `HandleDamage`): bullets, bolts, the
+  blade, blasts, Wind Blast's cone and thrown or fallen props strike what the scripts listen
+  to (by the collider struck, else by their bounds), each as its original damage type
+  (`DishonoredDamageType_BulletMedium`, `DisDamageType_Arrow`, `..._FastHit`,
+  `DisDamageType_WindBlast`, `DisDamageType_Impact`...) checked by class lineage against the
+  event's `DamageTypes` / `IgnoreDamageTypes`, summed to its `DamageThreshold` (100) past
+  `MinDamageAmount`, Corvo's only where `bPlayerOnly`, and `SeqAct_SetDamageInstigator` makes
+  him answerable for what follows (`DH_DAMAGE_LOG`). People's damage events take their blows'
+  types the same way.
+- **PA speakers**: their prefab hums (`ActorFactoryAkAmbientSound`'s `Amb_Speaker_Noise`,
+  started and stopped by `SeqAct_AkStartAmbientSound`); shot or struck, the script destroys the
+  joint they hang by (`RB_BSJointActor`: props held by joints fall once their joints are gone),
+  the feedback screeches, the speaker drops, its impact wears it down (`SeqAct_ModifyHealth` on
+  a prop) and it breaks with its tweak's blast (`PASpeaker_01_twk`).
+- **Fires and emitters**: the scripts switch placed emitters on and off (`SeqAct_Toggle` on an
+  `Emitter`: fireworks, a puff of smoke) and destroying one puts it out - Wind Blast blows out
+  a fireplace (its light off, the flames gone, the smoke rising).
+- **Sound through rooms**: the levels' audio volumes (`DishonoredAudioVolume`) and doorways
+  (`DishonoredAudioPortal`) are cooked; the room Corvo is in sets the ambience
+  (`m_pSoundEvent`: the drone of the street, of the interior); a sound in another room comes
+  through the doorways between, from the first of them, muffled by each - its own occlusion, a
+  shut door in it (`m_fPlayerSoundOcclusion` / `m_fAISoundOcclusion` of the door's tweak),
+  what the scripts set (`DisSeqAct_SetAudioOcclusion`) - and the AI hears through them the same
+  way (`DH_AUDIO_LOG`, `DH_NO_ROOMS`).
+- **Whale oil tanks** hold their charge (`DisTweaks_WhaleOilBattery`: 50 full); walls of light,
+  arc pylons and watchtowers spend it from the tank feeding them (a kill, a shot) and stop when
+  it runs dry; the scripts refill them (`DisSeqAct_RefillWhaleOilBattery`; the Refinery's start
+  empty) (`DH_TANK_LOG`; the test script's `tankcharge N` and `wallnpc`). A watchtower finds
+  the tank in its socket once the level's props are there, or spends from the receptacle
+  feeding it (the shipped levels' five towers have neither: they run on).
+  Saves and kept level states preserve each tank's remaining charge and the devices'
+  rewiring and script-controlled power state.
+- **Tallboys** carry their tanks and shields on their sockets (`m_pAttachmentsTweaks`): the
+  breakable parts wear down, break at once to the blows their tweak names (a bullet or bolt in
+  a tank) and shrug off others (Wind Blast); a tank bursts with its blast and kills its tallboy.
+- **Room reverb**: each room's environment (`m_Environment`: `Room_Medium_Wood`,
+  `PC_streets_01`, `sewer`...) is the bank's reverb effect of that name (`Init.bnk`'s RoomVerb
+  and Matrix Reverb share sets: decay, high damping, tail level), cooked into the audio index;
+  the world's sounds ring in the room Corvo hears from (a small reverb on each, its tail
+  outliving the sound).
+- **Achievements** (`Twk_PlayerStats`): the 81 achievements' conditions over the 43 statistics
+  (kills by weapon through the blows' damage types, NPCs alerted this mission, money stolen,
+  bone charms...), judged as the statistics change or when the scripts say
+  (`DisSeqAct_EvalAchievement`: the story's). The game-wide statistics ("Kills", "Amount of
+  money stolen") are the profile's running totals, as Steam keeps them; those of "this mission"
+  the mission's; streaks are so much gained within so long (`m_fStreakValue` /
+  `m_fStreakTime`: six kills in a second, a long fall); the distance travelled and the time in a
+  host are measured as Corvo goes. Four the original judges itself, though flagged as the
+  scripts' (none names them): Shadow as any mission's statistics come up past the prologue
+  (`Twk_M0_Prison`), Ghost, Clean Hands and Flesh and Steel as the last one's do
+  (`Twk_M8_Lighthouse`), over the whole campaign (earlier missions' kills and detections
+  carried; powers acquired = levels owned, Blink the first). Unlocks and totals are kept in `achievements.json` beside the
+  options, and each is announced as Steam's overlay announces the original's: a card in the
+  lower right ("Achievement unlocked", its name), over everything, the HUD shown or not.
+- **Joints**: `DisSeqAct_RBConstraint` given nothing to bind lets its joint go.
+- **Moving navigation** (`ArkDynamicPylon`): the navigation mesh riding a mover (the bridge's
+  platforms) parts from the rest as its matinee sets off and joins it again once back
+  (`ArkSeqAct_ChangePylonConnection`); parted, the characters' paths don't cross onto it
+  (`DH_NAV_LOG`).
+- **Lens flares** (`LensFlareSource`: the candles' glow, a sewer lamp's): the flare's source
+  element faces the view at the source over the scene (`SDPG_Foreground`), sized and faded for
+  the view's distance (`DistMap_Scale`, `DistMap_Alpha`), shaded as `LensFlare_PMAT`'s compiled
+  pixel shader does (`flare.wgsl`: a round glow to the material's power, dimmer away from the
+  screen's middle, the element's colour times the material's, pulsing in its glowing
+  permutation, clamped and added); behind a wall it fades (`DH_FLARE_LOG`, `DH_FLARE_NOOCC`).
+- **Planar reflections** (`SceneCaptureReflectActor`): the water's materials sample their
+  capture's render target (`TextureRenderTarget2D`, half the screen) at the screen's place; a
+  camera mirrored in the capture's plane draws the meshes in its channels
+  (`ReflectionChannels`: the `Group_1` meshes the levels put there) with an oblique near clip
+  along the water (nothing below it), and a flat pass turns its image over into the target, as
+  UE3's mirrored view draws it (`DH_NO_REFLECT`, `DH_SHOW_REFLECT` shows the target).
+  Screen-relative targets follow the physical viewport on resolution changes; the oblique
+  clip preserves the far corner across FOVs, aspect ratios and camera subviews.
+- **Physics bursts** (`RB_RadialImpulseActor`, set off by the scripts' `SeqAct_Toggle`) throw
+  the loose props in reach outward (`ImpulseRadius`, `ImpulseStrength`, falloff); thrown props
+  hurt whom they strike (their tweak's `m_Damage`, `DisDamageType_Impact`) unless the scripts
+  spare them (`DisSeqAct_NPCIgnoreRBDamages`); spring razors' shrapnel counts as their own
+  damage type.
+- **Dynamic light passes** draw after everything opaque and before the fog and the translucent
+  (as UE3 adds its lights), grouped by material and light (`Ue3Material::depth_bias`: their
+  order among themselves doesn't matter, adding), sharing one material per surface material and
+  light.
+- **Dunwall City Trials (DLC05)**, cooked from the install's `DLC\PCConsole\DLC05` (the cook
+  indexes the DLC's packages after the game's, reads their texture caches, and its banks join
+  the audio cook): the main menu's DOWNLOADABLE CONTENT lists the ten challenges
+  (`DisDLC05GameInfo.m_Challenges`: names, words, medal scores, maps) with the stars of their
+  best scores, to start normal or expert. A run (`challenge.rs`): once the level is up the
+  game plays its opening (the matinee nothing in the scripts starts) and raises
+  `DisSeqEvent_DLC05_Challenge` "Started"; the scripts' DLC05 actions run it - challenge events
+  (`ECE_Challenge_End` / `_Failed` / `_Backup` / `_Restore` / `_Pause` / `_Resume`), timers
+  that write their time, the HUD's counters (kills, enemies left...), wave titles, countdowns
+  and phase results, scoring rule sets (`DisDLC05Tweaks_ChallengeScoringRuleset`, cooked per
+  map: a kill scores its victim's gain by story group, custom rules theirs), expert mode,
+  resurrection, healing, infinite ammo, the clockwork dolls, the DLC's achievements, levels
+  streamed, waves' slowed entrances (`DisSeqAct_DLC05_NpcWave`). A death goes to the scripts
+  (`DisSeqEvent_DLC05_PlayerDeath`) rather than the game over menu; at the end the results:
+  the score against the medals, the best kept in `dlc05.json` (Enter retries, Escape leaves).
+  Remote events pass their instigator on, spawners spawn what the scripts set on them
+  (`m_pPawnTweaks`) and spawn again once their last is down - how the arena's waves come
+  (`DH_CHALLENGE_LOG`; test commands `killnpc`, `kop`).
+
+## Parity audit status
+
+Full original-game parity has **not** been verified. Current regression coverage includes
+47 game release tests, plus isolated-profile gameplay checks for grenade throwback attribution,
+explosive save/load, post-load rendering, Vengeance/Sustained Rage timing, surface/body/
+mid-air bolt recovery across loading, and ammunition grants at upgraded capacities.
+Saves also preserve equipped powers, Dark Vision/Bend Time timers, cooking grenades,
+and Blink traversal state; stopped bolts retain their position and lifetime after loading.
+Crossbow projectiles use the original 200 m/s base firing speed, per-variant speed
+and gravity multipliers, and default world gravity. A stopped-time runtime check
+confirmed speeds of 200/140/40 m/s for ordinary/sleep/incendiary bolts.
+
+Known outstanding gameplay gaps from source and original-data inspection:
+
+- Bolt recovery now uses `Twk_Projectiles.Twk_Proj_Arrow`'s recovery flags and break
+  chance, with the charm's `ArrowBreakingModifier`. Surface, body and mid-air recovery
+  passed rewrite runtime checks; representative comparisons against the original remain.
+- Rat Scent and Scavenger still lack connected gameplay effects.
+  White rats now use the original white material and swarm probability; Albinos adds
+  its chance bonus, and Welcoming Host extends white-rat possession. The runtime log
+  confirms a 30-second duration with Welcoming Host. Maps need recooking to include
+  the white material (currently recooked: `L_Streets1_P`); visual and save/load audits
+  beyond the current map remain outstanding. Swarm saves now preserve surviving rats,
+  their colors, positions, movement state, targets, bite timers and summoned lifetimes.
+  A stopped-time runtime round trip retained an identical snapshot of 17 swarms,
+  24 rats and four white rats. Active possession now saves its host, remaining time,
+  creature body and scripted overrides; host remapping and collider restoration have
+  regression coverage. Runtime white-rat, NPC, fish and krust possession persisted
+  across loading and ended normally afterward. Krust saves use the host root rather
+  than its separate weapon collider.
+  A normal aimed level-two cast selected an unaware guard and spent 60 mana.
+  Wild-swarm bite intervals, initial delays and minimum/maximum damage now use their
+  original tweak values, with regression coverage for slow-frame timing; runtime
+  comparison with the original remains outstanding.
+- Ammunition capacities and upgrades now apply to world pickups, scripted grants,
+  trap salvage and shops. Full ammunition pickups remain available and full shop items
+  cannot spend coins. Repeated inventory confiscation preserves previously stashed gear;
+  returning it restores capacity upgrades before adding ammunition and respects elixir
+  limits. A regression test covers confiscation, save/load, return and duplicate return.
+  Broader campaign playthroughs remain outstanding.
+  World elixirs also remain available at capacity; health and mana elixirs use their
+  separate original limits across pickups, shops and scripted grants.
+  Partially collected ammunition bundles retain their unused rounds; saves retain
+  remaining amounts for both level-authored and factory-spawned pickups, including
+  overlapping factory instances restored over multiple frames.
+- Representative original-game visual comparisons and full campaign/UX playthroughs
+  remain outstanding. Feature listings above are implementation notes, not parity evidence.
 
 ## Workspace layout
 

@@ -30,6 +30,14 @@ impl Plugin for GameDataPlugin {
 pub struct Data(pub GameData);
 
 impl Data {
+    pub fn ammo_capacities(&self, stats: &PlayerStats, difficulty: u8) -> [u32; 8] {
+        ["BulletCapacity", "ExplosiveBulletCapacity", "ArrowCapacity", "SleepArrowCapacity", "FlareArrowCapacity", "SpringRazorCapacity", "GrenadeCapacity", "StickyGrenadeCapacity"].map(|name| {
+            (self.0.attributes.get(name).map(|_| self.attribute(name, difficulty, &stats.powers, &stats.charms))
+                .unwrap_or(if matches!(name, "SpringRazorCapacity" | "GrenadeCapacity" | "StickyGrenadeCapacity") { 5.0 } else { 10.0 })
+                + self.0.upgrades.iter().filter(|u| stats.upgrades.contains(&u.id)).flat_map(|u| &u.attributes)
+                    .filter(|(n, _)| n == name).map(|(_, value)| *value).sum::<f32>()).max(0.0) as u32
+        })
+    }
     pub fn active(&self, name: &str) -> Option<&ActivePowerDef> {
         self.0.actives.iter().find(|a| a.name == name)
     }
@@ -107,6 +115,14 @@ pub struct Attrs {
     /// fall speeds (multipliers of the base thresholds) before damage / death
     pub fall_damage: f32,
     pub mantle_rate: f32,
+    pub choke_time: f32,
+    pub melee_rate: f32,
+    pub weapon_speed: f32,
+    pub food_heal_bonus: f32,
+    pub mana_potion_full_chance: f32,
+    pub npc_gun_miss: f32,
+    pub plague_damage_reduction: f32,
+    pub plague_mana: f32,
     pub mana_regen_delay: f32,
     /// mana per second while regenerating, and how far above the last expense it refills
     pub mana_regen_rate: f32,
@@ -117,7 +133,12 @@ pub struct Attrs {
     pub health_elixir: f32,
     pub mana_elixir: f32,
     pub max_elixirs: u32,
+    pub max_mana_elixirs: u32,
     pub adrenaline_max: f32,
+    pub adrenaline_cooldown: f32,
+    pub adrenaline_burn: f32,
+    pub adrenaline_damage: f32,
+    pub adrenaline_rat: f32,
     /// walking with a body on the shoulder (m/s)
     pub carry: f32,
     /// mana a drop assassination gives (Falling Star)
@@ -135,6 +156,19 @@ pub struct Attrs {
     pub sword_damage: f32,
     pub bullet: Shot,
     pub bolt: Shot,
+    pub bolt_capacity: u32,
+    pub ammo_capacity: [u32; 8],
+    pub bolt_break_modifier: f32,
+}
+
+impl Attrs {
+    pub fn elixir_capacity(&self, mana: bool) -> u32 {
+        if mana { self.max_mana_elixirs } else { self.max_elixirs }
+    }
+    /// Twist of Fortune affects automatic remedies as well as manually drunk ones.
+    pub fn mana_elixir_amount(&self, max_mana: f32, roll: f32) -> f32 {
+        if roll < self.mana_potion_full_chance { max_mana } else { self.mana_elixir }
+    }
 }
 
 /// A projectile of Corvo's (`DisTweaks_Bullet`, `DisTweaks_Arrow`): its damage (its own, else
@@ -185,6 +219,14 @@ impl Default for Attrs {
             power_jump_max: 0.0,
             fall_damage: 1.0,
             mantle_rate: 1.0,
+            choke_time: 1.5,
+            melee_rate: 1.0,
+            weapon_speed: 0.9,
+            food_heal_bonus: 0.0,
+            mana_potion_full_chance: 0.0,
+            npc_gun_miss: 0.0,
+            plague_damage_reduction: 0.0,
+            plague_mana: 0.0,
             mana_regen_delay: 3.0,
             mana_regen_rate: 10.0,
             mana_regen_portion: 20.0,
@@ -194,7 +236,12 @@ impl Default for Attrs {
             health_elixir: 40.0,
             mana_elixir: 50.0,
             max_elixirs: 10,
+            max_mana_elixirs: 10,
             adrenaline_max: 250.0,
+            adrenaline_cooldown: 10.0,
+            adrenaline_burn: 1.0,
+            adrenaline_damage: 0.0,
+            adrenaline_rat: 0.0,
             carry: 3.5,
             drop_mana: 0.0,
             swim: 3.5,
@@ -205,6 +252,9 @@ impl Default for Attrs {
             sword_damage: 10.0,
             bullet: Shot { damage: 20.0, headshot: 3.0, head_kill: true, stealth: 1.0, close: [9.0, 1.5], long: [15.0, 1.0] },
             bolt: Shot { damage: 20.0, headshot: 1.2, head_kill: false, stealth: 2.0, close: [0.0, 1.0], long: [1e4, 1.0] },
+            bolt_capacity: 10,
+            ammo_capacity: [10, 10, 10, 10, 10, 5, 5, 5],
+            bolt_break_modifier: 0.0,
         }
     }
 }
@@ -219,6 +269,7 @@ fn derive_attributes(data: Res<Data>, settings: Res<crate::settings::Settings>, 
     let d = settings.difficulty;
     let (powers, charms) = (stats.powers.clone(), stats.charms.clone());
     let a = |n: &str| data.attribute(n, d, &powers, &charms);
+    let ammo_capacity = data.ammo_capacities(&stats, d);
     let base = |n: &str| data.attribute(n, d, &BTreeMap::new(), &[]);
     let max_health = a("HealthMax");
     let max_mana = a("ManaMax");
@@ -258,6 +309,14 @@ fn derive_attributes(data: Res<Data>, settings: Res<crate::settings::Settings>, 
         power_jump_max: a("JumpZ_PowerJump") * UU * (crate::player::GRAVITY / 15.0).sqrt(),
         fall_damage: a("MaxSpeedBeforeFallingDamage") / base("MaxSpeedBeforeFallingDamage").max(1.0),
         mantle_rate: a("MantleAnimRate"),
+        choke_time: a("ChokeTime").max(0.0),
+        melee_rate: (1.0 + a("MeleeSpeed")).max(0.1),
+        weapon_speed: a("SwordUnsheathedSpeedFactor").max(0.1),
+        food_heal_bonus: a("FoodHealBonus"),
+        mana_potion_full_chance: a("PotionManaBonusChanceRatio").clamp(0.0, 1.0),
+        npc_gun_miss: a("ChanceNPCGunMiss").clamp(0.0, 1.0),
+        plague_damage_reduction: a("PlagueDamageReduction").max(0.0),
+        plague_mana: a("ManaGainOnPlagueDamage").max(0.0),
         mana_regen_delay: a("ManaRegenInitialDelay"),
         mana_regen_rate: a("ManaRegenAmount") / step,
         mana_regen_portion: a("ManaRegenAdditivePortion"),
@@ -267,7 +326,12 @@ fn derive_attributes(data: Res<Data>, settings: Res<crate::settings::Settings>, 
         health_elixir: data.pawn("m_nHealthElixirValue", 40.0) * (1.0 + a("HealthPotionPotencyBonus")),
         mana_elixir: data.pawn("m_nManaElixirValue", 50.0) * (1.0 + a("ManaPotionPotencyBonus")),
         max_elixirs: data.pawn("m_nMaxHealthElixir", 10.0) as u32,
+        max_mana_elixirs: data.pawn("m_nMaxManaElixir", 10.0) as u32,
         adrenaline_max: a("AdrenalineMax"),
+        adrenaline_cooldown: a("AdrenalineCooldown").max(0.0),
+        adrenaline_burn: a("AdrenalineBurnRate").max(0.0),
+        adrenaline_damage: a("AdrenalineMultWhenTakingDamage").max(0.0),
+        adrenaline_rat: a("AdrenalineOnRatKill").max(0.0),
         carry: a("GroundSpeedCarryingCorpse") * UU,
         drop_mana: a("DropAssassinationManaBonus"),
         swim: data.pawn("swim.m_fMaxSpeedNoStroke", 350.0) * UU,
@@ -278,7 +342,71 @@ fn derive_attributes(data: Res<Data>, settings: Res<crate::settings::Settings>, 
         sword_damage: item("Sword_MeleeDamage", 10.0),
         bullet: shot("bullet.", item("Pistol_RangedDamage", 10.0), item("Pistol_RangedHeadshotMultiplier", 1.2)),
         bolt: shot("arrow.", item("Crossbow_RangedDamage", 20.0), item("Crossbow_RangedHeadshotMultiplier", 1.2)),
+        bolt_capacity: ammo_capacity[2],
+        ammo_capacity,
+        bolt_break_modifier: a("ArrowBreakingModifier"),
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn equipping_and_removing_charms_updates_combat_attributes() {
+        let mut data = Data::default();
+        for (name, value) in [("HealthMax", 70.0), ("ManaMax", 100.0), ("ChokeTime", 1.5), ("SwordUnsheathedSpeedFactor", 0.9)] {
+            data.0.attributes.insert(name.into(), [value; 4]);
+        }
+        for (attribute, name, value) in [("ChokeTime", "Strong Arms", -1.5), ("MeleeSpeed", "Whirlwind II", 0.2), ("SwordUnsheathedSpeedFactor", "Fleet Fighter", 0.1)] {
+            data.0.charms.push(dhcook::format::CharmDef { attribute: attribute.into(), levels: vec![(name.into(), String::new(), value)] });
+        }
+        let mut app = App::new();
+        app.insert_resource(data).init_resource::<crate::settings::Settings>().init_resource::<PlayerStats>().init_resource::<Attrs>().add_systems(Update, derive_attributes);
+        app.world_mut().resource_mut::<PlayerStats>().charms = vec!["Strong Arms".into(), "Whirlwind II".into(), "Fleet Fighter".into()];
+        app.update();
+        let attrs = app.world().resource::<Attrs>();
+        assert_eq!(attrs.choke_time, 0.0);
+        assert!((attrs.melee_rate - 1.2).abs() < 1e-6);
+        assert!((attrs.weapon_speed - 1.0).abs() < 1e-6);
+        app.world_mut().resource_mut::<PlayerStats>().charms.clear();
+        app.update();
+        let attrs = app.world().resource::<Attrs>();
+        assert_eq!(attrs.choke_time, 1.5);
+        assert_eq!(attrs.melee_rate, 1.0);
+        assert_eq!(attrs.weapon_speed, 0.9);
+    }
+
+    #[test]
+    fn twist_of_fortune_respects_chance_boundary_and_maximum_mana() {
+        let attrs = Attrs { mana_elixir: 50.0, mana_potion_full_chance: 0.1, ..default() };
+        assert_eq!(attrs.mana_elixir_amount(120.0, 0.099), 120.0);
+        assert_eq!(attrs.mana_elixir_amount(120.0, 0.1), 50.0);
+        assert_eq!(Attrs::default().mana_elixir_amount(120.0, 0.0), Attrs::default().mana_elixir);
+    }
+
+    #[test]
+    fn quiver_upgrades_and_reinforced_bolts_derive_from_original_modifiers() {
+        let mut data = Data::default();
+        data.0.attributes.insert("ArrowCapacity".into(), [10.0; 4]);
+        data.0.upgrades.push(dhcook::format::UpgradeDef { id: "Twk_Upgrade_QuiverCapacity2".into(), attributes: vec![("ArrowCapacity".into(), 10.0)], ..default() });
+        data.0.upgrades.push(dhcook::format::UpgradeDef { id: "Twk_Upgrade_QuiverCapacity4".into(), attributes: vec![("ArrowCapacity".into(), 10.0)], ..default() });
+        data.0.charms.push(dhcook::format::CharmDef { attribute: "ArrowBreakingModifier".into(), levels: vec![("Reinforced Bolts".into(), String::new(), -0.5)] });
+        let mut app = App::new();
+        app.insert_resource(data).init_resource::<crate::settings::Settings>().init_resource::<PlayerStats>().init_resource::<Attrs>().add_systems(Update, derive_attributes);
+        app.update();
+        assert_eq!(app.world().resource::<Attrs>().bolt_capacity, 10);
+        {
+            let mut stats = app.world_mut().resource_mut::<PlayerStats>();
+            stats.upgrades = vec!["Twk_Upgrade_QuiverCapacity2".into(), "Twk_Upgrade_QuiverCapacity4".into()];
+            stats.charms.push("Reinforced Bolts".into());
+        }
+        app.update();
+        let attrs = app.world().resource::<Attrs>();
+        assert_eq!(attrs.bolt_capacity, 30);
+        assert_eq!(attrs.ammo_capacity, [10, 10, 30, 10, 10, 5, 5, 5]);
+        assert_eq!(attrs.bolt_break_modifier, -0.5);
+    }
 }
 
 /// Resolve the original strings' `GBA_*` binding tokens (the PC defaults) and markup.

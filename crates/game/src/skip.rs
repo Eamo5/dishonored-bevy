@@ -132,7 +132,7 @@ fn choke_gauge(
 ) {
     let Ok((mut node, mut vis, children)) = gauge.single_mut() else { return };
     let Ok(w) = window.single() else { return };
-    let Some(share) = choking.iter().next().map(|c| (c.t / crate::combat::CHOKE_TIME).clamp(0.0, 1.0)) else {
+    let Some(share) = choking.iter().next().map(|c| (c.t / c.duration.max(0.01)).clamp(0.0, 1.0)) else {
         *vis = Visibility::Hidden;
         return;
     };

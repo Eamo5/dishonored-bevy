@@ -25,7 +25,7 @@ impl Plugin for CarryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Carry>()
             .add_systems(OnExit(GameState::InGame), |mut c: ResMut<Carry>| *c = Carry::default())
-            .add_systems(Update, (carry_input, sync_body).chain().after(crate::interact::FocusSet).after(crate::arms::ArmsAnimSet).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (carry_input, sync_body).chain().after(crate::interact::FocusSet).after(crate::powers::bolt_focus).after(crate::arms::ArmsAnimSet).run_if(in_state(GameState::InGame)))
             .add_systems(Update, prewarm_bodies.run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, (place_body, fall).after(crate::arms::ArmsAlign).before(TransformSystems::Propagate))
             .add_systems(PostUpdate, log_joints.after(TransformSystems::Propagate));

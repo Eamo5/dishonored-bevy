@@ -45,8 +45,9 @@ enum Phase {
 #[derive(Clone, Default)]
 pub struct Device {
     pub def: Security,
-    /// receptacles: the tank is in
+    /// receptacles: the tank is in (which)
     pub has_tank: bool,
+    tank: Option<Entity>,
     pub rewired: bool,
     phase: Phase,
     cooldown: f32,
@@ -61,6 +62,11 @@ pub struct Device {
 }
 
 impl Device {
+    /// A receptacle's tank's place (where its tank sits).
+    fn tank_seat(&self) -> Option<Vec3> {
+        self.tank.map(|_| Vec3::from(self.def.position))
+    }
+
     /// A wall of light's middle and the way through it.
     pub fn wall_face(&self) -> Option<(Vec3, Vec3)> {
         let (inv, min, max) = self.wall?;
@@ -88,6 +94,17 @@ pub struct Devices {
     /// level puts in them
     seats: Vec<(usize, Vec3, Quat)>,
     seats_found: bool,
+    /// whale oil tanks' charges (by prop), and what the devices spent from the tank by where
+    /// it sits: 1 a kill, 2 an animal's, 3 a watchtower's shot (`DisTweaks_WhaleOilBattery`)
+    pub charges: std::collections::HashMap<Entity, f32>,
+    pub drains: Vec<(Vec3, usize)>,
+}
+
+/// Persist stable level indices, never ECS entity ids (those change on reload).
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+pub struct DevicesSave {
+    states: Vec<(usize, bool, bool)>,
+    charges: Vec<(usize, f32)>,
 }
 
 impl Device {
@@ -98,6 +115,30 @@ impl Device {
 }
 
 impl Devices {
+    pub fn save(&self, props: impl Iterator<Item = (Entity, usize)>) -> DevicesSave {
+        DevicesSave {
+            states: self.list.iter().enumerate().map(|(i, d)| (i, d.rewired, d.off)).collect(),
+            charges: props.filter_map(|(entity, index)| self.charges.get(&entity).map(|charge| (index, *charge))).collect(),
+        }
+    }
+
+    pub fn restore(&mut self, saved: DevicesSave, props: impl Iterator<Item = (Entity, usize)>) {
+        for (index, rewired, off) in saved.states {
+            if let Some(device) = self.list.get_mut(index) {
+                device.rewired = rewired;
+                device.off = off;
+            }
+        }
+        let charges: std::collections::HashMap<usize, f32> = saved.charges.into_iter().collect();
+        self.charges.clear();
+        self.drains.clear();
+        for (entity, index) in props {
+            if let Some(&charge) = charges.get(&index).filter(|c| c.is_finite()) {
+                self.charges.insert(entity, charge.max(0.0));
+            }
+        }
+    }
+
     /// Is a device fed: its receptacle holds a tank (devices without one always run).
     fn powered(&self, d: &Device) -> bool {
         if d.off {
@@ -106,7 +147,13 @@ impl Devices {
         if d.def.receptacle.is_empty() {
             return true;
         }
-        d.receptacle_idx.map(|r| self.list[r].has_tank).unwrap_or(true)
+        // (a tank in, with oil left)
+        d.receptacle_idx.map(|r| self.list[r].has_tank && self.list[r].tank.is_none_or(|t| self.charged(t))).unwrap_or(true)
+    }
+
+    /// A tank has oil left.
+    pub fn charged(&self, tank: Entity) -> bool {
+        self.charges.get(&tank).is_none_or(|c| *c > 0.0)
     }
 
     /// The device a level script names (the nearest of that name).
@@ -196,6 +243,56 @@ impl Devices {
         let d = self.list.iter().find(|d| d.def.actor == actor)?;
         Some((self.powered(d), self.rewired(d)))
     }
+
+    /// Where the tank feeding a device sits (its receptacle's, with a tank in), to spend from.
+    pub fn feed_seat(&self, actor: &str) -> Option<Vec3> {
+        let d = self.list.iter().find(|d| d.def.actor == actor)?;
+        self.list.get(d.receptacle_idx?)?.tank_seat()
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+
+    #[test]
+    fn security_round_trip_remaps_tanks_and_keeps_empty_tanks_empty() {
+        let mut world = World::new();
+        let old_empty = world.spawn_empty().id();
+        let old_partial = world.spawn_empty().id();
+        let mut before = Devices::default();
+        before.list = vec![Device { rewired: true, ..default() }, Device { off: true, ..default() }];
+        before.charges.insert(old_empty, 0.0);
+        before.charges.insert(old_partial, 17.5);
+        let json = serde_json::to_vec(&before.save([(old_empty, 4), (old_partial, 9)].into_iter())).unwrap();
+
+        let new_empty = world.spawn_empty().id();
+        let new_partial = world.spawn_empty().id();
+        let untouched = world.spawn_empty().id();
+        let mut after = Devices::default();
+        after.list = vec![Device::default(), Device::default()];
+        after.charges.insert(new_empty, 50.0);
+        after.drains.push((Vec3::ZERO, 1));
+        // Reverse the query's order: matching must use the movable index.
+        after.restore(serde_json::from_slice(&json).unwrap(), [(new_partial, 9), (untouched, 10), (new_empty, 4)].into_iter());
+
+        assert!(after.list[0].rewired);
+        assert!(after.list[1].off);
+        assert!(!after.charged(new_empty));
+        assert_eq!(after.charges.get(&new_partial), Some(&17.5));
+        assert!(!after.charges.contains_key(&old_empty));
+        assert!(!after.charges.contains_key(&untouched));
+        assert!(after.drains.is_empty());
+    }
+
+    #[test]
+    fn missing_devices_and_tanks_in_an_older_level_do_not_break_restore() {
+        let mut devices = Devices::default();
+        let saved = DevicesSave { states: vec![(99, true, true)], charges: vec![(42, 0.0)] };
+        devices.restore(saved, std::iter::empty());
+        assert!(devices.list.is_empty());
+        assert!(devices.charges.is_empty());
+    }
 }
 
 /// Whale oil tanks that are props: a receptacle is fed while a tank sits in its seat (as the
@@ -206,9 +303,34 @@ fn tank_seats(
     tanks: Query<(Entity, &crate::props::Prop, &Transform)>,
     held: Res<crate::props::Held>,
     mut sfx: MessageWriter<PostEvent>,
+    vm: Option<ResMut<crate::kismet::Vm>>,
 ) {
     let Some(level) = level else { return };
     let is_tank = |p: &crate::props::Prop| level.scene.movables.get(p.index).is_some_and(|m| m.tank.is_some());
+    // the tanks' charges: full as the level puts them (`m_InitialNumberOfCharges`), spent by
+    // the devices they feed, topped up by the scripts (`DisSeqAct_RefillWhaleOilBattery`)
+    let full = |p: &crate::props::Prop| level.scene.movables.get(p.index).and_then(|m| m.charges).map(|c| c[0]).unwrap_or(50.0);
+    for (e, p, _) in tanks.iter().filter(|(_, p, _)| is_tank(p)) {
+        devices.charges.entry(e).or_insert_with(|| full(p));
+    }
+    for (at, kind) in std::mem::take(&mut devices.drains) {
+        let Some((e, p, _)) = tanks.iter().filter(|(_, p, t)| is_tank(p) && t.translation.distance(at) < 2.5).min_by(|a, b| a.2.translation.distance(at).total_cmp(&b.2.translation.distance(at))) else { continue };
+        let cost = level.scene.movables.get(p.index).and_then(|m| m.charges).map(|c| c[kind.min(3)]).unwrap_or(1.0);
+        if let Some(c) = devices.charges.get_mut(&e) {
+            let was = *c;
+            *c = (*c - cost).max(0.0);
+            if std::env::var("DH_TANK_LOG").is_ok() {
+                info!("tank {e:?}: {was:.0} -> {:.0}", *c);
+            }
+        }
+    }
+    if let Some(mut vm) = vm {
+        for (insts, pct) in std::mem::take(&mut vm.tank_refills) {
+            for (e, p, _) in tanks.iter().filter(|(_, p, _)| is_tank(p) && level.scene.movables.get(p.index).is_some_and(|m| insts.contains(&m.instance))) {
+                devices.charges.insert(e, full(p) * (pct / 100.0).clamp(0.0, 1.0));
+            }
+        }
+    }
     if !devices.seats_found {
         devices.seats_found = true;
         // each tank's receptacle: the nearest that names it
@@ -230,8 +352,10 @@ fn tank_seats(
     }
     let seats = devices.seats.clone();
     for (r, at, _) in seats {
-        let filled = tanks.iter().any(|(e, p, t)| is_tank(p) && held.0 != Some(e) && t.translation.distance(at) < 0.5);
+        let tank = tanks.iter().find(|(e, p, t)| is_tank(p) && held.0 != Some(*e) && t.translation.distance(at) < 0.5).map(|x| x.0);
+        let filled = tank.is_some();
         let d = &mut devices.list[r];
+        d.tank = tank;
         if d.has_tank != filled {
             d.has_tank = filled;
             let key = if filled { "m_PlugSound" } else { "m_UnplugSound" };
@@ -582,6 +706,7 @@ fn walls(
         l.cmpge(w.1 - Vec3::splat(0.25)).all() && l.cmple(w.2 + Vec3::splat(0.25)).all()
     };
     let mut killed = Vec::new();
+    let mut spent = Vec::new();
     for (i, d) in devices.list.iter().enumerate() {
         let Some(w) = &d.wall else { continue };
         let on = devices.powered(d);
@@ -614,8 +739,12 @@ fn walls(
             // rewired, it spares Corvo's friends instead
             let dies = if rewired { n.enemy } else { !spared && !n.faction.is_empty() };
             if dies && inside(w, t.translation) {
-                hits.write(NpcHit { npc: e, damage: 999.0, kind: HitKind::Fatality, from: t.translation });
+                hits.write(NpcHit { npc: e, damage: 999.0, kind: HitKind::WallOfLight, from: t.translation });
                 killed.push(d.def.actor.clone());
+                // (a kill spends its tank's oil: `m_PawnChargeCost`)
+                if let Some(seat) = d.receptacle_idx.and_then(|r| devices.list[r].tank_seat()) {
+                    spent.push((seat, 1));
+                }
                 fx.write(crate::particles::SpawnEffect { follow: Some(e), secs: 1.5, ..crate::particles::SpawnEffect::at("electrified", Vec3::Y * 0.9) });
                 if let Some(s) = d.def.sounds.get("m_pStartKillEffectSound") {
                     sfx.write(PostEvent::named(s, Some(t.translation)));
@@ -624,6 +753,7 @@ fn walls(
         }
     }
     devices.wall_kills.extend(killed);
+    devices.drains.extend(spent);
 }
 
 /// Arc pylons: an intruder in the cylinder makes them charge, then strike.
@@ -641,10 +771,12 @@ fn pylons(
 ) {
     let dt = time.delta_secs();
     let ppos = player.single().map(|t| t.translation).ok();
+    let mut spent = Vec::new();
     for i in 0..devices.list.len() {
         if devices.list[i].def.kind != "ArcPylon" {
             continue;
         }
+        let seat = devices.list[i].receptacle_idx.and_then(|r| devices.list[r].tank_seat());
         let powered = devices.powered(&devices.list[i]);
         let rewired = devices.rewired(&devices.list[i]);
         let d = &mut devices.list[i];
@@ -676,12 +808,16 @@ fn pylons(
                         sfx.write(PostEvent::named(s, Some(base)));
                     }
                     let damage = if d.def.damage > 0.0 { d.def.damage } else { 50.0 };
+                    // (a strike spends its tank's oil)
+                    if let Some(s) = seat {
+                        spent.push((s, 1));
+                    }
                     match who {
                         Some(e) => {
                             hits.write(NpcHit { npc: e, damage, kind: HitKind::Bullet, from: base });
                         }
                         None => {
-                            stats.health = (stats.health - damage).max(0.0);
+                            stats.take_damage(damage);
                             stats.damage_flash = 1.0;
                             stats.hit_from = Some(base);
                             if stats.health <= 0.0 {
@@ -711,6 +847,7 @@ fn pylons(
             (p, _) => p,
         };
     }
+    devices.drains.extend(spent);
 }
 
 /// Alarm bells: guards in a fight nearby ring them; the whole area comes running, and the

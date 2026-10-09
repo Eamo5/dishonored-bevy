@@ -174,7 +174,7 @@ fn combat_tunes(
             let half = tu.combat_angle.to_radians().tan();
             let mut x = 1.5;
             while x <= tu.combat_range {
-                kill.write(crate::swarm::KillRats { at: t.translation + fwd * x, radius: (x * half).max(1.0) });
+                kill.write(crate::swarm::KillRats { at: t.translation + fwd * x, radius: (x * half).max(1.0), by_player: false, source: t.translation + Vec3::Y });
                 x += 2.0;
             }
         }

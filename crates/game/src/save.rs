@@ -70,6 +70,8 @@ pub struct SaveGame {
     kismet: Option<VmSave>,
     npcs: Vec<NpcSave>,
     taken: Vec<u32>,
+    #[serde(default)]
+    ammo_pickups: Vec<crate::interact::AmmoPickupSave>,
     /// (instance, open, target, swing direction, locked)
     doors: Vec<(u32, f32, f32, f32, bool)>,
     /// instances shown / hidden differently from the level's start
@@ -95,6 +97,21 @@ pub struct SaveGame {
     /// props: (movable, `None` broken, else where a loose one lies)
     #[serde(default)]
     props: Vec<(u32, Option<([f32; 3], [f32; 4])>)>,
+    /// Rewiring, script-controlled power and each tank's remaining whale oil.
+    /// Absent in older saves: retain the level's initial security state.
+    #[serde(default)]
+    security: Option<crate::security::DevicesSave>,
+    /// Live projectiles, held grenades and deployed springrazors.
+    #[serde(default)]
+    gadgets: Option<crate::gadgets::GadgetsSave>,
+    #[serde(default)]
+    projectiles: Vec<crate::powers::ProjectileSave>,
+    #[serde(default)]
+    powers: Option<crate::powers::PowersSave>,
+    #[serde(default)]
+    swarms: Option<crate::swarm::SwarmsSave>,
+    #[serde(default)]
+    possession: Option<crate::possession::PossessionSave>,
     /// what the scripts set on the characters: senses, health, who stands how with whom
     #[serde(default)]
     overrides: crate::script_world::OverridesSave,
@@ -276,9 +293,19 @@ fn save_game(
     pickups: Query<(&Pickup, &Transform)>,
     instances: Query<(&LevelInstance, &Visibility, &Transform, Option<&Door>)>,
     lights: Query<(&LevelLight, &Visibility)>,
-    (krusts, props, traps, usables): (Res<crate::krust::KrustLog>, Query<(&crate::props::Prop, &Transform), Without<Player>>, Res<crate::traps::TrapLog>, Res<crate::usables::UsableLog>),
-    overrides: Res<crate::script_world::SpawnerOverrides>,
-    (cine, script_ui, mut campaign): (Res<crate::script_world::Cinematic>, Option<Res<crate::kismet::ScriptUi>>, ResMut<crate::gameplay::Campaign>),
+    (krusts, props, traps, usables): (Res<crate::krust::KrustLog>, Query<(Entity, &crate::props::Prop, &Transform), Without<Player>>, Res<crate::traps::TrapLog>, Res<crate::usables::UsableLog>),
+    (overrides, devices, grenades, razors, held, npc_ids, projectiles, swarms, rats, bites, possession, possess_overrides, fish, krust_hosts): (
+        Res<crate::script_world::SpawnerOverrides>, Res<crate::security::Devices>,
+        Query<(Entity, &crate::gadgets::Grenade, &Transform)>, Query<(&crate::gadgets::Razor, &Transform)>,
+        Res<crate::props::Held>, Query<(Entity, &FromSpawner), With<Npc>>,
+        Query<(&crate::powers::Projectile, &Transform)>,
+        Query<(&crate::swarm::Swarm, &Transform)>,
+        Query<(Entity, &crate::swarm::Rat, &Transform, Option<&crate::swarm::WhiteRat>)>,
+        Res<crate::swarm::RatBites>,
+        Res<crate::possession::Possession>, Res<crate::possession::PossessOverrides>,
+        Query<(Entity, &crate::fish::Fish)>, Query<(Entity, &crate::krust::Krust)>,
+    ),
+    (cine, script_ui, mut campaign, powers, tc): (Res<crate::script_world::Cinematic>, Option<Res<crate::kismet::ScriptUi>>, ResMut<crate::gameplay::Campaign>, Res<crate::powers::Powers>, Res<crate::gameplay::TimeControl>),
     mut saving: MessageWriter<crate::globalui::ShowSaving>,
 ) {
     // the scripts keeping the map's state for a return (`DisSeqAct_SaveLevelState`; a partial
@@ -318,9 +345,23 @@ fn save_game(
         usables: usables.entered.iter().map(|(k, (s, d))| (*k, *s, *d)).collect(),
         usable_locks: usables.locks.iter().map(|(k, l)| (*k, *l)).collect(),
         factory_made: pickups.iter().filter(|(p, _)| level.scene.pickups.get(p.index as usize).is_some_and(|sp| sp.factory)).map(|(p, t)| (p.index, t.translation.to_array())).collect(),
+        ammo_pickups: pickups.iter().filter_map(|(p, t)| match &p.kind {
+            crate::interact::PickupKind::Ammo(amounts) => Some(crate::interact::AmmoPickupSave { index: p.index, position: t.translation.to_array(), amounts: amounts.clone() }),
+            _ => None,
+        }).collect(),
+        security: Some(devices.save(props.iter().map(|(e, p, _)| (e, p.index)))),
+        gadgets: Some(crate::gadgets::GadgetsSave::capture(grenades.iter(), razors.iter(), npc_ids.iter().map(|(e, s)| (e, s.0)), held.0)),
+        projectiles: crate::powers::save_projectiles(projectiles.iter(), npc_ids.iter().map(|(e, s)| (e, s.0))),
+        powers: Some(crate::powers::PowersSave::capture(&powers, &tc)),
+        swarms: Some(crate::swarm::SwarmsSave::capture(swarms.iter(), rats.iter(), npc_ids.iter().map(|(e, id)| (e, id.0)), bites.0, possession.host)),
+        possession: Some(crate::possession::PossessionSave::capture(&possession, &possess_overrides,
+            npc_ids.iter().map(|(e, id)| (e, crate::possession::SavedHost::Npc(id.0)))
+                .chain(rats.iter().map(|(e, _, _, _)| (e, crate::possession::SavedHost::Rat)))
+                .chain(fish.iter().map(|(e, f)| (e, crate::possession::SavedHost::Fish(f.index()))))
+                .chain(krust_hosts.iter().map(|(e, k)| (e, crate::possession::SavedHost::Krust(k.index())))))),
         props: {
             // the broken (no longer there) and where the loose ones lie
-            let alive: std::collections::HashMap<usize, &Transform> = props.iter().map(|(p, t)| (p.index, t)).collect();
+            let alive: std::collections::HashMap<usize, &Transform> = props.iter().map(|(_, p, t)| (p.index, t)).collect();
             (0..level.scene.movables.len())
                 .filter_map(|i| match alive.get(&i) {
                     None => Some((i as u32, None)),
@@ -473,7 +514,7 @@ fn arm_pending(pending: Option<ResMut<PendingLoad>>) {
 
 /// An NPC to put back into its saved state once spawned.
 #[derive(Component)]
-struct RestoreNpc(NpcSave);
+pub(crate) struct RestoreNpc(NpcSave);
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn apply_pending(
@@ -484,20 +525,23 @@ fn apply_pending(
     mut wl: Option<ResMut<WorldLighting>>,
     vm: Option<ResMut<Vm>>,
     mut stats: ResMut<PlayerStats>,
-    mut player: Query<(&mut Transform, &mut Player)>,
+    mut player: Query<(&mut Transform, &mut Player, &mut bevy_rapier3d::prelude::Collider)>,
     npcs: Query<Entity, With<Npc>>,
-    pickups: Query<(Entity, &Pickup)>,
+    (pickups, mut ammo_pickups): (Query<(Entity, &Pickup)>, ResMut<crate::interact::AmmoPickupRestore>),
     mut instances: Query<(Entity, &LevelInstance, &mut Visibility, &mut Transform, Option<&mut Door>, Option<&crate::level::InstanceCollider>), Without<Player>>,
     mut lights: Query<(&LevelLight, &mut Visibility), (Without<LevelInstance>, Without<Player>)>,
     (mut krusts, mut prop_restore, mut traps, mut usables): (ResMut<crate::krust::KrustLog>, ResMut<crate::props::PropRestore>, ResMut<crate::traps::TrapLog>, ResMut<crate::usables::UsableLog>),
-    mut overrides: ResMut<crate::script_world::SpawnerOverrides>,
-    (mut cine, mut matinee, mut collider_tfs, script_ui, mut campaign, settings): (
+    (mut overrides, mut devices, props, mut gadgets, mut projectiles, mut swarms, mut possession): (ResMut<crate::script_world::SpawnerOverrides>, ResMut<crate::security::Devices>, Query<(Entity, &crate::props::Prop)>, ResMut<crate::gadgets::GadgetRestore>, ResMut<crate::powers::ProjectileRestore>, ResMut<crate::swarm::SwarmRestore>, ResMut<crate::possession::PossessionRestore>),
+    (mut cine, mut matinee, mut collider_tfs, script_ui, mut campaign, settings, mut cinematic_fade, mut powers, mut tc): (
         ResMut<crate::script_world::Cinematic>,
         ResMut<crate::matinee::MatineeState>,
         Query<&mut Transform, (With<bevy_rapier3d::prelude::Collider>, Without<LevelInstance>, Without<Player>, Without<Npc>)>,
         Option<ResMut<crate::kismet::ScriptUi>>,
         ResMut<crate::gameplay::Campaign>,
         Res<crate::settings::Settings>,
+        ResMut<crate::matinee::CinematicFade>,
+        ResMut<crate::powers::Powers>,
+        ResMut<crate::gameplay::TimeControl>,
     ),
 ) {
     let Some(mut p) = pending else { return };
@@ -518,12 +562,20 @@ fn apply_pending(
     }
     // (a kept level state: the world as it was left, Corvo and the story as they are now)
     if !level_only {
-        if let Ok((mut t, mut pl)) = player.single_mut() {
+        if let Some(saved) = s.powers.take() {
+            saved.restore(&mut powers, &mut tc);
+        }
+        if let Ok((mut t, mut pl, mut collider)) = player.single_mut() {
             t.translation = Vec3::from(s.player);
             pl.yaw = s.yaw;
             pl.pitch = s.pitch;
             pl.velocity = Vec3::ZERO;
-            pl.locked = false;
+            pl.locked = powers.blink.is_some();
+            pl.crouched = s.crouched;
+            pl.eye_height = if s.crouched { crate::player::CROUCH_EYE } else { crate::player::STAND_EYE };
+            // The saved position is the capsule's centre. Restore its size as
+            // well, so loading in a low passage does not stand Corvo into the roof.
+            *collider = bevy_rapier3d::prelude::Collider::capsule_y(if s.crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF }, crate::player::RADIUS);
         }
         *stats = s.stats.clone();
     }
@@ -548,6 +600,10 @@ fn apply_pending(
         if let Some(mut ui) = script_ui {
             ui.restore(s.hud_hidden.take().unwrap_or_default().into_iter().collect());
         }
+        // The opening matinee may have written black earlier this frame. Clear
+        // that override together with ScriptUi, otherwise it reinstates black
+        // until the eight-second fallback fade despite the saved scene being live.
+        cinematic_fade.0 = None;
     }
     // (before the characters come back: they take it as they spawn)
     overrides.load(std::mem::take(&mut s.overrides));
@@ -626,10 +682,18 @@ fn apply_pending(
     usables.locks = s.usable_locks.iter().copied().collect();
     usables.restore = true;
     prop_restore.0 = Some(std::mem::take(&mut s.props));
+    gadgets.0 = s.gadgets.take();
+    projectiles.0 = Some(std::mem::take(&mut s.projectiles));
+    swarms.0 = s.swarms.take();
+    ammo_pickups.0 = std::mem::take(&mut s.ammo_pickups);
+    possession.0 = s.possession.take().map(|saved| if level_only { saved.level_return() } else { saved });
+    if let Some(security) = s.security.take() {
+        devices.restore(security, props.iter().map(|(e, p)| (e, p.index)));
+    }
     info!("save: restored {} ({} NPCs)", s.map, s.npcs.len());
 }
 
-fn restore_npcs(mut commands: Commands, mut q: Query<(Entity, &RestoreNpc, &mut Npc, &mut Transform)>) {
+pub(crate) fn restore_npcs(mut commands: Commands, mut q: Query<(Entity, &RestoreNpc, &mut Npc, &mut Transform)>) {
     for (e, r, mut n, mut t) in &mut q {
         let s = &r.0;
         t.translation = Vec3::from(s.position);

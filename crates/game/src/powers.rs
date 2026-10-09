@@ -23,13 +23,17 @@ pub struct PowersPlugin;
 impl Plugin for PowersPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Powers>()
+            .init_resource::<ProjectileRestore>()
             .add_message::<PowerUsed>()
             .add_message::<PowerEquipped>()
             .add_systems(OnEnter(GameState::InGame), (reset_powers, spawn_blink_marker))
+            .add_systems(Update, restore_projectiles.after(crate::save::restore_npcs).before(bolt_focus).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, bolt_focus.after(crate::interact::FocusSet).before(crate::gadgets::grenade_focus).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
             .add_systems(
                 Update,
                 (select_power, use_power, cook_grenade, blink_travel, update_projectiles, regenerate, dark_vision_post, crate::darkvision::update_dark_vision, crate::darkvision::dark_vision_sounds)
                     .chain()
+                    .after(crate::gadgets::grenade_focus)
                     .run_if(in_state(GameState::InGame)),
             );
     }
@@ -243,6 +247,197 @@ pub struct Projectile {
     pub kind: HitKind,
     pub life: f32,
     pub stuck: bool,
+    pub recoverable: bool,
+    attachment: Option<BoltAttachment>,
+}
+
+/// Player-owned power state must travel with a save: a projectile saved in
+/// stopped time must not resume moving merely because its map was reloaded.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct PowersSave {
+    selected: Power,
+    dark_vision_left: f32,
+    cooldown: f32,
+    cooking: Option<(Power, f32)>,
+    blink: Option<([f32; 3], [f32; 3], f32)>,
+    bend_remaining: f32,
+    world_dilation: f32,
+    scripted: Option<(f32, f32)>,
+}
+
+impl PowersSave {
+    pub fn capture(powers: &Powers, time: &TimeControl) -> Self {
+        Self {
+            selected: powers.selected,
+            dark_vision_left: if powers.dark_vision { powers.dark_vision_left } else { 0.0 },
+            cooldown: powers.cooldown,
+            cooking: powers.cooking,
+            blink: powers.blink.map(|(a, b, t)| (a.to_array(), b.to_array(), t)),
+            bend_remaining: time.bend_remaining,
+            world_dilation: time.world_dilation,
+            scripted: time.scripted,
+        }
+    }
+
+    pub fn restore(self, powers: &mut Powers, time: &mut TimeControl) {
+        *powers = Powers {
+            selected: self.selected,
+            dark_vision: self.dark_vision_left > 0.0,
+            dark_vision_left: self.dark_vision_left,
+            cooldown: self.cooldown,
+            cooking: self.cooking,
+            blink: self.blink.map(|(a, b, t)| (Vec3::from(a), Vec3::from(b), t)),
+            ..default()
+        };
+        *time = TimeControl {
+            bend_remaining: self.bend_remaining,
+            world_dilation: self.world_dilation,
+            scripted: self.scripted,
+            ..default()
+        };
+    }
+}
+
+#[derive(Clone, Copy)]
+struct BoltAttachment {
+    npc: Entity,
+    bone: Option<usize>,
+    offset: Vec3,
+    rotation: Quat,
+}
+
+impl Projectile {
+    fn physics(data: &Data, kind: HitKind) -> (f32, f32) {
+        let (prefix, speed, gravity) = match kind {
+            HitKind::SleepDart => ("arrow_sleep", 0.7, 0.4),
+            HitKind::Fire => ("arrow_flare", 0.2, 0.5),
+            _ => ("arrow", 1.0, 1.3),
+        };
+        let speed = data.pawn("crossbow.m_fArrowFireSpeed", 20000.0) * UU * data.pawn(&format!("{prefix}.m_fSpeedMultiplier"), speed).max(0.0);
+        let gravity = data.pawn("world.DefaultGravityZ", -1500.0) * UU * data.pawn(&format!("{prefix}.m_fGravityMultiplier"), gravity).max(0.0);
+        (speed, gravity)
+    }
+    fn survives_body_hit(base_chance: f32, modifier: f32, roll: f32) -> bool {
+        roll >= (base_chance + modifier).clamp(0.0, 1.0)
+    }
+}
+
+fn recover_bolt(stats: &mut PlayerStats, attrs: &Attrs) -> bool {
+    if stats.bolts >= attrs.bolt_capacity { return false; }
+    stats.bolts += 1;
+    true
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct ProjectileSave {
+    position: [f32; 3],
+    rotation: [f32; 4],
+    velocity: [f32; 3],
+    kind: HitKind,
+    life: f32,
+    stuck: bool,
+    recoverable: bool,
+    /// Stable NPC spawner and bone index; the offset is local to that bone.
+    attachment: Option<(u32, Option<usize>, [f32; 3], [f32; 4])>,
+}
+
+#[derive(Resource, Default)]
+pub struct ProjectileRestore(pub Option<Vec<ProjectileSave>>);
+
+pub(crate) fn save_projectiles<'a>(projectiles: impl IntoIterator<Item = (&'a Projectile, &'a Transform)>, npcs: impl IntoIterator<Item = (Entity, u32)>) -> Vec<ProjectileSave> {
+    let npcs: std::collections::HashMap<_, _> = npcs.into_iter().collect();
+    projectiles.into_iter().map(|(p, t)| ProjectileSave {
+        position: t.translation.to_array(), rotation: t.rotation.to_array(), velocity: p.vel.to_array(),
+        kind: p.kind, life: p.life, stuck: p.stuck, recoverable: p.recoverable,
+        attachment: p.attachment.and_then(|a| Some((*npcs.get(&a.npc)?, a.bone, a.offset.to_array(), a.rotation.to_array()))),
+    }).collect()
+}
+
+fn projectile_model(entity: &mut EntityCommands, assets: Option<&GameAssets>, kind: HitKind) {
+    if kind == HitKind::Fire {
+        entity.insert((
+            PointLight { color: Color::srgb(1.0, 0.55, 0.2), intensity: 60_000.0, range: 5.0, ..default() },
+            crate::fxlight::FxLight { color: Vec3::new(1.0, 0.55, 0.2), brightness: 3.0, radius: 5.0 },
+        ));
+    }
+    let prop = match kind { HitKind::SleepDart => "bolt_sleep", HitKind::Fire => "bolt_flare", _ => "bolt" };
+    if let Some(parts) = assets.and_then(|a| a.props.get(prop).or(a.props.get("bolt"))) {
+        entity.with_children(|c| {
+            for (mesh, mat) in &parts.parts {
+                let mut m = c.spawn((Mesh3d(mesh.clone()), MeshTag(0), Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2))));
+                mat.apply(&mut m);
+            }
+        });
+    }
+}
+
+fn restore_projectiles(mut commands: Commands, mut pending: ResMut<ProjectileRestore>, old: Query<Entity, With<Projectile>>, npcs: Query<(Entity, &crate::npc::FromSpawner)>, assets: Option<Res<GameAssets>>) {
+    let Some(saved) = pending.0.take() else { return };
+    for e in &old { commands.entity(e).despawn(); }
+    let npcs: std::collections::HashMap<_, _> = npcs.iter().map(|(e, s)| (s.0, e)).collect();
+    for p in saved {
+        let attachment = p.attachment.and_then(|(s, bone, offset, rotation)| Some(BoltAttachment { npc: *npcs.get(&s)?, bone, offset: Vec3::from(offset), rotation: Quat::from_array(rotation) }));
+        let mut e = commands.spawn((
+            Projectile { vel: Vec3::from(p.velocity), kind: p.kind, life: p.life, stuck: p.stuck, recoverable: p.recoverable, attachment },
+            Transform::from_translation(Vec3::from(p.position)).with_rotation(Quat::from_array(p.rotation)),
+            Visibility::default(), DespawnOnExit(GameState::InGame),
+        ));
+        projectile_model(&mut e, assets.as_deref(), p.kind);
+    }
+}
+
+/// Ordinary bolts use their own interaction, rather than masquerading as a
+/// level-authored pickup (which would fire the wrong Kismet pickup event).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn bolt_focus(
+    mut commands: Commands,
+    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
+    mut focus: ResMut<crate::interact::InteractFocus>,
+    bolts: Query<(Entity, &Projectile, &Transform)>,
+    positions: Query<&Transform>,
+    cam: Query<&GlobalTransform, With<PlayerCamera>>,
+    player: Query<(Entity, &Player)>,
+    (mut stats, attrs, mut held, carry, possession): (ResMut<PlayerStats>, Res<Attrs>, ResMut<crate::props::Held>, Res<crate::carry::Carry>, Res<crate::possession::Possession>),
+    rapier: ReadRapierContext,
+    mut sound: MessageWriter<PostEvent>,
+    mut log: ResMut<crate::pickuplog::PickupLog>,
+    mut messages: ResMut<HudMessages>,
+) {
+    let (Ok((pe, p)), Ok(camera), Ok(ctx)) = (player.single(), cam.single(), rapier.single()) else { return };
+    if stats.dead || p.locked || held.busy() || carry.carrying() || possession.host.is_some() { return; }
+    let eye = camera.translation();
+    let direction = camera.forward().as_vec3();
+    let nearest = bolts.iter().filter(|(_, b, _)| b.recoverable).filter_map(|(e, bolt, t)| {
+        let to = t.translation - eye;
+        let distance = to.length();
+        if distance > 2.4 || distance < 0.05 || to.dot(direction) / distance < 0.94 { return None; }
+        let not_host = |collider| bolt.attachment.is_none_or(|a| collider != a.npc);
+        let filter = QueryFilter::default().exclude_collider(pe).predicate(&not_host).groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP | GROUP_NPC));
+        if ctx.cast_ray(eye, to / distance, (distance - 0.08).max(0.0), true, filter).is_some() { return None; }
+        Some((e, distance, bolt.attachment.map(|a| a.npc)))
+    }).min_by(|a, b| a.1.total_cmp(&b.1));
+    let Some((e, distance, host)) = nearest else { return };
+    if focus.1.filter(|focused| Some(*focused) != host).and_then(|e| positions.get(e).ok()).is_some_and(|t| t.translation.distance(eye) + 0.1 < distance) { return; }
+    focus.0 = true;
+    focus.1 = Some(e);
+    focus.2 = format!("{} Pick up", crate::bindings::hint(crate::bindings::Act::Use));
+    focus.3 = "Bolt".into();
+    if keys.just_pressed(bind.key(crate::bindings::Act::Use)) {
+        if recover_bolt(&mut stats, &attrs) {
+            // Consume the short pickup action, so the same Use press cannot
+            // also grab a loose prop behind the disappearing bolt.
+            held.1 = held.1.max(0.1);
+            commands.entity(e).despawn();
+            focus.1 = None;
+            focus.2.clear();
+            focus.3.clear();
+            log.add("Crossbow Bolts +1", crate::pickuplog::ammo_icon(2));
+            sound.write(PostEvent::named("Snd_UI_Ingame_Ammo_Pickup", None));
+        } else {
+            messages.push("You can't carry more ammo of this type");
+            sound.write(PostEvent::named("Snd_UI_Ingame_Max_Ammo", None));
+        }
+    }
 }
 
 fn reset_powers(mut p: ResMut<Powers>, stats: Res<PlayerStats>) {
@@ -408,7 +603,7 @@ fn use_power(
         Res<crate::possession::PossessOverrides>,
     ),
     (mut swarm, mut gadget, mut blast, mut door_blast, mut kill_cams): (MessageWriter<crate::swarm::SummonSwarm>, MessageWriter<crate::gadgets::UseGadget>, MessageWriter<crate::gadgets::Explosion>, MessageWriter<crate::interact::DoorBlast>, MessageWriter<crate::killcam::StartKillCam>),
-    mut aim: ResMut<crate::aim::Aim>,
+    (mut aim, held): (ResMut<crate::aim::Aim>, Res<crate::props::Held>),
 ) {
     let dt = time.delta_secs();
     powers.cooldown = (powers.cooldown - dt).max(0.0);
@@ -427,7 +622,7 @@ fn use_power(
         }
     }
     let grabbed = cursor.grab_mode != CursorGrabMode::None || scripted.is_some();
-    let can_act = grabbed && !stats.dead && !p.locked && powers.blink.is_none() && tc.wheel >= 1.0;
+    let can_act = grabbed && !stats.dead && !p.locked && !held.busy() && powers.blink.is_none() && tc.wheel >= 1.0;
     let sel = powers.selected;
     let level = sel.level(&stats);
     // possessing: the left hand only ends it
@@ -508,7 +703,7 @@ fn use_power(
     // (short of mana: a remedy drunk first, if the option says so)
     if stats.mana < cost && settings.auto_mana_elixir && stats.mana_elixirs > 0 {
         stats.mana_elixirs -= 1;
-        stats.mana = (stats.mana + attrs.mana_elixir).min(stats.max_mana);
+        stats.mana = (stats.mana + attrs.mana_elixir_amount(stats.max_mana, rand::random::<f32>())).min(stats.max_mana);
         stats.mana_cap = stats.mana_cap.max(stats.mana);
         sfx.write(PostEvent::named("Snd_UI_Ingame_Wheel_Mana", None));
     }
@@ -632,10 +827,10 @@ fn use_power(
             powers.cooldown = 1.0;
         }
         Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt => {
-            let (kind, prop, empty) = match sel {
-                Power::SleepDart => (HitKind::SleepDart, "bolt_sleep", "Out of sleep darts"),
-                Power::IncendiaryBolt => (HitKind::Fire, "bolt_flare", "Out of incendiary bolts"),
-                _ => (HitKind::Bolt, "bolt", "Out of bolts"),
+            let (kind, empty) = match sel {
+                Power::SleepDart => (HitKind::SleepDart, "Out of sleep darts"),
+                Power::IncendiaryBolt => (HitKind::Fire, "Out of incendiary bolts"),
+                _ => (HitKind::Bolt, "Out of bolts"),
             };
             let ammo = match sel {
                 Power::SleepDart => &mut stats.sleep_darts,
@@ -668,25 +863,12 @@ fn use_power(
                     crate::combat::kill_cam(settings.kill_cam, last)
                 });
             let mut e = commands.spawn((
-                Projectile { vel: dir * 45.0, kind, life: 6.0, stuck: false },
+                Projectile { vel: dir * Projectile::physics(&data, kind).0, kind, life: 6.0, stuck: false, recoverable: kind == HitKind::Bolt && data.pawn("arrow.m_bCanRecoverAmmoInAir", 1.0) > 0.0, attachment: None },
                 Transform::from_translation(eye + dir * 0.4).looking_to(dir, Vec3::Y),
                 Visibility::default(),
                 DespawnOnExit(GameState::InGame),
             ));
-            if kind == HitKind::Fire {
-                e.insert((
-                    PointLight { color: Color::srgb(1.0, 0.55, 0.2), intensity: 60_000.0, range: 5.0, ..default() },
-                    crate::fxlight::FxLight { color: Vec3::new(1.0, 0.55, 0.2), brightness: 3.0, radius: 5.0 },
-                ));
-            }
-            if let Some(parts) = assets.as_ref().and_then(|a| a.props.get(prop).or(a.props.get("bolt"))) {
-                e.with_children(|c| {
-                    for (mesh, mat) in &parts.parts {
-                        let mut m = c.spawn((Mesh3d(mesh.clone()), MeshTag(0), Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2))));
-                        mat.apply(&mut m);
-                    }
-                });
-            }
+            projectile_model(&mut e, assets.as_deref(), kind);
             if let Some(npc) = lethal {
                 kill_cams.write(crate::killcam::StartKillCam { bolt: e.id(), npc });
             }
@@ -709,7 +891,7 @@ fn use_power(
                 let at = eye + dir * toi;
                 if explosive {
                     // `Twk_Proj_Bullet_Explosive`: 500 uu reach, 200 uu full, 50 damage
-                    blast.write(crate::gadgets::Explosion { at: at - dir * 0.2, radius: 5.0, full: 2.0, damage: 50.0, effect: "explosive_bullet", player: None });
+                    blast.write(crate::gadgets::Explosion { at: at - dir * 0.2, radius: 5.0, full: 2.0, damage: 50.0, effect: "explosive_bullet", player: None, kind: HitKind::ExplosiveBullet });
                 }
                 if let Ok((_, nt, n)) = npcs.get(hit) {
                     // the shot's damage by range, to the head (a kill), on the unaware
@@ -775,18 +957,34 @@ fn update_projectiles(
     time: Res<Time>,
     tc: Res<TimeControl>,
     rapier: ReadRapierContext,
-    (mut hits, attrs): (MessageWriter<NpcHit>, Res<Attrs>),
+    (mut hits, attrs, data): (MessageWriter<NpcHit>, Res<Attrs>, Res<Data>),
     player: Query<Entity, With<Player>>,
-    npcs: Query<(&Npc, &Transform), Without<Projectile>>,
+    npcs: Query<(&Npc, &Transform, Option<&crate::npc::NpcRig>), Without<Projectile>>,
     mut q: Query<(Entity, &mut Projectile, &mut Transform)>,
     (surfaces, mut sfx): (Query<&ColliderSurfaces>, MessageWriter<PostEvent>),
     (strikeables, mut struck, mut world_hits): (Query<&crate::gameplay::Strikeable>, MessageWriter<crate::gameplay::Struck>, MessageWriter<WorldDamage>),
+    globals: Query<&GlobalTransform>,
 ) {
-    let dt = time.delta_secs() * tc.world_scale().max(0.05);
+    let dt = time.delta_secs() * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
     let pe = player.single().ok();
     for (e, mut pr, mut t) in &mut q {
-        pr.life -= time.delta_secs();
+        let mut embedded_in_living = false;
+        if let Some(a) = pr.attachment {
+            let Ok((npc, nt, rig)) = npcs.get(a.npc) else {
+                commands.entity(e).despawn();
+                continue;
+            };
+            let frame = a.bone.and_then(|i| rig?.joint_at(i)).and_then(|e| globals.get(e).ok()).copied().unwrap_or(GlobalTransform::from(*nt));
+            t.translation = frame.affine().transform_point3(a.offset);
+            t.rotation = frame.compute_transform().rotation * a.rotation;
+            embedded_in_living = !npc.is_down();
+        }
+        // Recoverable bolts remain on surfaces and corpses. Only free flight and
+        // bolts embedded in living enemies consume their lifespan.
+        if !pr.stuck || !pr.recoverable || embedded_in_living {
+            pr.life -= dt;
+        }
         if pr.life <= 0.0 {
             commands.entity(e).despawn();
             continue;
@@ -794,8 +992,9 @@ fn update_projectiles(
         if pr.stuck {
             continue;
         }
-        pr.vel.y -= 4.0 * dt;
-        let step = pr.vel * dt;
+        let acceleration = Vec3::Y * Projectile::physics(&data, pr.kind).1;
+        let step = pr.vel * dt + acceleration * (0.5 * dt * dt);
+        pr.vel += acceleration * dt;
         let len = step.length();
         if len <= 0.0 {
             continue;
@@ -809,6 +1008,9 @@ fn update_projectiles(
             pr.stuck = true;
             pr.life = pr.life.min(5.0);
             let what = if npcs.get(hit).is_ok() { "Body" } else { impact_surface(surface) };
+            if pr.kind == HitKind::Bolt {
+                pr.recoverable = data.pawn("arrow.m_bCanRecoverAmmoInEnvironment", 1.0) > 0.0;
+            }
             sfx.write(PostEvent::named(&format!("Imp_Arrow_on_{what}"), Some(t.translation)));
             if pr.kind == HitKind::Fire && npcs.get(hit).is_err() {
                 sfx.write(PostEvent::named(&format!("Imp_Arrow_on_{what}_Flare"), Some(t.translation)));
@@ -826,7 +1028,7 @@ fn update_projectiles(
                 let damage = if pr.kind == HitKind::SleepDart { 0.0 } else { attrs.bolt.damage };
                 world_hits.write(WorldDamage::player(Reach::Hit { collider: hit, at: t.translation }, damage, kind));
             }
-            if let Ok((npc, nt)) = npcs.get(hit) {
+            if let Ok((npc, nt, rig)) = npcs.get(hit) {
                 if !npc.is_down() {
                     // a bolt: doubled on the unaware (`m_fDamageMultiplier_Stealth`), more to the head
                     let damage = match pr.kind {
@@ -836,13 +1038,167 @@ fn update_projectiles(
                     };
                     hits.write(NpcHit { npc: hit, damage, kind: pr.kind, from: t.translation });
                 }
-                commands.entity(e).despawn();
+                if pr.kind == HitKind::Bolt && data.pawn("arrow.m_bCanRecoverAmmoInBodies", 1.0) > 0.0
+                    && Projectile::survives_body_hit(data.pawn("arrow.m_fChanceToBreak", 0.7), attrs.bolt_break_modifier, rand::random::<f32>()) {
+                    let nearest = rig.and_then(|r| (0..r.len()).filter_map(|i| Some((i, *globals.get(r.joint_at(i)?).ok()?)))
+                        .min_by(|a, b| a.1.translation().distance_squared(t.translation).total_cmp(&b.1.translation().distance_squared(t.translation))));
+                    let frame = nearest.map(|(_, g)| g).unwrap_or(GlobalTransform::from(*nt));
+                    pr.attachment = Some(BoltAttachment { npc: hit, bone: nearest.map(|(i, _)| i),
+                        offset: frame.affine().inverse().transform_point3(t.translation), rotation: frame.compute_transform().rotation.inverse() * t.rotation });
+                    pr.recoverable = true;
+                    pr.life = data.pawn("arrow.m_fStuckInAlivePawnVanishTime", 10.0).max(0.01);
+                } else {
+                    commands.entity(e).despawn();
+                }
             }
         } else {
             t.translation += step;
             let v = pr.vel;
             t.look_to(v, Vec3::Y);
         }
+    }
+}
+
+#[cfg(test)]
+mod projectile_tests {
+    use super::*;
+
+    #[test]
+    fn arrow_variants_use_original_gravity_and_speed_modifiers() {
+        let mut data = Data::default();
+        for (kind, speed, gravity) in [(HitKind::Bolt, 200.0, -19.5), (HitKind::SleepDart, 140.0, -6.0), (HitKind::Fire, 40.0, -7.5)] {
+            let actual = Projectile::physics(&data, kind);
+            assert!((actual.0 - speed).abs() < 1e-5);
+            assert!((actual.1 - gravity).abs() < 1e-5);
+        }
+        data.0.pawn.insert("world.DefaultGravityZ".into(), -1000.0);
+        data.0.pawn.insert("arrow_sleep.m_fSpeedMultiplier".into(), 0.5);
+        data.0.pawn.insert("arrow_sleep.m_fGravityMultiplier".into(), 0.2);
+        assert_eq!(Projectile::physics(&data, HitKind::SleepDart), (100.0, -2.0));
+    }
+
+    #[test]
+    fn loading_preserves_active_powers_and_resets_transient_menu_slowdown() {
+        let powers = Powers { selected: Power::Crossbow, dark_vision: true, dark_vision_left: 6.5,
+            cooldown: 0.4, cooking: Some((Power::Grenade, 1.2)), blink: Some((Vec3::X, Vec3::Z, 0.05)), ..default() };
+        let tc = TimeControl { bend_remaining: 4.5, world_dilation: 0.0, wheel: 0.1, finisher: 0.2, scripted: Some((0.3, 7.0)) };
+        let bytes = serde_json::to_vec(&PowersSave::capture(&powers, &tc)).unwrap();
+        let saved: PowersSave = serde_json::from_slice(&bytes).unwrap();
+        let mut loaded = Powers::default();
+        let mut time = TimeControl::default();
+        saved.restore(&mut loaded, &mut time);
+        assert_eq!(loaded.selected, Power::Crossbow);
+        assert!(loaded.dark_vision);
+        assert_eq!(loaded.dark_vision_left, 6.5);
+        assert_eq!(loaded.cooldown, 0.4);
+        assert_eq!(loaded.cooking, powers.cooking);
+        assert_eq!(loaded.blink, powers.blink);
+        assert_eq!(time.bend_remaining, 4.5);
+        assert_eq!(time.world_scale(), 0.0);
+        assert_eq!(time.scripted, Some((0.3, 7.0)));
+        assert_eq!(time.wheel, 1.0);
+        assert_eq!(time.finisher, 1.0);
+        PowersSave::capture(&Powers::default(), &TimeControl::default()).restore(&mut loaded, &mut time);
+        assert!(!loaded.dark_vision);
+        assert!(loaded.cooking.is_none());
+        assert!(loaded.blink.is_none());
+        assert_eq!(time.world_scale(), 1.0);
+    }
+
+    #[test]
+    fn reinforced_bolts_reduce_breakage_and_recovery_respects_capacity() {
+        let ordinary = (0..100).filter(|i| Projectile::survives_body_hit(0.7, 0.0, (*i as f32 + 0.5) / 100.0)).count();
+        let reinforced = (0..100).filter(|i| Projectile::survives_body_hit(0.7, -0.5, (*i as f32 + 0.5) / 100.0)).count();
+        assert_eq!(ordinary, 30);
+        assert_eq!(reinforced, 80);
+        assert!(Projectile::survives_body_hit(0.7, -2.0, 0.0));
+        assert!(!Projectile::survives_body_hit(0.7, 2.0, 0.99));
+        let mut stats = PlayerStats::default();
+        stats.bolts = 9;
+        let mut attrs = Attrs::default();
+        assert!(recover_bolt(&mut stats, &attrs));
+        assert_eq!(stats.bolts, 10);
+        assert!(!recover_bolt(&mut stats, &attrs));
+        assert_eq!(stats.bolts, 10);
+        attrs.bolt_capacity = 20;
+        assert!(recover_bolt(&mut stats, &attrs));
+        assert_eq!(stats.bolts, 11);
+    }
+
+    #[test]
+    fn projectile_save_remaps_embedded_bolts_and_preserves_flight() {
+        let mut old = World::new();
+        let npc = old.spawn_empty().id();
+        let stuck = Projectile { vel: Vec3::ZERO, kind: HitKind::Bolt, life: 7.5, stuck: true, recoverable: true,
+            attachment: Some(BoltAttachment { npc, bone: Some(7), offset: Vec3::X * 0.1, rotation: Quat::from_rotation_z(0.3) }) };
+        let flying = Projectile { vel: Vec3::X * 45.0, kind: HitKind::Bolt, life: 4.0, stuck: false, recoverable: true, attachment: None };
+        let pose = Transform::from_xyz(1.0, 2.0, 3.0);
+        let saved = save_projectiles([(&stuck, &pose), (&flying, &pose)], [(npc, 11)]);
+        let saved = serde_json::from_slice::<Vec<ProjectileSave>>(&serde_json::to_vec(&saved).unwrap()).unwrap();
+        let mut app = App::new();
+        app.insert_resource(ProjectileRestore(Some(saved))).add_systems(Update, restore_projectiles);
+        for _ in 0..10 { app.world_mut().spawn_empty(); }
+        let restored_npc = app.world_mut().spawn(crate::npc::FromSpawner(11)).id();
+        assert_ne!(npc, restored_npc);
+        let stale = app.world_mut().spawn((flying, pose)).id();
+        app.update();
+        assert!(app.world().get_entity(stale).is_err());
+        let mut q = app.world_mut().query::<(&Projectile, &Transform)>();
+        assert_eq!(q.iter(app.world()).count(), 2);
+        for (p, t) in q.iter(app.world()) {
+            assert_eq!(t.translation, pose.translation);
+            assert!(p.recoverable);
+            if p.stuck {
+                let a = p.attachment.unwrap();
+                assert_eq!(a.npc, restored_npc);
+                assert_eq!(a.bone, Some(7));
+                assert_eq!(a.offset, Vec3::X * 0.1);
+                assert_eq!(a.rotation, Quat::from_rotation_z(0.3));
+                assert_eq!(p.life, 7.5);
+            } else {
+                assert_eq!(p.vel, Vec3::X * 45.0);
+                assert_eq!(p.life, 4.0);
+            }
+        }
+        app.world_mut().resource_mut::<ProjectileRestore>().0 = Some(Vec::new());
+        app.update();
+        assert_eq!(q.iter(app.world()).count(), 0);
+    }
+
+    #[test]
+    fn bend_time_freezes_bolt_motion_gravity_and_lifetime() {
+        let mut app = App::new();
+        app.init_resource::<Time>().init_resource::<Attrs>().init_resource::<Data>()
+            .insert_resource(TimeControl { bend_remaining: 10.0, world_dilation: 0.0, ..default() })
+            .add_message::<NpcHit>().add_message::<PostEvent>().add_message::<crate::gameplay::Struck>().add_message::<WorldDamage>()
+            .add_systems(Update, update_projectiles);
+        app.world_mut().spawn((DefaultRapierContext, RapierContextSimulation::default()));
+        let e = app.world_mut().spawn((Projectile { vel: Vec3::X * 10.0, kind: HitKind::Bolt, life: 10.0, stuck: false, recoverable: true, attachment: None }, Transform::IDENTITY)).id();
+        app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_secs(1));
+        app.update();
+        assert_eq!(app.world().get::<Projectile>(e).unwrap().life, 10.0);
+        assert_eq!(app.world().get::<Projectile>(e).unwrap().vel, Vec3::X * 10.0);
+        assert_eq!(app.world().get::<Transform>(e).unwrap().translation, Vec3::ZERO);
+        app.world_mut().resource_mut::<TimeControl>().world_dilation = 0.1;
+        app.update();
+        assert!((app.world().get::<Projectile>(e).unwrap().life - 9.9).abs() < 1e-5);
+        assert!((app.world().get::<Transform>(e).unwrap().translation.x - 1.0).abs() < 1e-5);
+        assert!((app.world().get::<Transform>(e).unwrap().translation.y + 0.0975).abs() < 1e-5);
+        assert!((app.world().get::<Projectile>(e).unwrap().vel.y + 1.95).abs() < 1e-5);
+        app.world_mut().resource_mut::<TimeControl>().bend_remaining = 0.0;
+        app.update();
+        assert!((app.world().get::<Projectile>(e).unwrap().life - 8.9).abs() < 1e-5);
+        assert!((app.world().get::<Transform>(e).unwrap().translation.x - 11.0).abs() < 1e-5);
+        assert!((app.world().get::<Transform>(e).unwrap().translation.y + 11.7975).abs() < 1e-4);
+        // An intact bolt stuck in the world must not vanish before it is looted.
+        {
+            let mut projectile = app.world_mut().get_mut::<Projectile>(e).unwrap();
+            projectile.stuck = true;
+            projectile.life = 0.1;
+        }
+        app.update();
+        assert_eq!(app.world().get::<Projectile>(e).unwrap().life, 0.1);
+        assert!((app.world().get::<Transform>(e).unwrap().translation.x - 11.0).abs() < 1e-5);
     }
 }
 
@@ -928,7 +1284,7 @@ fn regenerate(
     if keys.just_pressed(bind.key(crate::bindings::Act::ManaElixir)) {
         if stats.mana_elixirs > 0 && stats.mana < stats.max_mana {
             stats.mana_elixirs -= 1;
-            stats.mana = (stats.mana + attrs.mana_elixir).min(stats.max_mana);
+            stats.mana = (stats.mana + attrs.mana_elixir_amount(stats.max_mana, rand::random::<f32>())).min(stats.max_mana);
             stats.mana_cap = stats.mana_cap.max(stats.mana);
             sfx.write(PostEvent::named("Snd_UI_Ingame_Wheel_Mana", None));
         } else if stats.mana_elixirs == 0 {

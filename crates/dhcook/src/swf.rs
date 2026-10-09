@@ -643,6 +643,11 @@ fn walk_timeline(d: &[u8], mut p: usize, end: usize, frames: &mut Vec<crate::for
                 let clip = (f & 64 != 0).then(|| u16_at(body, q));
                 cur.ops.push(TlOp::Place { depth, moved: f & 1 != 0, id, name, m, cx, clip });
             }
+            37 if len >= 4 => {
+                if let Some((id, t)) = edit_text(body) {
+                    tl.texts.insert(id, t);
+                }
+            }
             28 => cur.ops.push(TlOp::Remove(u16_at(body, 0))),
             5 => cur.ops.push(TlOp::Remove(u16_at(body, 2))),
             43 => cur.labels.push(cstr(body, 0).0),
@@ -680,6 +685,86 @@ impl Movie {
         let mut root = Vec::new();
         walk_timeline(d, p0 + 4, d.len(), &mut root, &mut tl, &declared, &mut vectors);
         tl.sprites.insert(0, SpriteTimeline { frames: root });
+        // the text fields' fonts by name (the font library's: imported, or defined here)
+        let names = self.font_names();
+        for t in tl.texts.values_mut() {
+            if let Some(n) = t.font.strip_prefix('#').and_then(|i| i.parse::<u16>().ok()).and_then(|i| names.get(&i)) {
+                t.font = n.clone();
+            }
+        }
         tl
     }
+
+    /// The fonts' names by character id: imported (`$NormalFont`...) or defined
+    /// (`DefineFont2` / `DefineFont3`).
+    pub fn font_names(&self) -> HashMap<u16, String> {
+        let mut out: HashMap<u16, String> = self.imports().into_iter().map(|(id, _, name)| (id, name)).collect();
+        for t in self.tags.iter().filter(|t| t.code == 48 || t.code == 75) {
+            let d = &self.body[t.start..t.start + t.len];
+            if d.len() < 5 {
+                continue;
+            }
+            let id = u16_at(d, 0);
+            let n = d[4] as usize;
+            if 5 + n <= d.len() {
+                let name = String::from_utf8_lossy(&d[5..5 + n]).trim_end_matches('\0').to_string();
+                out.entry(id).or_insert(name);
+            }
+        }
+        out
+    }
+}
+
+/// A `DefineEditText` body: its id and field (the font as `#<id>` until named).
+fn edit_text(d: &[u8]) -> Option<(u16, crate::format::EditTextDef)> {
+    let id = u16_at(d, 0);
+    let mut b = Bits::new(d, 2);
+    let n = b.ub(5);
+    let r = [b.sb(n), b.sb(n), b.sb(n), b.sb(n)];
+    let mut q = b.byte_pos();
+    let (f1, f2) = (*d.get(q)?, *d.get(q + 1)?);
+    q += 2;
+    let mut t = crate::format::EditTextDef {
+        // (RECT is x min, x max, y min, y max in twips)
+        bounds: [r[0] as f32 / 20.0, r[2] as f32 / 20.0, r[1] as f32 / 20.0, r[3] as f32 / 20.0],
+        color: [1.0; 4],
+        wrap: f1 & 0x40 != 0,
+        multiline: f1 & 0x20 != 0,
+        html: f2 & 0x02 != 0,
+        ..Default::default()
+    };
+    if f1 & 0x01 != 0 {
+        t.font = format!("#{}", u16_at(d, q));
+        q += 2;
+    }
+    if f2 & 0x80 != 0 {
+        let (name, e) = cstr(d, q);
+        t.font = name;
+        q = e;
+    }
+    if f1 & 0x01 != 0 || f2 & 0x80 != 0 {
+        t.size = u16_at(d, q) as f32 / 20.0;
+        q += 2;
+    }
+    if f1 & 0x04 != 0 {
+        let c = d.get(q..q + 4)?;
+        t.color = [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, c[3] as f32 / 255.0];
+        q += 4;
+    }
+    if f1 & 0x02 != 0 {
+        q += 2;
+    }
+    if f2 & 0x20 != 0 {
+        t.align = *d.get(q)?;
+        t.margins = [u16_at(d, q + 1) as f32 / 20.0, u16_at(d, q + 3) as f32 / 20.0];
+        t.leading = u16_at(d, q + 7) as i16 as f32 / 20.0;
+        q += 9;
+    }
+    let (var, e) = cstr(d, q);
+    t.var = var;
+    q = e;
+    if f1 & 0x80 != 0 {
+        t.text = cstr(d, q).0;
+    }
+    Some((id, t))
 }

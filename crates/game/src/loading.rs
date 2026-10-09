@@ -162,7 +162,8 @@ fn load_level(cfg: &Config, tx: &Sender<LoadMsg>) -> anyhow::Result<LoadedLevel>
     let textures: Vec<Option<TexFile>> = scene
         .textures
         .par_iter()
-        .map(|t| match TexFile::read(&cache.join(&t.file)) {
+        // (render targets are drawn at run time: no file)
+        .map(|t| match if t.render_target.is_some() { Err(anyhow::anyhow!("render target")) } else { TexFile::read(&cache.join(&t.file)) } {
             Ok(mut f) => {
                 let lighting = t.name.starts_with("lmpage.") || t.name.starts_with("lmraw") || t.name.starts_with("shpage.");
                 while !lighting && f.mips.len() > 1 && f.width.max(f.height) > cap {
@@ -172,6 +173,7 @@ fn load_level(cfg: &Config, tx: &Sender<LoadMsg>) -> anyhow::Result<LoadedLevel>
                 }
                 Some(f)
             }
+            Err(_) if t.render_target.is_some() => None,
             Err(e) => {
                 warn!("texture {} unreadable: {e:#}", t.name);
                 None

@@ -274,6 +274,9 @@ pub struct VmSave {
     /// properties the scripts set on spawners (`SeqAct_ModifyProperty`)
     #[serde(default)]
     spawn_props: HashMap<u32, Vec<(String, String)>>,
+    /// physics joints the scripts destroyed
+    #[serde(default)]
+    joints_broken: Vec<String>,
 }
 
 #[derive(Resource)]
@@ -526,6 +529,37 @@ pub struct Vm {
     pub ambush_cmds: Vec<(Vec<Val>, Vec<Val>, bool)>,
     /// the damage each `SeqEvent_TakeDamage` has taken towards its threshold
     damage_acc: HashMap<u32, f32>,
+    /// physics joints the scripts destroyed (`SeqAct_Destroy` on an `RB_ConstraintActor`):
+    /// what hung by them falls
+    pub joints_broken: std::collections::HashSet<String>,
+    /// damage the scripts deal to things (`SeqAct_ModifyHealth` on a prop): its instances, how much
+    pub prop_damage: Vec<(Vec<u32>, f32)>,
+    /// doorways the scripts muffle (`DisSeqAct_SetAudioOcclusion`): their names, for Corvo, for
+    /// the AI
+    pub portal_occlusion: Vec<(Vec<String>, f32, f32)>,
+    /// whale oil tanks the scripts fill (`DisSeqAct_RefillWhaleOilBattery`): their instances,
+    /// to what percentage
+    pub tank_refills: Vec<(Vec<u32>, f32)>,
+    /// Dunwall City Trials: what the scripts ask of the challenge (`challenge.rs`), whether it
+    /// is in expert mode, whether this map's clockwork doll was found before
+    pub challenge_fx: Vec<crate::challenge::ChallengeFx>,
+    pub expert: bool,
+    pub doll_found: bool,
+    /// the damage type of the last death the challenge saw (`DisSeqAct_DLC05_GetDeathInfo`)
+    pub last_death: Option<String>,
+    /// movers' navigation meshes the scripts join to the rest (true) or part from it
+    /// (`ArkSeqAct_ChangePylonConnection`): the pylon's actor
+    pub pylon_links: Vec<(String, bool)>,
+    /// physics bursts the scripts set off (`RB_RadialImpulseActor` toggled): where, its
+    /// impulse (reach, strength, speed change, falloff)
+    pub impulses: Vec<(Vec3, [f32; 4])>,
+    /// achievements the scripts judge (`DisSeqAct_EvalAchievement`), and whether the mission's
+    /// statistics reset after (`m_bResetStats`)
+    pub achievement_evals: Vec<(String, bool)>,
+    /// the sounds factories made (`ActorFactoryAkAmbientSound`), by the actor standing for
+    /// them (its spawn point), and the emitters made for them
+    factory_sounds: HashMap<u32, String>,
+    factory_ambients: HashMap<u32, usize>,
     /// characters struck by a typed blow lately (when): their health's drop was that blow
     pub recent_hits: HashMap<Entity, f32>,
 }
@@ -671,6 +705,19 @@ impl Vm {
             npc_flags: Vec::new(),
             ambush_cmds: Vec::new(),
             damage_acc: HashMap::new(),
+            joints_broken: Default::default(),
+            prop_damage: Vec::new(),
+            portal_occlusion: Vec::new(),
+            tank_refills: Vec::new(),
+            challenge_fx: Vec::new(),
+            expert: false,
+            doll_found: false,
+            last_death: None,
+            pylon_links: Vec::new(),
+            impulses: Vec::new(),
+            achievement_evals: Vec::new(),
+            factory_sounds: HashMap::new(),
+            factory_ambients: HashMap::new(),
             recent_hits: HashMap::new(),
             explosions: Vec::new(),
             projectiles: Vec::new(),
@@ -872,6 +919,11 @@ impl Vm {
     fn read_b(&self, op: u32, desc: &str, prop: &str, default: bool) -> bool {
         self.read(op, desc).iter().find_map(|v| v.as_bool()).or_else(|| self.pb(op, prop)).unwrap_or(default)
     }
+    /// Write an op's linked variables (what the world measures: a challenge timer's time).
+    pub fn write_var(&mut self, op: u32, desc: &str, v: Val) {
+        self.write(op, desc, v);
+    }
+
     fn write(&mut self, op: u32, desc: &str, v: Val) {
         for w in self.link_vars(op, desc) {
             self.vals[w as usize] = v.clone();
@@ -1103,6 +1155,9 @@ impl Vm {
     /// firing once the sum reaches its `DamageThreshold` (100) and adding the sum to its
     /// "Damage Taken". Only Corvo's blows count where `bPlayerOnly` (the default).
     pub fn take_damage(&mut self, actor: u32, class: &str, amount: f32, by_player: bool) {
+        // (whoever the scripts made answerable for its damage: Corvo, for a PA speaker he
+        // shot down and its fall, `SeqAct_SetDamageInstigator`)
+        let by_player = by_player || matches!(self.instigators.get(&actor), Some(Val::Player));
         for ev in self.events_of.get(&actor).cloned().unwrap_or_default() {
             let op = &self.g.ops[ev as usize];
             if op.class != "SeqEvent_TakeDamage" || self.is_inert(ev) || self.st[ev as usize].disabled {
@@ -1247,9 +1302,12 @@ impl Vm {
                 }
             }
             "SeqAct_ActivateRemoteEvent" => {
+                // (what it names as the instigator, the events take as theirs: a challenge's
+                // spawn point for the wave's spawn)
+                let instigator = self.read(op, "Instigator").into_iter().find(|v| !matches!(v, Val::None));
                 if let Some(name) = self.ps(op, "EventName") {
                     for ev in self.remote.get(&name.to_ascii_lowercase()).cloned().unwrap_or_default() {
-                        self.event(ev, 0, None);
+                        self.event(ev, 0, instigator.clone());
                     }
                 }
                 self.fire(op, 0);
@@ -1337,6 +1395,13 @@ impl Vm {
             }
             "SeqAct_Toggle" => {
                 for t in self.read(op, "Target") {
+                    // (a physics burst fires on any input: `RB_RadialImpulseActor.OnToggle`)
+                    if let Some(ka) = if let Val::Actor(a) = &t { g.actors.get(*a as usize) } else { None } {
+                        if let Some(imp) = ka.impulse {
+                            self.impulses.push((Vec3::from(ka.position), imp));
+                            continue;
+                        }
+                    }
                     match t {
                         Val::Op(ev) => self.toggle_event(ev, input),
                         v @ Val::Actor(_) => {
@@ -1556,7 +1621,7 @@ impl Vm {
                 self.ai_fx.push(crate::script_world::AiFx::Attach { targets, attachments, detach });
                 self.fire(op, 0);
             }
-            "SeqAct_ToggleCinematicMode" => {
+            "SeqAct_ToggleCinematicMode" | "DisSeqAct_DLC05_ToggleCinematicMode" => {
                 let f = |k: &str| self.pb(op, k).unwrap_or(true);
                 let (hide_hud, hold) = (f("bHideHUD"), f("bDisableMovement") && f("bDisableInput"));
                 let on = match input {
@@ -1573,6 +1638,10 @@ impl Vm {
                 // "Spawned" (a PA speaker's announcements) happen there
                 if input == 0 {
                     if let Some(at) = self.read(op, "Spawn Point").into_iter().find(|v| matches!(v, Val::Actor(_))) {
+                        // (a sound it makes plays there when started)
+                        if let (Val::Actor(a), Some(ev)) = (&at, self.ps(op, "ambient_event")) {
+                            self.factory_sounds.insert(*a, ev);
+                        }
                         self.write(op, "Spawned", at.clone());
                         self.write(op, "Spawned 1", at);
                     }
@@ -2212,6 +2281,12 @@ impl Vm {
             }
             "SeqAct_Destroy" => {
                 for t in self.read(op, "Target") {
+                    // a joint: what hung by it falls
+                    if let Some(ka) = if let Val::Actor(a) = t { g.actors.get(a as usize) } else { None } {
+                        if ka.class.starts_with("RB_") {
+                            self.joints_broken.insert(ka.name.clone());
+                        }
+                    }
                     self.effects.push(Effect::Destroy(t));
                 }
                 self.fire(op, 0);
@@ -2280,6 +2355,15 @@ impl Vm {
                 let amount = self.read_f(op, "Amount", "Amount", 0.0);
                 let heal = self.pb(op, "bHeal").unwrap_or(false);
                 for t in self.read(op, "Target") {
+                    // a thing (a PA speaker): worn down, broken
+                    if let Some(ka) = if let Val::Actor(a) = t { g.actors.get(a as usize) } else { None } {
+                        if ka.spawner.is_none() && !ka.instances.is_empty() {
+                            if !heal {
+                                self.prop_damage.push((ka.instances.clone(), amount));
+                            }
+                            continue;
+                        }
+                    }
                     self.effects.push(Effect::Damage(t, if heal { -amount } else { amount }));
                 }
                 self.fire(op, 0);
@@ -2296,9 +2380,274 @@ impl Vm {
                 }
                 self.fire(op, 0);
             }
+            "DisSeqAct_RBConstraint" => {
+                // a joint given nothing to bind (`ConstraintActor1` empty: the Tower's) lets go
+                if !self.read(op, "ConstraintActor1").iter().any(|v| matches!(v, Val::Actor(_))) {
+                    for t in self.read(op, "Targets") {
+                        if let Some(ka) = if let Val::Actor(a) = t { g.actors.get(a as usize) } else { None } {
+                            if ka.class.starts_with("RB_") {
+                                self.joints_broken.insert(ka.name.clone());
+                            }
+                        }
+                    }
+                }
+                self.fire(op, 0);
+            }
+            "DisSeqAct_EvalAchievement" => {
+                if let Some(a) = self.ps(op, "m_Achievement") {
+                    let reset = self.pb(op, "m_bResetStats").unwrap_or(false);
+                    self.achievement_evals.push((a, reset));
+                }
+                self.fire(op, 0);
+            }
+            // ------------------------------------------------- Dunwall City Trials
+            "DisSeqAct_DLC05_SendChallengeEvent" => {
+                // (unset: the challenge's end, the enum's first)
+                let ev = self.ps(op, "m_eEventToSend").unwrap_or_else(|| "ECE_Challenge_End".into());
+                self.challenge_fx.push(crate::challenge::ChallengeFx::Event(ev));
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_StreamLevels" => {
+                let names: Vec<String> = match self.prop(op, "Levels") {
+                    Some(KVal::List(l)) => l.iter().filter_map(|v| if let KVal::Str(s) = v { Some(s.clone()) } else { None }).collect(),
+                    _ => Vec::new(),
+                };
+                for n in names {
+                    if input == 0 {
+                        self.load_level(&n);
+                    } else {
+                        self.unload_level(&n);
+                    }
+                }
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_Timer" => {
+                // Start, Stop, Add Modifier, Pause, Resume -> Started, Stopped, (Completed), Paused, Resumed
+                let modifier = self.read(op, "Modifier").iter().find_map(|v| v.as_f32()).unwrap_or(0.0);
+                let p = crate::challenge::TimerParams {
+                    initial: self.pf(op, "m_fInitialTime").unwrap_or(0.0),
+                    target: self.pb(op, "m_bUseTargetTime").unwrap_or(false).then(|| self.pf(op, "m_fTargetTime").unwrap_or(0.0)),
+                    increment: self.pb(op, "m_bIncrement").unwrap_or(true),
+                    reset_on_stop: self.pb(op, "m_bResetOnStop").unwrap_or(false),
+                    kind: self.ps(op, "m_TimerType").unwrap_or_else(|| "DDHT_DefaultTimer".into()),
+                };
+                self.challenge_fx.push(crate::challenge::ChallengeFx::Timer { op, input, params: p, modifier });
+                match input {
+                    0 => self.fire(op, 0),
+                    1 => self.fire(op, 1),
+                    3 => self.fire(op, 3),
+                    4 => self.fire(op, 4),
+                    _ => {}
+                }
+            }
+            "DisSeqAct_DLC05_SetScoringRules" => {
+                if let Some(t) = self.ps(op, "m_pRuleSetTweak") {
+                    self.challenge_fx.push(crate::challenge::ChallengeFx::Rules(t));
+                }
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_TriggerCustomScoringRule" => {
+                if let Some(r) = self.ps(op, "m_RuleToTrigger") {
+                    self.challenge_fx.push(crate::challenge::ChallengeFx::CustomRule(r));
+                }
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_ShowHUDItem" => {
+                // Show, Hide, Reset -> Shown, Hidden, Reset
+                let item = self.ps(op, "m_Item").or_else(|| self.ps(op, "m_LinkSetup")).unwrap_or_default();
+                let initial = self.read(op, "Initial Count").iter().find_map(|v| v.as_f32()).map(|f| f as i32);
+                let max = self.pi(op, "m_MaxValue");
+                self.challenge_fx.push(crate::challenge::ChallengeFx::HudItem { item, input, initial, max });
+                self.fire(op, (input as usize).min(2));
+            }
+            "DisSeqAct_DLC05_ShowWaveNumber" => {
+                let number = self.read(op, "Number").iter().find_map(|v| v.as_f32()).map(|f| f as i32);
+                let text = self.ps(op, "m_CustomText").filter(|t| !t.is_empty());
+                self.challenge_fx.push(crate::challenge::ChallengeFx::Wave { number, text });
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_ShowCountdown" => {
+                // Out now; Finished once the count is down (`challenge.rs`)
+                let go = self.pb(op, "m_bShowGO").unwrap_or(true);
+                self.challenge_fx.push(crate::challenge::ChallengeFx::Countdown { op, go });
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_ShowPhaseResults" => {
+                let n = |s: &Self, d: &str| s.read(op, d).iter().find_map(|v| v.as_f32()).unwrap_or(0.0) as i32;
+                let fx = crate::challenge::ChallengeFx::PhaseResults {
+                    name: self.ps(op, "m_PhaseName").unwrap_or_default(),
+                    last: self.pb(op, "m_bWasLastPhase").unwrap_or(false),
+                    possible: n(self, "Possible Kills"),
+                    required: n(self, "Required Kills"),
+                    effective: n(self, "Effective Kills"),
+                };
+                self.challenge_fx.push(fx);
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_ShowEquipmentUnlock" => {
+                self.challenge_fx.push(crate::challenge::ChallengeFx::EquipmentUnlock);
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_SetDifficulty" => {
+                self.challenge_fx.push(crate::challenge::ChallengeFx::Difficulty(self.ps(op, "m_Difficulty").unwrap_or_else(|| "EDifficulty_Normal".into())));
+                self.fire(op, 0);
+            }
+            "DisSeqCond_DLC05_IsExpertMode" => {
+                // Normal, Expert
+                self.fire(op, self.expert as usize);
+            }
+            "DisSeqAct_DLC05_PlayerResurrect" => {
+                self.challenge_fx.push(crate::challenge::ChallengeFx::Resurrect);
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_Heal" => {
+                let pct = self.read(op, "m_MaxHealthPercentage").iter().find_map(|v| v.as_f32()).or_else(|| self.pi(op, "m_MaxHealthPercentage").map(|i| i as f32)).unwrap_or(100.0);
+                self.challenge_fx.push(crate::challenge::ChallengeFx::Heal(pct));
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_InfiniteAmmo" => {
+                // Enable, Disable -> Enabled, Disabled
+                self.challenge_fx.push(crate::challenge::ChallengeFx::InfiniteAmmo(input == 0));
+                self.fire(op, (input as usize).min(1));
+            }
+            "DisSeqAct_DLC05_DollCollected" => {
+                self.doll_found = true;
+                self.challenge_fx.push(crate::challenge::ChallengeFx::Doll);
+                self.fire(op, 0);
+            }
+            "DisSeqCond_DLC05_IsDollAlreadyCollected" => {
+                // No, Yes
+                self.fire(op, self.doll_found as usize);
+            }
+            "DisSeqAct_DLC05_UnlockAchievement" => {
+                // eDLC05Achievement_TimeManager -> eAchievement_DLC05_TimeManager
+                if let Some(a) = self.ps(op, "m_Achievement") {
+                    let name = format!("eAchievement_DLC05_{}", a.trim_start_matches("eDLC05Achievement_"));
+                    self.achievement_evals.push((name, false));
+                }
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_Teleport" => {
+                // Success, Fail
+                let dest = self.read(op, "Destination").into_iter().find_map(|v| if let Val::Actor(a) = v { g.actors.get(a as usize) } else { None });
+                match dest {
+                    Some(d) => {
+                        let targets = self.read(op, "Target");
+                        let targets = if targets.is_empty() { vec![Val::Player] } else { targets };
+                        for t in targets {
+                            self.effects.push(Effect::Teleport(t, Vec3::from(d.position), d.yaw));
+                        }
+                        self.fire(op, 0);
+                    }
+                    None => self.fire(op, 1),
+                }
+            }
+            "DisSeqAct_DLC05_NpcWave" => {
+                // Add Npc: a moment of slowed time on the newcomers (`m_fWorldTimeDilation` for
+                // `m_fDuration`); Stop BendTime
+                if input == 0 {
+                    self.fire(op, 0);
+                    let dur = self.pf(op, "m_fDuration").unwrap_or(1.5);
+                    self.bend_time.push(Some(self.pf(op, "m_fWorldTimeDilation").unwrap_or(0.2)));
+                    self.challenge_fx.push(crate::challenge::ChallengeFx::WaveBendTime { op, secs: dur });
+                    self.fire(op, 1);
+                } else {
+                    self.bend_time.push(None);
+                    self.fire(op, 2);
+                }
+            }
+            "SeqAct_DrawText" => {
+                // Show, Hide
+                let text = self.read(op, "String").into_iter().find_map(|v| if let Val::Str(s) = v { Some(s) } else { None });
+                self.challenge_fx.push(crate::challenge::ChallengeFx::Text(if input == 0 { text.or_else(|| self.ps(op, "DrawText")) } else { None }));
+                self.fire(op, 0);
+            }
+            "SeqAct_ConvertToString" => {
+                let parts: Vec<String> = self
+                    .read(op, "Inputs")
+                    .into_iter()
+                    .map(|v| match v {
+                        Val::Str(s) => s,
+                        Val::Int(i) => i.to_string(),
+                        Val::Float(f) => format!("{f}"),
+                        Val::Bool(b) => b.to_string(),
+                        _ => String::new(),
+                    })
+                    .collect();
+                let sep = self.ps(op, "VarSeparator").unwrap_or_default();
+                self.write(op, "Output", Val::Str(parts.join(&sep)));
+                self.fire(op, 0);
+            }
+            "SeqAct_GetVectorComponents" => {
+                if let Some(Val::Vec3(v)) = self.read(op, "Input Vector").into_iter().next() {
+                    self.write(op, "X", Val::Float(v[0]));
+                    self.write(op, "Y", Val::Float(v[1]));
+                    self.write(op, "Z", Val::Float(v[2]));
+                }
+                self.fire(op, 0);
+            }
+            "SeqAct_SetVectorComponents" => {
+                let c = |s: &Self, d: &str| s.read(op, d).iter().find_map(|v| v.as_f32());
+                let mut v = match self.read(op, "Output Vector").into_iter().next() {
+                    Some(Val::Vec3(v)) => v,
+                    _ => [0.0; 3],
+                };
+                for (k, d) in ["X", "Y", "Z"].iter().enumerate() {
+                    if let Some(x) = c(self, d) {
+                        v[k] = x;
+                    }
+                }
+                self.write(op, "Output Vector", Val::Vec3(v));
+                self.fire(op, 0);
+            }
+            "SeqCond_SwitchClass" => {
+                // the output named after the object's class, else "Default"
+                let class_of = self.read(op, "Object").into_iter().find_map(|v| if let Val::Str(s) = v { Some(s) } else { None }).unwrap_or_default();
+                let cls = class_of.rsplit('.').next().unwrap_or(&class_of).to_string();
+                let out = self.output_index(op, &cls).or_else(|| self.output_index(op, "Default")).unwrap_or(0);
+                self.fire(op, out);
+            }
+            "DisSeqAct_DLC05_GetDeathInfo" => {
+                // the last death the challenge saw: its damage type (Out), or none (Error)
+                match self.last_death.clone() {
+                    Some(kind) => {
+                        self.write(op, "Damage Type", Val::Str(kind));
+                        self.fire(op, 0);
+                    }
+                    None => self.fire(op, 1),
+                }
+            }
+            "SeqAct_AkStopAll" => {
+                self.challenge_fx.push(crate::challenge::ChallengeFx::StopAllSounds);
+                self.fire(op, 0);
+            }
+            "ArkSeqAct_ChangePylonConnection" => {
+                // (Connect, Disconnect)
+                for v in self.read(op, "Target") {
+                    if let Some(a) = if let Val::Actor(a) = v { g.actors.get(a as usize) } else { None } {
+                        self.pylon_links.push((a.name.clone(), input == 0));
+                    }
+                }
+                self.fire(op, 0);
+            }
+            "DisSeqAct_RefillWhaleOilBattery" => {
+                let pct = self.pf(op, "m_PercentageCharge").unwrap_or(100.0);
+                let insts: Vec<u32> = self.read(op, "Battery").iter().filter_map(|v| if let Val::Actor(a) = v { g.actors.get(*a as usize) } else { None }).flat_map(|a| a.instances.iter().copied()).collect();
+                self.tank_refills.push((insts, pct));
+                self.fire(op, 0);
+            }
+            "DisSeqAct_SetAudioOcclusion" => {
+                // (a door shut or opened: its doorway muffles what passes)
+                let names: Vec<String> = self.read(op, "Target").iter().filter_map(|v| if let Val::Actor(a) = v { g.actors.get(*a as usize).map(|a| a.name.clone()) } else { None }).collect();
+                let player = self.read(op, "Occlusion For Player").iter().find_map(|v| v.as_f32()).unwrap_or(0.0);
+                let ai = self.read(op, "Occlusion For AI").iter().find_map(|v| v.as_f32()).unwrap_or(0.0);
+                self.portal_occlusion.push((names, player, ai));
+                self.fire(op, 0);
+            }
             "SeqAct_AkStartAmbientSound" => {
+                // (Start All, Stop All, Start Target(s), Stop Target(s))
                 for t in self.read(op, "Target") {
-                    self.effects.push(Effect::Ambient(t, input == 0));
+                    self.effects.push(Effect::Ambient(t, input % 2 == 0));
                 }
                 self.fire(op, 0);
             }
@@ -2518,7 +2867,7 @@ impl Vm {
             }
 
             // ---------------------------------------------------- timed
-            "SeqAct_Interp" => {
+            "SeqAct_Interp" | "DisSeqAct_DLC05_Interp" => {
                 // inputs: Play, Reverse, Stop, Pause, Change Dir
                 let existing = self.latent.iter().position(|l| matches!(l, Latent::Interp { op: o, .. } if *o == op));
                 match input {
@@ -3375,6 +3724,7 @@ impl Vm {
             switches: Some((self.switches.clone(), self.wheel_off, self.tutorials_off)),
             music_box: self.music_box.clone(),
             spawn_props: self.spawn_props.clone(),
+            joints_broken: self.joints_broken.iter().cloned().collect(),
         }
     }
 
@@ -3406,6 +3756,7 @@ impl Vm {
         }
         self.music_box = s.music_box;
         self.spawn_props = s.spawn_props;
+        self.joints_broken = s.joints_broken.into_iter().collect();
         if let Some(i) = s.inert {
             self.inert = i;
         }
@@ -3479,6 +3830,40 @@ impl Vm {
     }
 
     /// Activates an op's input (testing: `kop OP [INPUT]`).
+    /// Raise the challenge's events (`DisSeqEvent_DLC05_Challenge`: Started 0, Ended 1,
+    /// Failed 2, Reset 3).
+    pub fn challenge_event(&mut self, out: usize) {
+        for i in 0..self.g.ops.len() {
+            if self.g.ops[i].class == "DisSeqEvent_DLC05_Challenge" {
+                self.event(i as u32, out, None);
+            }
+        }
+    }
+
+    /// The player died in a challenge (`DisSeqEvent_DLC05_PlayerDeath` "Died"): whether the
+    /// scripts take it from here.
+    pub fn challenge_death(&mut self) -> bool {
+        let mut any = false;
+        for i in 0..self.g.ops.len() {
+            if self.g.ops[i].class == "DisSeqEvent_DLC05_PlayerDeath" && !self.is_inert(i as u32) {
+                any |= self.event(i as u32, 0, None);
+            }
+        }
+        any
+    }
+
+    /// The challenge's opening, which the game plays itself: the level's matinee nothing in the
+    /// scripts starts (the briefing's fly-through, its dialogue).
+    pub fn challenge_intro(&mut self) -> usize {
+        let intros: Vec<u32> = (0..self.g.ops.len() as u32)
+            .filter(|&i| matches!(self.g.ops[i as usize].class.as_str(), "SeqAct_Interp" | "DisSeqAct_DLC05_Interp") && self.linked_inputs[i as usize] == 0 && !self.is_inert(i))
+            .collect();
+        for &i in &intros {
+            self.activate_op(i, 0);
+        }
+        intros.len()
+    }
+
     pub fn activate_op(&mut self, op: u32, input: u32) {
         if (op as usize) < self.g.ops.len() {
             self.queue.push_back((op, input));
@@ -4874,7 +5259,13 @@ pub fn apply_effects(
     (mut sounds, mut ambients, mut travel, mut store): (MessageWriter<crate::audio::PostEvent>, ResMut<crate::audio::Ambients>, MessageWriter<crate::mission::TravelRequest>, MessageWriter<crate::store::OpenStore>),
     level: Option<Res<LevelInfo>>,
     data: Option<Res<crate::gamedata::Data>>,
-    (stream_cols, mut fog, mut autosave, mut choice): (Query<(&LevelInstance, &crate::level::InstanceCollider)>, ResMut<crate::fog::FogState>, MessageWriter<crate::save::SaveRequest>, ResMut<crate::choice::Choice>),
+    (stream_cols, mut fog, mut autosave, mut choice, mut emitters): (
+        Query<(&LevelInstance, &crate::level::InstanceCollider)>,
+        ResMut<crate::fog::FogState>,
+        MessageWriter<crate::save::SaveRequest>,
+        ResMut<crate::choice::Choice>,
+        Query<&mut crate::particles::ParticleEmitter>,
+    ),
 ) {
     if vm.effects.is_empty() {
         return;
@@ -4944,6 +5335,22 @@ pub fn apply_effects(
             Effect::Ambient(v, on) => {
                 if let Some(i) = actor(&v).and_then(|a| a.sound) {
                     ambients.set_enabled(i as usize, on);
+                } else if let Val::Actor(a) = v {
+                    // a factory's sound (a PA speaker's hum), where it was made
+                    if let Some(ev) = vm.factory_sounds.get(&a).cloned() {
+                        let i = match vm.factory_ambients.get(&a) {
+                            Some(&i) => i,
+                            None => {
+                                let i = ambients.add(&ev, Vec3::from(g.actors[a as usize].position));
+                                vm.factory_ambients.insert(a, i);
+                                i
+                            }
+                        };
+                        ambients.set_enabled(i, on);
+                        if std::env::var("DH_AUDIO_LOG").is_ok() {
+                            info!("audio: factory sound {ev} at {} {}", g.actors[a as usize].name, if on { "on" } else { "off" });
+                        }
+                    }
                 }
             }
             Effect::Power(name, level) => {
@@ -5025,6 +5432,14 @@ pub fn apply_effects(
                         commands.entity(col.0).insert(bevy_rapier3d::prelude::ColliderDisabled);
                     }
                 }
+                // an emitter goes out (a fire blown out)
+                if !a.particles.is_empty() {
+                    for mut em in &mut emitters {
+                        if a.particles.contains(&em.index) {
+                            em.active = false;
+                        }
+                    }
+                }
                 if let Val::Actor(ai) = v {
                     commands.queue(move |w: &mut World| {
                         let rigs: Vec<Entity> = w.query::<(Entity, &crate::usables::UsableRig)>().iter(w).filter(|(_, r)| r.actor() == Some(ai)).map(|(e, _)| e).collect();
@@ -5058,6 +5473,14 @@ pub fn apply_effects(
                     if a.lights.contains(&ll.0) {
                         let show = on.unwrap_or(*vis == Visibility::Hidden);
                         *vis = if show { Visibility::Inherited } else { Visibility::Hidden };
+                    }
+                }
+                // an emitter switches on (`ActivateSystem`: fireworks, a puff of smoke) or off
+                if !a.particles.is_empty() {
+                    for mut em in &mut emitters {
+                        if a.particles.contains(&em.index) {
+                            em.active = on.unwrap_or(!em.active);
+                        }
                     }
                 }
             }
@@ -5102,7 +5525,11 @@ pub fn apply_effects(
             }
             Effect::Damage(v, amount) => match v {
                 Val::Player => {
-                    stats.health = (stats.health - amount).clamp(0.0, stats.max_health);
+                    if amount >= 0.0 {
+                        stats.take_damage(amount);
+                    } else {
+                        stats.health = (stats.health - amount).clamp(0.0, stats.max_health);
+                    }
                 }
                 _ => {
                     let Some(s) = actor(&v).and_then(|a| a.spawner) else { continue };

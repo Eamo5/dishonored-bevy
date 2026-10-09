@@ -15,6 +15,76 @@ use std::sync::Arc;
 /// The most output channels laid out (7.1).
 pub const MAX_CH: usize = 8;
 
+/// The reverb of the room Corvo hears from (its environment's: decay seconds, high damping,
+/// wet gain), shared with the audio thread; every world sound rings in it.
+pub struct RoomReverb([AtomicU32; 3]);
+
+pub static ROOM_REVERB: RoomReverb = RoomReverb([AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)]);
+
+impl RoomReverb {
+    /// Set the room's reverb (a decay of 0 or no wet: none).
+    pub fn set(&self, decay: f32, damp: f32, wet: f32) {
+        for (a, v) in self.0.iter().zip([decay, damp, wet]) {
+            a.store(v.to_bits(), Ordering::Relaxed);
+        }
+    }
+    fn get(&self) -> (f32, f32, f32) {
+        let g = |k: usize| f32::from_bits(self.0[k].load(Ordering::Relaxed));
+        (g(0), g(1), g(2))
+    }
+}
+
+/// A small reverb (Schroeder: four damped combs into two allpasses) a world sound rings
+/// through, the room's decay and damping setting its combs' feedback.
+struct Verb {
+    combs: [(Vec<f32>, usize, f32); 4],
+    aps: [(Vec<f32>, usize); 2],
+    rate: f32,
+    /// the decay the combs' feedback is set for, and that feedback
+    decay: f32,
+    gains: [f32; 4],
+}
+
+impl Verb {
+    fn new(rate: f32) -> Verb {
+        let s = rate / 44100.0;
+        let len = |n: f32| ((n * s) as usize).max(8);
+        Verb {
+            combs: [1116.0, 1277.0, 1422.0, 1557.0].map(|n| (vec![0.0; len(n)], 0, 0.0)),
+            aps: [556.0, 341.0].map(|n| (vec![0.0; len(n)], 0)),
+            rate,
+            decay: -1.0,
+            gains: [0.0; 4],
+        }
+    }
+
+    /// One sample through (decay seconds, damping 0..1).
+    fn run(&mut self, x: f32, decay: f32, damp: f32) -> f32 {
+        if decay != self.decay {
+            // (60 dB down over the decay, for each comb's length)
+            self.decay = decay;
+            for (g, (buf, _, _)) in self.gains.iter_mut().zip(&self.combs) {
+                *g = 10f32.powf(-3.0 * buf.len() as f32 / (decay.max(0.05) * self.rate));
+            }
+        }
+        let mut out = 0.0;
+        for ((buf, i, store), &g) in self.combs.iter_mut().zip(&self.gains) {
+            let y = buf[*i];
+            *store = y * (1.0 - damp) + *store * damp;
+            buf[*i] = x + *store * g;
+            *i = (*i + 1) % buf.len();
+            out += y;
+        }
+        for (buf, i) in self.aps.iter_mut() {
+            let b = buf[*i];
+            buf[*i] = out + b * 0.5;
+            out = b - out;
+            *i = (*i + 1) % buf.len();
+        }
+        out * 0.25
+    }
+}
+
 /// The output stream, as opened for the setting.
 #[derive(Resource)]
 pub struct Output {
@@ -167,12 +237,17 @@ struct Panned<S: Source> {
     cur: [f32; MAX_CH],
     k: usize,
     ease: f32,
+    /// a world sound's reverb, its ring this frame, and (its sound over) how much tail is left
+    verb: Option<Box<Verb>>,
+    wet: f32,
+    tail: Option<f32>,
 }
 
 impl<S: Source> Panned<S> {
     fn new(inner: S, out_ch: usize, world: bool, pan: Arc<Pan>, gains: [f32; MAX_CH]) -> Self {
         let rate = inner.sample_rate().get() as f32;
-        Panned { out_ch: out_ch.clamp(1, MAX_CH), world, pan, frame: [0.0; MAX_CH], in_ch: 1, mono: 0.0, cur: gains, k: usize::MAX, ease: 1.0 - (-1.0 / (0.02 * rate)).exp(), inner }
+        let verb = world.then(|| Box::new(Verb::new(rate)));
+        Panned { out_ch: out_ch.clamp(1, MAX_CH), world, pan, frame: [0.0; MAX_CH], in_ch: 1, mono: 0.0, cur: gains, k: usize::MAX, ease: 1.0 - (-1.0 / (0.02 * rate)).exp(), inner, verb, wet: 0.0, tail: None }
     }
 }
 
@@ -185,9 +260,17 @@ impl<S: Source> Iterator for Panned<S> {
             self.in_ch = (self.inner.channels().get() as usize).max(1);
             let mut sum = 0.0;
             for c in 0..self.in_ch {
-                let v = match self.inner.next() {
+                let v = match self.tail.is_some().then_some(0.0).or_else(|| self.inner.next()) {
                     Some(v) => v,
-                    None if c == 0 => return None,
+                    None if c == 0 => {
+                        // the sound is over: its reverb rings on for the room's decay
+                        let (decay, _, wet) = ROOM_REVERB.get();
+                        if self.verb.is_none() || wet <= 0.0 || decay <= 0.0 {
+                            return None;
+                        }
+                        self.tail = Some(decay.min(4.0) * self.verb.as_ref().map(|v| v.rate).unwrap_or(48000.0));
+                        0.0
+                    }
                     None => 0.0,
                 };
                 if c < MAX_CH {
@@ -196,6 +279,18 @@ impl<S: Source> Iterator for Panned<S> {
                 sum += v;
             }
             self.mono = sum / self.in_ch as f32;
+            if let Some(t) = &mut self.tail {
+                *t -= 1.0;
+                if *t <= 0.0 {
+                    return None;
+                }
+            }
+            // (the room's ring, spread over the speakers about the listener)
+            if let Some(v) = &mut self.verb {
+                let (decay, damp, wet) = ROOM_REVERB.get();
+                let level = self.cur.iter().take(self.out_ch).fold(0.0f32, |a, g| a.max(*g));
+                self.wet = if wet > 0.0 && decay > 0.0 { v.run(self.mono * level, decay, damp) * wet } else { 0.0 };
+            }
             for k in 0..self.out_ch {
                 self.cur[k] += (self.pan.get(k) - self.cur[k]) * self.ease;
             }
@@ -204,7 +299,9 @@ impl<S: Source> Iterator for Panned<S> {
         let k = self.k;
         self.k += 1;
         let v = if self.world {
-            self.mono
+            // (the ring is diffuse: the same at every speaker but the centre and LFE)
+            let diffuse = if self.out_ch >= 6 && (k == 2 || k == 3) { 0.0 } else { 1.0 };
+            return Some(if self.tail.is_some() { 0.0 } else { self.mono * self.cur[k] } + self.wet * diffuse);
         } else if self.out_ch == 1 {
             self.mono
         } else if self.in_ch == 1 {
@@ -237,6 +334,27 @@ impl<S: Source> Source for Panned<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reverb_decays() {
+        // an impulse rings, and falls about 60 dB over the decay
+        let rate = 48000.0;
+        let mut v = Verb::new(rate);
+        let energy = |v: &mut Verb, first: f32, secs: f32| -> f32 {
+            let mut e = 0.0;
+            for i in 0..(secs * rate) as usize {
+                let y = v.run(if i == 0 { first } else { 0.0 }, 2.0, 0.3);
+                e += y * y;
+            }
+            e
+        };
+        let early = energy(&mut v, 1.0, 0.5);
+        let mid = energy(&mut v, 0.0, 0.5);
+        let _ = energy(&mut v, 0.0, 1.0);
+        let late = energy(&mut v, 0.0, 0.5);
+        assert!(early > 0.0 && mid > 0.0);
+        assert!(late < early * 1e-4, "early {early} late {late}");
+    }
 
     fn at(channels: usize, x: f32, z: f32) -> [f32; MAX_CH] {
         // a listener at the origin looking down -Z

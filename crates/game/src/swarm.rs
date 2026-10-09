@@ -10,7 +10,7 @@
 use crate::anim::{Animator, ClipId};
 use crate::audio::PostEvent;
 use crate::gamedata::Data;
-use crate::gameplay::{HitKind, NpcHit, NpcStagger, TimeControl};
+use crate::gameplay::{HitKind, NpcHit, NpcStagger, PlayerStats, TimeControl};
 use crate::level::{GameAssets, LevelInfo, GROUP_PROP, GROUP_WORLD};
 use crate::npc::{Kind, Mode, Npc};
 use crate::world_light::{LitActor, WorldLighting};
@@ -29,11 +29,12 @@ pub struct RatBites(pub u32);
 
 impl Plugin for SwarmPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RatBites>();
+        app.init_resource::<RatBites>().init_resource::<SwarmRestore>();
         app.add_message::<SummonSwarm>()
             .add_message::<KillRats>()
             .add_systems(OnEnter(GameState::InGame), level_swarms.after(crate::level::LevelSpawnSet))
-            .add_systems(Update, (summon, scripted_swarms, swarm_brain, move_rats, npc_stomps, kill_rats).chain().run_if(in_state(GameState::InGame)));
+            .add_systems(Update, restore_swarms.after(crate::save::restore_npcs).before(summon).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (summon, scripted_swarms, color_rats, swarm_brain, move_rats, npc_stomps, kill_rats).chain().run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -49,10 +50,13 @@ pub struct SummonSwarm {
 pub struct KillRats {
     pub at: Vec3,
     pub radius: f32,
+    pub by_player: bool,
+    /// Blade origin or blast centre, for testing cover before killing a rat.
+    pub source: Vec3,
 }
 
 /// A level swarm's behaviour, from its tweak (distances in metres).
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Wild {
     pub home: Vec3,
     pub roam: f32,
@@ -61,10 +65,143 @@ pub struct Wild {
     /// rats needed before it attacks
     pub aggressive: usize,
     pub bite: f32,
+    pub min_damage: f32,
     pub max_damage: f32,
+    pub bite_interval: f32,
+    pub initial_delay: f32,
     /// roaming: where to and for how long
     pub goal: Vec3,
     pub wait: f32,
+}
+
+impl Wild {
+    fn bite_damage(&self, rats: usize) -> f32 {
+        (self.bite * rats as f32).clamp(self.min_damage, self.max_damage.max(self.min_damage))
+    }
+}
+
+/// Count elapsed bites without dropping time at low frame rates. The first bite
+/// occurs at the initial-delay boundary, then repeats at the tweak's interval.
+fn advance_bites(delay: &mut f32, elapsed: &mut f32, dt: f32, interval: f32) -> u32 {
+    if dt <= 0.0 { return 0; }
+    let interval = interval.max(0.01);
+    let mut first = 0;
+    let active = if *delay > 0.0 {
+        let remaining = *delay - dt;
+        *delay = remaining.max(0.0);
+        if remaining > 0.0 { return 0; }
+        first = 1;
+        *elapsed = 0.0;
+        -remaining
+    } else { dt };
+    *elapsed += active;
+    let repeats = (*elapsed / interval).floor() as u32;
+    *elapsed -= repeats as f32 * interval;
+    first + repeats
+}
+
+#[cfg(test)]
+mod bite_tests {
+    use super::*;
+
+    #[test]
+    fn albinos_adds_to_original_white_rat_probability() {
+        let count = |bonus| (0..100).filter(|i| is_white_rat(0.1, bonus, (*i as f32 + 0.5) / 100.0)).count();
+        assert_eq!(count(0.0), 10);
+        assert_eq!(count(0.15), 25);
+        assert_eq!(count(-1.0), 0);
+        assert_eq!(count(2.0), 100);
+    }
+
+    #[test]
+    fn white_rat_material_replaces_every_lod_once() {
+        let mut app = App::new();
+        app.init_resource::<Data>().init_resource::<crate::gameplay::PlayerStats>()
+            .init_resource::<crate::settings::Settings>()
+            .insert_resource(GameAssets { white_rat_material: Some(crate::level::PartMat::Std(Handle::default())), ..default() })
+            .add_systems(Update, color_rats);
+        let rat = app.world_mut().spawn((RatWhiteChance(1.0), Rat { offset: Vec3::ZERO, speed: 1.0, yaw: 0.0, state: RatAnim::Idle, spawn_t: 0.0 })).id();
+        let visual = app.world_mut().spawn(ChildOf(rat)).id();
+        let parts: Vec<_> = (0..3).map(|_| app.world_mut().spawn((ChildOf(visual), RatMesh, MeshMaterial3d::<crate::ue3mat::Ue3Material>(Handle::default()))).id()).collect();
+        app.update();
+        assert!(app.world().get::<WhiteRat>(rat).is_some());
+        for e in parts {
+            assert!(app.world().get::<MeshMaterial3d<crate::lightmap::WorldMaterial>>(e).is_some());
+            assert!(app.world().get::<MeshMaterial3d<crate::ue3mat::Ue3Material>>(e).is_none());
+        }
+        app.world_mut().entity_mut(rat).insert(RatWhiteChance(0.0));
+        app.update();
+        assert!(app.world().get::<WhiteRat>(rat).is_some());
+    }
+
+    #[test]
+    fn saved_colors_override_new_spawn_rolls() {
+        let mut app = App::new();
+        app.init_resource::<Data>().init_resource::<crate::gameplay::PlayerStats>()
+            .init_resource::<crate::settings::Settings>()
+            .insert_resource(GameAssets { white_rat_material: Some(crate::level::PartMat::Std(Handle::default())), ..default() })
+            .add_systems(Update, color_rats);
+        let rat = Rat { offset: Vec3::X, speed: 2.0, yaw: 1.0, state: RatAnim::Run, spawn_t: 0.0 };
+        let white = app.world_mut().spawn((rat.clone(), RatWhiteChance(0.0), SavedRatColor(true))).id();
+        let ordinary = app.world_mut().spawn((rat, RatWhiteChance(1.0), SavedRatColor(false))).id();
+        app.update();
+        assert!(app.world().get::<WhiteRat>(white).is_some());
+        assert!(app.world().get::<WhiteRat>(ordinary).is_none());
+    }
+
+    #[test]
+    fn swarm_snapshot_keeps_survivors_colors_timers_and_stable_targets() {
+        let mut world = World::new();
+        let npc = world.spawn_empty().id();
+        let alive = world.spawn_empty().id();
+        let dead = world.spawn_empty().id();
+        let rat = Rat { offset: Vec3::X, speed: 2.0, yaw: 1.0, state: RatAnim::Run, spawn_t: 0.0 };
+        let pose = Transform::from_xyz(1.0, 2.0, 3.0).with_rotation(Quat::from_rotation_y(1.0));
+        let swarm = Swarm { wild: None, spawner: Some(7), left: f32::INFINITY, level: 2, target: Some(npc), eating: Some((npc, 3.25)),
+            delay: 0.25, bite_t: 0.125, rats: vec![alive, dead], scattering: true };
+        let snapshot = SwarmsSave::capture([(&swarm, &pose)], [(alive, &rat, &pose, Some(&WhiteRat))], [(npc, 42)], 6, Some(alive));
+        let restored: SwarmsSave = serde_json::from_slice(&serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        assert_eq!(restored.bites, 6);
+        let s = &restored.swarms[0];
+        assert_eq!(s.spawner, Some(7));
+        assert_eq!(s.left, None);
+        assert_eq!(s.target, Some(42));
+        assert_eq!(s.eating, Some((42, 3.25)));
+        assert_eq!(s.delay, 0.25);
+        assert_eq!(s.bite_t, 0.125);
+        assert!(s.scattering);
+        assert_eq!(s.rats.len(), 1);
+        assert!(s.rats[0].white);
+        assert_eq!(s.rats[0].position, pose.translation.to_array());
+        assert_eq!(s.rats[0].rotation, pose.rotation.to_array());
+        assert_eq!(s.rats[0].rat.offset, Vec3::X);
+    }
+
+    #[test]
+    fn bite_cadence_preserves_delay_and_partial_intervals() {
+        let (mut delay, mut elapsed) = (1.0, 0.0);
+        assert_eq!(advance_bites(&mut delay, &mut elapsed, 0.75, 0.5), 0);
+        assert_eq!(advance_bites(&mut delay, &mut elapsed, 0.0, 0.5), 0);
+        assert_eq!(delay, 0.25);
+        assert_eq!(advance_bites(&mut delay, &mut elapsed, 0.5, 0.5), 1);
+        assert_eq!(elapsed, 0.25);
+        assert_eq!(advance_bites(&mut delay, &mut elapsed, 0.25, 0.5), 1);
+        assert_eq!(advance_bites(&mut delay, &mut elapsed, 1.25, 0.5), 2);
+        assert_eq!(elapsed, 0.25);
+        let (mut delay, mut elapsed) = (1.0, 0.0);
+        assert_eq!(advance_bites(&mut delay, &mut elapsed, 2.75, 0.5), 4);
+        assert_eq!(elapsed, 0.25);
+    }
+
+    #[test]
+    fn bite_damage_uses_original_minimum_and_maximum() {
+        let wild = Wild { home: Vec3::ZERO, roam: 1.0, detect: 10.0, escape: 15.0,
+            aggressive: 10, bite: 0.2, min_damage: 1.0, max_damage: 10.0,
+            bite_interval: 0.5, initial_delay: 1.0, goal: Vec3::ZERO, wait: 0.0 };
+        assert_eq!(wild.bite_damage(1), 1.0);
+        assert_eq!(wild.bite_damage(10), 2.0);
+        assert_eq!(wild.bite_damage(100), 10.0);
+    }
 }
 
 #[derive(Component)]
@@ -84,8 +221,8 @@ pub struct Swarm {
     pub scattering: bool,
 }
 
-#[derive(Component)]
-struct Rat {
+#[derive(Component, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Rat {
     /// place in the swarm (around its centre)
     offset: Vec3,
     speed: f32,
@@ -94,12 +231,94 @@ struct Rat {
     spawn_t: f32,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 enum RatAnim {
     Spawn,
     Idle,
     Run,
     Attack,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SwarmsSave {
+    swarms: Vec<SwarmSave>,
+    bites: u32,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SwarmSave {
+    position: [f32; 3],
+    wild: Option<Wild>,
+    spawner: Option<u32>,
+    /// Wild swarms have no expiry; JSON cannot encode infinity.
+    left: Option<f32>,
+    level: u8,
+    target: Option<u32>,
+    eating: Option<(u32, f32)>,
+    delay: f32,
+    bite_t: f32,
+    scattering: bool,
+    rats: Vec<RatSave>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RatSave {
+    position: [f32; 3],
+    rotation: [f32; 4],
+    rat: Rat,
+    white: bool,
+    #[serde(default)]
+    possessed: bool,
+}
+
+#[derive(Resource, Default)]
+pub struct SwarmRestore(pub Option<SwarmsSave>);
+
+impl SwarmsSave {
+    pub(crate) fn capture<'a>(swarms: impl IntoIterator<Item = (&'a Swarm, &'a Transform)>, rats: impl IntoIterator<Item = (Entity, &'a Rat, &'a Transform, Option<&'a WhiteRat>)>, npcs: impl IntoIterator<Item = (Entity, u32)>, bites: u32, possessed: Option<Entity>) -> Self {
+        let rats: std::collections::HashMap<_, _> = rats.into_iter().map(|(e, r, t, w)| (e, (r, t, w.is_some(), Some(e) == possessed))).collect();
+        let npcs: std::collections::HashMap<_, _> = npcs.into_iter().collect();
+        Self { bites, swarms: swarms.into_iter().map(|(s, t)| SwarmSave {
+            position: t.translation.to_array(), wild: s.wild.clone(), spawner: s.spawner,
+            left: s.left.is_finite().then_some(s.left), level: s.level,
+            target: s.target.and_then(|e| npcs.get(&e).copied()),
+            eating: s.eating.and_then(|(e, time)| npcs.get(&e).map(|id| (*id, time))),
+            delay: s.delay, bite_t: s.bite_t, scattering: s.scattering,
+            rats: s.rats.iter().filter_map(|e| rats.get(e)).map(|(r, t, white, possessed)| RatSave {
+                position: t.translation.to_array(), rotation: t.rotation.to_array(), rat: (*r).clone(), white: *white, possessed: *possessed,
+            }).collect(),
+        }).collect() }
+    }
+}
+
+pub(crate) fn restore_swarms(mut commands: Commands, mut pending: ResMut<SwarmRestore>, assets: Option<Res<GameAssets>>, level: Option<Res<LevelInfo>>, mut lighting: Option<ResMut<WorldLighting>>,
+    old: Query<Entity, Or<(With<Swarm>, With<Rat>)>>, npcs: Query<(Entity, &crate::npc::FromSpawner)>, mut bites: ResMut<RatBites>) {
+    if pending.0.is_none() { return; }
+    let (Some(assets), Some(level)) = (assets, level) else { return };
+    let vis = level.scene.rat_type.and_then(|t| assets.npc_types.get(t as usize)).and_then(|v| v.as_ref());
+    if vis.is_none() && pending.0.as_ref().is_some_and(|s| s.swarms.iter().any(|s| !s.rats.is_empty())) { return; }
+    let saved = pending.0.take().unwrap();
+    for e in &old { commands.entity(e).despawn(); }
+    bites.0 = saved.bites;
+    let npcs: std::collections::HashMap<_, _> = npcs.iter().map(|(e, id)| (id.0, e)).collect();
+    for s in saved.swarms {
+        if s.rats.is_empty() { continue; }
+        let slot = lighting.as_mut().map(|l| l.alloc_slot()).unwrap_or(0);
+        let mut rats = Vec::new();
+        for r in s.rats {
+            let e = spawn_rat(&mut commands, vis.unwrap(), level.scene.rat_type, Vec3::from(r.position), r.rat.yaw, slot);
+            // A saved identity overrides random coloring, including ordinary rats.
+            commands.entity(e).insert((r.rat, SavedRatColor(r.white), Transform::from_translation(Vec3::from(r.position)).with_rotation(Quat::from_array(r.rotation))));
+            if r.possessed { commands.entity(e).insert(crate::possession::RestoredRatHost); }
+            rats.push(e);
+        }
+        commands.spawn((Swarm { wild: s.wild, spawner: s.spawner, left: s.left.unwrap_or(f32::INFINITY), level: s.level,
+            target: s.target.and_then(|id| npcs.get(&id).copied()), eating: s.eating.and_then(|(id, time)| npcs.get(&id).map(|e| (*e, time))),
+            delay: s.delay, bite_t: s.bite_t, scattering: s.scattering, rats },
+            Transform::from_translation(Vec3::from(s.position)),
+            LitActor { slot, probe_height: 0.3, brightness: 0.3, color: Vec3::splat(0.05), sun: 0.0, dominant: None },
+            DespawnOnExit(GameState::InGame)));
+    }
 }
 
 struct RatClips {
@@ -154,6 +373,8 @@ fn summon(
             let offset = Vec3::new(a.cos() * rr, 0.0, a.sin() * rr);
             let yaw = rand::random::<f32>() * std::f32::consts::TAU;
             let e = spawn_rat(&mut commands, vis, level.scene.rat_type, r.at + offset, yaw, slot);
+            // Both original Devouring Swarm level tweaks override the base 10%.
+            commands.entity(e).insert(RatWhiteChance(0.15));
             commands.entity(e).insert(Rat { offset, speed: 3.0 + rand::random::<f32>() * 1.2, yaw, state: RatAnim::Spawn, spawn_t: rand::random::<f32>() * 0.35 });
             rats.push(e);
         }
@@ -192,6 +413,7 @@ fn spawn_wild(commands: &mut Commands, vis: &crate::level::NpcVisual, ty: Option
         let offset = Vec3::new(a.cos() * rr, 0.0, a.sin() * rr);
         let yaw = rand::random::<f32>() * std::f32::consts::TAU;
         let e = spawn_rat(commands, vis, ty, at + offset, yaw, slot);
+        commands.entity(e).insert(RatWhiteChance(p("m_fWhiteRatRatio", 0.1)));
         commands.entity(e).insert(Rat { offset, speed: 2.6 + rand::random::<f32>() * 1.2, yaw, state: RatAnim::Spawn, spawn_t: rand::random::<f32>() * 0.35 });
         rats.push(e);
     }
@@ -201,13 +423,16 @@ fn spawn_wild(commands: &mut Commands, vis: &crate::level::NpcVisual, ty: Option
         detect: p("m_fPawnDetectionRadius", 700.0) * 0.01,
         escape: p("m_fPawnEscapeRadius", 750.0) * 0.01,
         aggressive: p("m_InitialRatCountToBeAggressive", 11.0) as usize,
-        bite: p("m_fDamagePerBite", 0.4),
-        max_damage: p("m_fMaxDamage", 5.0),
+        bite: p("m_fDamagePerBite", 0.2),
+        min_damage: p("m_fMinDamage", 1.0).max(0.0),
+        max_damage: p("m_fMaxDamage", 10.0),
+        bite_interval: p("m_fDamageTimeInterval", 0.5).max(0.01),
+        initial_delay: p("m_fInitialDelayBeforeDealingDamage", 1.0).max(0.0),
         goal: at,
         wait: 1.0,
     };
     commands.spawn((
-        Swarm { wild: Some(wild), spawner: Some(spawner), left: f32::INFINITY, level: 1, target: None, eating: None, delay: p("m_fInitialDelayBeforeDealingDamage", 2.0), bite_t: 0.0, rats, scattering: false },
+        Swarm { delay: wild.initial_delay, wild: Some(wild), spawner: Some(spawner), left: f32::INFINITY, level: 1, target: None, eating: None, bite_t: 0.0, rats, scattering: false },
         Transform::from_translation(at),
         LitActor { slot, probe_height: 0.3, brightness: 0.3, color: Vec3::splat(0.05), sun: 0.0, dominant: None },
         DespawnOnExit(GameState::InGame),
@@ -309,12 +534,22 @@ fn npc_stomps(
     cds.retain(|e, _| npcs.contains(*e));
 }
 
-fn kill_rats(mut commands: Commands, mut kills: MessageReader<KillRats>, mut swarms: Query<&mut Swarm>, rats: Query<&Transform, With<Rat>>) {
+fn kill_rats(mut commands: Commands, mut kills: MessageReader<KillRats>, mut swarms: Query<&mut Swarm>, rats: Query<&Transform, With<Rat>>, mut stats: ResMut<PlayerStats>, attrs: Res<crate::gamedata::Attrs>, rapier: ReadRapierContext) {
+    let context = rapier.single().ok();
     for k in kills.read() {
         for mut s in &mut swarms {
             s.rats.retain(|&r| match rats.get(r) {
                 Ok(t) if t.translation.distance(k.at) < k.radius => {
+                    let to = t.translation + Vec3::Y * 0.05 - k.source;
+                    let distance = to.length();
+                    if distance > 0.05 && context.as_ref().is_some_and(|ctx| ctx.cast_ray(k.source, to / distance, distance - 0.05, true,
+                        QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP))).is_some()) {
+                        return true;
+                    }
                     commands.entity(r).despawn();
+                    if k.by_player {
+                        stats.gain_adrenaline(attrs.adrenaline_rat);
+                    }
                     false
                 }
                 _ => true,
@@ -323,9 +558,68 @@ fn kill_rats(mut commands: Commands, mut kills: MessageReader<KillRats>, mut swa
     }
 }
 
+#[cfg(test)]
+mod kill_tests {
+    use super::*;
+
+    #[test]
+    fn carrion_killer_counts_each_player_rat_kill_once() {
+        let mut app = App::new();
+        let mut stats = PlayerStats::default();
+        stats.powers.insert("BloodThirsty".into(), 1);
+        app.insert_resource(stats).insert_resource(crate::gamedata::Attrs { adrenaline_rat: 10.0, ..default() })
+            .init_resource::<Time>().init_resource::<TimeControl>().init_resource::<crate::kismet::ScriptSwitches>()
+            .add_message::<KillRats>().add_systems(Update, kill_rats).add_systems(Last, crate::gameplay::tick_adrenaline);
+        let mut rats = Vec::new();
+        for x in [0.0, 10.0] {
+            rats.push(app.world_mut().spawn((Rat { offset: Vec3::ZERO, speed: 0.0, yaw: 0.0, state: RatAnim::Idle, spawn_t: 0.0 }, Transform::from_xyz(x, 0.0, 0.0))).id());
+        }
+        app.world_mut().spawn(Swarm { wild: None, spawner: None, left: 30.0, level: 1, target: None, eating: None, delay: 0.0, bite_t: 0.0, rats, scattering: false });
+        // The same rat is inside two simultaneous blasts: only the first kills it.
+        for _ in 0..2 {
+            app.world_mut().write_message(KillRats { at: Vec3::ZERO, radius: 1.0, by_player: true, source: Vec3::Y });
+        }
+        app.update();
+        assert_eq!(app.world().resource::<PlayerStats>().adrenaline, 10.0);
+        app.world_mut().write_message(KillRats { at: Vec3::X * 10.0, radius: 1.0, by_player: false, source: Vec3::Y });
+        app.update();
+        assert_eq!(app.world().resource::<PlayerStats>().adrenaline, 10.0);
+        let mut q = app.world_mut().query::<&Rat>();
+        assert_eq!(q.iter(app.world()).count(), 0);
+    }
+}
+
 /// A swarm rat's mesh (its shadow by the option: `settings::rat_shadows`).
 #[derive(Component)]
 pub struct RatMesh;
+
+#[derive(Component)]
+pub struct WhiteRat;
+
+#[derive(Component)]
+struct RatWhiteChance(f32);
+
+#[derive(Component)]
+struct SavedRatColor(bool);
+
+fn is_white_rat(base: f32, bonus: f32, roll: f32) -> bool {
+    roll < (base + bonus).clamp(0.0, 1.0)
+}
+
+fn color_rats(mut commands: Commands, rats: Query<(Entity, &RatWhiteChance, Option<&SavedRatColor>), Added<Rat>>, children: Query<&Children>, meshes: Query<(), With<RatMesh>>,
+    assets: Option<Res<GameAssets>>, data: Res<Data>, stats: Res<crate::gameplay::PlayerStats>, settings: Res<crate::settings::Settings>) {
+    let Some(mat) = assets.as_ref().and_then(|a| a.white_rat_material.as_ref()) else { return };
+    let bonus = data.attribute("WhiteRatChanceBonus", settings.difficulty, &stats.powers, &stats.charms);
+    for (e, chance, saved) in &rats {
+        if !saved.map(|s| s.0).unwrap_or_else(|| is_white_rat(chance.0, bonus, rand::random::<f32>())) { continue; }
+        commands.entity(e).insert(WhiteRat);
+        for child in children.iter_descendants(e).filter(|c| meshes.contains(*c)) {
+            let mut mesh = commands.entity(child);
+            mesh.remove::<(MeshMaterial3d<crate::lightmap::WorldMaterial>, MeshMaterial3d<crate::ue3mat::Ue3Material>)>();
+            mat.apply(&mut mesh);
+        }
+    }
+}
 
 fn spawn_rat(commands: &mut Commands, vis: &crate::level::NpcVisual, ty: Option<u32>, pos: Vec3, yaw: f32, slot: u32) -> Entity {
     let bones = &vis.skeleton.bones;
@@ -366,6 +660,7 @@ fn spawn_rat(commands: &mut Commands, vis: &crate::level::NpcVisual, ty: Option<
         }
     }
     let mut e = commands.spawn((
+        RatWhiteChance(0.1),
         Transform::from_translation(pos).with_rotation(Quat::from_rotation_y(yaw)),
         Visibility::default(),
         crate::possession::Host { npc_type: ty, rooted: false, fish: false, seat: Vec3::ZERO, facing: Vec3::NEG_Z },
@@ -422,17 +717,16 @@ fn swarm_brain(
                     goal = Some(pp);
                     busy = true;
                     if d < 1.4 {
-                        s.delay -= dt;
-                        s.bite_t += dt;
-                        if s.delay <= 0.0 && s.bite_t >= 1.0 {
-                            s.bite_t = 0.0;
-                            stats.health = (stats.health - (w.bite * n as f32).min(w.max_damage)).max(0.0);
+                        let swarm = &mut *s;
+                        let count = advance_bites(&mut swarm.delay, &mut swarm.bite_t, dt, w.bite_interval);
+                        if count > 0 {
+                            stats.take_damage(w.bite_damage(n) * count as f32);
                             stats.damage_flash = stats.damage_flash.max(0.4);
                             if stats.health <= 0.0 {
                                 stats.dead = true;
                             }
                             sfx.write(PostEvent::named("Imp_Rat_on_Body", Some(pp)));
-                            bites.0 += 1;
+                            bites.0 += count;
                         }
                     }
                 } else if !big && d < w.escape * 0.6 {
@@ -451,11 +745,10 @@ fn swarm_brain(
                     goal = Some(tt);
                     busy = true;
                     if tt.distance(center) < 1.3 {
-                        s.delay -= dt;
-                        s.bite_t += dt;
-                        if s.delay <= 0.0 && s.bite_t >= 1.0 {
-                            s.bite_t = 0.0;
-                            hits.write(NpcHit { npc: te, damage: (w.bite * n as f32).min(w.max_damage), kind: HitKind::ByOthers, from: center });
+                        let swarm = &mut *s;
+                        let count = advance_bites(&mut swarm.delay, &mut swarm.bite_t, dt, w.bite_interval);
+                        if count > 0 {
+                            hits.write(NpcHit { npc: te, damage: w.bite_damage(n) * count as f32, kind: HitKind::ByOthers, from: center });
                             stagger.write(NpcStagger { npc: te, secs: 0.6, parried: false });
                             sfx.write(PostEvent::named("Imp_Rat_on_Body", Some(tt)));
                         }
@@ -484,7 +777,8 @@ fn swarm_brain(
                 }
             }
             if !busy {
-                s.delay = 2.0;
+                s.delay = w.initial_delay;
+                s.bite_t = 0.0;
             }
             // else roam about the spawner
             let goal = goal.unwrap_or_else(|| {

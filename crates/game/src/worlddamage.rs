@@ -56,6 +56,11 @@ impl WorldDamage {
 const PARENTS: &[(&str, &str)] = &[
     ("DishonoredDamageType", "DamageType"),
     ("DishonoredDamageType_FastHit", "DishonoredDamageType"),
+    ("DisDamageType_FastHit_Left", "DishonoredDamageType_FastHit"),
+    ("DisDamageType_FastHit_Right", "DishonoredDamageType_FastHit"),
+    ("DisDamageType_FastHit_Up", "DishonoredDamageType_FastHit"),
+    ("DisDamageType_FastHit_Up_Left", "DisDamageType_FastHit_Left"),
+    ("DisDamageType_FastHit_Up_Right", "DisDamageType_FastHit_Right"),
     ("DisDamageType_ImpactHit", "DishonoredDamageType_FastHit"),
     ("DisDamageType_ImpactHit_Adrenaline", "DishonoredDamageType_FastHit"),
     ("DishonoredDamageType_Projectile", "DishonoredDamageType"),
@@ -126,7 +131,8 @@ pub fn bullet_type(dist: f32, attrs: &Attrs) -> &'static str {
 /// A blow on a person: its original type.
 pub fn hit_type(kind: HitKind, dist: f32, attrs: &Attrs) -> &'static str {
     match kind {
-        HitKind::Sword => "DishonoredDamageType_FastHit",
+        // (a blow of the blade: the original tells its swings apart, left, right, up)
+        HitKind::Sword => "DisDamageType_FastHit_Right",
         HitKind::Assassinate => "DisDamageType_Assassination",
         HitKind::Choke => "DisDamageType_Choke",
         HitKind::SleepDart => "DisDamageType_Arrow_Sleep",
@@ -136,7 +142,12 @@ pub fn hit_type(kind: HitKind, dist: f32, attrs: &Attrs) -> &'static str {
         HitKind::Fatality => "DisDamageType_ImpactHit_Adrenaline",
         HitKind::Rats => "DishonoredDamageType_Bite",
         HitKind::Fire => "DisDamageType_Arrow_Flare",
-        HitKind::Explosion => "DisDamageType_Grenade",
+        HitKind::Explosion | HitKind::EnemyExplosion | HitKind::GrenadeThrowback => "DisDamageType_Grenade",
+        HitKind::StickyGrenade => "DisDamageType_StickyGrenadeExplosion",
+        HitKind::ExplosiveBullet => "DisDamageType_ExplosiveBullet",
+        HitKind::Impact => "DisDamageType_Impact",
+        HitKind::SpringRazor => "DisDamageType_SpringRazor",
+        HitKind::WallOfLight => "DisDamageType_WallOfLight",
         _ => "DishonoredDamageType",
     }
 }
@@ -153,7 +164,7 @@ fn npc_damage(mut hits: MessageReader<NpcHit>, vm: Option<ResMut<Vm>>, npcs: Que
         let now = vm.time;
         vm.recent_hits.insert(h.npc, now);
         let kind = hit_type(h.kind, h.from.distance(t.translation), &attrs);
-        vm.take_damage(actor, kind, h.damage, h.kind != HitKind::ByOthers);
+        vm.take_damage(actor, kind, h.damage, !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion));
     }
 }
 
@@ -178,10 +189,10 @@ fn world_damage(
     for b in blasts.read() {
         let kind = match b.effect {
             "explosive_bullet" => "DisDamageType_ExplosiveBullet",
-            "grenade" => "DisDamageType_Grenade",
+            "grenade" => hit_type(b.kind, 0.0, &Attrs::default()),
             _ => "DishonoredDamageType_Explosion",
         };
-        all.push(WorldDamage { reach: Reach::Near { at: b.at, radius: b.radius, full: b.full }, damage: b.damage.max(1.0), kind, by_player: true });
+        all.push(WorldDamage { reach: Reach::Near { at: b.at, radius: b.radius, full: b.full }, damage: b.damage.max(1.0), kind, by_player: !matches!(b.kind, HitKind::ByOthers | HitKind::EnemyExplosion) });
     }
     if all.is_empty() {
         return;
@@ -315,5 +326,8 @@ mod tests {
         assert!(is_a("DisDamageType_Arrow", "DamageType"));
         assert!(!is_a("DishonoredDamageType_BulletMedium", "DishonoredDamageType_BulletBlast"));
         assert!(!is_a("DishonoredDamageType_FastHit", "DisDamageType_Impact"));
+        // (a sword kill counts as "Kills with sword" and as the scripts' FastHit)
+        assert!(is_a(hit_type(HitKind::Sword, 0.0, &Attrs::default()), "DisDamageType_FastHit_Right"));
+        assert!(is_a(hit_type(HitKind::Sword, 0.0, &Attrs::default()), "DishonoredDamageType_FastHit"));
     }
 }

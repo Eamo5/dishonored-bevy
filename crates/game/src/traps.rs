@@ -385,7 +385,7 @@ fn fly_darts(
         match &def.blast {
             Some(b) => {
                 let damage = b.damage[settings.difficulty.min(3) as usize];
-                blasts.write(crate::gadgets::Explosion { at, radius: b.radius, full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]) });
+                blasts.write(crate::gadgets::Explosion { at, radius: b.radius, full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]), kind: crate::gameplay::HitKind::Explosion });
             }
             None => {
                 // a bolt: the original's damage
@@ -413,7 +413,7 @@ fn disarm_focus(
     player: Query<&Player>,
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
     (carry, possession, held): (Res<crate::carry::Carry>, Res<crate::possession::Possession>, Res<crate::props::Held>),
-    (mut stats, mut msgs, mut log): (ResMut<PlayerStats>, ResMut<HudMessages>, ResMut<TrapLog>),
+    (mut stats, mut msgs, mut log, attrs): (ResMut<PlayerStats>, ResMut<HudMessages>, ResMut<TrapLog>, Res<crate::gamedata::Attrs>),
     mut fx: MessageWriter<SpawnEffect>,
 ) {
     let Some(level) = level else { return };
@@ -453,7 +453,7 @@ fn disarm_focus(
         msgs.push(def.used_message.clone());
     }
     for &(ty, n) in &def.harvest {
-        let name = crate::gadgets::give_ammo(&mut stats, ty, n);
+        let (name, n) = crate::gadgets::give_ammo(&mut stats, &attrs, ty, n);
         msgs.push(format!("{name} +{n}"));
     }
 }

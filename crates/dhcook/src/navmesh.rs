@@ -145,6 +145,11 @@ pub fn merge(levels: &[std::sync::Arc<upk::Package>]) -> crate::format::NavMesh 
                 continue;
             }
             let (vo, po) = (out.verts.len() as u32, out.polys.len() as u32);
+            // (a mesh riding a mover: its polygons, for the scripts to join and part)
+            let owner = pkg.obj_outer(i);
+            if pkg.class_name(owner) == "ArkDynamicPylon" {
+                out.dynamic.push((pkg.obj_name(owner).to_string(), po, po + m.polys.len() as u32));
+            }
             out.verts.extend(m.verts.iter().map(|v| crate::xform::ue_point(*v)));
             out.polys.extend(m.polys.iter().map(|p| crate::format::NavPoly { verts: p.iter().map(|v| vo + *v as u32).collect(), links: Vec::new() }));
             let np = m.polys.len() as u16;

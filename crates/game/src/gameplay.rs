@@ -18,8 +18,12 @@ impl Plugin for GameplayPlugin {
             .init_resource::<Campaign>()
             .add_systems(OnEnter(GameState::InGame), reset_stats.after(crate::level::LevelSpawnSet))
             .add_systems(Update, (tick_time_control, tick_messages).run_if(in_state(GameState::InGame)))
-            .add_systems(Last, log_health.run_if(in_state(GameState::InGame)));
+            .add_systems(Last, (tick_adrenaline, log_health).run_if(in_state(GameState::InGame)));
     }
+}
+
+pub(crate) fn tick_adrenaline(time: Res<Time>, tc: Res<TimeControl>, attrs: Res<crate::gamedata::Attrs>, switches: Res<crate::kismet::ScriptSwitches>, mut stats: ResMut<PlayerStats>) {
+    stats.advance_adrenaline(time.delta_secs() * tc.world_scale(), &attrs, switches.0.adrenaline_off);
 }
 
 /// `DH_HP_LOG`: each change of Corvo's health, where he stands (debug).
@@ -44,7 +48,7 @@ pub struct Noise {
     pub combat: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum HitKind {
     Sword,
     Assassinate,
@@ -61,8 +65,20 @@ pub enum HitKind {
     Fire,
     /// grenades, explosive bullets
     Explosion,
+    /// An enemy's grenade, before Corvo has picked it up.
+    EnemyExplosion,
+    /// An enemy grenade taken and thrown back by Corvo.
+    GrenadeThrowback,
+    StickyGrenade,
+    ExplosiveBullet,
     /// another NPC (a faction feud) or the level's own rats: not Corvo's doing
     ByOthers,
+    /// a thrown thing striking someone (its tweak's `m_Damage`, `DisDamageType_Impact`)
+    Impact,
+    /// a spring razor's shrapnel
+    SpringRazor,
+    /// a wall of light's disintegration
+    WallOfLight,
 }
 
 #[derive(Message, Clone, Copy)]
@@ -89,7 +105,7 @@ pub fn hurt_player(stats: &mut PlayerStats, msgs: &mut HudMessages, sfx: &mut Me
     if stats.dead {
         return;
     }
-    stats.health = (stats.health - damage).max(0.0);
+    stats.take_damage(damage);
     stats.damage_flash = 1.0;
     if stats.health <= 0.0 {
         stats.dead = true;
@@ -161,6 +177,9 @@ pub struct PlayerStats {
     /// lethal / non-lethal totals of the missions before this one (chaos)
     pub past_kills: u32,
     pub past_knockouts: u32,
+    /// times seen in the missions before this one (the game's achievements: Ghost)
+    #[serde(default)]
+    pub past_detected: u32,
     /// powers owned and their level (1, 2): `Blink`, `Vitality`... (cooked game data names)
     pub powers: std::collections::BTreeMap<String, u8>,
     /// bone charms worn / found (by name)
@@ -177,6 +196,14 @@ pub struct PlayerStats {
     pub no_crossbow: bool,
     /// Blood Thirst's meter
     pub adrenaline: f32,
+    /// Remaining time before adrenaline starts burning away (Sustained Rage).
+    #[serde(default)]
+    adrenaline_delay: f32,
+    /// Accumulated within a frame; saved too if a save precedes the Last schedule.
+    #[serde(default)]
+    adrenaline_gain: f32,
+    #[serde(default)]
+    adrenaline_damage: f32,
     /// mana regenerates up to here (a portion above the last expense)
     pub mana_cap: f32,
     /// seconds before health regenerates
@@ -231,9 +258,50 @@ pub struct Stash {
 }
 
 impl PlayerStats {
+    /// Add only what fits, preserving any legacy over-cap inventory.
+    pub fn give_elixirs(&mut self, mana: bool, amount: u32, capacity: u32) -> u32 {
+        let count = if mana { &mut self.mana_elixirs } else { &mut self.health_elixirs };
+        let added = amount.min(capacity.saturating_sub(*count));
+        *count += added;
+        added
+    }
+    /// Record actual health lost, rather than a net health delta that healing in
+    /// the same frame could hide. All combat/environment damage shares this path.
+    pub fn take_damage(&mut self, damage: f32) {
+        if self.dead || !damage.is_finite() || damage <= 0.0 {
+            return;
+        }
+        let lost = damage.min(self.health.max(0.0));
+        self.health = (self.health - lost).max(0.0);
+        self.adrenaline_damage += lost;
+    }
+
+    pub fn gain_adrenaline(&mut self, amount: f32) {
+        if amount.is_finite() && amount > 0.0 {
+            self.adrenaline_gain += amount;
+        }
+    }
+
+    fn advance_adrenaline(&mut self, dt: f32, attrs: &crate::gamedata::Attrs, disabled: bool) {
+        let gain = std::mem::take(&mut self.adrenaline_gain) + std::mem::take(&mut self.adrenaline_damage) * attrs.adrenaline_damage;
+        if self.dead || disabled || self.power("BloodThirsty") == 0 {
+            self.adrenaline = 0.0;
+            self.adrenaline_delay = 0.0;
+            return;
+        }
+        if gain > 0.0 {
+            self.adrenaline = (self.adrenaline + gain).min(attrs.adrenaline_max);
+            self.adrenaline_delay = attrs.adrenaline_cooldown;
+        } else {
+            let burn_time = (dt - self.adrenaline_delay).max(0.0);
+            self.adrenaline_delay = (self.adrenaline_delay - dt).max(0.0);
+            self.adrenaline = (self.adrenaline - attrs.adrenaline_burn * burn_time).clamp(0.0, attrs.adrenaline_max.max(0.0));
+        }
+    }
+
     /// The scripts put his things away (`DisSeqAct_BackupAndClearInventory`) or give them back
     /// (`DisSeqAct_RestoreInventoryFromBackup`: added to what he got meanwhile).
-    pub fn stash(&mut self, put_away: bool, upgrades: bool) {
+    pub fn stash(&mut self, put_away: bool, upgrades: bool, data: &crate::gamedata::Data, difficulty: u8) {
         if put_away {
             let s = Stash {
                 items: std::mem::take(&mut self.items),
@@ -244,21 +312,148 @@ impl PlayerStats {
                 mana_elixirs: std::mem::take(&mut self.mana_elixirs),
                 upgrades: if upgrades { std::mem::take(&mut self.upgrades) } else { Vec::new() },
             };
-            self.stash = Some(s);
-        } else if let Some(s) = self.stash.take() {
-            for (k, n) in s.items {
-                *self.items.entry(k).or_default() += n;
+            if let Some(old) = &mut self.stash {
+                for (k, n) in s.items {
+                    let count = old.items.entry(k).or_default();
+                    *count = count.saturating_add(n);
+                }
+                old.bullets = old.bullets.saturating_add(s.bullets);
+                old.bolts = old.bolts.saturating_add(s.bolts);
+                old.sleep_darts = old.sleep_darts.saturating_add(s.sleep_darts);
+                old.health_elixirs = old.health_elixirs.saturating_add(s.health_elixirs);
+                old.mana_elixirs = old.mana_elixirs.saturating_add(s.mana_elixirs);
+                for u in s.upgrades {
+                    if !old.upgrades.contains(&u) { old.upgrades.push(u); }
+                }
+            } else {
+                self.stash = Some(s);
             }
-            self.bullets += s.bullets;
-            self.bolts += s.bolts;
-            self.sleep_darts += s.sleep_darts;
-            self.health_elixirs += s.health_elixirs;
-            self.mana_elixirs += s.mana_elixirs;
+        } else if let Some(s) = self.stash.take() {
+            // Restore upgrades first: the recovered pouch/quiver determines how
+            // much of the returned ammunition fits alongside newly found gear.
             for u in s.upgrades {
                 if !self.upgrades.contains(&u) {
                     self.upgrades.push(u);
                 }
             }
+            let attrs = crate::gamedata::Attrs { ammo_capacity: data.ammo_capacities(self, difficulty), ..default() };
+            for (k, n) in s.items {
+                if let Some(ty) = crate::gadgets::ammo_type(&k) {
+                    crate::gadgets::give_ammo(self, &attrs, ty, n);
+                } else {
+                    let count = self.items.entry(k).or_default();
+                    *count = count.saturating_add(n);
+                }
+            }
+            for (ty, n) in [(0, s.bullets), (2, s.bolts), (3, s.sleep_darts)] {
+                crate::gadgets::give_ammo(self, &attrs, ty, n);
+            }
+            self.give_elixirs(false, s.health_elixirs, data.pawn("m_nMaxHealthElixir", 10.0).max(0.0) as u32);
+            self.give_elixirs(true, s.mana_elixirs, data.pawn("m_nMaxManaElixir", 10.0).max(0.0) as u32);
+        }
+    }
+}
+
+#[cfg(test)]
+mod inventory_tests {
+    use super::*;
+
+    #[test]
+    fn repeated_confiscation_survives_saving_and_restores_upgrades_before_ammo() {
+        let mut data = crate::gamedata::Data::default();
+        data.0.upgrades.push(dhcook::format::UpgradeDef { id: "Pouch".into(), attributes: vec![("BulletCapacity".into(), 10.0)], ..default() });
+        let mut stats = PlayerStats::default();
+        stats.bullets = 15;
+        stats.health_elixirs = 8;
+        stats.items.insert(crate::gadgets::GRENADES.into(), 4);
+        stats.items.insert("MissionItem".into(), 1);
+        stats.upgrades.push("Pouch".into());
+        stats.stash(true, true, &data, 0);
+        assert_eq!(stats.bullets, 0);
+        assert!(stats.upgrades.is_empty());
+        stats.bullets = 2;
+        stats.stash(true, true, &data, 0);
+        let mut stats: PlayerStats = serde_json::from_slice(&serde_json::to_vec(&stats).unwrap()).unwrap();
+        stats.bullets = 5;
+        stats.health_elixirs = 5;
+        stats.items.insert(crate::gadgets::GRENADES.into(), 3);
+        stats.stash(false, true, &data, 0);
+        assert_eq!(stats.bullets, 20);
+        assert_eq!(stats.health_elixirs, 10);
+        assert_eq!(stats.items[crate::gadgets::GRENADES], 5);
+        assert_eq!(stats.items["MissionItem"], 1);
+        assert_eq!(stats.upgrades, vec!["Pouch"]);
+        assert!(stats.stash.is_none());
+        stats.bullets -= 1;
+        stats.stash(false, true, &data, 0);
+        assert_eq!(stats.bullets, 19);
+        assert_eq!(stats.items["MissionItem"], 1);
+    }
+}
+
+#[cfg(test)]
+mod adrenaline_tests {
+    use super::*;
+    use crate::gamedata::Attrs;
+
+    fn player() -> PlayerStats {
+        let mut s = PlayerStats::default();
+        s.powers.insert("BloodThirsty".into(), 1);
+        s
+    }
+
+    #[test]
+    fn damage_and_healing_in_the_same_frame_still_trigger_vengeance() {
+        let mut s = player();
+        let attrs = Attrs { adrenaline_damage: 1.0, ..default() };
+        s.take_damage(12.0);
+        s.health += 12.0;
+        s.advance_adrenaline(0.1, &attrs, false);
+        assert_eq!(s.health, 100.0);
+        assert_eq!(s.adrenaline, 12.0);
+        s.advance_adrenaline(0.1, &attrs, false);
+        assert_eq!(s.adrenaline, 12.0);
+    }
+
+    #[test]
+    fn cooldown_uses_only_elapsed_time_after_the_delay_and_survives_saving() {
+        let mut s = player();
+        let attrs = Attrs { adrenaline_cooldown: 20.0, ..default() };
+        s.gain_adrenaline(60.0);
+        // Pending gains must survive a save earlier in the same frame.
+        let bytes = serde_json::to_vec(&s).unwrap();
+        let mut s: PlayerStats = serde_json::from_slice(&bytes).unwrap();
+        s.advance_adrenaline(0.0, &attrs, false);
+        s.advance_adrenaline(19.5, &attrs, false);
+        assert_eq!(s.adrenaline, 60.0);
+        let bytes = serde_json::to_vec(&s).unwrap();
+        let mut loaded: PlayerStats = serde_json::from_slice(&bytes).unwrap();
+        loaded.advance_adrenaline(1.0, &attrs, false);
+        assert_eq!(loaded.adrenaline, 59.5);
+        loaded.gain_adrenaline(500.0);
+        loaded.advance_adrenaline(0.0, &attrs, false);
+        assert_eq!(loaded.adrenaline, attrs.adrenaline_max);
+        loaded.advance_adrenaline(20.0, &attrs, false);
+        assert_eq!(loaded.adrenaline, attrs.adrenaline_max);
+        loaded.advance_adrenaline(1.0, &attrs, false);
+        assert_eq!(loaded.adrenaline, attrs.adrenaline_max - 1.0);
+    }
+
+    #[test]
+    fn no_power_disabled_and_dead_players_cannot_bank_adrenaline() {
+        let attrs = Attrs { adrenaline_damage: 1.0, ..default() };
+        for (power, disabled, dead) in [(false, false, false), (true, true, false), (true, false, true)] {
+            let mut s = player();
+            if !power { s.powers.clear(); }
+            s.gain_adrenaline(60.0);
+            s.take_damage(10.0);
+            s.dead = dead;
+            s.advance_adrenaline(0.0, &attrs, disabled);
+            assert_eq!(s.adrenaline, 0.0);
+            s.dead = false;
+            s.powers.insert("BloodThirsty".into(), 1);
+            s.advance_adrenaline(0.0, &attrs, false);
+            assert_eq!(s.adrenaline, 0.0);
         }
     }
 }
@@ -289,6 +484,7 @@ impl Default for PlayerStats {
             hints: Vec::new(),
             past_kills: 0,
             past_knockouts: 0,
+            past_detected: 0,
             powers: Default::default(),
             charms: Vec::new(),
             charms_owned: Vec::new(),
@@ -297,6 +493,9 @@ impl Default for PlayerStats {
             weapons: true,
             no_crossbow: false,
             adrenaline: 0.0,
+            adrenaline_delay: 0.0,
+            adrenaline_gain: 0.0,
+            adrenaline_damage: 0.0,
             mana_cap: 100.0,
             health_delay: 0.0,
             dead: false,
@@ -349,7 +548,11 @@ impl PlayerStats {
             "ePlayerStat_RuneFound" => self.runes_found,
             "ePlayerStat_BoneCharmFound" => self.charms_found,
             "ePlayerStat_GoldFound" => self.coins_found,
+            // (the money Corvo picks up: `m_pAbstractItem` coins)
+            "ePlayerStat_AmountStolen" => self.coins_found,
             "ePlayerStat_ChaosLevel" => self.chaos_level.max(0) as u32,
+            // (each power bought or raised a level: Blink, given, is the first)
+            "ePlayerStat_PowersAcquired" => self.powers.values().map(|l| *l as u32).sum(),
             other => self.counters.get(other).copied().unwrap_or(0),
         }
     }
@@ -446,6 +649,7 @@ fn reset_stats(
             if mission != campaign.mission && script.0.is_none() {
                 s.past_kills += s.kills;
                 s.past_knockouts += s.knockouts;
+                s.past_detected += s.times_detected;
                 s.kills = 0;
                 s.knockouts = 0;
                 s.times_detected = 0;

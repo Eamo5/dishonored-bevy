@@ -23,6 +23,24 @@ fn main() -> Result<()> {
                 println!("{:6} {:30} {:9} {:8} fl={:016x} ef={:x} {}", i, cls, e.offset, e.size, e.flags, e.export_flags, pkg.obj_path(i));
             }
         }
+        Some("obj") => {
+            // dhtool obj <object path> [package to load first]: an object found among the
+            // packages, its properties and its archetypes'
+            init_classes();
+            let assets = dhcook::resolver::Assets::new(std::path::Path::new(COOKED))?;
+            assets.load_globals();
+            if let Some(p) = args.get(3).and_then(|n| assets.package(n)) {
+                assets.add_search(p);
+            }
+            let Some(o) = assets.find(&args[2]) else { anyhow::bail!("not found") };
+            let (pkg, mut idx) = (o.pkg.clone(), o.idx);
+            println!("in {}", pkg.name);
+            while idx > 0 {
+                println!("== {} [{}]", pkg.obj_path(idx), pkg.class_name(idx));
+                if let Ok(od) = upk::read_object(&pkg, idx) { dump_props(&pkg, &od.props, 1); }
+                idx = pkg.exports[idx as usize - 1].archetype;
+            }
+        }
         Some("chain") => {
             // dhtool chain <pkg> <export>: an object's properties, then its archetypes' in turn
             init_classes();
@@ -714,6 +732,13 @@ fn main() -> Result<()> {
                     }
                     Err(e) => println!("map {i} {}: {e:#}", m.name),
                 }
+            }
+        }
+        Some("enum") => {
+            // dhtool enum <pkg> <enum name...>: an enum's values, in order
+            let pkg = upk::Package::open(&pkg_path(&args[2]))?;
+            for name in &args[3..] {
+                println!("{name}: {:?}", dhcook::gamedata::enum_names(&pkg, name));
             }
         }
         Some("findmap") => {

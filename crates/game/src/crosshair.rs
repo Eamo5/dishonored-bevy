@@ -221,7 +221,7 @@ fn update_crosshair(
     hud: Query<Entity, With<crate::hud::HudRoot>>,
     mut clips: Query<(&mut FlashClip, &mut Node, &mut Visibility)>,
     focus: Res<crate::interact::InteractFocus>,
-    what: (Query<&crate::interact::Pickup>, Query<&crate::interact::Door>, Query<&crate::npc::Npc>, Query<&crate::interact::Usable>, Option<Res<crate::interact::TravelActors>>),
+    what: (Query<&crate::interact::Pickup>, Query<&crate::interact::Door>, Query<&crate::npc::Npc>, Query<&crate::interact::Usable>, Option<Res<crate::interact::TravelActors>>, Query<(), With<crate::gadgets::Grenade>>, Query<&crate::powers::Projectile>),
     (stats, powers, data, settings, paused, script_ui, carry): (
         Res<PlayerStats>,
         Res<Powers>,
@@ -253,11 +253,15 @@ fn update_crosshair(
     let hidden = stats.dead || paused.0 || settings.crosshair_style == 0 || script_ui.is_some_and(|u| u.hud_hidden.contains("DHE_Crosshair"));
     let simple = settings.crosshair_style == 1;
     // what Corvo looks at
-    let (pickups, doors, bodies, usables, travel) = what;
+    let (pickups, doors, bodies, usables, travel, grenades, bolts) = what;
     // (a prop to pick up is focused by name, without an entity: `props`)
     let prop = focus.0 && focus.1.is_none() && !focus.3.is_empty() && carry.body.is_none();
     let kind = if prop { Some(Focus::Carry) } else { focus.1.filter(|_| focus.0 && carry.body.is_none()).map(|e| {
-        if let Ok(p) = pickups.get(e) {
+        if grenades.contains(e) {
+            Focus::Carry
+        } else if bolts.get(e).is_ok_and(|b| b.recoverable) {
+            Focus::Pickup
+        } else if let Ok(p) = pickups.get(e) {
             if matches!(p.kind, crate::interact::PickupKind::Note) { Focus::Note } else { Focus::Pickup }
         } else if let Ok(d) = doors.get(e) {
             if d.locked && d.key_in(&stats.keys).is_none() {

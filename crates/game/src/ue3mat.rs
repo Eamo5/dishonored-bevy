@@ -240,6 +240,10 @@ pub struct Ue3Material {
     /// the scene material it was made from (`u32::MAX`: none), for parameters set at runtime
     pub mat_id: u32,
     pub light_ok: bool,
+    /// a light pass's place among the light passes (all of them drawn before anything
+    /// translucent, as UE3 adds its lights before the fog and the translucency; those of one
+    /// material and light together)
+    pub light_group: u32,
 }
 
 impl From<&Ue3Material> for Ue3Key {
@@ -270,6 +274,16 @@ impl Ue3Material {
 }
 
 impl Material for Ue3Material {
+    // (the light passes sort behind everything translucent, grouped by material and light:
+    // their order among themselves doesn't matter, adding)
+    fn depth_bias(&self) -> f32 {
+        if self.key.light_pass {
+            -1.0e7 - self.light_group as f32 * 1.0e4
+        } else {
+            0.0
+        }
+    }
+
     fn alpha_mode(&self) -> AlphaMode {
         match self.key.blend {
             0 => AlphaMode::Opaque,

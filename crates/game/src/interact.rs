@@ -12,6 +12,9 @@ pub struct InteractPlugin;
 impl Plugin for InteractPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InteractFocus>()
+            .init_resource::<AmmoPickupRestore>()
+            .add_systems(OnEnter(GameState::InGame), |mut pending: ResMut<AmmoPickupRestore>| pending.0.clear())
+            .add_systems(Update, restore_ammo_pickups.after(crate::save::restore_npcs).before(find_focus).run_if(in_state(GameState::InGame)))
             .add_message::<Interaction>()
             .add_systems(OnEnter(GameState::InGame), setup_interactables.after(LevelSpawnSet))
             .add_message::<DoorBlast>()
@@ -43,6 +46,70 @@ pub enum PickupKind {
     Loot(u32),
 }
 
+impl PickupKind {
+    fn at_capacity(&self, stats: &PlayerStats, attrs: &crate::gamedata::Attrs) -> bool {
+        match self {
+            Self::Ammo(list) => list.iter().all(|(ty, _)| attrs.ammo_capacity.get(*ty as usize).is_none_or(|cap| crate::gadgets::ammo_count(stats, *ty) >= *cap)),
+            Self::HealthElixir => stats.health_elixirs >= attrs.elixir_capacity(false),
+            Self::ManaElixir => stats.mana_elixirs >= attrs.elixir_capacity(true),
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+
+    #[test]
+    fn remaining_ammo_restores_by_instance_including_late_factory_pickups() {
+        let saved = vec![AmmoPickupSave { index: 4, position: [1.0, 0.0, 0.0], amounts: vec![(0, 1)] },
+            AmmoPickupSave { index: 4, position: [1.0, 0.0, 0.0], amounts: vec![(0, 2)] },
+            AmmoPickupSave { index: 4, position: [1.0, 0.0, 0.0], amounts: vec![(0, 3)] }];
+        let saved = serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
+        let mut app = App::new();
+        app.insert_resource(AmmoPickupRestore(saved)).add_systems(Update, restore_ammo_pickups);
+        let pickup = || Pickup { kind: PickupKind::Ammo(vec![(0, 5)]), label: "Bullets".into(), entities: Vec::new(), index: 4 };
+        let first = app.world_mut().spawn((pickup(), Transform::from_xyz(1.0, 0.0, 0.0))).id();
+        app.update();
+        assert_eq!(app.world().get::<Pickup>(first).unwrap().kind, PickupKind::Ammo(vec![(0, 1)]));
+        assert_eq!(app.world().resource::<AmmoPickupRestore>().0.len(), 2);
+        let second = app.world_mut().spawn((pickup(), Transform::from_xyz(1.0, 0.0, 0.0))).id();
+        let third = app.world_mut().spawn((pickup(), Transform::from_xyz(1.0, 0.0, 0.0))).id();
+        app.update();
+        assert_eq!(app.world().get::<Pickup>(first).unwrap().kind, PickupKind::Ammo(vec![(0, 1)]));
+        let mut amounts: Vec<_> = [second, third].into_iter().map(|e| match &app.world().get::<Pickup>(e).unwrap().kind {
+            PickupKind::Ammo(list) => list[0].1,
+            _ => panic!("restored pickup lost ammunition"),
+        }).collect();
+        amounts.sort_unstable();
+        assert_eq!(amounts, [2, 3]);
+        assert!(app.world().resource::<AmmoPickupRestore>().0.is_empty());
+    }
+
+    #[test]
+    fn full_elixirs_are_rejected_without_blocking_other_pickups() {
+        let attrs = crate::gamedata::Attrs { max_elixirs: 10, max_mana_elixirs: 7, ..default() };
+        let mut stats = PlayerStats::default();
+        stats.health_elixirs = 10;
+        stats.mana_elixirs = 6;
+        assert!(PickupKind::HealthElixir.at_capacity(&stats, &attrs));
+        assert!(!PickupKind::ManaElixir.at_capacity(&stats, &attrs));
+        assert_eq!(stats.give_elixirs(true, u32::MAX, attrs.elixir_capacity(true)), 1);
+        assert_eq!(stats.mana_elixirs, 7);
+        assert!(PickupKind::ManaElixir.at_capacity(&stats, &attrs));
+        assert!(!PickupKind::Coins(10).at_capacity(&stats, &attrs));
+        assert!(!PickupKind::Weapon("Crossbow".into(), vec![(2, 1)]).at_capacity(&stats, &attrs));
+        stats.health_elixirs = 12;
+        assert_eq!(stats.give_elixirs(false, 1, attrs.elixir_capacity(false)), 0);
+        assert_eq!(stats.health_elixirs, 12);
+        stats.health_elixirs = 9;
+        assert!(!PickupKind::HealthElixir.at_capacity(&stats, &attrs));
+        assert_eq!(stats.give_elixirs(false, 1, attrs.elixir_capacity(false)), 1);
+        assert_eq!(stats.health_elixirs, 10);
+    }
+}
+
 #[derive(Component)]
 pub struct Pickup {
     pub kind: PickupKind,
@@ -50,6 +117,32 @@ pub struct Pickup {
     pub entities: Vec<Entity>,
     /// Index into `scene.pickups`.
     pub index: u32,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct AmmoPickupSave {
+    pub index: u32,
+    pub position: [f32; 3],
+    pub amounts: Vec<(u8, u32)>,
+}
+
+#[derive(Resource, Default)]
+pub struct AmmoPickupRestore(pub Vec<AmmoPickupSave>);
+
+#[derive(Component)]
+struct RestoredAmmoPickup;
+
+fn restore_ammo_pickups(mut commands: Commands, mut pending: ResMut<AmmoPickupRestore>, mut pickups: Query<(Entity, &mut Pickup, &Transform), Without<RestoredAmmoPickup>>) {
+    // Factory-created pickups can arrive after the initial level entities.
+    // Consume each match once, including when identical factory instances overlap.
+    let mut matched = std::collections::HashSet::new();
+    pending.0.retain(|saved| {
+        let Some((e, mut pickup, _)) = pickups.iter_mut().find(|(e, p, t)| !matched.contains(e) && p.index == saved.index && t.translation.distance_squared(Vec3::from(saved.position)) < 0.01) else { return true };
+        pickup.kind = PickupKind::Ammo(saved.amounts.clone());
+        matched.insert(e);
+        commands.entity(e).insert(RestoredAmmoPickup);
+        false
+    });
 }
 
 /// A rune's or bone charm's song (the original `Snd_UI_Rune_Amb` / `Snd_UI_Whale_Bone_Charms_Amb`
@@ -309,8 +402,7 @@ pub fn make_pickup(level: &LevelInfo, data: &crate::gamedata::Data, pi: usize, e
         }
         if !p.ammo.is_empty() {
             // the cooked ammunition: its type names it
-            let mut probe = PlayerStats::default();
-            label = crate::gadgets::give_ammo(&mut probe, p.ammo[0].0, 0).to_string();
+            label = crate::gadgets::ammo_name(p.ammo[0].0).to_string();
             kind = PickupKind::Ammo(p.ammo.clone());
         }
         // a weapon: what it gives (with its bullets)
@@ -473,11 +565,11 @@ pub fn use_focus(
     mut msgs: ResMut<HudMessages>,
     mut noise: MessageWriter<Noise>,
     mut used: MessageWriter<Interaction>,
-    pickups: Query<(&Pickup, Option<&Song>)>,
+    mut pickups: Query<(&mut Pickup, Option<&Song>)>,
     usables: Query<&Usable>,
     mut doors: Query<(&mut Door, &GlobalTransform, &LevelInstance)>,
     player: Query<&Transform, With<Player>>,
-    (level, mut timed, data, mut ambients, mut read): (Option<Res<LevelInfo>>, ResMut<crate::audio::TimedSounds>, Res<crate::gamedata::Data>, ResMut<crate::audio::Ambients>, MessageWriter<crate::journal::ReadNote>),
+    (level, mut timed, data, mut ambients, mut read, attrs): (Option<Res<LevelInfo>>, ResMut<crate::audio::TimedSounds>, Res<crate::gamedata::Data>, ResMut<crate::audio::Ambients>, MessageWriter<crate::journal::ReadNote>, Res<crate::gamedata::Attrs>),
     (keyholes, peek, mut plog, mut tw): (Query<(), With<crate::keyhole::KeyholeDoor>>, Res<crate::keyhole::Peek>, ResMut<crate::pickuplog::PickupLog>, ResMut<crate::tutwindow::TutorialWindow>),
 ) {
     let use_key = bind.key(crate::bindings::Act::Use);
@@ -491,7 +583,12 @@ pub fn use_focus(
     } else if !keys.just_pressed(use_key) {
         return;
     }
-    if let Ok((p, song)) = pickups.get(e) {
+    if let Ok((mut p, song)) = pickups.get_mut(e) {
+        if p.kind.at_capacity(&stats, &attrs) {
+            timed.schedule(&[(0.0, "Snd_UI_Ingame_Max_Ammo".to_string())], None);
+            msgs.push(if matches!(p.kind, PickupKind::Ammo(_)) { "You can't carry more ammo of this type" } else { "You cannot carry any more of this elixir" });
+            return;
+        }
         // a blade while he has one: left there (the original's cannot-pick-up sound)
         if matches!(&p.kind, PickupKind::Weapon(w, _) if w.to_ascii_lowercase().contains("sword")) && !stats.unarmed {
             timed.schedule(&[(0.0, "Snd_UI_Ingame_Max_Ammo".to_string())], None);
@@ -514,6 +611,7 @@ pub fn use_focus(
             PickupKind::Weapon(..) => "Snd_UI_Ingame_Ammo_Pickup",
         };
         timed.schedule(&[(0.0, sound.to_string())], None);
+        let mut remaining_ammo = None;
         match &p.kind {
             PickupKind::Coins(v) | PickupKind::Loot(v) => {
                 stats.coins += v;
@@ -521,15 +619,15 @@ pub fn use_focus(
                 plog.add(format!("{} +{v}", if p.label.is_empty() || p.label.starts_with('`') { "Coins" } else { p.label.as_str() }), Some("Money_Small"));
             }
             PickupKind::HealthElixir => {
-                stats.health_elixirs += 1;
+                stats.give_elixirs(false, 1, attrs.elixir_capacity(false));
                 plog.add("Sokolov's Health Elixir", Some("HealthElixir_Small"));
             }
             PickupKind::ManaElixir => {
-                stats.mana_elixirs += 1;
+                stats.give_elixirs(true, 1, attrs.elixir_capacity(true));
                 plog.add("Piero's Spiritual Remedy", Some("ManaElixir_Small"));
             }
             PickupKind::Food => {
-                stats.health = (stats.health + 10.0).min(stats.max_health);
+                stats.health = (stats.health + 10.0 + attrs.food_heal_bonus).min(stats.max_health);
                 plog.add(if p.label.is_empty() { "Food".to_string() } else { p.label.clone() }, None);
             }
             PickupKind::Key(_) => {
@@ -563,10 +661,13 @@ pub fn use_focus(
                 }
             }
             PickupKind::Ammo(list) => {
+                let mut remaining = Vec::new();
                 for &(ty, n) in list {
-                    let name = crate::gadgets::give_ammo(&mut stats, ty, n);
-                    plog.add(format!("{name} +{n}"), crate::pickuplog::ammo_icon(ty));
+                    let (name, added) = crate::gadgets::give_ammo(&mut stats, &attrs, ty, n);
+                    if added > 0 { plog.add(format!("{name} +{added}"), crate::pickuplog::ammo_icon(ty)); }
+                    if n > added { remaining.push((ty, n - added)); }
                 }
+                remaining_ammo = Some(remaining);
             }
             PickupKind::Rune => {
                 stats.runes += 1;
@@ -634,10 +735,14 @@ pub fn use_focus(
                 };
                 plog.add(p.label.clone(), icon);
                 for &(ty, n) in ammo {
-                    let name = crate::gadgets::give_ammo(&mut stats, ty, n);
-                    plog.add(format!("{name} +{n}"), crate::pickuplog::ammo_icon(ty));
+                    let (name, added) = crate::gadgets::give_ammo(&mut stats, &attrs, ty, n);
+                    if added > 0 { plog.add(format!("{name} +{added}"), crate::pickuplog::ammo_icon(ty)); }
                 }
             }
+        }
+        if let Some(remaining) = remaining_ammo.filter(|list| !list.is_empty()) {
+            p.kind = PickupKind::Ammo(remaining);
+            return;
         }
         for &m in &p.entities {
             commands.entity(m).despawn();

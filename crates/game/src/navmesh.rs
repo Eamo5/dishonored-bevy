@@ -14,6 +14,7 @@ impl Plugin for NavMeshPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PathBudget>()
             .add_systems(OnEnter(GameState::InGame), build.after(crate::level::LevelSpawnSet))
+            .add_systems(Update, pylon_links.run_if(in_state(GameState::InGame)))
             .add_systems(Update, (|mut b: ResMut<PathBudget>| b.0 = PATHS_PER_FRAME).run_if(in_state(GameState::InGame)))
             .add_systems(Update, draw_paths.run_if(in_state(GameState::InGame)).run_if(|| std::env::var("DH_NAV_DRAW").is_ok()));
     }
@@ -41,6 +42,10 @@ struct Poly {
 pub struct NavGrid {
     polys: Vec<Poly>,
     cells: HashMap<(i32, i32), Vec<u32>>,
+    /// polygons parted from the rest (a mover's, under way): not walked onto
+    parted: Vec<bool>,
+    /// the movers' meshes: the pylon's actor, its polygons
+    dynamic: Vec<(String, u32, u32)>,
 }
 
 /// A character's way to its goal.
@@ -92,7 +97,28 @@ fn build(mut commands: Commands, level: Option<Res<LevelInfo>>) {
         polys.push(Poly { verts, center, lo, hi, links });
     }
     info!("navmesh: {} polygons", polys.len());
-    commands.insert_resource(NavGrid { polys, cells });
+    let parted = vec![false; polys.len()];
+    commands.insert_resource(NavGrid { polys, cells, parted, dynamic: nm.dynamic.clone() });
+}
+
+/// The scripts joining a mover's mesh to the rest, or parting it (`ArkSeqAct_ChangePylonConnection`:
+/// parted as the platform sets off, joined as it is back).
+fn pylon_links(vm: Option<ResMut<crate::kismet::Vm>>, grid: Option<ResMut<NavGrid>>) {
+    let (Some(mut vm), Some(mut grid)) = (vm, grid) else { return };
+    if vm.pylon_links.is_empty() {
+        return;
+    }
+    for (name, joined) in std::mem::take(&mut vm.pylon_links) {
+        let ranges: Vec<(u32, u32)> = grid.dynamic.iter().filter(|d| d.0 == name).map(|d| (d.1, d.2)).collect();
+        for (a, b) in ranges {
+            for p in a..b.min(grid.parted.len() as u32) {
+                grid.parted[p as usize] = !joined;
+            }
+        }
+        if std::env::var("DH_NAV_LOG").is_ok() {
+            info!("navmesh: {name} {}", if joined { "joined" } else { "parted" });
+        }
+    }
 }
 
 /// (debug) the characters' paths, and the mesh's edges near the player.
@@ -226,6 +252,10 @@ impl NavGrid {
             }
             let cp = &self.polys[cur as usize];
             for (li, &(nb, a, b)) in cp.links.iter().enumerate() {
+                // (not onto a mover's mesh parted from the rest, unless it is the way's end)
+                if self.parted[nb as usize] && nb != end {
+                    continue;
+                }
                 let mid = (a + b) * 0.5;
                 let cost = g[cur as usize] + cp.center.distance(mid) + mid.distance(self.polys[nb as usize].center);
                 if cost < g[nb as usize] {

@@ -399,6 +399,7 @@ pub struct NpcVisual {
 /// Character and prop visuals built from the cooked data, for gameplay systems.
 #[derive(Resource, Default)]
 pub struct GameAssets {
+    pub white_rat_material: Option<PartMat>,
     pub npc_types: Vec<Option<NpcVisual>>,
     /// materials the scripts put on characters, by scene material
     pub npc_mat_swaps: HashMap<u32, PartMat>,
@@ -441,13 +442,22 @@ struct MatBuilder<'a> {
     /// bindings shared by every original-shader material (textures filled per material)
     ue_base: Option<Ue3Material>,
     ue_mats: HashMap<(u32, Policy), Option<Handle<Ue3Material>>>,
+    /// the light passes' materials, one per surface material and light (its parameters' and
+    /// shadow's bits): the passes of a light over surfaces of one material share it, and draw
+    /// together
+    light_mats: HashMap<(u32, Policy, [u32; 16], Option<[u32; 5]>), Option<Handle<Ue3Material>>>,
     cube_faces: &'a [[u32; 6]],
     cubes: HashMap<u32, Option<Handle<Image>>>,
+    /// render-target textures: the images the reflections draw into
+    render_targets: HashMap<u32, Handle<Image>>,
 }
 
 impl MatBuilder<'_> {
     fn image(&mut self, id: Option<u32>, srgb: bool, assets: &mut Assets<Image>) -> Option<Handle<Image>> {
         let id = id?;
+        if let Some(h) = self.render_targets.get(&id) {
+            return Some(h.clone());
+        }
         if let Some(h) = self.images.get(&(id, srgb)) {
             return Some(h.clone());
         }
@@ -490,6 +500,38 @@ impl MatBuilder<'_> {
         programs: &mut Ue3Programs,
         shaders: &mut Assets<Shader>,
     ) -> Option<Handle<Ue3Material>> {
+        let bits = |v: &[Vec4]| -> Vec<u32> { v.iter().flat_map(|q| q.to_array()).map(f32::to_bits).collect() };
+        let key = (
+            id,
+            policy,
+            <[u32; 16]>::try_from(bits(&light)).unwrap_or_default(),
+            shadow.map(|(sb, layer)| {
+                let b = bits(&[sb]);
+                [b[0], b[1], b[2], b[3], layer]
+            }),
+        );
+        if let Some(m) = self.light_mats.get(&key) {
+            return m.clone();
+        }
+        let group = self.light_mats.len() as u32;
+        let m = self.build_ue3_light_material(id, policy, light, shadow, group, images, materials, programs, shaders);
+        self.light_mats.insert(key, m.clone());
+        m
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_ue3_light_material(
+        &mut self,
+        id: u32,
+        policy: Policy,
+        light: [Vec4; 4],
+        shadow: Option<(Vec4, u32)>,
+        group: u32,
+        images: &mut Assets<Image>,
+        materials: &mut Assets<Ue3Material>,
+        programs: &mut Ue3Programs,
+        shaders: &mut Assets<Shader>,
+    ) -> Option<Handle<Ue3Material>> {
         let ue = self.defs.get(id as usize)?.ue3.as_ref()?;
         if ue.unlit || !matches!(ue.blend, Blend::Opaque | Blend::Masked) || ue.params.len() > dhcook::ue3prog::DYN_SHADOW_SLOT {
             return None;
@@ -505,6 +547,7 @@ impl MatBuilder<'_> {
         }
         m.key.blend = 3;
         m.key.light_pass = true;
+        m.light_group = group;
         Some(materials.add(m))
     }
 
@@ -962,6 +1005,7 @@ fn spawn_level(
             map: 0,
             mat_id: u32::MAX,
             light_ok: false,
+            light_group: 0,
         }
     });
     let mut mb = MatBuilder {
@@ -974,9 +1018,17 @@ fn spawn_level(
         ext,
         ue_base,
         ue_mats: HashMap::new(),
+        light_mats: HashMap::new(),
         cube_faces: &scene.cubes,
         cubes: HashMap::new(),
+        render_targets: {
+            let rt = crate::reflections::make_targets(&scene, &mut image_assets);
+            commands.insert_resource(crate::reflections::ReflectionTargets(rt.clone()));
+            rt
+        },
     };
+    // the meshes the reflections show (their groups: `ReflectionChannels`)
+    let reflect_groups = crate::reflections::shown_groups(&scene);
     lap("lighting buffers");
     // the level's reflection cube, for every surface
     if let Some(h) = scene.scene_reflection.and_then(|c| mb.cube(c, &mut image_assets)) {
@@ -1157,6 +1209,11 @@ fn spawn_level(
             });
         }
         let inst_entity = e.id();
+        if inst.reflect & reflect_groups != 0 {
+            for pe in &part_entities {
+                commands.entity(*pe).insert(bevy::camera::visibility::RenderLayers::from_layers(&[0, crate::reflections::REFLECT_LAYER]));
+            }
+        }
         if !swaps.is_empty() {
             let list = swaps.into_iter().filter_map(|(id, part, h)| part_entities.get(part).map(|pe| (id, *pe, h))).collect();
             commands.entity(inst_entity).insert(MatSwaps(list));
@@ -1541,6 +1598,15 @@ fn spawn_level(
         let stalk = part(&k.stalk);
         let pearl = part(&k.pearl);
         game_assets.krust_parts.push((stalk, pearl));
+    }
+    if let Some(id) = scene.white_rat_material {
+        game_assets.white_rat_material = match mb.ue3_material(id, Policy::NoLightMap, &mut image_assets, &mut ue_assets, &mut ue_programs, &mut shader_assets) {
+            Some(h) => Some(PartMat::Ue3(h)),
+            None => match mb.material(id, &mut image_assets, &mut mat_assets, &mut sky_assets) {
+                Some(MatHandle::Std(h)) => Some(PartMat::Std(h)),
+                _ => None,
+            },
+        };
     }
     // the materials the scripts put on characters (`DisSeqAct_NPCSetMaterials`)
     for op in scene.kismet.ops.iter().filter(|o| o.class == "DisSeqAct_NPCSetMaterials") {

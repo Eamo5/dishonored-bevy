@@ -47,12 +47,16 @@ pub const GLOBAL_PACKAGES: &[&str] = &["Startup", "DishonoredGame", "Engine", "G
 impl Assets {
     pub fn new(cooked_dir: &Path) -> Result<Self> {
         let mut files = HashMap::new();
-        for e in std::fs::read_dir(cooked_dir).with_context(|| format!("listing {}", cooked_dir.display()))? {
-            let e = e?;
-            let p = e.path();
-            if p.extension().map(|x| x.eq_ignore_ascii_case("upk")).unwrap_or(false) {
-                let stem = p.file_stem().unwrap().to_string_lossy().to_ascii_lowercase();
-                files.insert(stem, p);
+        // the game's packages, then the DLC's (`DLC\PCConsole\DLCnn`: their own maps, UI and
+        // tweaks; where a name is in both, the game's)
+        for dir in std::iter::once(cooked_dir.to_path_buf()).chain(dlc_dirs(cooked_dir)) {
+            let Ok(list) = std::fs::read_dir(&dir) else { continue };
+            for e in list.flatten() {
+                let p = e.path();
+                if p.extension().map(|x| x.eq_ignore_ascii_case("upk")).unwrap_or(false) {
+                    let stem = p.file_stem().unwrap().to_string_lossy().to_ascii_lowercase();
+                    files.entry(stem).or_insert(p);
+                }
             }
         }
         Ok(Self {
@@ -62,6 +66,11 @@ impl Assets {
             search: Mutex::new(Vec::new()),
             tfc: TfcCache::new(cooked_dir),
         })
+    }
+
+    /// Where a package's file is.
+    pub fn package_path(&self, name: &str) -> Option<&Path> {
+        self.files.get(&name.to_ascii_lowercase()).map(|p| p.as_path())
     }
 
     pub fn has_package(&self, name: &str) -> bool {
@@ -146,4 +155,15 @@ impl Assets {
         }
         self.find(&path)
     }
+}
+
+/// The installed DLC's package folders (`DishonoredGame\DLC\PCConsole\DLC05`...), beside the
+/// game's `CookedPCConsole`.
+pub fn dlc_dirs(cooked_dir: &Path) -> Vec<PathBuf> {
+    let root = cooked_dir.parent().map(|p| p.join("DLC").join("PCConsole")).unwrap_or_default();
+    let mut out: Vec<PathBuf> = std::fs::read_dir(&root)
+        .map(|l| l.flatten().map(|e| e.path()).filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("DLC"))).collect())
+        .unwrap_or_default();
+    out.sort();
+    out
 }

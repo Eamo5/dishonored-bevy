@@ -36,3 +36,21 @@ fn read(name: &str) -> Option<Font> {
     let bytes = std::fs::read(&path).ok()?;
     Some(Font::from_bytes(bytes))
 }
+
+/// The fonts' files, for measuring (body, title).
+static FACES: std::sync::OnceLock<(Vec<u8>, Vec<u8>)> = std::sync::OnceLock::new();
+
+/// How wide a line of text is in a font (`title`: the display face) at a size, in the
+/// size's units: its glyphs' advances.
+pub fn measure(title: bool, size: f32, text: &str) -> f32 {
+    let faces = FACES.get_or_init(|| {
+        let file = |n: &str| std::fs::read(crate::loading::cache_dir().join("ui").join("fonts").join(n)).unwrap_or_default();
+        (file("ChaletComprimeCologneEighty.ttf"), file("EmergeBF.ttf"))
+    });
+    let data = if title { &faces.1 } else { &faces.0 };
+    let Ok(face) = ttf_parser::Face::parse(data, 0) else { return text.chars().count() as f32 * size * 0.5 };
+    let em = face.units_per_em().max(1) as f32;
+    text.lines()
+        .map(|l| l.chars().map(|c| face.glyph_index(c).and_then(|g| face.glyph_hor_advance(g)).unwrap_or((em * 0.5) as u16) as f32).sum::<f32>() * size / em)
+        .fold(0.0, f32::max)
+}

@@ -425,7 +425,7 @@ fn ue(v: Vec3) -> Vec3 {
 }
 
 /// Evaluate a cooked distribution at `t` with random numbers `r` (one per component).
-fn sample(d: &Dist, t: f32, r: [f32; 3], out: &mut [f32; 3]) -> usize {
+pub(crate) fn sample(d: &Dist, t: f32, r: [f32; 3], out: &mut [f32; 3]) -> usize {
     let chunk = d.chunk.max(1) as usize;
     let n = d.table.len() / chunk;
     if n == 0 {
@@ -1481,6 +1481,14 @@ fn simulate(
                 let c = [rgb.x.max(0.0), rgb.y.max(0.0), rgb.z.max(0.0), a];
                 colors.extend_from_slice(&[c, c, c, c]);
                 indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+            }
+            // (nothing to draw after all - a ribbon of one point: hidden, its mesh left as it
+            // was, an empty one having no room on the GPU)
+            if positions.is_empty() {
+                if let Ok(mut v) = vis.get_mut(st.entity) {
+                    *v = Visibility::Hidden;
+                }
+                continue;
             }
             if let Some(mut mesh) = meshes.get_mut(handle) {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);

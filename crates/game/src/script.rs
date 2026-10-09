@@ -298,15 +298,15 @@ fn run_script(
     mut script: ResMut<Script>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
-    mut stats: ResMut<PlayerStats>,
+    (mut stats, attrs): (ResMut<PlayerStats>, Res<crate::gamedata::Attrs>),
     mut player: Query<(&mut Player, &mut Transform)>,
     npcs: Query<(&Npc, &Transform, Option<&crate::interact::Usable>), Without<Player>>,
-    pickups: Query<&Transform, (With<crate::interact::Pickup>, Without<Player>, Without<Npc>)>,
+    pickups: Query<(&Transform, &crate::interact::Pickup), (Without<Player>, Without<Npc>)>,
     doors: Query<&GlobalTransform, With<crate::interact::Door>>,
     usables: Query<&Transform, (With<crate::interact::Usable>, Without<Player>, Without<Npc>, Without<crate::interact::Pickup>)>,
     (mut exit, mut fx, mut vm): (MessageWriter<AppExit>, MessageWriter<crate::particles::SpawnEffect>, Option<ResMut<crate::kismet::Vm>>),
     (diag, data, rapier, mut explosions): (Res<bevy::diagnostic::DiagnosticsStore>, Res<crate::gamedata::Data>, bevy_rapier3d::prelude::ReadRapierContext, MessageWriter<crate::gadgets::Explosion>),
-    (mut powers, warming, swim, npc_ents, focus, pockets, krusts, strikeables, fish, (hosts, possession), (props, level, traps, devices, usable_rigs)): (
+    (mut powers, warming, swim, npc_ents, focus, pockets, krusts, strikeables, fish, (hosts, possession), (props, level, traps, mut devices, usable_rigs)): (
         ResMut<crate::powers::Powers>,
         Option<Res<crate::warmup::Warmup>>,
         Res<crate::swim::Swim>,
@@ -317,7 +317,7 @@ fn run_script(
         Query<(&crate::gameplay::Strikeable, &GlobalTransform)>,
         Query<(&crate::fish::Fish, &Transform), (Without<Player>, Without<Npc>)>,
         (Query<(Entity, &crate::possession::Host, &GlobalTransform)>, Res<crate::possession::Possession>),
-        (Query<(&crate::props::Prop, &Transform), (Without<Player>, Without<Npc>)>, Option<Res<crate::level::LevelInfo>>, Query<(&crate::traps::TrapPart, &Transform), (Without<Player>, Without<Npc>)>, Res<crate::security::Devices>, Query<&crate::usables::UsableRig>),
+        (Query<(&crate::props::Prop, &Transform), (Without<Player>, Without<Npc>)>, Option<Res<crate::level::LevelInfo>>, Query<(&crate::traps::TrapPart, &Transform), (Without<Player>, Without<Npc>)>, ResMut<crate::security::Devices>, Query<&crate::usables::UsableRig>),
     ),
 ) {
     let dt = time.delta_secs();
@@ -495,6 +495,17 @@ fn run_script(
                 stats.charms_owned.push(name);
             }
         }
+        "equipcharm" => {
+            // equipcharm NAME: equip a particular cooked charm for regression runs.
+            let name = cmd[1..].join(" ");
+            if let Some(name) = data.0.charms.iter().flat_map(|c| &c.levels).map(|l| &l.0).find(|n| n.eq_ignore_ascii_case(&name)) {
+                if !stats.charms_owned.contains(name) { stats.charms_owned.push(name.clone()); }
+                if !stats.charms.contains(name) { stats.charms.push(name.clone()); }
+                info!("script: equipped charm {name}");
+            } else {
+                warn!("script: unknown charm {name}");
+            }
+        }
         "chaos" => {
             // chaos N: the campaign's chaos level
             let n: i32 = cmd.get(1).and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -557,15 +568,114 @@ fn run_script(
             let d = cmd.get(1).and_then(|v| v.parse::<f32>().ok()).unwrap_or(5.0);
             let fwd = Quat::from_euler(EulerRot::YXZ, p.yaw, p.pitch, 0.0) * Vec3::NEG_Z;
             let at = t.translation + Vec3::Y * 0.3 + fwd * d;
-            explosions.write(crate::gadgets::Explosion { at, radius: 6.0, full: 2.0, damage: 0.0, effect: "grenade", player: None });
+            explosions.write(crate::gadgets::Explosion { at, radius: 6.0, full: 2.0, damage: 0.0, effect: "grenade", player: None, kind: crate::gameplay::HitKind::Explosion });
             info!("script: explode at {at:.1}");
+        }
+        "grenade" => {
+            // grenade [fuse] [npc]: an enemy grenade in reach of the view, or at
+            // its owner's feet to check non-player kill attribution.
+            let fuse = cmd.get(1).and_then(|v| v.parse::<f32>().ok()).unwrap_or(3.0).max(0.0);
+            let at_npc = cmd.get(2).is_some_and(|v| v == "npc");
+            let at = t.translation;
+            commands.queue(move |w: &mut World| {
+                let mut npcs = w.query::<(Entity, &Npc, &Transform)>();
+                let owner = npcs.iter(w).filter(|(_, n, _)| !n.is_down()).min_by(|a, b| a.2.translation.distance_squared(at).total_cmp(&b.2.translation.distance_squared(at))).map(|(e, _, t)| (e, t.translation));
+                let Some((owner, feet)) = owner else { return };
+                let mut camera = w.query_filtered::<&GlobalTransform, With<crate::player::PlayerCamera>>();
+                let Some(camera) = camera.iter(w).next() else { return };
+                let from = if at_npc { feet + Vec3::Y * 0.2 } else { camera.translation() + camera.forward().as_vec3() * 1.0 };
+                w.write_message(crate::gadgets::NpcGrenade {
+                    owner, from, vel: Vec3::ZERO, fuse: [fuse, 0.5],
+                    blast: dhcook::format::TrapBlast { radius: 3.5, full: 3.0, player_radius: 6.0, player_full: 1.5, damage: [50.0; 4], ..default() },
+                });
+                info!("script: enemy grenade at {from:.2}, fuse {fuse}");
+            });
+        }
+        "wallnpc" => {
+            // (tests) wallnpc: the nearest character the nearest wall of light would strike, put
+            // in it
+            let near = devices
+                .list
+                .iter()
+                .filter_map(|dv| dv.wall_face().map(|w| (dv, w.0)))
+                .min_by(|a, b| a.1.distance(t.translation).total_cmp(&b.1.distance(t.translation)));
+            if let Some((dv, mid)) = near {
+                let (friendly, rewired, actor) = (dv.def.friendly.clone(), dv.rewired, dv.def.actor.clone());
+                commands.queue(move |w: &mut World| {
+                    let mut q = w.query::<(Entity, &Npc, &Transform)>();
+                    let pick = q
+                        .iter(w)
+                        .filter(|(_, n, _)| !n.is_down() && if rewired { n.enemy } else { !n.faction.is_empty() && !friendly.contains(&n.faction) })
+                        .min_by(|a, b| a.2.translation.distance(mid).total_cmp(&b.2.translation.distance(mid)))
+                        .map(|(e, n, _)| (e, n.faction.clone()));
+                    if let Some((e, faction)) = pick {
+                        if let Some(mut nt) = w.get_mut::<Transform>(e) {
+                            nt.translation = mid;
+                        }
+                        info!("script: wallnpc {e:?} ({faction}) into {actor} at {mid:.1}");
+                    } else {
+                        info!("script: wallnpc: no one {actor} would strike");
+                    }
+                });
+            }
+        }
+        "grab" => {
+            // (tests) grab [NAME]: the nearest loose prop (its name holding NAME) in hand, as
+            // picked up
+            let want = cmd.get(1).map(|s| s.to_ascii_lowercase()).unwrap_or_default();
+            let at = t.translation;
+            commands.queue(move |w: &mut World| {
+                let mut q = w.query::<(Entity, &crate::props::Prop, &Transform)>();
+                let all: Vec<(Entity, usize, Option<Entity>, Vec3)> = q.iter(w).map(|(e, p, pt)| (e, p.index, p.body().0, pt.translation)).collect();
+                let Some(level) = w.get_resource::<crate::level::LevelInfo>() else { return };
+                let pick = all
+                    .iter()
+                    .filter(|(_, i, b, _)| b.is_some() && level.scene.movables.get(*i).is_some_and(|m| !m.fixed && m.interactable && m.name.to_ascii_lowercase().contains(&want)))
+                    .min_by(|a, b| a.3.distance(at).total_cmp(&b.3.distance(at)))
+                    .map(|(e, i, b, _)| (*e, b.unwrap_or(*e), level.scene.movables[*i].name.clone()));
+                if let Some((e, body, name)) = pick {
+                    // (in hand at once: before the eyes)
+                    let mut cam = w.query_filtered::<&GlobalTransform, With<crate::player::PlayerCamera>>();
+                    if let Some(c) = cam.iter(w).next().copied() {
+                        if let Some(mut bt) = w.get_mut::<Transform>(body) {
+                            bt.translation = c.translation() + c.forward().as_vec3() * 1.0 - Vec3::Y * 0.15;
+                        }
+                    }
+                    w.resource_mut::<crate::props::Held>().0 = Some(e);
+                    w.entity_mut(body).insert(bevy_rapier3d::prelude::RigidBody::Dynamic);
+                    if let Some(mut g) = w.get_mut::<bevy_rapier3d::prelude::GravityScale>(body) {
+                        g.0 = 0.0;
+                    }
+                    info!("script: grab {name}");
+                }
+            });
+        }
+        "tankcharge" => {
+            // tankcharge N: every whale oil tank's oil (charges) set to N
+            let n = f(1);
+            for c in devices.charges.values_mut() {
+                *c = n;
+            }
+            info!("script: {} tanks at {n}", devices.charges.len());
         }
         "ammo" => {
             // ammo <type 0-7> [n]: the original ammo types (0 bullets .. 6 grenades, 7 sticky)
             let ty: u8 = cmd.get(1).and_then(|v| v.parse().ok()).unwrap_or(6);
             let n: u32 = cmd.get(2).and_then(|v| v.parse().ok()).unwrap_or(3);
-            let name = crate::gadgets::give_ammo(&mut stats, ty, n);
+            let (name, n) = crate::gadgets::give_ammo(&mut stats, &attrs, ty, n);
             info!("script: {name} +{n}");
+        }
+        "elixirs" => {
+            // Set a test inventory to exercise full and partially full pickups.
+            let mana = cmd.get(1).is_some_and(|s| s == "mana");
+            let n = cmd.get(2).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0).min(attrs.elixir_capacity(mana));
+            if mana { stats.mana_elixirs = n; } else { stats.health_elixirs = n; }
+        }
+        "inventory" => {
+            // Exercise the same confiscation/return path as campaign Kismet.
+            if let Some(vm) = vm.as_mut() {
+                vm.inventory_ops.push((cmd.get(1).is_some_and(|s| s == "stash"), true));
+            }
         }
         "runes" => {
             stats.runes = cmd.get(1).and_then(|v| v.parse().ok()).unwrap_or(10);
@@ -828,6 +938,24 @@ fn run_script(
             p.yaw = f(1);
             p.pitch = f(2);
         }
+        "aimbolt" => {
+            // Aim at the nearest recoverable bolt without moving or granting ammo.
+            commands.queue(|w: &mut World| {
+                let mut cameras = w.query_filtered::<&GlobalTransform, With<crate::player::PlayerCamera>>();
+                let Some(eye) = cameras.iter(w).next().map(|c| c.translation()) else { return };
+                let mut bolts = w.query::<(&crate::powers::Projectile, &Transform)>();
+                let target = bolts.iter(w).filter(|(b, _)| b.recoverable).map(|(_, t)| t.translation)
+                    .min_by(|a, b| a.distance_squared(eye).total_cmp(&b.distance_squared(eye)));
+                let Some(at) = target else { warn!("script: no recoverable bolt"); return };
+                let mut players = w.query::<&mut crate::player::Player>();
+                if let Ok(mut p) = players.single_mut(w) {
+                    let to = at - eye;
+                    p.yaw = (-to.x).atan2(-to.z);
+                    p.pitch = (to.y / to.length().max(0.001)).clamp(-1.0, 1.0).asin();
+                    info!("script: aiming at recoverable bolt {at:.2}, distance {:.2}", to.length());
+                }
+            });
+        }
         "krust" => {
             // krust [D] [N]: hover D m (default 8) in front of the nearest river krust (or the
             // level's N-th), looking at it
@@ -983,8 +1111,29 @@ fn run_script(
             }
         }
         "possess" => {
-            // possess fish|krust|rat: the nearest such creature, at once (level 1)
+            // possess fish|krust|rat|white|npc: select a test host directly.
             let kind = cmd.get(1).map(|s| s.as_str()).unwrap_or("rat");
+            if kind == "npc" {
+                let near = npc_ents.iter().filter(|(_, n, _)| !n.is_down())
+                    .min_by(|a, b| a.2.translation.distance_squared(t.translation).total_cmp(&b.2.translation.distance_squared(t.translation)));
+                if let Some((host, npc, _)) = near {
+                    info!("script: possess NPC {} spawner {}", npc.name, npc.spawner);
+                    commands.queue(move |w: &mut World| { w.write_message(crate::possession::PossessRequest { host, level: 2 }); });
+                } else { warn!("script: no standing NPC to possess"); }
+                return;
+            }
+            if kind == "white" {
+                let at = t.translation;
+                commands.queue(move |w: &mut World| {
+                    let mut q = w.query_filtered::<(Entity, &GlobalTransform), With<crate::swarm::WhiteRat>>();
+                    let rats: Vec<_> = q.iter(w).map(|(e, t)| (e, t.translation())).collect();
+                    if let Some((host, _)) = rats.iter().min_by(|a, b| a.1.distance_squared(at).total_cmp(&b.1.distance_squared(at))) {
+                        w.write_message(crate::possession::PossessRequest { host: *host, level: 1 });
+                        info!("script: possess white rat ({} white rats present)", rats.len());
+                    } else { warn!("script: no white rats present"); }
+                });
+                return;
+            }
             let near = hosts
                 .iter()
                 .filter(|(_, h, _)| match kind {
@@ -999,6 +1148,23 @@ fn run_script(
                     w.write_message(crate::possession::PossessRequest { host: e, level: 1 });
                 });
             }
+        }
+        "aimpart" => {
+            // (tests) aim at the nearest breakable part a character carries (a tallboy's tank)
+            // (`aimpart tank`: only those that burst)
+            let tank = cmd.get(1).is_some_and(|a| a == "tank");
+            commands.queue(move |w: &mut World| {
+                let Some((pe, eye)) = w.query_filtered::<(Entity, &Transform), With<crate::player::Player>>().iter(w).next().map(|(e, t)| (e, t.translation + Vec3::Y * 0.6)) else { return };
+                let level = w.get_resource::<crate::level::LevelInfo>().map(|l| l.scene.npc_types.iter().map(|t| t.attachments.iter().map(|a| a.breaks.as_ref().is_some_and(|b| b.blast.is_some())).collect::<Vec<_>>()).collect::<Vec<_>>()).unwrap_or_default();
+                let bursts = |p: &crate::npcparts::NpcAttached| level.get(p.npc_type as usize).and_then(|t| t.get(p.index)).copied().unwrap_or(false);
+                let Some(at) = w.query::<(&GlobalTransform, &crate::npcparts::NpcAttached)>().iter(w).filter(|(_, p)| !tank || bursts(p)).map(|(g, _)| g.translation()).min_by(|a, b| a.distance(eye).total_cmp(&b.distance(eye))) else { return };
+                let to = at - eye;
+                if let Some(mut p) = w.get_mut::<crate::player::Player>(pe) {
+                    p.yaw = (-to.x).atan2(-to.z);
+                    p.pitch = (to.y / to.length().max(1e-3)).asin();
+                }
+                info!("script: aimpart at {at:.2}");
+            });
         }
         "lookat" => {
             // aim the view at a world point (camera height above the player origin)
@@ -1052,7 +1218,8 @@ fn run_script(
             // damage feedback)
             let a = f(2).to_radians();
             let (fwd, right) = (Vec3::new(-p.yaw.sin(), 0.0, -p.yaw.cos()), Vec3::new(p.yaw.cos(), 0.0, -p.yaw.sin()));
-            stats.health = (stats.health - f(1)).max(1.0);
+            let damage = f(1).min((stats.health - 1.0).max(0.0));
+            stats.take_damage(damage);
             stats.hit_from = Some(t.translation + (fwd * a.cos() + right * a.sin()) * 2.0);
         }
         "epp" => {
@@ -1084,6 +1251,17 @@ fn run_script(
                 commands.queue(move |w: &mut World| {
                     w.write_message(crate::gameplay::NpcHit { npc: e, damage: 0.0, kind: crate::gameplay::HitKind::SleepDart, from: Vec3::ZERO });
                 });
+            }
+        }
+        "killnpc" => {
+            // (tests) killnpc [NAME]: the nearest standing character killed by Corvo's blade
+            let named = cmd.get(1).cloned().unwrap_or_default();
+            if let Some((e, at)) = npc_ents.iter().filter(|(_, n, _)| !n.is_down() && (named.is_empty() || n.name.contains(&named) || n.pawn.contains(&named))).map(|(e, _, nt)| (e, nt.translation)).min_by(|a, b| a.1.distance(t.translation).total_cmp(&b.1.distance(t.translation))) {
+                let from = t.translation;
+                commands.queue(move |w: &mut World| {
+                    w.write_message(crate::gameplay::NpcHit { npc: e, damage: 999.0, kind: crate::gameplay::HitKind::Sword, from });
+                });
+                info!("script: killnpc at {at:.1}");
             }
         }
         "behind" | "front" | "side" => {
@@ -1120,7 +1298,13 @@ fn run_script(
         }
         "pickup" | "door" | "use" => {
             let target = if cmd[0] == "pickup" {
-                pickups.iter().map(|pt| pt.translation).min_by(|a, b| a.distance(t.translation).total_cmp(&b.distance(t.translation)))
+                pickups.iter().filter(|(_, pickup)| match cmd.get(1).map(String::as_str) {
+                    Some("health") => matches!(pickup.kind, crate::interact::PickupKind::HealthElixir),
+                    Some("mana") => matches!(pickup.kind, crate::interact::PickupKind::ManaElixir),
+                    Some("ammo") => matches!(pickup.kind, crate::interact::PickupKind::Ammo(_)),
+                    Some(index) if index.parse::<u32>().is_ok() => pickup.index == index.parse::<u32>().unwrap(),
+                    _ => true,
+                }).map(|(pt, _)| pt.translation).min_by(|a, b| a.distance(t.translation).total_cmp(&b.distance(t.translation)))
             } else if cmd[0] == "use" {
                 usables.iter().map(|ut| ut.translation).min_by(|a, b| a.distance(t.translation).total_cmp(&b.distance(t.translation)))
             } else {

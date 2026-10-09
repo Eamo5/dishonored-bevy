@@ -47,6 +47,7 @@ const DEFAULT_REACH: f32 = 25.0;
 static INDEX: OnceLock<Option<Arc<Library>>> = OnceLock::new();
 
 struct Library {
+    environments: HashMap<u32, dhcook::audio::Reverb>,
     events: HashMap<u32, EventDef>,
     media: HashMap<u32, String>,
     durations: HashMap<u32, f32>,
@@ -65,12 +66,18 @@ fn library() -> Option<Arc<Library>> {
             };
             info!("audio: {} events, {} media", idx.events.len(), idx.media.len());
             Some(Arc::new(Library {
+                environments: idx.environments,
                 events: idx.events.into_iter().map(|e| (e.id, e)).collect(),
                 media: idx.media,
                 durations: idx.durations,
             }))
         })
         .clone()
+}
+
+/// A room environment's reverb (`DishonoredAudioVolume.m_Environment`), if the banks have it.
+pub fn environment(name: &str) -> Option<dhcook::audio::Reverb> {
+    library()?.environments.get(&dhcook::audio::fnv(name)).copied()
 }
 
 /// The Wwise id of an event name (or an `AkEvent` object path).
@@ -644,6 +651,7 @@ fn attenuate(
     listener: Query<&GlobalTransform, With<SpatialListener>>,
     voices: Query<(&Transform, &Emitter, &Voice)>,
     (time, mut log_t): (Res<Time>, Local<f32>),
+    rooms: Res<crate::audiorooms::AudioRooms>,
 ) {
     let Ok(l) = listener.single() else { return };
     let ear = l.translation();
@@ -662,6 +670,8 @@ fn attenuate(
         }
         rtpc_mods(&em.curves, |id| if id == dilation { Some(if em.positional { world } else { own }) } else { rtpcs.0.get(&id).copied() })
     };
+    // (the ways through the doorways from where Corvo hears, once for all the sounds)
+    let field = rooms.field(ear, false);
     for (t, em, voice) in &voices {
         let cat = if em.music { settings.music_volume } else if em.voice { settings.voice_volume } else { settings.sfx_volume };
         let (g, speed) = mods(em);
@@ -670,9 +680,15 @@ fn attenuate(
         }
         let mut v = em.gain * g * em.fade.clamp(0.0, 1.0) * cat * settings.master_volume;
         if em.positional {
-            let x = (1.0 - t.translation.distance(ear) / em.reach).clamp(0.0, 1.0);
-            v *= x * x;
-            voice.pan.set(&world_gains(out.channels, l, t.translation));
+            // (from another room: the way through the doorways, from the first of them,
+            // muffled by each)
+            let (dist, from, through) = match field.as_ref().and_then(|f| f.route(&rooms, t.translation)) {
+                Some(r) => (r.dist, ear + (r.toward - ear).normalize_or(Vec3::Z) * r.dist.max(0.1), r.gain),
+                None => (t.translation.distance(ear), t.translation, 1.0),
+            };
+            let x = (1.0 - dist / em.reach).clamp(0.0, 1.0);
+            v *= x * x * through;
+            voice.pan.set(&world_gains(out.channels, l, from));
         }
         if (voice.player.volume() - v).abs() > 1e-4 {
             voice.player.set_volume(v);
