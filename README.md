@@ -987,6 +987,16 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Watchtower arrows now survive save/load with position, velocity, gravity,
+  remaining lifetime and tower association; restored trails follow the new entities
+  for their remaining lifetime. The optional field preserves older-save loading.
+  All 98 tests pass (`cache/parity_tower_arrow_save_suite.log`), including duplicate
+  prevention, stopped-time stability, resumed trajectories and empty snapshots.
+  A live Streets2 volley (Kismet op 336 after the arrival cinematic) produced three
+  arrows that were stopped with Bend Time and restored exactly across save/load
+  (`cache/parity_tower_arrow_save_runtime.log`). Tower AI state itself still resets
+  on loading and needs a separate persistence audit.
+
 - Watchtower searchlight obstruction and target visibility now include movable
   prop colliders and exclude trigger sensors. The tower-system regression places
   solid cover between lamp and player: both prop and world groups prevent alert,

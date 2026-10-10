@@ -26,8 +26,9 @@ pub struct WatchTowerPlugin;
 impl Plugin for WatchTowerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Blinding>()
+            .init_resource::<ArrowRestore>()
             .add_systems(OnEnter(GameState::InGame), setup_towers.after(LevelSpawnSet))
-            .add_systems(Update, (towers, fly_arrows).chain().run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (restore_arrows.after(crate::save::restore_npcs), towers, fly_arrows).chain().run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -75,11 +76,43 @@ struct Tower {
 }
 
 #[derive(Component)]
-struct Arrow {
+pub(crate) struct Arrow {
     tower: usize,
     vel: Vec3,
     gravity: f32,
     life: f32,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct ArrowRestore(pub Option<Vec<ArrowSave>>);
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct ArrowSave {
+    tower: usize,
+    position: [f32; 3],
+    velocity: [f32; 3],
+    gravity: f32,
+    life: f32,
+}
+
+impl ArrowSave {
+    pub(crate) fn capture(a: &Arrow, t: &Transform) -> Self {
+        Self { tower: a.tower, position: t.translation.to_array(), velocity: a.vel.to_array(), gravity: a.gravity, life: a.life }
+    }
+}
+
+fn restore_arrows(mut commands: Commands, mut pending: ResMut<ArrowRestore>, level: Option<Res<LevelInfo>>,
+    arrows: Query<Entity, With<Arrow>>, mut fx: MessageWriter<SpawnEffect>) {
+    let Some(saved) = pending.0.take() else { return };
+    for e in &arrows { commands.entity(e).despawn(); }
+    for a in saved {
+        let at = Vec3::from(a.position);
+        let e = commands.spawn((Arrow { tower: a.tower, vel: Vec3::from(a.velocity), gravity: a.gravity, life: a.life },
+            Transform::from_translation(at), Visibility::default(), DespawnOnExit(GameState::InGame))).id();
+        if let Some(trail) = level.as_ref().and_then(|l| l.scene.security.get(a.tower)).and_then(|d| d.trail) {
+            fx.write(SpawnEffect { follow: Some(e), system: Some(trail), secs: a.life, ..SpawnEffect::at("", Vec3::ZERO) });
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -469,6 +502,45 @@ fn rand_unit() -> f32 {
 #[cfg(test)]
 mod projectile_tests {
     use super::*;
+
+    #[test]
+    fn saved_arrows_restore_once_freeze_and_resume_their_trajectory() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>().init_resource::<crate::gameplay::TimeControl>()
+            .init_resource::<crate::settings::Settings>().init_resource::<ArrowRestore>()
+            .add_message::<SpawnEffect>().add_message::<crate::gadgets::Explosion>()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
+            .insert_resource(LevelInfo { scene: dhcook::format::Scene { security: vec![dhcook::format::Security {
+                trail: Some(7), ..default()
+            }], ..default() } }).add_systems(Last, (restore_arrows, fly_arrows).chain());
+        let original = Arrow { tower: 0, vel: Vec3::new(10.0, 2.0, 0.0), gravity: 3.0, life: 2.5 };
+        let position = Transform::from_xyz(4.0, 5.0, 6.0);
+        let encoded = serde_json::to_string(&vec![ArrowSave::capture(&original, &position)]).unwrap();
+        app.world_mut().spawn((original, position));
+        app.world_mut().resource_mut::<ArrowRestore>().0 = Some(serde_json::from_str(&encoded).unwrap());
+        app.world_mut().resource_mut::<crate::gameplay::TimeControl>().bend_remaining = 10.0;
+        app.update();
+        let mut arrows = app.world_mut().query::<(Entity, &Arrow, &Transform)>();
+        let (entity, a, t) = arrows.single(app.world()).unwrap();
+        assert_eq!(serde_json::to_string(&vec![ArrowSave::capture(a, t)]).unwrap(), encoded);
+        let effects = app.world().resource::<Messages<SpawnEffect>>();
+        let mut cursor = effects.get_cursor();
+        let effect = cursor.read(effects).next().unwrap();
+        assert_eq!((effect.follow, effect.system, effect.secs), (Some(entity), Some(7), 2.5));
+        app.update();
+        let (_, a, t) = arrows.single(app.world()).unwrap();
+        assert_eq!(serde_json::to_string(&vec![ArrowSave::capture(a, t)]).unwrap(), encoded);
+        app.world_mut().resource_mut::<crate::gameplay::TimeControl>().bend_remaining = 0.0;
+        app.update();
+        let (_, a, t) = arrows.single(app.world()).unwrap();
+        assert!((a.life - 2.4).abs() < 1.0e-6);
+        assert!(a.vel.abs_diff_eq(Vec3::new(10.0, 1.7, 0.0), 1.0e-6));
+        assert!(t.translation.abs_diff_eq(Vec3::new(5.0, 5.17, 6.0), 1.0e-6));
+        app.world_mut().resource_mut::<ArrowRestore>().0 = Some(vec![]);
+        app.update();
+        assert_eq!(arrows.iter(app.world()).count(), 0, "empty snapshot clears existing arrows");
+    }
 
     #[test]
     fn tower_decisions_obey_world_time_and_solid_cover() {
