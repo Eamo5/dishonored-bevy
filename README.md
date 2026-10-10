@@ -987,6 +987,15 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Acid-projectile saves now retain position, velocity, gravity, damage and remaining
+  lifetime; the source shell remaps by krust index and its trail restarts with the
+  remaining duration. Empty snapshots clear stale projectiles; the field is optional
+  for older saves. All 88 tests pass (`cache/parity_spit_save_suite.log`). A live
+  Hound Pits shot was captured from krust 1, then a generated isolated fixture enabled
+  stopped time in that snapshot; loading and saving again preserved every projectile
+  field exactly (`cache/parity_spit_save_runtime.log`,
+  `cache/parity_spit_frozen_restore_runtime.log`).
+
 - River-krust acid projectiles now resolve capsule entry distances against the
   first world/prop impact instead of checking characters before cover. NPC hits
   use nearest entry, and impact effects use the actual contact point. The source

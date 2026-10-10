@@ -31,9 +31,9 @@ pub struct KrustPlugin;
 
 impl Plugin for KrustPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<KrustLog>()
+        app.init_resource::<KrustLog>().init_resource::<SpitRestore>()
             .add_systems(OnEnter(GameState::InGame), spawn_krusts.after(crate::level::LevelSpawnSet))
-            .add_systems(Update, (restore_krusts, scripted_spits, krust_hits, possessed_krust, krust_brain, fly_spit).chain().run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (restore_krusts, restore_spits.after(crate::save::restore_npcs), scripted_spits, krust_hits, possessed_krust, krust_brain, fly_spit).chain().run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -165,6 +165,38 @@ mod cover_tests {
     }
 
     #[test]
+    fn spit_save_restores_flight_and_remaps_source_shell() {
+        let mut app = App::new();
+        app.init_resource::<SpitRestore>().add_message::<SpawnEffect>().add_systems(Update, restore_spits);
+        let old_shell = Entity::from_bits(500);
+        let source = test_krust(old_shell);
+        let spit = Spit { source: old_shell, vel: Vec3::new(2.0, -1.0, 4.0), gravity: 3.0, damage: 12.0, life: 2.75 };
+        let transform = Transform::from_xyz(8.0, 2.0, -3.0);
+        let saved = save_spits([(&spit, &transform)], [&source]);
+        let saved = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let shell = app.world_mut().spawn_empty().id();
+        app.world_mut().spawn(test_krust(shell));
+        app.insert_resource(LevelInfo { scene: dhcook::format::Scene { krusts: vec![KrustDef { trail: Some(7), ..default() }], ..default() } });
+        let stale = app.world_mut().spawn((spit, Transform::default())).id();
+        app.world_mut().resource_mut::<SpitRestore>().0 = Some(saved);
+        app.update();
+        assert!(app.world().get_entity(stale).is_err());
+        let mut q = app.world_mut().query::<(Entity, &Spit, &Transform)>();
+        let (entity, s, t) = q.single(app.world()).unwrap();
+        assert_eq!(s.source, shell);
+        assert_eq!(s.vel, Vec3::new(2.0, -1.0, 4.0));
+        assert_eq!((s.gravity, s.damage, s.life), (3.0, 12.0, 2.75));
+        assert_eq!(t.translation, transform.translation);
+        let effects = app.world().resource::<Messages<SpawnEffect>>();
+        let mut cursor = effects.get_cursor();
+        let effect = cursor.read(effects).next().unwrap();
+        assert_eq!((effect.follow, effect.system, effect.secs), (Some(entity), Some(7), 2.75));
+        app.world_mut().resource_mut::<SpitRestore>().0 = Some(vec![]);
+        app.update();
+        assert_eq!(q.iter(app.world()).count(), 0, "an empty snapshot clears stale acid");
+    }
+
+    #[test]
     fn possessed_krust_ignores_menu_clicks_and_restores_player_animation_clock() {
         let mut app = App::new();
         app.init_resource::<ButtonInput<MouseButton>>().insert_resource(crate::hud::Paused(true))
@@ -244,12 +276,46 @@ mod cover_tests {
 
 /// A gob of acid in flight.
 #[derive(Component)]
-struct Spit {
+pub(crate) struct Spit {
     source: Entity,
     vel: Vec3,
     gravity: f32,
     damage: f32,
     life: f32,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct SpitSave {
+    source: Option<u32>,
+    position: [f32; 3],
+    velocity: [f32; 3],
+    gravity: f32,
+    damage: f32,
+    life: f32,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct SpitRestore(pub Option<Vec<SpitSave>>);
+
+pub(crate) fn save_spits<'a>(spits: impl IntoIterator<Item = (&'a Spit, &'a Transform)>, krusts: impl IntoIterator<Item = &'a Krust>) -> Vec<SpitSave> {
+    let sources: HashMap<_, _> = krusts.into_iter().map(|k| (k.collider, k.index)).collect();
+    spits.into_iter().map(|(s, t)| SpitSave { source: sources.get(&s.source).copied(), position: t.translation.to_array(),
+        velocity: s.vel.to_array(), gravity: s.gravity, damage: s.damage, life: s.life }).collect()
+}
+
+fn restore_spits(mut commands: Commands, mut pending: ResMut<SpitRestore>, old: Query<Entity, With<Spit>>,
+    krusts: Query<&Krust>, level: Option<Res<LevelInfo>>, mut fx: MessageWriter<SpawnEffect>) {
+    let Some(saved) = pending.0.take() else { return };
+    for e in &old { commands.entity(e).despawn(); }
+    let sources: HashMap<_, _> = krusts.iter().map(|k| (k.index, k.collider)).collect();
+    for s in saved {
+        let source = s.source.and_then(|i| sources.get(&i).copied()).unwrap_or(Entity::PLACEHOLDER);
+        let e = commands.spawn((Spit { source, vel: Vec3::from(s.velocity), gravity: s.gravity, damage: s.damage, life: s.life },
+            Transform::from_translation(Vec3::from(s.position)), Visibility::default(), DespawnOnExit(GameState::InGame))).id();
+        if let Some(trail) = s.source.and_then(|i| level.as_ref().and_then(|l| l.scene.krusts.get(i as usize))).and_then(|k| k.trail) {
+            fx.write(SpawnEffect { follow: Some(e), secs: s.life, system: Some(trail), ..SpawnEffect::at("", Vec3::ZERO) });
+        }
+    }
 }
 
 /// The pearl of a dead krust, lying there to be taken.
