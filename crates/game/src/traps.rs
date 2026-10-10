@@ -412,6 +412,45 @@ mod projectile_tests {
     use super::*;
 
     #[test]
+    fn disarming_requires_active_gameplay_and_clear_access_to_launcher() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>().init_resource::<ButtonInput<KeyCode>>().init_resource::<Bindings>()
+            .insert_resource(crate::hud::Paused(true)).init_resource::<InteractFocus>()
+            .init_resource::<crate::carry::Carry>().init_resource::<crate::possession::Possession>()
+            .init_resource::<crate::props::Held>().init_resource::<PlayerStats>().init_resource::<HudMessages>()
+            .init_resource::<TrapLog>().init_resource::<crate::gamedata::Attrs>().add_message::<SpawnEffect>()
+            .insert_resource(LevelInfo { scene: dhcook::format::Scene { traps: vec![dhcook::format::Trap { launcher: true, ..default() }], ..default() } })
+            .add_systems(Last, disarm_focus);
+        app.world_mut().spawn((PlayerCamera, Transform::from_xyz(0.0, 0.4, 1.5)));
+        let collider = app.world_mut().spawn((Collider::cuboid(0.3, 0.35, 0.3), Transform::from_xyz(0.0, 0.35, 0.0), CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
+        let trap = app.world_mut().spawn((TrapPart { index: 0, launcher: true, sprung: false, disarmed: false,
+            firing: None, wire: (Vec3::ZERO, Vec3::ZERO), sockets: vec![], collider: Some(collider) }, Transform::default())).id();
+        let key = app.world().resource::<Bindings>().key(Act::Use);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        app.update();
+        assert!(!app.world().get::<TrapPart>(trap).unwrap().disarmed);
+        assert!(!app.world().resource::<InteractFocus>().0);
+        app.world_mut().resource_mut::<crate::hud::Paused>().0 = false;
+        let cover = app.world_mut().spawn((Collider::cuboid(1.0, 1.0, 0.01), Transform::from_xyz(0.0, 0.4, 0.75), CollisionGroups::new(GROUP_WORLD, Group::ALL))).id();
+        for group in [GROUP_WORLD, GROUP_PROP] {
+            app.world_mut().entity_mut(cover).insert(CollisionGroups::new(group, Group::ALL));
+            app.update();
+            assert!(!app.world().get::<TrapPart>(trap).unwrap().disarmed);
+            assert!(!app.world().resource::<InteractFocus>().0);
+        }
+        app.world_mut().entity_mut(cover).insert(Sensor);
+        app.world_mut().resource_mut::<PlayerStats>().dead = true;
+        app.update();
+        assert!(!app.world().get::<TrapPart>(trap).unwrap().disarmed);
+        app.world_mut().resource_mut::<PlayerStats>().dead = false;
+        app.update();
+        assert!(app.world().get::<TrapPart>(trap).unwrap().disarmed);
+        assert_eq!(app.world().resource::<TrapLog>().state.get(&0), Some(&2));
+        assert!(app.world().resource::<InteractFocus>().0);
+    }
+
+    #[test]
     fn fast_darts_respect_cover_crouching_and_explode_at_first_contact() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
@@ -466,6 +505,7 @@ mod projectile_tests {
 #[allow(clippy::too_many_arguments)]
 fn disarm_focus(
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<Bindings>),
+    (paused, rapier): (Res<crate::hud::Paused>, ReadRapierContext),
     level: Option<Res<LevelInfo>>,
     mut focus: ResMut<InteractFocus>,
     mut traps: Query<(&mut TrapPart, &Transform, Option<&mut Animator>)>,
@@ -476,18 +516,24 @@ fn disarm_focus(
     (mut stats, mut msgs, mut log, attrs): (ResMut<PlayerStats>, ResMut<HudMessages>, ResMut<TrapLog>, Res<crate::gamedata::Attrs>),
     mut fx: MessageWriter<SpawnEffect>,
 ) {
+    if paused.0 || stats.dead { return; }
     let Some(level) = level else { return };
     if focus.0 || carry.carrying() || possession.host.is_some() || held.0.is_some() || player.single().is_ok_and(|p| p.locked) {
         return;
     }
     let Ok(c) = cam.single() else { return };
+    let Ok(ctx) = rapier.single() else { return };
     let (eye, fwd) = (c.translation(), c.forward().as_vec3());
     let near = traps
         .iter_mut()
         .filter(|(t, tf, _)| {
             let launcher = level.scene.traps.get(t.index as usize).is_some_and(|d| d.launcher);
             let to = tf.translation + Vec3::Y * 0.4 - eye;
-            launcher && !t.sprung && !t.disarmed && to.length() < REACH && to.normalize_or_zero().dot(fwd) > 0.8
+            let distance = to.length();
+            if !launcher || t.sprung || t.disarmed || distance >= REACH || to.normalize_or_zero().dot(fwd) <= 0.8 { return false; }
+            let filter = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
+            let filter = t.collider.map(|e| filter.exclude_collider(e)).unwrap_or(filter);
+            ctx.cast_ray(eye, to / distance, distance, true, filter).is_none()
         })
         .min_by(|a, b| a.1.translation.distance(eye).total_cmp(&b.1.translation.distance(eye)));
     let Some((mut t, _, a)) = near else { return };

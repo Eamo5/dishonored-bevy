@@ -987,6 +987,12 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Trap disarming now requires active gameplay and an unobstructed ray to the
+  launcher. World and movable cover block interaction; trigger sensors and the
+  launcher's own collider do not. A system regression covers paused input, death,
+  both cover groups and successful sensor-only access. All 93 tests pass
+  (`cache/parity_trap_interaction_suite.log`).
+
 - Trap darts now resolve capsule hits and solid world/prop impacts in travel order,
   use Corvo's current stance, and exclude their source launcher and trigger sensors.
   Explosive shots detonate at the first contact rather than a guessed midpoint.
