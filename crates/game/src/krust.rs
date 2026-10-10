@@ -165,6 +165,47 @@ mod cover_tests {
     }
 
     #[test]
+    fn krust_perception_obeys_cover_but_ignores_triggers_and_own_shell() {
+        for group in [GROUP_WORLD, GROUP_PROP] {
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+                .init_resource::<Assets<Mesh>>().init_resource::<TimeControl>().init_resource::<PlayerStats>()
+                .init_resource::<crate::settings::Settings>().init_resource::<crate::possession::Possession>()
+                .init_resource::<KrustLog>().add_message::<PostEvent>().add_message::<StopEvent>().add_message::<SpawnEffect>()
+                .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
+                .insert_resource(LevelInfo { scene: dhcook::format::Scene { krusts: vec![KrustDef {
+                    aggressive: [10.0, 15.0], first_volley: [100.0, 100.0], ..default()
+                }], ..default() } }).add_systems(Last, krust_brain);
+            app.world_mut().spawn((Transform::from_xyz(3.0, 0.0, 0.0), Player {
+                velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
+                grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
+                air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
+                fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO,
+            }));
+            let shell = app.world_mut().spawn((Collider::ball(0.4), Transform::default(), CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
+            let cover = app.world_mut().spawn((Collider::cuboid(0.01, 2.0, 2.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(group, Group::ALL))).id();
+            let skeleton = dhcook::format::SkeletonDef::default();
+            let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![]));
+            let mut k = test_krust(shell);
+            k.state = AMBIENT;
+            k.mode = Mode::Ambient;
+            k.lost = LOST_RETENTION;
+            let entity = app.world_mut().spawn((k, Animator::new(lib, &skeleton, vec![]), Transform::default())).id();
+            app.update();
+            app.update();
+            let k = app.world().get::<Krust>(entity).unwrap();
+            assert_eq!(k.mode, Mode::Ambient);
+            assert!(k.blocked.is_some());
+            app.world_mut().entity_mut(cover).insert(Sensor);
+            app.update();
+            let k = app.world().get::<Krust>(entity).unwrap();
+            assert_eq!(k.mode, Mode::Aggressive);
+            assert!(k.blocked.is_none());
+            assert_eq!(k.lost, 0.0);
+        }
+    }
+
+    #[test]
     fn krust_save_preserves_wounds_and_does_not_repeat_a_fired_shot() {
         let mut app = App::new();
         app.init_resource::<KrustRestore>().init_resource::<ButtonInput<MouseButton>>()
@@ -806,7 +847,7 @@ fn krust_brain(
     let Some(level) = level else { return };
     let ctx = rapier.single().ok();
     let target = player.single().ok().filter(|_| !stats.dead && possession.host.is_none()).map(|(t, p)| (t.translation + Vec3::Y * 0.35, p.velocity));
-    let walls = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+    let walls = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     let log_on = std::env::var("DH_KRUST_LOG").is_ok();
     let mut any_open = false;
     for (mut k, mut a, g) in &mut krusts {
@@ -873,7 +914,7 @@ fn krust_brain(
                         if l < 0.01 {
                             return true;
                         }
-                        blocked = c.cast_ray(eye, to / l, l - 0.3, true, walls).map(|(e, toi)| {
+                        blocked = c.cast_ray(eye, to / l, (l - 0.3).max(0.0), true, walls.exclude_collider(k.collider)).map(|(e, toi)| {
                             if log_on && rand::random::<f32>() < 0.01 {
                                 let n = names.get(e).ok().map(|(li, n, c)| (li.map(|l| (l.actor.clone(), l.class.clone())), n.cloned(), c.map(|c| format!("{:?}", c.raw.shape_type()))));
                                 info!("krust {}: view blocked by {e} {n:?}", def.name);

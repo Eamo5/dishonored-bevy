@@ -987,6 +987,11 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Krust sight now checks movable props as well as world cover, excluding trigger
+  sensors and its own shell. The perception-system regression verifies an unaware
+  krust remains ambient behind either cover group, then becomes aggressive when
+  the barrier becomes a sensor. All 91 tests pass (`cache/parity_krust_sight_suite.log`).
+
 - Krust snapshots now preserve health, AI/animation state, reaction/visibility/
   proximity timers, volley progress, fired flag and scripted targets. Restoration
   follows the legacy death/pearl log and precedes possession restoration; older
