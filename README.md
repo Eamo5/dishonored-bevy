@@ -987,6 +987,12 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Unpossessed krusts now update their animation clocks before returning on zero
+  world delta, preventing state transitions and new volleys during Bend Time.
+  A regression retains a scripted target while stopped and starts its volley only
+  when half-speed world time resumes. All 89 tests pass
+  (`cache/parity_krust_freeze_suite.log`).
+
 - Acid-projectile saves now retain position, velocity, gravity, damage and remaining
   lifetime; the source shell remaps by krust index and its trail restarts with the
   remaining duration. Empty snapshots clear stale projectiles; the field is optional

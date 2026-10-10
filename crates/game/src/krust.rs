@@ -197,6 +197,33 @@ mod cover_tests {
     }
 
     #[test]
+    fn stopped_krust_waits_to_begin_scripted_volley_until_world_time_resumes() {
+        let mut app = App::new();
+        app.init_resource::<Time>().insert_resource(TimeControl { bend_remaining: 10.0, world_dilation: 0.0, ..default() })
+            .init_resource::<crate::settings::Settings>().init_resource::<PlayerStats>()
+            .init_resource::<crate::possession::Possession>().init_resource::<KrustLog>()
+            .add_message::<PostEvent>().add_message::<StopEvent>().add_message::<SpawnEffect>()
+            .insert_resource(LevelInfo { scene: dhcook::format::Scene { krusts: vec![KrustDef { fire_angle: 180.0, ..default() }], ..default() } })
+            .add_systems(Update, krust_brain);
+        let skeleton = dhcook::format::SkeletonDef::default();
+        let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![]));
+        let mut k = test_krust(Entity::PLACEHOLDER);
+        k.order = Some(Vec3::X * 10.0);
+        let entity = app.world_mut().spawn((k, Animator::new(lib, &skeleton, vec![]), GlobalTransform::IDENTITY)).id();
+        app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(100));
+        app.update();
+        let k = app.world().get::<Krust>(entity).unwrap();
+        assert_eq!((k.state, k.shots), (AGGRESSIVE, 0));
+        assert_eq!(k.order, Some(Vec3::X * 10.0));
+        assert_eq!(app.world().get::<Animator>(entity).unwrap().time_scale, 0.0);
+        app.world_mut().resource_mut::<TimeControl>().world_dilation = 0.5;
+        app.update();
+        let k = app.world().get::<Krust>(entity).unwrap();
+        assert_eq!((k.state, k.shots), (FIRING, 1));
+        assert_eq!(app.world().get::<Animator>(entity).unwrap().time_scale, 0.5);
+    }
+
+    #[test]
     fn possessed_krust_ignores_menu_clicks_and_restores_player_animation_clock() {
         let mut app = App::new();
         app.init_resource::<ButtonInput<MouseButton>>().insert_resource(crate::hud::Paused(true))
@@ -670,8 +697,11 @@ fn krust_brain(
     mut looping: Local<bool>,
     names: Query<(Option<&crate::level::LevelInstance>, Option<&Name>, Option<&Collider>)>,
 ) {
+    let scale = tc.world_scale().max(0.0);
+    for (_, mut anim, _) in &mut krusts { anim.time_scale = scale; }
+    let dt = time.delta_secs() * scale;
+    if dt <= 0.0 { return; }
     let Some(level) = level else { return };
-    let dt = time.delta_secs() * tc.world_scale();
     let ctx = rapier.single().ok();
     let target = player.single().ok().filter(|_| !stats.dead && possession.host.is_none()).map(|(t, p)| (t.translation + Vec3::Y * 0.35, p.velocity));
     let walls = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
@@ -679,7 +709,6 @@ fn krust_brain(
     let mut any_open = false;
     for (mut k, mut a, g) in &mut krusts {
         let Some(def) = level.scene.krusts.get(k.index as usize) else { continue };
-        a.time_scale = tc.world_scale();
         // ---- dead: the death plays out, the pearl can be taken
         if k.dead() {
             let t = a.current().map(|c| c.t).unwrap_or(0.0);
