@@ -148,6 +148,53 @@ fn slot_path(slot: usize) -> PathBuf {
     saves_dir().join(if slot == 0 { "quicksave.json".to_string() } else { format!("slot{slot}.json") })
 }
 
+/// Keep the previous slot intact until the replacement has been fully written.
+/// The temporary file is beside the destination so the rename stays on one volume.
+fn replace_save(path: &std::path::Path, write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>) -> std::io::Result<()> {
+    let pending = path.with_extension("json.tmp");
+    let result = (|| {
+        let mut file = std::fs::File::create(&pending)?;
+        write(&mut file)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&pending, path)
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&pending); }
+    result
+}
+
+#[cfg(test)]
+mod write_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn failed_save_keeps_previous_slot_and_successful_save_replaces_it() {
+        let dir = std::env::temp_dir().join("opencode").join(format!("dishonored-save-{}-{}", std::process::id(), rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("slot1.json");
+        let original = br#"{"checkpoint":"original"}"#;
+        std::fs::write(&path, original).unwrap();
+        let result = replace_save(&path, |file| {
+            file.write_all(b"{\"checkpoint\":")?;
+            Err(std::io::Error::other("simulated interrupted write"))
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert!(!path.with_extension("json.tmp").exists());
+        // A leftover file from an interrupted process is safely superseded.
+        std::fs::write(path.with_extension("json.tmp"), b"partial").unwrap();
+        let replacement = br#"{"checkpoint":"replacement"}"#;
+        replace_save(&path, |file| file.write_all(replacement)).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), replacement);
+        assert!(!path.with_extension("json.tmp").exists());
+        let new_slot = dir.join("slot2.json");
+        replace_save(&new_slot, |file| file.write_all(replacement)).unwrap();
+        assert_eq!(std::fs::read(&new_slot).unwrap(), replacement);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 /// A readable mission name for a map.
 pub fn mission_name(map: &str) -> String {
     let m = map.to_ascii_lowercase();
@@ -427,7 +474,10 @@ fn save_game(
     }
     let Some(slot) = slot else { return };
     s.level_states = campaign.level_states.clone();
-    match serde_json::to_vec(&s).map_err(anyhow::Error::from).and_then(|d| Ok(std::fs::write(slot_path(slot), d)?)) {
+    match serde_json::to_vec(&s).map_err(anyhow::Error::from).and_then(|d| {
+        use std::io::Write;
+        Ok(replace_save(&slot_path(slot), |file| file.write_all(&d))?)
+    }) {
         Ok(()) => {
             saving.write(crate::globalui::ShowSaving);
             msgs.push(if slot == 0 { "Quicksaved".to_string() } else { format!("Saved to slot {slot}") });
