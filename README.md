@@ -987,6 +987,11 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Hagfish explosion damage now checks solid world/prop cover, matching bite and
+  feeding visibility. Regression blasts leave covered fish alive, then kill them
+  through the same collider when it becomes a trigger sensor, removing dead hosts
+  and strike targets. All 83 tests pass (`cache/parity_fish_blast_suite.log`).
+
 - Hagfish saves now retain transforms, home/goal, velocity, bite cooldown, attack/
   feeding/death state and animation cursor/rate. Shared corpse-feeding progress uses
   stable NPC spawners and restores after NPCs; possession restores afterward. Fish

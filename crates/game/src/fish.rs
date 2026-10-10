@@ -228,10 +228,13 @@ fn fish_hits(
     mut blasts: MessageReader<Explosion>,
     mut fish: Query<(Entity, &mut Fish, &mut Animator, &Transform)>,
     mut sfx: MessageWriter<PostEvent>,
+    rapier: ReadRapierContext,
 ) {
+    let context = rapier.single().ok();
     let mut killed: Vec<Entity> = struck.read().map(|s| s.target).collect();
     for b in blasts.read() {
-        killed.extend(fish.iter().filter(|(_, _, _, t)| t.translation.distance(b.at) < b.radius).map(|(e, ..)| e));
+        killed.extend(fish.iter().filter(|(_, _, _, t)| t.translation.distance(b.at) < b.radius
+            && context.as_ref().is_none_or(|ctx| fish_target_visible(ctx, b.at, t.translation))).map(|(e, ..)| e));
     }
     for e in killed {
         let Ok((_, mut f, mut a, t)) = fish.get_mut(e) else { continue };
@@ -266,6 +269,38 @@ mod cover_tests {
 
     #[derive(Resource, Default)]
     struct Reachable(bool);
+
+    #[test]
+    fn explosions_respect_fish_cover_and_remove_dead_hosts() {
+        for group in [GROUP_WORLD, GROUP_PROP] {
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+                .init_resource::<Assets<Mesh>>().add_message::<Struck>().add_message::<Explosion>().add_message::<PostEvent>()
+                .add_systems(Last, fish_hits);
+            let skeleton = dhcook::format::SkeletonDef::default();
+            let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![]));
+            let collider = app.world_mut().spawn(Strikeable(Entity::PLACEHOLDER)).id();
+            let fish = app.world_mut().spawn((Fish { index: 0, home: Vec3::ZERO, goal: Vec3::ZERO,
+                doing: Doing::Roam, bite_t: 0.0, vel: Vec3::ZERO, clips: FishClips::default(), collider },
+                Transform::from_xyz(2.0, 0.0, 0.0), Animator::new(lib, &skeleton, vec![]),
+                crate::possession::Host { npc_type: None, rooted: false, fish: true, seat: Vec3::ZERO, facing: Vec3::NEG_Z })).id();
+            let wall = app.world_mut().spawn((Collider::cuboid(0.01, 1.0, 1.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(group, Group::ALL))).id();
+            let blast = |app: &mut App| {
+                app.world_mut().write_message(Explosion { at: Vec3::ZERO, radius: 3.0, full: 3.0, damage: 100.0,
+                    effect: "", player: None, kind: crate::gameplay::HitKind::Explosion });
+                app.update();
+            };
+            app.update();
+            blast(&mut app);
+            assert_eq!(app.world().get::<Fish>(fish).unwrap().doing, Doing::Roam);
+            assert!(app.world().get::<crate::possession::Host>(fish).is_some());
+            app.world_mut().entity_mut(wall).insert(Sensor);
+            blast(&mut app);
+            assert_eq!(app.world().get::<Fish>(fish).unwrap().doing, Doing::Dead(0.0));
+            assert!(app.world().get::<crate::possession::Host>(fish).is_none());
+            assert!(app.world().get::<Strikeable>(collider).is_none());
+        }
+    }
 
     #[test]
     fn fish_save_restores_deaths_cooldowns_meals_and_animation_cursors() {
