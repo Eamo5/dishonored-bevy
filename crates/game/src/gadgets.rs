@@ -34,6 +34,16 @@ pub const RAZORS: &str = "SpringRazor_Ammo_WithItem_twk";
 pub const FLARES: &str = "Flare_Ammo_twk";
 pub const EXPLOSIVE: &str = "ExplosiveBullets_Ammo_twk";
 
+/// Original pickup ranges are inclusive; fixed quantities do not consume a random roll.
+pub fn roll_ammo_amount(min: u32, max: u32) -> u32 {
+    roll_ammo_amount_with(min, max, &mut rand::rng())
+}
+
+fn roll_ammo_amount_with(min: u32, max: u32, rng: &mut impl rand::Rng) -> u32 {
+    let min = min.min(max);
+    if min == max { max } else { rng.random_range(min..=max) }
+}
+
 /// Ammunition by the original ammo type (the index into `m_AmmoRanges`): adds it and names it.
 pub fn give_ammo(stats: &mut PlayerStats, attrs: &crate::gamedata::Attrs, ty: u8, n: u32) -> (&'static str, u32) {
     let Some(&capacity) = attrs.ammo_capacity.get(ty as usize) else { return ("Ammo", 0) };
@@ -762,6 +772,17 @@ const FLASH_BRIGHTNESS: f32 = 6.0;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn original_daud_bolt_purse_rolls_both_inclusive_bounds() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let amounts: Vec<_> = (0..64).map(|_| super::roll_ammo_amount_with(2, 3, &mut rng)).collect();
+        assert!(amounts.iter().all(|n| (2..=3).contains(n)));
+        assert!(amounts.contains(&2) && amounts.contains(&3));
+        assert_eq!(super::roll_ammo_amount_with(2, 2, &mut rng), 2);
+        assert_eq!(super::roll_ammo_amount_with(3, 2, &mut rng), 2);
+        assert_eq!(super::roll_ammo_amount_with(0, 0, &mut rng), 0);
+    }
     #[test]
     fn ammunition_grants_clamp_all_types_and_preserve_existing_excess() {
         let attrs = crate::gamedata::Attrs::default();

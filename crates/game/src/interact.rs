@@ -108,6 +108,20 @@ mod capacity_tests {
         assert_eq!(stats.give_elixirs(false, 1, attrs.elixir_capacity(false)), 1);
         assert_eq!(stats.health_elixirs, 10);
     }
+
+    #[test]
+    fn loading_preserves_rolled_ammunition_and_weapon_identity() {
+        let mut app = App::new();
+        app.insert_resource(AmmoPickupRestore(vec![
+            AmmoPickupSave { index: 5, position: [0.0; 3], amounts: vec![(2, 2)] },
+            AmmoPickupSave { index: 6, position: [0.0; 3], amounts: vec![(2, 2)] },
+        ])).add_systems(Update, restore_ammo_pickups);
+        let purse = app.world_mut().spawn((Pickup { kind: PickupKind::Ammo(vec![(2, 3)]), label: "Bolts".into(), entities: vec![], index: 5 }, Transform::IDENTITY)).id();
+        let weapon = app.world_mut().spawn((Pickup { kind: PickupKind::Weapon("Crossbow".into(), vec![(2, 3)]), label: "Crossbow".into(), entities: vec![], index: 6 }, Transform::IDENTITY)).id();
+        app.update();
+        assert_eq!(app.world().get::<Pickup>(purse).unwrap().kind, PickupKind::Ammo(vec![(2, 2)]));
+        assert_eq!(app.world().get::<Pickup>(weapon).unwrap().kind, PickupKind::Weapon("Crossbow".into(), vec![(2, 2)]));
+    }
 }
 
 #[derive(Component)]
@@ -138,7 +152,10 @@ fn restore_ammo_pickups(mut commands: Commands, mut pending: ResMut<AmmoPickupRe
     let mut matched = std::collections::HashSet::new();
     pending.0.retain(|saved| {
         let Some((e, mut pickup, _)) = pickups.iter_mut().find(|(e, p, t)| !matched.contains(e) && p.index == saved.index && t.translation.distance_squared(Vec3::from(saved.position)) < 0.01) else { return true };
-        pickup.kind = PickupKind::Ammo(saved.amounts.clone());
+        match &mut pickup.kind {
+            PickupKind::Weapon(_, ammo) => *ammo = saved.amounts.clone(),
+            _ => pickup.kind = PickupKind::Ammo(saved.amounts.clone()),
+        }
         matched.insert(e);
         commands.entity(e).insert(RestoredAmmoPickup);
         false
@@ -391,6 +408,7 @@ pub fn make_pickup(level: &LevelInfo, data: &crate::gamedata::Data, pi: usize, e
             *bp = it.to_string();
         }
         // the tweak's own name; "`i" / "`k" stand for its item's (and the key's) name
+        if p.food_health.is_some() { kind = PickupKind::Food; }
         let token = p.label.starts_with('`');
         let own = (!token).then_some(p.label.as_str()).filter(|l| !l.is_empty());
         // money: the tweak's quantity
@@ -400,15 +418,19 @@ pub fn make_pickup(level: &LevelInfo, data: &crate::gamedata::Data, pi: usize, e
         } else if let Some(l) = own.filter(|_| !matches!(kind, PickupKind::Key(_))) {
             label = l.to_string();
         }
-        if !p.ammo.is_empty() {
+        let ammo: Vec<_> = p.ammo.iter().map(|&(ty, max)| {
+            let min = p.ammo_min.iter().find(|(t, _)| *t == ty).map(|(_, min)| *min).unwrap_or(max);
+            (ty, crate::gadgets::roll_ammo_amount(min, max))
+        }).collect();
+        if !ammo.is_empty() {
             // the cooked ammunition: its type names it
             label = crate::gadgets::ammo_name(p.ammo[0].0).to_string();
-            kind = PickupKind::Ammo(p.ammo.clone());
+            kind = PickupKind::Ammo(ammo.clone());
         }
         // a weapon: what it gives (with its bullets)
         let w = p.inv_item.to_ascii_lowercase();
         if w.contains("sword") || w.contains("pistol") || w.contains("crossbow") {
-            kind = PickupKind::Weapon(p.inv_item.clone(), p.ammo.clone());
+            kind = PickupKind::Weapon(p.inv_item.clone(), ammo);
             label = own.map(str::to_string).unwrap_or_else(|| (if w.contains("sword") { "Sword" } else if w.contains("pistol") { "Pistol" } else { "Crossbow" }).to_string());
         }
         // notes, keys, valuables and blueprints carry their own names
@@ -629,7 +651,8 @@ pub fn use_focus(
                 plog.add("Piero's Spiritual Remedy", Some("ManaElixir_Small"));
             }
             PickupKind::Food => {
-                stats.health = (stats.health + 10.0 + attrs.food_heal_bonus).min(stats.max_health);
+                let base = level.as_ref().and_then(|l| l.scene.pickups.get(p.index as usize)).and_then(|p| p.food_health).unwrap_or(10);
+                stats.eat_food(base as f32, attrs.food_heal_bonus);
                 plog.add(if p.label.is_empty() { "Food".to_string() } else { p.label.clone() }, None);
             }
             PickupKind::Key(_) => {

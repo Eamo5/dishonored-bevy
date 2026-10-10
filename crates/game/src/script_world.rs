@@ -1302,11 +1302,18 @@ fn give_pickup(props: &std::collections::BTreeMap<String, KVal>, data: &crate::g
         return;
     }
     let mut gave = false;
+    if let Some(KVal::Int(health)) = props.get("pickup_food_health") {
+        stats.eat_food((*health).max(0) as f32, attrs.food_heal_bonus);
+        return;
+    }
     if let Some(KVal::List(ammo)) = props.get("pickup_ammo") {
         for a in ammo {
             if let KVal::List(p) = a {
                 if let (Some(KVal::Int(ty)), Some(KVal::Int(n))) = (p.first(), p.get(1)) {
-                    let (label, added) = crate::gadgets::give_ammo(stats, attrs, *ty as u8, (*n).max(0) as u32);
+                    let max = (*n).max(0) as u32;
+                    let min = match p.get(2) { Some(KVal::Int(min)) => (*min).max(0) as u32, _ => max };
+                    let amount = crate::gadgets::roll_ammo_amount(min, max);
+                    let (label, added) = crate::gadgets::give_ammo(stats, attrs, *ty as u8, amount);
                     if added > 0 { msgs.push(format!("{label} +{added}")); }
                     gave = true;
                 }

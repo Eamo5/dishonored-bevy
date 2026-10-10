@@ -393,7 +393,7 @@ fn save_game(
         usable_locks: usables.locks.iter().map(|(k, l)| (*k, *l)).collect(),
         factory_made: pickups.iter().filter(|(p, _)| level.scene.pickups.get(p.index as usize).is_some_and(|sp| sp.factory)).map(|(p, t)| (p.index, t.translation.to_array())).collect(),
         ammo_pickups: pickups.iter().filter_map(|(p, t)| match &p.kind {
-            crate::interact::PickupKind::Ammo(amounts) => Some(crate::interact::AmmoPickupSave { index: p.index, position: t.translation.to_array(), amounts: amounts.clone() }),
+            crate::interact::PickupKind::Ammo(amounts) | crate::interact::PickupKind::Weapon(_, amounts) => Some(crate::interact::AmmoPickupSave { index: p.index, position: t.translation.to_array(), amounts: amounts.clone() }),
             _ => None,
         }).collect(),
         security: Some(devices.save(props.iter().map(|(e, p, _)| (e, p.index)))),

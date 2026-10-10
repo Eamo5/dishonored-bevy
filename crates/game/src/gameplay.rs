@@ -258,6 +258,11 @@ pub struct Stash {
 }
 
 impl PlayerStats {
+    /// Food has a per-item health value; Healthy Appetite adds its attribute bonus.
+    pub fn eat_food(&mut self, base: f32, bonus: f32) {
+        self.health = (self.health + (base + bonus).max(0.0)).min(self.max_health);
+    }
+
     /// Add only what fits, preserving any legacy over-cap inventory.
     pub fn give_elixirs(&mut self, mana: bool, amount: u32, capacity: u32) -> u32 {
         let count = if mana { &mut self.mana_elixirs } else { &mut self.health_elixirs };
@@ -356,6 +361,21 @@ impl PlayerStats {
 
 #[cfg(test)]
 mod inventory_tests {
+    #[test]
+    fn food_uses_original_item_health_plus_charm_bonus_and_health_cap() {
+        let mut stats = super::PlayerStats::default();
+        stats.health = 10.0;
+        stats.max_health = 100.0;
+        stats.eat_food(5.0, 0.0); // pear
+        assert_eq!(stats.health, 15.0);
+        stats.eat_food(30.0, 0.0); // bluejawed hagfish eggs
+        assert_eq!(stats.health, 45.0);
+        stats.eat_food(5.0, 5.0);
+        assert_eq!(stats.health, 55.0);
+        stats.health = 98.0;
+        stats.eat_food(30.0, 5.0);
+        assert_eq!(stats.health, 100.0);
+    }
     use super::*;
 
     #[test]

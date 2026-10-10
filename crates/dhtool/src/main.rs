@@ -572,7 +572,9 @@ fn main() -> Result<()> {
             let pkg = upk::Package::open(&pkg_path(&args[2]))?;
             for i in 1..=pkg.exports.len() as i32 {
                 let Ok(od) = upk::read_object(&pkg, i) else { continue };
-                if od.props.get(&args[3]).is_some() {
+                // Static-array overrides may only set a nonzero index (for example
+                // bolt ammunition uses m_AmmoRanges[2]); get() only checks index zero.
+                if od.props.0.iter().any(|p| p.name == args[3]) {
                     println!("{:6} [{}] {}", i, pkg.class_name(i), pkg.obj_path(i));
                     let one = upk::Props(od.props.0.iter().filter(|p| p.name == args[3]).cloned().collect());
                     dump_props(&pkg, &one, 1);

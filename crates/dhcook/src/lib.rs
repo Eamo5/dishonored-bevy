@@ -3644,12 +3644,15 @@ impl<'a> Cooker<'a> {
             let Some(mesh_obj) = ["m_pPickupStaticMesh", "m_pStaticMesh", "m_pMesh"].iter().find_map(|n| tc.obj(self.assets, n)).filter(|m| m.class() == "StaticMesh") else { continue };
             let Ok(Some((mesh, materials))) = self.cook_mesh(&mesh_obj) else { continue };
             let mut ammo = Vec::new();
+            let mut ammo_min = Vec::new();
             for k in 0..8 {
                 if let Some((_, Value::Struct(_, r))) = tc.get_idx_pkg("m_AmmoRanges", k) {
                     let r = Props(r.clone());
                     let n = r.int("m_MaxValue").or(r.int("m_MinValue")).unwrap_or(0);
                     if n > 0 {
                         ammo.push((k as u8, n as u32));
+                        let min = r.int("m_MinValue").unwrap_or(n).clamp(0, n) as u32;
+                        if min < n as u32 { ammo_min.push((k as u8, min)); }
                     }
                 }
             }
@@ -3689,6 +3692,10 @@ impl<'a> Cooker<'a> {
                 instance: Some(instance),
                 item,
                 ammo,
+                ammo_min,
+                food_health: if tc.name("m_Type") == Some("eStatPickupType_Food") {
+                    match tc.get("m_HealthChange") { Some(Value::Int(n)) => Some((*n).max(0) as u32), _ => None }
+                } else { None },
                 label,
                 quantity,
                 coins,
@@ -4120,7 +4127,8 @@ impl<'a> Cooker<'a> {
                     let r = Props(r.clone());
                     let n = r.int("m_MaxValue").or(r.int("m_MinValue")).unwrap_or(0);
                     if n > 0 {
-                        ammo.push(KVal::List(vec![KVal::Int(k), KVal::Int(n)]));
+                        let min = r.int("m_MinValue").unwrap_or(n).clamp(0, n);
+                        ammo.push(KVal::List(vec![KVal::Int(k), KVal::Int(n), KVal::Int(min)]));
                     }
                 }
             }
@@ -4135,6 +4143,11 @@ impl<'a> Cooker<'a> {
             let props = &mut self.scene.kismet.ops[i].props;
             if !ammo.is_empty() {
                 props.insert("pickup_ammo".into(), KVal::List(ammo));
+            }
+            if tch.name("m_Type") == Some("eStatPickupType_Food") {
+                if let Some(Value::Int(n)) = tch.get("m_HealthChange") {
+                    props.insert("pickup_food_health".into(), KVal::Int((*n).max(0)));
+                }
             }
             props.insert("pickup_quantity".into(), KVal::Int(quantity));
             props.insert("pickup_coins".into(), KVal::Bool(coins));
@@ -4153,14 +4166,21 @@ impl<'a> Cooker<'a> {
             self.actor_ref(actor).tweaks = lineage;
         }
         let mut ammo = Vec::new();
+        let mut ammo_min = Vec::new();
+        let mut food_health = None;
         if let Some(tw) = ["m_pTweaks", "m_pPickupTweaks", "m_pStatPickupTweaks", "m_pInventoryTweaks", "m_pInvPickupTweaks"].iter().find_map(|n| ch.obj(self.assets, n)) {
             let tch = self.chain(&tw);
+            if tch.name("m_Type") == Some("eStatPickupType_Food") {
+                if let Some(Value::Int(n)) = tch.get("m_HealthChange") { food_health = Some((*n).max(0) as u32); }
+            }
             for i in 0..8 {
                 if let Some((_, Value::Struct(_, r))) = tch.get_idx_pkg("m_AmmoRanges", i) {
                     let r = Props(r.clone());
                     let n = r.int("m_MaxValue").or(r.int("m_MinValue")).unwrap_or(0);
                     if n > 0 {
                         ammo.push((i as u8, n as u32));
+                        let min = r.int("m_MinValue").unwrap_or(n).clamp(0, n) as u32;
+                        if min < n as u32 { ammo_min.push((i as u8, min)); }
                     }
                 }
             }
@@ -4215,6 +4235,8 @@ impl<'a> Cooker<'a> {
             position: ue_point(loc),
             instance: None,
             ammo,
+            ammo_min,
+            food_health,
             factory: false,
             inv_item,
         });

@@ -1531,6 +1531,13 @@ pub struct Pickup {
     /// 7 sticky grenades — and the amount)
     #[serde(default)]
     pub ammo: Vec<(u8, u32)>,
+    /// Lower bounds for variable ammunition ranges. Missing entries equal `ammo`'s
+    /// upper bound, keeping older cooked maps and fixed pickups unchanged.
+    #[serde(default)]
+    pub ammo_min: Vec<(u8, u32)>,
+    /// Food's original `m_HealthChange`; absent in older cooked maps.
+    #[serde(default)]
+    pub food_health: Option<u32>,
     /// what the prompt calls it (its tweak's interactable `m_Name`: "Tyvian Ore")
     #[serde(default)]
     pub label: String,
