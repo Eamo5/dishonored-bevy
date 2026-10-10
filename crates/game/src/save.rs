@@ -53,6 +53,13 @@ pub struct NpcSave {
     /// the bones lost to a beheading (`gore::Severed`)
     #[serde(default)]
     severed: Vec<usize>,
+    #[serde(default)]
+    falling: Option<crate::carry::Falling>,
+    #[serde(default)]
+    consumed: bool,
+    /// Original passenger placement, before a cinematic vehicle's movement.
+    #[serde(default)]
+    ride_base: Option<[f32; 16]>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -97,6 +104,12 @@ pub struct SaveGame {
     /// props: (movable, `None` broken, else where a loose one lies)
     #[serde(default)]
     props: Vec<(u32, Option<([f32; 3], [f32; 4])>)>,
+    #[serde(default)]
+    held_prop: Option<u32>,
+    #[serde(default)]
+    carry: Option<crate::carry::CarrySave>,
+    #[serde(default)]
+    prop_states: Vec<crate::props::PropStateSave>,
     /// Rewiring, script-controlled power and each tank's remaining whale oil.
     /// Absent in older saves: retain the level's initial security state.
     #[serde(default)]
@@ -118,6 +131,9 @@ pub struct SaveGame {
     /// the scripts' cinematic mode: (hide the HUD, hold Corvo, hide his arms)
     #[serde(default)]
     cinematic: Option<(bool, bool, bool)>,
+    /// Active ride's script operation and the player's pre-ride placement.
+    #[serde(default)]
+    player_ride: Option<(u32, [f32; 16])>,
     /// the HUD's parts the scripts had hidden (`DHE_Health` until Corvo wakes in his cell)
     #[serde(default)]
     hud_hidden: Option<Vec<String>>,
@@ -336,11 +352,11 @@ fn save_game(
     mut slots: ResMut<SaveSlots>,
     mut msgs: ResMut<HudMessages>,
     player: Query<(&Transform, &Player)>,
-    npcs: Query<(&Npc, &FromSpawner, &Transform, Option<&crate::gore::Severed>)>,
+    npcs: Query<(Entity, &Npc, &FromSpawner, &Transform, Option<&crate::gore::Severed>, Option<&crate::carry::Falling>, Has<crate::npc::ConsumedBody>)>,
     pickups: Query<(&Pickup, &Transform)>,
     instances: Query<(&LevelInstance, &Visibility, &Transform, Option<&Door>)>,
     lights: Query<(&LevelLight, &Visibility)>,
-    (krusts, props, traps, usables): (Res<crate::krust::KrustLog>, Query<(Entity, &crate::props::Prop, &Transform), Without<Player>>, Res<crate::traps::TrapLog>, Res<crate::usables::UsableLog>),
+    (krusts, props, traps, usables, prop_bodies): (Res<crate::krust::KrustLog>, Query<(Entity, &crate::props::Prop, &Transform), Without<Player>>, Res<crate::traps::TrapLog>, Res<crate::usables::UsableLog>, Query<(&bevy_rapier3d::prelude::Velocity, &bevy_rapier3d::prelude::GravityScale, &bevy_rapier3d::prelude::RigidBody)>),
     (overrides, devices, grenades, razors, held, npc_ids, projectiles, swarms, rats, bites, possession, possess_overrides, fish, krust_hosts): (
         Res<crate::script_world::SpawnerOverrides>, Res<crate::security::Devices>,
         Query<(Entity, &crate::gadgets::Grenade, &Transform)>, Query<(&crate::gadgets::Razor, &Transform)>,
@@ -352,7 +368,7 @@ fn save_game(
         Res<crate::possession::Possession>, Res<crate::possession::PossessOverrides>,
         Query<(Entity, &crate::fish::Fish)>, Query<(Entity, &crate::krust::Krust)>,
     ),
-    (cine, script_ui, mut campaign, powers, tc): (Res<crate::script_world::Cinematic>, Option<Res<crate::kismet::ScriptUi>>, ResMut<crate::gameplay::Campaign>, Res<crate::powers::Powers>, Res<crate::gameplay::TimeControl>),
+    (cine, script_ui, mut campaign, powers, tc, carry, matinee): (Res<crate::script_world::Cinematic>, Option<Res<crate::kismet::ScriptUi>>, ResMut<crate::gameplay::Campaign>, Res<crate::powers::Powers>, Res<crate::gameplay::TimeControl>, Res<crate::carry::Carry>, Res<crate::matinee::MatineeState>),
     mut saving: MessageWriter<crate::globalui::ShowSaving>,
 ) {
     // the scripts keeping the map's state for a return (`DisSeqAct_SaveLevelState`; a partial
@@ -406,6 +422,10 @@ fn save_game(
                 .chain(rats.iter().map(|(e, _, _, _)| (e, crate::possession::SavedHost::Rat)))
                 .chain(fish.iter().map(|(e, f)| (e, crate::possession::SavedHost::Fish(f.index()))))
                 .chain(krust_hosts.iter().map(|(e, k)| (e, crate::possession::SavedHost::Krust(k.index())))))),
+        held_prop: held.0.and_then(|e| props.get(e).ok()).map(|(_, p, _)| p.index as u32),
+        carry: carry.save(),
+        player_ride: matinee.saved_player_ride(),
+        prop_states: props.iter().map(|(_, p, _)| p.save_state(p.body().0.and_then(|b| prop_bodies.get(b).ok()))).collect(),
         props: {
             // the broken (no longer there) and where the loose ones lie
             let alive: std::collections::HashMap<usize, &Transform> = props.iter().map(|(_, p, t)| (p.index, t)).collect();
@@ -419,7 +439,7 @@ fn save_game(
         },
         npcs: npcs
             .iter()
-            .map(|(n, f, t, sev)| NpcSave {
+            .map(|(entity, n, f, t, sev, falling, consumed)| NpcSave {
                 spawner: f.0,
                 position: t.translation.to_array(),
                 yaw: n.yaw,
@@ -430,6 +450,9 @@ fn save_game(
                 down_t: n.down_t,
                 route_idx: n.route_idx,
                 severed: sev.map(|s| s.0.clone()).unwrap_or_default(),
+                falling: falling.cloned(),
+                consumed,
+                ride_base: matinee.saved_ride_base(entity),
             })
             .collect(),
         taken: (0..scene.pickups.len() as u32).filter(|i| !present.contains(i)).collect(),
@@ -580,7 +603,7 @@ fn apply_pending(
     (pickups, mut ammo_pickups): (Query<(Entity, &Pickup)>, ResMut<crate::interact::AmmoPickupRestore>),
     mut instances: Query<(Entity, &LevelInstance, &mut Visibility, &mut Transform, Option<&mut Door>, Option<&crate::level::InstanceCollider>), Without<Player>>,
     mut lights: Query<(&LevelLight, &mut Visibility), (Without<LevelInstance>, Without<Player>)>,
-    (mut krusts, mut prop_restore, mut traps, mut usables): (ResMut<crate::krust::KrustLog>, ResMut<crate::props::PropRestore>, ResMut<crate::traps::TrapLog>, ResMut<crate::usables::UsableLog>),
+    (mut krusts, mut prop_restore, mut traps, mut usables, mut carry_restore): (ResMut<crate::krust::KrustLog>, ResMut<crate::props::PropRestore>, ResMut<crate::traps::TrapLog>, ResMut<crate::usables::UsableLog>, ResMut<crate::carry::CarryRestore>),
     (mut overrides, mut devices, props, mut gadgets, mut projectiles, mut swarms, mut possession): (ResMut<crate::script_world::SpawnerOverrides>, ResMut<crate::security::Devices>, Query<(Entity, &crate::props::Prop)>, ResMut<crate::gadgets::GadgetRestore>, ResMut<crate::powers::ProjectileRestore>, ResMut<crate::swarm::SwarmRestore>, ResMut<crate::possession::PossessionRestore>),
     (mut cine, mut matinee, mut collider_tfs, script_ui, mut campaign, settings, mut cinematic_fade, mut powers, mut tc): (
         ResMut<crate::script_world::Cinematic>,
@@ -643,6 +666,7 @@ fn apply_pending(
     }
     if !level_only {
         // (the start-up's cinematic, e.g. waking in the cell, gives way to the save's)
+        matinee.restore_player_ride(s.player_ride);
         *cine = match s.cinematic {
             Some((hide_hud, hold, hide_player)) => crate::script_world::Cinematic { on: true, hide_hud, hold, hide_player, since: 0.0 },
             None => crate::script_world::Cinematic::default(),
@@ -732,6 +756,9 @@ fn apply_pending(
     usables.locks = s.usable_locks.iter().copied().collect();
     usables.restore = true;
     prop_restore.0 = Some(std::mem::take(&mut s.props));
+    prop_restore.1 = s.held_prop;
+    carry_restore.0 = s.carry.take();
+    prop_restore.2 = std::mem::take(&mut s.prop_states);
     gadgets.0 = s.gadgets.take();
     projectiles.0 = Some(std::mem::take(&mut s.projectiles));
     swarms.0 = s.swarms.take();
@@ -743,11 +770,16 @@ fn apply_pending(
     info!("save: restored {} ({} NPCs)", s.map, s.npcs.len());
 }
 
-pub(crate) fn restore_npcs(mut commands: Commands, mut q: Query<(Entity, &RestoreNpc, &mut Npc, &mut Transform)>) {
+pub(crate) fn restore_npcs(mut commands: Commands, mut q: Query<(Entity, &RestoreNpc, &mut Npc, &mut Transform)>, mut matinee: ResMut<crate::matinee::MatineeState>) {
     for (e, r, mut n, mut t) in &mut q {
         let s = &r.0;
         t.translation = Vec3::from(s.position);
+        // Falling bodies bypass NPC steering, which otherwise updates this rotation.
+        t.rotation = Quat::from_rotation_y(s.yaw);
         n.yaw = s.yaw;
+        if let Some(base) = s.ride_base {
+            matinee.restore_ride_base(e, base);
+        }
         // (saves from before health was the original's keep no more than it)
         n.health = s.health.min(n.max_health);
         n.alert = s.alert;
@@ -764,6 +796,18 @@ pub(crate) fn restore_npcs(mut commands: Commands, mut q: Query<(Entity, &Restor
         }
         if !s.severed.is_empty() {
             commands.entity(e).insert(crate::gore::Severed(s.severed.clone()));
+        }
+        if s.consumed {
+            commands.entity(e).insert((crate::npc::ConsumedBody, Visibility::Hidden));
+            if std::env::var_os("DH_CARRY_LOG").is_some() {
+                info!("carry: restored consumed NPC {} hidden", s.spawner);
+            }
+        }
+        if let Some(falling) = &s.falling {
+            if std::env::var_os("DH_CARRY_LOG").is_some() {
+                info!("carry: restored flight for NPC {} at {:?}, rotation {:?}, yaw {}", s.spawner, t.translation, t.rotation, s.yaw);
+            }
+            commands.entity(e).insert(falling.clone());
         }
         commands.entity(e).remove::<RestoreNpc>();
     }

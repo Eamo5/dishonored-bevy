@@ -476,6 +476,10 @@ impl Npc {
 #[derive(Component)]
 pub struct NpcVisual;
 
+/// A corpse fully consumed by rats or hagfish, distinct from temporary hiding.
+#[derive(Component)]
+pub struct ConsumedBody;
+
 /// Killed by a drop assassination: from which side (0 front, 1 back, 2 left, 3 right).
 #[derive(Component, Clone, Copy)]
 pub struct DropKilled(pub u8);
@@ -1783,7 +1787,7 @@ pub(crate) fn npc_perception(
     rapier: ReadRapierContext,
     mut stats: ResMut<PlayerStats>,
     player: Query<(Entity, &Transform, &Player, Option<&LitActor>)>,
-    mut npcs: Query<(Entity, &mut Npc, &Transform), Without<Player>>,
+    mut npcs: Query<(Entity, &mut Npc, &Transform), (Without<Player>, Without<ConsumedBody>)>,
     possession: Res<crate::possession::Possession>,
     mut found: Local<std::collections::HashSet<Entity>>,
     (froms, mut events): (Query<&FromSpawner>, MessageWriter<crate::interact::Interaction>),
@@ -2603,7 +2607,7 @@ fn npc_move(
     player: Query<&Transform, With<Player>>,
     mut npcs: Query<
         (&mut Npc, &mut Transform, Option<&mut KinematicCharacterController>, Option<&KinematicCharacterControllerOutput>),
-        (Without<Player>, Without<ScriptedAnim>, Without<crate::possession::Possessed>),
+        (Without<Player>, Without<ScriptedAnim>, Without<crate::possession::Possessed>, Without<crate::carry::Falling>),
     >,
     mut steps: MessageWriter<crate::footsteps::Footfall>,
     (grid, mut budget): (Option<Res<crate::navmesh::NavGrid>>, ResMut<crate::navmesh::PathBudget>),
@@ -3150,12 +3154,12 @@ fn npc_select_anim(
     tc: Res<TimeControl>,
     mut commands: Commands,
     player: Query<&Transform, With<Player>>,
-    mut npcs: Query<(Entity, &Npc, &mut NpcAnim, &mut Animator, &Transform, &Children, Option<&DropKilled>, Option<&AssassinClip>, Option<&mut FinisherClip>), Without<ScriptedAnim>>,
+    mut npcs: Query<(Entity, &Npc, &mut NpcAnim, &mut Animator, &Transform, &Children, Option<&DropKilled>, Option<&AssassinClip>, Option<&mut FinisherClip>, Option<&crate::carry::Falling>), Without<ScriptedAnim>>,
     mut visuals: Query<&mut Transform, (With<NpcVisual>, Without<Npc>, Without<Player>)>,
 ) {
     let dt = time.delta_secs() * tc.world_scale().max(0.0);
     let ppos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
-    for (e, npc, mut st, mut anim, t, children, dropped, assassin, finisher) in &mut npcs {
+    for (e, npc, mut st, mut anim, t, children, dropped, assassin, finisher, falling) in &mut npcs {
         anim.time_scale = tc.world_scale().max(0.0);
         // the clips carry the whole body motion (falls included)
         for c in children.iter() {
@@ -3207,6 +3211,20 @@ fn npc_select_anim(
         }
 
         if npc.is_down() {
+            if falling.is_some() {
+                if !st.down {
+                    crate::carry::lay_down(&mut anim);
+                    if std::env::var_os("DH_CARRY_LOG").is_some() {
+                        info!("carry: restored flight pose for NPC {}", npc.spawner);
+                    }
+                }
+                st.down = true;
+                st.settle = None;
+                st.last_mode = npc.mode;
+                st.last_alert = npc.alert;
+                anim.frozen = false;
+                continue;
+            }
             if !st.down {
                 st.down = true;
                 st.oneshot = false;

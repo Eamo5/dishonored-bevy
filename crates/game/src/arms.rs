@@ -477,7 +477,7 @@ fn animate_arms(
     player: Query<(&Player, &Sword, Option<&Choking>, Option<&crate::npc::Grabbed>)>,
     mut arms: Query<(&mut Animator, &mut ArmsAnim, &mut Visibility), With<ArmsRoot>>,
     mut held: Query<&mut Visibility, Without<ArmsRoot>>,
-    (swim, carry, peek, cine, scene_arms): (Res<crate::swim::Swim>, Res<crate::carry::Carry>, Res<crate::keyhole::Peek>, Res<crate::script_world::Cinematic>, Res<crate::matinee::SceneArms>),
+    (swim, mut carry, peek, cine, scene_arms): (Res<crate::swim::Swim>, ResMut<crate::carry::Carry>, Res<crate::keyhole::Peek>, Res<crate::script_world::Cinematic>, Res<crate::matinee::SceneArms>),
     versus: Res<crate::combat::Versus>,
 ) {
     let (Ok((p, sword, choking, grabbed)), Ok((mut anim, mut st, mut vis))) = (player.single(), arms.single_mut()) else { return };
@@ -520,7 +520,19 @@ fn animate_arms(
         let moving = Vec2::new(p.velocity.x, p.velocity.z).length() > 0.4;
         if let Some(cl) = crate::carry::master_clip(carry.phase, moving).and_then(|n| anim.lib.find(n)) {
             let oneshot = !matches!(carry.phase, crate::carry::CarryPhase::Hold);
-            if oneshot {
+            if carry.resume_animation {
+                carry.resume_animation = false;
+                st.carry_seq = carry.seq;
+                anim.restart(cl, !oneshot, 1.0, 0.0);
+                if let Some((name, time)) = &carry.animation {
+                    if anim.lib.clip(cl).name == *name {
+                        anim.seek(*time);
+                        if std::env::var_os("DH_CARRY_LOG").is_some() {
+                            info!("carry: resumed {name} at {time:.3}s");
+                        }
+                    }
+                }
+            } else if oneshot {
                 if carry.seq != st.carry_seq {
                     st.carry_seq = carry.seq;
                     anim.restart(cl, false, 1.0, 0.15);

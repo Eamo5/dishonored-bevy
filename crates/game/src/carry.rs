@@ -24,8 +24,9 @@ pub struct CarryPlugin;
 impl Plugin for CarryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Carry>()
+            .init_resource::<CarryRestore>()
             .add_systems(OnExit(GameState::InGame), |mut c: ResMut<Carry>| *c = Carry::default())
-            .add_systems(Update, (carry_input, sync_body).chain().after(crate::interact::FocusSet).after(crate::powers::bolt_focus).after(crate::arms::ArmsAnimSet).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (carry_input, sync_body).chain().after(crate::save::restore_npcs).after(crate::interact::FocusSet).after(crate::powers::bolt_focus).after(crate::arms::ArmsAnimSet).run_if(in_state(GameState::InGame)))
             .add_systems(Update, prewarm_bodies.run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, (place_body, fall).after(crate::arms::ArmsAlign).before(TransformSystems::Propagate))
             .add_systems(PostUpdate, log_joints.after(TransformSystems::Propagate));
@@ -33,14 +34,14 @@ impl Plugin for CarryPlugin {
 }
 
 /// How a body leaves the shoulder (the original's drop clips).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum DropKind {
     Low,
     LowSneak,
     NoMove,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum CarryPhase {
     #[default]
     None,
@@ -67,26 +68,51 @@ pub struct Carry {
     spawner: Option<u32>,
     /// seconds into the current phase
     t: f32,
+    /// Last master clip and cursor; retained across saves during lift/drop transitions.
+    pub(crate) animation: Option<(String, f32)>,
+    pub(crate) resume_animation: bool,
 }
 
 impl Carry {
+    pub fn save(&self) -> Option<CarrySave> {
+        self.body?;
+        Some(CarrySave { spawner: self.spawner?, phase: self.phase, time: self.t, animation: self.animation.clone() })
+    }
     pub fn carrying(&self) -> bool {
         self.body.is_some()
     }
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct CarrySave {
+    spawner: u32,
+    phase: CarryPhase,
+    time: f32,
+    #[serde(default)]
+    animation: Option<(String, f32)>,
+}
+
+#[derive(Resource, Default)]
+pub struct CarryRestore(pub Option<CarrySave>);
+
 /// A body leaving the shoulder: it lies down where its hips are and falls to the ground
 /// (thrown: along the view).
-#[derive(Component)]
-struct Falling {
+#[derive(Component, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Falling {
     vel: Vec3,
     placed: bool,
+    /// Hip position sampled before changing to the lying animation.
+    #[serde(default)]
+    release_hips: Option<Vec3>,
 }
 
 /// Lying on its back (the pose of the levels' corpses).
-fn lay_down(anim: &mut Animator) {
+pub(crate) fn lay_down(anim: &mut Animator) {
     if let Some(c) = anim.lib.first(&["Corpses_DeathPose_OnBack1", "Generic_DeathFrontA", "Generic_DeathFront_A", "Generic_DeathA"]) {
-        anim.restart(c, false, 1.0, 0.2);
+        // Flight uses a settled pose, including when the world is stopped. A
+        // world-time crossfade here would preserve a half-carried pose indefinitely.
+        anim.restart(c, false, 1.0, 0.0);
+        anim.frozen = false;
         let d = anim.lib.duration(c);
         anim.seek(d);
     }
@@ -118,16 +144,16 @@ fn carry_input(
     (keys, mouse, bind): (Res<ButtonInput<KeyCode>>, Res<ButtonInput<MouseButton>>, Res<crate::bindings::Bindings>),
     focus: Res<InteractFocus>,
     mut carry: ResMut<Carry>,
-    (level, assets): (Option<Res<LevelInfo>>, Option<Res<GameAssets>>),
+    (level, assets, mut restore): (Option<Res<LevelInfo>>, Option<Res<GameAssets>>, ResMut<CarryRestore>),
     (stats, mut msgs): (Res<PlayerStats>, ResMut<HudMessages>),
     player: Query<(&Player, &Transform)>,
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
-    npcs: Query<(&Npc, &FromSpawner, &Children)>,
+    npcs: Query<(Entity, &Npc, &FromSpawner, &Children), Without<crate::npc::ConsumedBody>>,
     visuals: Query<(&Transform, &Children), With<NpcVisual>>,
     parts: Query<(&SkinnedMesh, &MeshTag), With<Mesh3d>>,
     mut vis: Query<&mut Visibility>,
     mut used: MessageWriter<Interaction>,
-    (arms, mut anims, npc_anims): (Query<&Animator, With<ArmsRoot>>, Query<&mut Animator, Without<ArmsRoot>>, Query<&crate::npc::NpcAnim>),
+    (arms, mut anims, npc_anims, rigs, joints): (Query<&Animator, With<ArmsRoot>>, Query<&mut Animator, Without<ArmsRoot>>, Query<&crate::npc::NpcAnim>, Query<&crate::npc::NpcRig>, Query<&GlobalTransform>),
 ) {
     if paused.0 { return; }
     let dt = time.delta_secs();
@@ -141,11 +167,17 @@ fn carry_input(
         }
     }
     let arms_done = arms.single().map(|a| a.finished()).unwrap_or(true);
+    let release_hips = |body| rigs.get(body).ok().and_then(|r| r.joint("Root_jnt"))
+        .and_then(|joint| joints.get(joint).ok()).map(GlobalTransform::translation);
     match carry.phase {
         CarryPhase::None => {
             // pick up the body looked at
-            let Some(e) = focus.1.filter(|_| keys.just_pressed(bind.key(crate::bindings::Act::Use))) else { return };
-            let Ok((npc, from, children)) = npcs.get(e) else { return };
+            let restoring = restore.0.as_ref();
+            let target = if let Some(saved) = restoring {
+                npcs.iter().find(|(_, npc, from, _)| from.0 == saved.spawner && npc.is_down()).map(|(e, _, _, _)| e)
+            } else { focus.1.filter(|_| keys.just_pressed(bind.key(crate::bindings::Act::Use))) };
+            let Some(e) = target else { return };
+            let Ok((_, npc, from, children)) = npcs.get(e) else { return };
             if !npc.is_down() || p.locked || stats.dead {
                 return;
             }
@@ -162,7 +194,9 @@ fn carry_input(
             let Some(Some(nv)) = level.scene.spawners.get(from.0 as usize).and_then(|s| s.npc_type).and_then(|t| assets.npc_types.get(t as usize)) else { return };
             // the body's foreground copy, on the same skeleton
             let mut view_parts = Vec::new();
-            for (mesh, mat) in &nv.parts.view_parts {
+            let render_parts = if std::env::var_os("DH_CARRY_WORLD_MATERIAL").is_some() { &nv.parts.parts } else { &nv.parts.view_parts };
+            for (mesh, mat) in render_parts {
+                if std::env::var_os("DH_CARRY_HIDE_VIEW").is_some() { break; }
                 let mut ec = commands.spawn((
                     Mesh3d(mesh.clone()),
                     tag.clone(),
@@ -184,8 +218,14 @@ fn carry_input(
                 }
             }
             commands.entity(e).try_insert(ScriptedAnim);
-            *carry = Carry { body: Some(e), phase: CarryPhase::In, seq: carry.seq + 1, view_parts, world_parts, visual: Some((visual, vt)), swords, spawner: Some(from.0), t: 0.0 };
-            used.write(Interaction::Corpse { spawner: from.0, what: 0 });
+            let phase = restoring.map(|s| s.phase).unwrap_or(CarryPhase::In);
+            let time = restoring.map(|s| s.time).unwrap_or(0.0);
+            let animation = restoring.and_then(|s| s.animation.clone());
+            let resume_animation = restoring.is_some();
+            *carry = Carry { body: Some(e), phase, seq: carry.seq + 1, view_parts, world_parts, visual: Some((visual, vt)), swords, spawner: Some(from.0), t: time, animation, resume_animation };
+            if restore.0.take().is_none() {
+                used.write(Interaction::Corpse { spawner: from.0, what: 0 });
+            }
             let _ = &mut msgs;
         }
         CarryPhase::In => {
@@ -204,7 +244,11 @@ fn carry_input(
                 // off the shoulder along the view
                 let dir = cam.single().map(|c| c.forward().as_vec3()).unwrap_or(Vec3::NEG_Z);
                 let Some(b) = carry.body else { return };
-                commands.entity(b).try_insert(Falling { vel: dir * 6.0 + Vec3::Y * 1.5, placed: false });
+                let hips = release_hips(b);
+                if std::env::var_os("DH_CARRY_LOG").is_some() {
+                    info!("carry: sampled release hips {hips:?} before throw pose");
+                }
+                commands.entity(b).try_insert(Falling { vel: dir * 6.0 + Vec3::Y * 1.5, placed: false, release_hips: hips });
                 if let Ok(mut a) = anims.get_mut(b) {
                     lay_down(&mut a);
                 }
@@ -227,7 +271,7 @@ fn carry_input(
                 release(&mut commands, &mut carry, &mut vis, None);
                 // it settles on whatever is below
                 if let Some(b) = b {
-                    commands.entity(b).try_insert(Falling { vel: Vec3::ZERO, placed: false });
+                    commands.entity(b).try_insert(Falling { vel: Vec3::ZERO, placed: false, release_hips: release_hips(b) });
                     if let Ok(mut a) = anims.get_mut(b) {
                         lay_down(&mut a);
                     }
@@ -316,12 +360,16 @@ fn prewarm_bodies(
 }
 
 /// The body plays the slave clip of what the arms play, at the same time.
-fn sync_body(carry: Res<Carry>, arms: Query<&Animator, With<ArmsRoot>>, mut bodies: Query<&mut Animator, Without<ArmsRoot>>) {
+fn sync_body(mut carry: ResMut<Carry>, arms: Query<&Animator, With<ArmsRoot>>, mut bodies: Query<&mut Animator, Without<ArmsRoot>>) {
+    // The arms consume the restored cursor on their next update. Do not overwrite it
+    // with the unrelated clip that was playing when the NPC was restored.
+    if carry.resume_animation { return; }
     let (Some(b), Ok(arms)) = (carry.body, arms.single()) else { return };
     let Ok(mut anim) = bodies.get_mut(b) else { return };
     let Some(cur) = arms.current() else { return };
     let name = &arms.lib.clip(cur.clip).name;
     let Some(rest) = name.strip_prefix("Empty_CarryCorpse_") else { return };
+    carry.animation = Some((name.clone(), cur.t));
     let slave = format!("Corpses_CarryCorpse_{}", rest.replace("_Master", "_Slave"));
     let Some(clip) = anim.lib.find(&slave) else {
         if std::env::var("DH_CARRY_LOG").is_ok() {
@@ -329,6 +377,10 @@ fn sync_body(carry: Res<Carry>, arms: Query<&Animator, With<ArmsRoot>>, mut bodi
         }
         return;
     };
+    // ScriptedAnim suspends NPC animation updates while carried. Replace their
+    // last world-time/LOD state so both paired clips advance and blend together.
+    anim.time_scale = arms.time_scale;
+    anim.frozen = false;
     if anim.current().map(|c| c.clip) != Some(clip) {
         anim.restart(clip, cur.looping, cur.speed, 0.15);
         if std::env::var("DH_CARRY_LOG").is_ok() {
@@ -368,13 +420,14 @@ fn log_joints(carry: Res<Carry>, rigs: Query<&crate::npc::NpcRig>, g: Query<(&Gl
     info!("carry: corvo {:?}", out);
 }
 
-/// The carried body's skeleton sits where the first-person rig's root is.
+/// The slave clip's anchor locates the carrier, rather than the body's mesh origin.
 #[allow(clippy::type_complexity)]
 fn place_body(
     carry: Res<Carry>,
     player: Query<&Transform, (With<Player>, Without<Npc>)>,
     cam: Query<&Transform, (With<PlayerCamera>, Without<Npc>, Without<Player>)>,
-    arms: Query<&Transform, (With<ArmsRoot>, Without<Npc>, Without<Player>, Without<PlayerCamera>)>,
+    arms: Query<(&Transform, &Animator), (With<ArmsRoot>, Without<Npc>, Without<Player>, Without<PlayerCamera>)>,
+    rigs: Query<(&Animator, &crate::npc::NpcRig), Without<ArmsRoot>>,
     mut bodies: Query<&mut Transform, (With<Npc>, Without<Player>, Without<PlayerCamera>, Without<ArmsRoot>, Without<NpcVisual>)>,
     mut visuals: Query<&mut Transform, (With<NpcVisual>, Without<Npc>, Without<Player>, Without<PlayerCamera>, Without<ArmsRoot>)>,
 ) {
@@ -382,14 +435,238 @@ fn place_body(
     if let Ok(mut v) = visuals.get_mut(visual) {
         *v = vt;
     }
-    let (Ok(pt), Ok(ct), Ok(at)) = (player.single(), cam.single(), arms.single()) else { return };
+    let (Ok(pt), Ok(ct), Ok((at, master))) = (player.single(), cam.single(), arms.single()) else { return };
     let Ok(mut t) = bodies.get_mut(b) else { return };
-    let root = pt.to_matrix() * ct.to_matrix() * at.to_matrix() * vt.to_matrix().inverse();
+    let alignment = rigs.get(b).ok()
+        .and_then(|(anim, rig)| rig.index("anchor_jnt").map(|i| carry_alignment(master.model(0), anim.model(i))))
+        .unwrap_or(Mat4::IDENTITY);
+    let root = pt.to_matrix() * ct.to_matrix() * at.to_matrix() * alignment * vt.to_matrix().inverse();
     let (_, r, p) = root.to_scale_rotation_translation();
     t.translation = p;
     t.rotation = r;
     if std::env::var("DH_CARRY_LOG").is_ok() {
         info!("carry: player {:.2} body {:.2} arms root local {:.2} rot {:.2?} {:?}", pt.translation, p, at.translation, at.rotation.to_euler(EulerRot::YXZ), carry.phase);
+    }
+}
+
+fn carry_alignment(carrier_root: Transform, slave_anchor: Transform) -> Mat4 {
+    carrier_root.to_matrix() * slave_anchor.to_matrix().inverse()
+}
+
+/// Sweep the body's width through its horizontal flight, including thin obstacles
+/// that lie entirely between frame endpoints. Gravity/ground settling stays below.
+fn body_flight_step(ctx: &RapierContext, entity: Entity, at: Vec3, velocity: &mut Vec3, dt: f32) -> Vec3 {
+    let mut step = *velocity * dt;
+    let horizontal = step.with_y(0.0);
+    if horizontal.length_squared() <= 1e-10 { return step; }
+    let shape = Collider::ball(crate::npc::NPC_RADIUS);
+    let filter = QueryFilter::default().exclude_collider(entity).exclude_sensors()
+        .groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | crate::level::GROUP_PROP));
+    if let Some((obstacle, hit)) = ctx.cast_shape(at, Quat::IDENTITY, horizontal, shape.raw.as_ref(),
+        ShapeCastOptions { max_time_of_impact: 1.0, target_distance: 0.01, stop_at_penetration: false, ..default() }, filter) {
+        let fraction = hit.time_of_impact.clamp(0.0, 1.0);
+        step.x *= fraction;
+        step.z *= fraction;
+        velocity.x = 0.0;
+        velocity.z = 0.0;
+        if std::env::var_os("DH_CARRY_LOG").is_some() {
+            info!("carry: body {entity:?} blocked by {obstacle:?} at flight fraction {fraction:.3}");
+        }
+    }
+    step
+}
+
+fn body_ground_hit(ctx: &RapierContext, at: Vec3, step: Vec3) -> Option<(Entity, f32)> {
+    // A nearby floor is support only when descending. Testing it during ascent
+    // would cancel the upward impulse before the body could leave the ground.
+    if step.y > 0.0 { return None; }
+    let filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+    ctx.cast_ray(at + Vec3::new(step.x, 0.0, step.z), Vec3::NEG_Y,
+        crate::npc::NPC_CENTER - step.y + 0.05, true, filter)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flight_pose_settles_even_with_stopped_time_and_a_previously_frozen_rig() {
+        use dhcook::format::{AnimClip, AnimFile, BoneDef, KeyTrack, SkeletonDef};
+        use std::sync::Arc;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, crate::anim::AnimPlugin)).add_message::<crate::audio::PostEvent>();
+        let skeleton = SkeletonDef {
+            bones: vec![BoneDef { name: "root".into(), parent: -1, rotation: Quat::IDENTITY.to_array(), ..default() }], ..default()
+        };
+        let lib = Arc::new(crate::anim::CharAnims::new(&skeleton, vec![Arc::new(AnimFile {
+            bones: vec!["root".into()],
+            clips: vec![
+                AnimClip { name: "carried".into(), duration: 1.0, rate: 30.0, frames: 30, ..default() },
+                AnimClip { name: "Corpses_DeathPose_OnBack1".into(), duration: 1.0, rate: 30.0, frames: 30,
+                    translations: vec![KeyTrack { bone: 0, frames: vec![0, 29], values: vec![[0.0; 3], [0.0, -1.0, 0.0]] }], ..default() },
+            ],
+        })]));
+        let joint = app.world_mut().spawn(Transform::default()).id();
+        let mut anim = Animator::new(lib.clone(), &skeleton, vec![joint]);
+        anim.restart(lib.find("carried").unwrap(), true, 1.0, 0.0);
+        anim.time_scale = 0.0;
+        anim.frozen = true;
+        lay_down(&mut anim);
+        app.world_mut().spawn((anim, GlobalTransform::default()));
+        app.update();
+        assert_eq!(app.world().get::<Transform>(joint).unwrap().translation, Vec3::NEG_Y);
+    }
+
+    #[test]
+    fn thrown_body_leaves_nearby_floor_before_landing_on_descent() {
+        #[derive(Resource)]
+        struct Flight { position: Vec3, velocity: Vec3, peak: f32, landed: bool }
+        let start = crate::npc::NPC_CENTER + 0.02;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>()
+            .insert_resource(Flight { position: Vec3::Y * start, velocity: Vec3::new(6.0, 1.5, 0.0), peak: start, landed: false })
+            .add_systems(Last, |ctx: ReadRapierContext, mut flight: ResMut<Flight>| {
+                if flight.landed { return; }
+                flight.velocity.y -= 9.8 * 0.02;
+                let step = flight.velocity * 0.02;
+                if let Some((_, distance)) = body_ground_hit(&ctx.single().unwrap(), flight.position, step) {
+                    flight.position += step.with_y(0.0);
+                    flight.position.y += crate::npc::NPC_CENTER + 0.05 - distance;
+                    flight.landed = true;
+                } else { flight.position += step; }
+                flight.peak = flight.peak.max(flight.position.y);
+            });
+        app.world_mut().spawn((Collider::cuboid(20.0, 0.1, 20.0), Transform::from_xyz(0.0, -0.1, 0.0), CollisionGroups::new(GROUP_WORLD, Group::ALL)));
+        app.update();
+        assert!(!app.world().resource::<Flight>().landed);
+        for _ in 0..30 { app.update(); }
+        let flight = app.world().resource::<Flight>();
+        assert!(flight.landed);
+        assert!(flight.peak > start + 0.08, "upward throw must clear its starting floor");
+        assert!(flight.position.x > 1.0);
+        assert!((flight.position.y - (crate::npc::NPC_CENTER + 0.05)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn thrown_body_sweep_blocks_thin_cover_and_respects_removal() {
+        #[derive(Resource, Default)]
+        struct FlightResult(Vec3, Vec3, Vec3);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<FlightResult>()
+            .add_systems(Last, |ctx: ReadRapierContext, mut result: ResMut<FlightResult>| {
+                let mut velocity = Vec3::new(60.0, -2.0, 0.0);
+                let step = body_flight_step(&ctx.single().unwrap(), Entity::PLACEHOLDER, Vec3::ZERO, &mut velocity, 0.05);
+                let mut away_velocity = Vec3::NEG_X;
+                let away = body_flight_step(&ctx.single().unwrap(), Entity::PLACEHOLDER, Vec3::X * 0.8, &mut away_velocity, 0.05);
+                *result = FlightResult(step, velocity, away);
+            });
+        app.update();
+        assert_eq!(app.world().resource::<FlightResult>().0.x, 3.0);
+        for group in [GROUP_WORLD, crate::level::GROUP_PROP] {
+            let wall = app.world_mut().spawn((Collider::cuboid(0.01, 2.0, 2.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(group, Group::ALL))).id();
+            app.update();
+            let result = app.world().resource::<FlightResult>();
+            assert!(result.0.x > 0.6 && result.0.x < 0.66, "body must stop before its radius overlaps cover: {}", result.0.x);
+            assert_eq!(result.0.y, -0.1);
+            assert_eq!(result.1, Vec3::new(0.0, -2.0, 0.0));
+            assert_eq!(result.2.x, -0.05, "a release already touching cover can move away from it");
+            app.world_mut().despawn(wall);
+            app.update();
+            assert_eq!(app.world().resource::<FlightResult>().0.x, 3.0);
+        }
+        app.world_mut().spawn((Collider::cuboid(0.01, 2.0, 2.0), Sensor, Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(GROUP_WORLD, Group::ALL)));
+        app.update();
+        assert_eq!(app.world().resource::<FlightResult>().0.x, 3.0);
+    }
+
+    #[test]
+    fn carried_pose_blends_on_carrier_time_even_when_npc_was_frozen() {
+        use dhcook::format::{AnimClip, AnimFile, BoneDef, KeyTrack, SkeletonDef};
+        use std::sync::Arc;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, crate::anim::AnimPlugin))
+            .add_message::<crate::audio::PostEvent>()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(50)))
+            .add_systems(Update, sync_body);
+        let skeleton = SkeletonDef {
+            bones: vec![BoneDef { name: "root".into(), parent: -1, rotation: Quat::IDENTITY.to_array(), ..Default::default() }],
+            ..Default::default()
+        };
+        let clip = |name: &str, y: f32| AnimClip {
+            name: name.into(), duration: 2.0, rate: 30.0, frames: 60,
+            translations: vec![KeyTrack { bone: 0, frames: vec![0], values: vec![[0.0, y, 0.0]] }],
+            ..Default::default()
+        };
+        let lib = Arc::new(crate::anim::CharAnims::new(&skeleton, vec![Arc::new(AnimFile {
+            bones: vec!["root".into()],
+            clips: vec![clip("Empty_CarryCorpse_Idle_Master", 2.0), clip("Corpses_CarryCorpse_Idle_Slave", 2.0), clip("dead", 0.0)],
+        })]));
+        let hand = app.world_mut().spawn(Transform::default()).id();
+        let joint = app.world_mut().spawn(Transform::default()).id();
+        let mut master = Animator::new(lib.clone(), &skeleton, vec![hand]);
+        master.restart(lib.find("Empty_CarryCorpse_Idle_Master").unwrap(), true, 1.0, 0.0);
+        let master_entity = app.world_mut().spawn((ArmsRoot, master, GlobalTransform::default())).id();
+        let mut slave = Animator::new(lib.clone(), &skeleton, vec![joint]);
+        slave.restart(lib.find("dead").unwrap(), false, 1.0, 0.0);
+        slave.time_scale = 0.0;
+        slave.frozen = true;
+        let body = app.world_mut().spawn((slave, GlobalTransform::default())).id();
+        app.insert_resource(Carry { body: Some(body), phase: CarryPhase::Hold, ..Default::default() });
+        for _ in 0..8 { app.update(); }
+        let world = app.world();
+        let master = world.get::<Animator>(master_entity).unwrap();
+        let slave = world.get::<Animator>(body).unwrap();
+        assert!((master.current().unwrap().t - slave.current().unwrap().t).abs() < 1e-6);
+        assert!((world.get::<Transform>(joint).unwrap().translation.y - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn transition_save_retains_cursor_and_accepts_legacy_carry_state() {
+        let legacy = r#"{"spawner":40,"phase":{"Drop":"LowSneak"},"time":0.31}"#;
+        let saved: CarrySave = serde_json::from_str(legacy).unwrap();
+        assert!(saved.animation.is_none());
+        let carry = Carry {
+            body: Some(Entity::PLACEHOLDER), spawner: Some(saved.spawner),
+            phase: saved.phase, t: saved.time,
+            animation: Some(("Empty_CarryCorpse_DropLowSneak_Master".into(), 0.30)),
+            ..Default::default()
+        };
+        let encoded = serde_json::to_string(&carry.save().unwrap()).unwrap();
+        let restored: CarrySave = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored.phase, CarryPhase::Drop(DropKind::LowSneak));
+        assert_eq!(restored.animation, carry.animation);
+        assert_eq!(restored.time, carry.t);
+    }
+
+    #[test]
+    fn flight_save_accepts_legacy_state_and_retains_pending_release_origin() {
+        let legacy: Falling = serde_json::from_str(r#"{"vel":[6.0,1.5,0.0],"placed":false}"#).unwrap();
+        assert!(legacy.release_hips.is_none());
+        let pending = Falling { release_hips: Some(Vec3::new(13.0, 30.0, -1.0)), ..legacy };
+        let restored: Falling = serde_json::from_str(&serde_json::to_string(&pending).unwrap()).unwrap();
+        assert!(!restored.placed);
+        assert_eq!(restored.release_hips, pending.release_hips);
+        assert_eq!(restored.vel, pending.vel);
+    }
+
+    #[test]
+    fn carried_anchor_matches_carrier_through_camera_and_visual_transforms() {
+        let camera = Transform::from_xyz(12.0, 31.0, -8.0)
+            .with_rotation(Quat::from_euler(EulerRot::YXZ, -1.58, 0.6, 0.0)).to_matrix();
+        let arms = Transform::from_xyz(0.0, -0.2, 0.1).to_matrix();
+        let visual = Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)).to_matrix();
+        let carrier = Transform::from_xyz(0.0, -0.875, 0.0)
+            .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
+        let anchor = Transform::from_xyz(0.3, -0.97, 0.23)
+            .with_rotation(Quat::from_euler(EulerRot::XYZ, 2.93, 0.21, 1.57));
+        let body = camera * arms * carry_alignment(carrier, anchor) * visual.inverse();
+        let actual = body * visual * anchor.to_matrix();
+        let expected = camera * arms * carrier.to_matrix();
+        assert!(actual.abs_diff_eq(expected, 1e-5));
+        assert!(!(camera * arms * anchor.to_matrix()).abs_diff_eq(expected, 0.01));
     }
 }
 
@@ -399,6 +676,7 @@ fn place_body(
 fn fall(
     mut commands: Commands,
     time: Res<Time>,
+    tc: Res<crate::gameplay::TimeControl>,
     rapier: ReadRapierContext,
     waters: Option<Res<crate::swim::Waters>>,
     mut stats: ResMut<PlayerStats>,
@@ -406,28 +684,34 @@ fn fall(
     mut q: Query<(Entity, &mut Transform, &mut Falling, &mut Npc, Option<&crate::npc::NpcRig>)>,
     joints: Query<&GlobalTransform>,
 ) {
-    let dt = time.delta_secs().min(0.05);
+    let dt = time.delta_secs().min(0.05) * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
-    let ground = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
     for (e, mut t, mut f, mut npc, rig) in &mut q {
         if !f.placed {
             // lying where the hips were, level
             f.placed = true;
-            if let Some(hips) = rig.and_then(|r| r.joint("Root_jnt")).and_then(|j| joints.get(j).ok()) {
-                t.translation = hips.translation() + Vec3::Y * 0.2;
+            let hips = f.release_hips.or_else(|| rig.and_then(|r| r.joint("Root_jnt"))
+                .and_then(|j| joints.get(j).ok()).map(GlobalTransform::translation));
+            if let Some(hips) = hips {
+                t.translation = hips + Vec3::Y * 0.2;
             }
             let fwd = t.rotation * Vec3::NEG_Z;
             let yaw = (-fwd.x).atan2(-fwd.z);
             t.rotation = Quat::from_rotation_y(yaw);
             npc.yaw = yaw;
+            if std::env::var("DH_CARRY_LOG").is_ok() {
+                info!("carry: released body {e:?} at {:?}, velocity {:?}, world scale {}", t.translation, f.vel, tc.world_scale());
+            }
         }
+        if dt <= 0.0 { continue; }
         f.vel.y -= 9.8 * dt;
-        let step = f.vel * dt;
-        let feet = t.translation - Vec3::Y * crate::npc::NPC_CENTER;
-        let down = (feet.y - (t.translation.y + step.y - crate::npc::NPC_CENTER)).max(0.0);
-        let hit = ctx.cast_ray(t.translation + Vec3::new(step.x, 0.0, step.z), Vec3::NEG_Y, crate::npc::NPC_CENTER + down + 0.05, true, ground);
+        let step = body_flight_step(&ctx, e, t.translation, &mut f.vel, dt);
+        let hit = body_ground_hit(&ctx, t.translation, step);
         let in_water = waters.as_ref().and_then(|w| w.at(t.translation - Vec3::Y * 0.6));
         if hit.is_some() || in_water.is_some() {
+            if std::env::var_os("DH_CARRY_LOG").is_some() {
+                info!("carry: body {e:?} settled from {:?} with velocity {:?}, water {}", t.translation, f.vel, in_water.is_some());
+            }
             if let Some((_, toi)) = hit {
                 t.translation += Vec3::new(step.x, 0.0, step.z);
                 t.translation.y = t.translation.y - toi + crate::npc::NPC_CENTER + 0.05;

@@ -24,7 +24,7 @@ impl Plugin for MatineePlugin {
             .init_resource::<SceneArms>()
             .add_systems(OnEnter(GameState::InGame), reset)
             // (skipping: held, `skip`)
-            .add_systems(Update, (play_matinees, ride_platforms).chain().run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (play_matinees, ride_platforms).chain().after(crate::save::restore_npcs).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, cinematic_camera.before(TransformSystems::Propagate).run_if(in_state(GameState::InGame)));
     }
 }
@@ -70,6 +70,30 @@ pub struct MatineeState {
 }
 
 impl MatineeState {
+    fn record_platform_motion(&mut self, entity: Entity, before: Transform, after: Transform) {
+        if let Some(motion) = self.platforms.iter_mut().find(|m| m.0 == entity) {
+            motion.2 = after;
+        } else {
+            self.platforms.push((entity, before, after));
+        }
+    }
+    pub fn saved_player_ride(&self) -> Option<(u32, [f32; 16])> {
+        Some((self.player_ride?, self.player_base?.to_matrix().to_cols_array()))
+    }
+
+    pub fn restore_player_ride(&mut self, saved: Option<(u32, [f32; 16])>) {
+        self.player_ride = saved.map(|(op, _)| op);
+        self.player_base = saved.map(|(_, base)| Transform::from_matrix(Mat4::from_cols_array(&base)));
+    }
+
+    pub fn saved_ride_base(&self, entity: Entity) -> Option<[f32; 16]> {
+        self.ride_base.get(&entity).map(|t| t.to_matrix().to_cols_array())
+    }
+
+    pub fn restore_ride_base(&mut self, entity: Entity, base: [f32; 16]) {
+        self.ride_base.insert(entity, Transform::from_matrix(Mat4::from_cols_array(&base)));
+    }
+
     /// A mover's place before any matinee moved it (taken as it is now if not known yet): a
     /// save puts movers back where their matinees left them, relative to it.
     pub fn base_of(&mut self, e: Entity, now: Transform) -> Transform {
@@ -80,6 +104,70 @@ impl MatineeState {
 fn reset(mut st: ResMut<MatineeState>, mut fade: ResMut<CinematicFade>) {
     *st = MatineeState::default();
     fade.0 = None;
+}
+
+#[cfg(test)]
+mod ride_save_tests {
+    use super::*;
+
+    #[test]
+    fn platform_motion_uses_frame_endpoints_not_intermediate_attachment_updates() {
+        let entity = Entity::PLACEHOLDER;
+        let mut state = MatineeState::default();
+        let start = Transform::from_xyz(2.0, 0.0, 3.0);
+        let intermediate = Transform::from_rotation(Quat::from_rotation_y(1.57));
+        let end = Transform::from_xyz(2.1, 0.0, 3.0);
+        state.record_platform_motion(entity, start, intermediate);
+        state.record_platform_motion(entity, intermediate, end);
+        assert_eq!(state.platforms.len(), 1);
+        let (_, before, after) = state.platforms[0];
+        let delta = after.to_matrix() * before.to_matrix().inverse();
+        assert!(delta.abs_diff_eq(Mat4::from_translation(Vec3::X * 0.1), 1e-5));
+    }
+
+    #[test]
+    fn player_ride_round_trip_retains_initial_placement_and_clears_stale_state() {
+        let initial = Transform::from_xyz(12.0, 2.0, -7.0)
+            .with_rotation(Quat::from_rotation_y(0.4));
+        let mut original = MatineeState::default();
+        original.player_ride = Some(42);
+        original.player_base = Some(initial);
+        let encoded = serde_json::to_string(&original.saved_player_ride()).unwrap();
+        let mut restored = MatineeState::default();
+        restored.restore_player_ride(serde_json::from_str(&encoded).unwrap());
+        assert_eq!(restored.player_ride, Some(42));
+        // On a ride without a stage mark, the restored current transform must
+        // never replace the original base, otherwise movement gets applied twice.
+        let delta = Mat4::from_translation(Vec3::new(4.0, 0.0, 3.0));
+        let current = Transform::from_matrix(delta * initial.to_matrix());
+        let base = restored.player_base.get_or_insert(current);
+        assert!((delta * base.to_matrix()).abs_diff_eq(current.to_matrix(), 1e-5));
+        restored.restore_player_ride(None);
+        assert!(restored.player_base.is_none());
+        assert!(restored.player_ride.is_none());
+    }
+
+    #[test]
+    fn restored_passenger_base_does_not_apply_vehicle_motion_twice() {
+        let mut world = World::new();
+        let old = world.spawn_empty().id();
+        let new = world.spawn_empty().id();
+        let base = Transform::from_xyz(-89.0, -20.0, 65.0)
+            .with_rotation(Quat::from_rotation_y(0.3));
+        let delta = Transform::from_xyz(2.0, 0.0, -12.0)
+            .with_rotation(Quat::from_rotation_y(-0.2)).to_matrix();
+        let saved_position = Transform::from_matrix(delta * base.to_matrix());
+        let mut original = MatineeState::default();
+        original.ride_base.insert(old, base);
+        let data = original.saved_ride_base(old).unwrap();
+        let mut restored = MatineeState::default();
+        restored.restore_ride_base(new, data);
+        let initial = *restored.ride_base.entry(new).or_insert(saved_position);
+        let resumed = delta * initial.to_matrix();
+        assert!(resumed.abs_diff_eq(saved_position.to_matrix(), 1e-5));
+        assert!(!(delta * saved_position.to_matrix()).abs_diff_eq(resumed, 0.01));
+        assert!(restored.saved_ride_base(old).is_none());
+    }
 }
 
 /// UE3 FRotationMatrix (column vectors, UE space).

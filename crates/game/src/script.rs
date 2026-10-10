@@ -1296,7 +1296,7 @@ fn run_script(
                 info!("script: {} npc at {pos:.1}", cmd[0]);
             }
         }
-        "pickup" | "door" | "use" => {
+        "pickup" | "door" | "use" | "body" => {
             let target = if cmd[0] == "pickup" {
                 pickups.iter().filter(|(_, pickup)| match cmd.get(1).map(String::as_str) {
                     Some("health") => matches!(pickup.kind, crate::interact::PickupKind::HealthElixir),
@@ -1305,6 +1305,9 @@ fn run_script(
                     Some(index) if index.parse::<u32>().is_ok() => pickup.index == index.parse::<u32>().unwrap(),
                     _ => true,
                 }).map(|(pt, _)| pt.translation).min_by(|a, b| a.distance(t.translation).total_cmp(&b.distance(t.translation)))
+            } else if cmd[0] == "body" {
+                npc_ents.iter().filter(|(_, n, _)| n.is_down()).map(|(_, _, nt)| nt.translation - Vec3::Y * 0.75)
+                    .min_by(|a, b| a.distance(t.translation).total_cmp(&b.distance(t.translation)))
             } else if cmd[0] == "use" {
                 usables.iter().map(|ut| ut.translation).min_by(|a, b| a.distance(t.translation).total_cmp(&b.distance(t.translation)))
             } else {

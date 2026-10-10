@@ -455,7 +455,7 @@ fn find_focus(
     player: Query<&Player>,
     rapier: bevy_rapier3d::prelude::ReadRapierContext,
     (bodies, carry, data, owners, stats): (
-        Query<(Entity, &crate::npc::Npc, &Transform, Option<&crate::anim::Animator>), Without<Player>>,
+        Query<(Entity, &crate::npc::Npc, &Transform, Option<&crate::anim::Animator>), (Without<Player>, Without<crate::npc::ConsumedBody>)>,
         Res<crate::carry::Carry>,
         Res<crate::gamedata::Data>,
         Query<(&crate::npc::Npc, &Transform), Without<Player>>,

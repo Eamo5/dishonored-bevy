@@ -31,9 +31,12 @@ impl Plugin for PropsPlugin {
             .init_resource::<TankBlasts>()
             .init_resource::<PropsTaken>()
             .init_resource::<PropKnocks>()
+            .init_resource::<PropPhysicsStep>()
+            .add_systems(PostUpdate, scale_prop_physics.before(PhysicsSet::SyncBackend).run_if(in_state(GameState::InGame)))
+            .add_systems(PostUpdate, unscale_prop_physics.after(PhysicsSet::Writeback).run_if(in_state(GameState::InGame)))
             .add_systems(OnEnter(GameState::InGame), ((|mut h: ResMut<Held>| *h = Held::default()), setup_props.after(crate::level::LevelSpawnSet)))
             .add_systems(Update, prop_focus.after(crate::interact::FocusSet).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (restore_props, hold_prop, prop_impacts, prop_hits, sync_props, burst_tanks, prop_events, script_physics).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (restore_props, restore_prop_states, restore_held_prop, hold_prop, prop_impacts, prop_hits, sync_props, burst_tanks, prop_events, script_physics).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -43,6 +46,55 @@ const MASS: [f32; 4] = [0.4, 2.0, 8.0, 25.0];
 const THROW: [f32; 4] = [1.0, 0.85, 0.6, 0.4];
 /// The groups a loose prop collides with.
 const LOOSE: Group = GROUP_WORLD.union(GROUP_PROP).union(GROUP_NPC).union(GROUP_PLAYER);
+
+#[derive(Resource, Default)]
+struct PropPhysicsStep(Vec<(Entity, f32, Velocity, f32, Option<Damping>)>);
+
+// Keep ECS/save velocities in world-time units. Only Rapier's step sees the scaled
+// values; fixed bodies make stopped props resist impulses as well as gravity.
+fn scale_prop_physics(
+    tc: Res<crate::gameplay::TimeControl>, held: Res<Held>,
+    props: Query<(Entity, &Prop)>,
+    mut bodies: Query<(&mut RigidBody, &mut Velocity, &mut GravityScale, Option<&mut Damping>)>,
+    mut step: ResMut<PropPhysicsStep>,
+) {
+    step.0.clear();
+    let scale = tc.world_scale().clamp(0.0, 1.0);
+    if scale == 1.0 { return; }
+    for (entity, prop) in &props {
+        if held.0 == Some(entity) { continue; }
+        let Some(body) = prop.body else { continue };
+        let Ok((mut mode, mut velocity, mut gravity, damping)) = bodies.get_mut(body) else { continue };
+        if *mode != RigidBody::Dynamic { continue; }
+        step.0.push((body, scale, *velocity, gravity.0, damping.as_deref().copied()));
+        if let Some(mut damping) = damping {
+            damping.linear_damping *= scale;
+            damping.angular_damping *= scale;
+        }
+        if scale == 0.0 { *mode = RigidBody::Fixed; }
+        velocity.linear *= scale;
+        velocity.angular *= scale;
+        gravity.0 *= scale * scale;
+    }
+}
+
+fn unscale_prop_physics(
+    mut step: ResMut<PropPhysicsStep>,
+    mut bodies: Query<(&mut RigidBody, &mut Velocity, &mut GravityScale, Option<&mut Damping>)>,
+) {
+    for (body, scale, saved, gravity, damping) in step.0.drain(..) {
+        let Ok((mut mode, mut velocity, mut g, current_damping)) = bodies.get_mut(body) else { continue };
+        if let (Some(saved), Some(mut current)) = (damping, current_damping) { *current = saved; }
+        if scale == 0.0 {
+            *mode = RigidBody::Dynamic;
+            *velocity = saved;
+        } else {
+            velocity.linear /= scale;
+            velocity.angular /= scale;
+        }
+        g.0 = gravity;
+    }
+}
 
 /// A prop on its level instance: its tweak (`scene.movables`), body and wear.
 #[derive(Component)]
@@ -195,7 +247,198 @@ impl Held {
 
 /// A loaded save's props to put back: (movable, `None` broken, else where it lies).
 #[derive(Resource, Default)]
-pub struct PropRestore(pub Option<Vec<(u32, Option<([f32; 3], [f32; 4])>)>>);
+pub struct PropRestore(pub Option<Vec<(u32, Option<([f32; 3], [f32; 4])>)>>, pub Option<u32>, pub Vec<PropStateSave>);
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct PropStateSave {
+    index: usize,
+    health: f32,
+    last_velocity: [f32; 3],
+    thrown: bool,
+    quiet: f32,
+    released: f32,
+    settling: bool,
+    body: Option<([f32; 3], [f32; 3], f32, u8)>,
+}
+
+impl Prop {
+    pub fn save_state(&self, body: Option<(&Velocity, &GravityScale, &RigidBody)>) -> PropStateSave {
+        PropStateSave {
+            index: self.index, health: self.health, last_velocity: self.last_vel.to_array(),
+            thrown: self.thrown, quiet: self.quiet, released: self.released, settling: self.settling,
+            body: body.map(|(v, g, b)| (v.linear.to_array(), v.angular.to_array(), g.0, match b {
+                RigidBody::Fixed => 0, RigidBody::Dynamic => 1,
+                RigidBody::KinematicPositionBased => 2, RigidBody::KinematicVelocityBased => 3,
+            })),
+        }
+    }
+}
+
+fn restore_prop_states(
+    mut restore: ResMut<PropRestore>,
+    mut props: Query<&mut Prop>,
+    mut bodies: Query<(&mut Velocity, &mut GravityScale, &mut RigidBody, &mut CollisionGroups)>,
+) {
+    restore.2.retain(|saved| {
+        let Some(mut prop) = props.iter_mut().find(|p| p.index == saved.index) else { return true };
+        if let Some((linear, angular, gravity, kind)) = saved.body {
+            let Some(body) = prop.body else { return true };
+            let Ok((mut v, mut g, mut b, mut groups)) = bodies.get_mut(body) else { return true };
+            v.linear = Vec3::from(linear);
+            v.angular = Vec3::from(angular);
+            g.0 = gravity;
+            *b = match kind { 1 => RigidBody::Dynamic, 2 => RigidBody::KinematicPositionBased, 3 => RigidBody::KinematicVelocityBased, _ => RigidBody::Fixed };
+            if saved.released > 0.0 { groups.filters = LOOSE.difference(GROUP_PLAYER); }
+        }
+        prop.health = saved.health;
+        prop.last_vel = Vec3::from(saved.last_velocity);
+        prop.thrown = saved.thrown;
+        prop.quiet = saved.quiet;
+        prop.released = saved.released;
+        prop.settling = saved.settling;
+        if saved.thrown && std::env::var("DH_PROP_LOG").is_ok() {
+            info!("restored thrown prop {}: health {}, body {:?}", saved.index, saved.health, saved.body);
+        }
+        false
+    });
+}
+
+fn restore_held_prop(
+    mut commands: Commands,
+    mut restore: ResMut<PropRestore>,
+    mut held: ResMut<Held>,
+    mut props: Query<(Entity, &mut Prop)>,
+    mut bodies: Query<(&mut GravityScale, &mut CollisionGroups, &mut Velocity)>,
+) {
+    let Some(index) = restore.1 else { return };
+    let Some((entity, mut prop)) = props.iter_mut().find(|(_, p)| p.index == index as usize) else { return };
+    let Some(body) = prop.body else { return };
+    let Ok((mut gravity, mut groups, mut velocity)) = bodies.get_mut(body) else { return };
+    gravity.0 = 0.0;
+    groups.filters = LOOSE.difference(GROUP_PLAYER);
+    *velocity = Velocity::zero();
+    commands.entity(body).insert(RigidBody::Dynamic);
+    prop.thrown = false;
+    prop.released = 0.0;
+    held.0 = Some(entity);
+    held.1 = 0.0;
+    restore.1 = None;
+}
+
+#[cfg(test)]
+mod held_save_tests {
+    use super::*;
+
+    #[test]
+    fn stopped_prop_physics_preserves_momentum_and_resumes_motion() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>().init_resource::<Held>().init_resource::<PropPhysicsStep>()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(20)))
+            .insert_resource(crate::gameplay::TimeControl { bend_remaining: 10.0, world_dilation: 0.0, ..default() })
+            .add_systems(PostUpdate, scale_prop_physics.before(PhysicsSet::SyncBackend))
+            .add_systems(PostUpdate, unscale_prop_physics.after(PhysicsSet::Writeback));
+        let body = app.world_mut().spawn((Transform::from_xyz(0.0, 10.0, 0.0), RigidBody::Dynamic,
+            Collider::ball(0.2), GravityScale(1.0), Velocity::linear(Vec3::X * 10.0))).id();
+        let prop = app.world_mut().spawn(Prop { index: 0, health: 10.0, body: Some(body),
+            last_vel: Vec3::X * 10.0, thrown: true, quiet: 0.0, released: 0.2, offset: Vec3::ZERO,
+            settling: false, hung: false }).id();
+        for _ in 0..4 { app.update(); }
+        assert_eq!(app.world().get::<Transform>(body).unwrap().translation, Vec3::new(0.0, 10.0, 0.0));
+        assert_eq!(app.world().get::<Velocity>(body).unwrap().linear, Vec3::X * 10.0);
+        assert_eq!(*app.world().get::<RigidBody>(body).unwrap(), RigidBody::Dynamic);
+        app.world_mut().resource_mut::<crate::gameplay::TimeControl>().world_dilation = 1.0;
+        app.update();
+        let moving = app.world().get::<Transform>(body).unwrap().translation;
+        assert!(moving.x > 0.0 && moving.y < 10.0);
+        app.world_mut().resource_mut::<crate::gameplay::TimeControl>().world_dilation = 0.5;
+        app.update();
+        let slowed = app.world().get::<Transform>(body).unwrap().translation;
+        assert!(((slowed.x - moving.x) - moving.x * 0.5).abs() < 1e-5);
+        assert!((app.world().get::<Velocity>(body).unwrap().linear.x - 10.0).abs() < 1e-5);
+        app.world_mut().resource_mut::<crate::gameplay::TimeControl>().world_dilation = 0.0;
+        app.world_mut().resource_mut::<Held>().0 = Some(prop);
+        app.update();
+        assert!(app.world().get::<Transform>(body).unwrap().translation.x > slowed.x);
+        app.world_mut().resource_mut::<Held>().0 = None;
+        app.world_mut().entity_mut(body).insert((GravityScale(0.0), Damping { linear_damping: 4.0, angular_damping: 8.0 }));
+        let mut damped = Vec::new();
+        for scale in [1.0, 0.5, 0.0] {
+            app.world_mut().resource_mut::<crate::gameplay::TimeControl>().world_dilation = scale;
+            app.world_mut().entity_mut(body).insert(Velocity { linear: Vec3::X * 10.0, angular: Vec3::Y * 10.0 });
+            app.update();
+            let v = app.world().get::<Velocity>(body).unwrap();
+            damped.push((v.linear.x, v.angular.y));
+            let d = app.world().get::<Damping>(body).unwrap();
+            assert_eq!((d.linear_damping, d.angular_damping), (4.0, 8.0));
+        }
+        assert!(damped[0].0 < damped[1].0 && damped[1].0 < 10.0);
+        assert!(damped[0].1 < damped[1].1 && damped[1].1 < 10.0);
+        assert_eq!(damped[2], (10.0, 10.0));
+    }
+
+    #[test]
+    fn damaged_thrown_prop_round_trip_restores_momentum_and_release_state() {
+        let mut app = App::new();
+        app.init_resource::<PropRestore>().add_systems(Update, restore_prop_states);
+        let mut prop = Prop { index: 8, health: 3.0, body: None, last_vel: Vec3::X * 12.0,
+            thrown: true, quiet: 0.4, released: 0.2, offset: Vec3::ZERO, settling: false, hung: false };
+        let velocity = Velocity { linear: Vec3::new(10.0, 2.0, 0.0), angular: Vec3::Y * 3.0 };
+        let saved = prop.save_state(Some((&velocity, &GravityScale(1.0), &RigidBody::Dynamic)));
+        let saved = serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
+        app.world_mut().resource_mut::<PropRestore>().2.push(saved);
+        app.update(); // a streamed body's creation may be delayed
+        assert_eq!(app.world().resource::<PropRestore>().2.len(), 1);
+        let body = app.world_mut().spawn((Velocity::zero(), GravityScale(0.0), RigidBody::Fixed, CollisionGroups::new(GROUP_PROP, LOOSE))).id();
+        prop.body = Some(body);
+        prop.health = 100.0;
+        prop.thrown = false;
+        prop.last_vel = Vec3::ZERO;
+        prop.released = 0.0;
+        let entity = app.world_mut().spawn(prop).id();
+        app.update();
+        let restored = app.world().get::<Prop>(entity).unwrap();
+        assert_eq!(restored.health, 3.0);
+        assert!(restored.thrown);
+        assert_eq!(restored.last_vel, Vec3::X * 12.0);
+        assert_eq!(restored.released, 0.2);
+        assert_eq!(app.world().get::<Velocity>(body).unwrap().linear, velocity.linear);
+        assert_eq!(app.world().get::<Velocity>(body).unwrap().angular, velocity.angular);
+        assert_eq!(app.world().get::<GravityScale>(body).unwrap().0, 1.0);
+        assert_eq!(*app.world().get::<RigidBody>(body).unwrap(), RigidBody::Dynamic);
+        assert!(!app.world().get::<CollisionGroups>(body).unwrap().filters.intersects(GROUP_PLAYER));
+        assert!(app.world().resource::<PropRestore>().2.is_empty());
+        app.world_mut().get_mut::<Velocity>(body).unwrap().linear = Vec3::ZERO;
+        app.update();
+        assert_eq!(app.world().get::<Velocity>(body).unwrap().linear, Vec3::ZERO);
+    }
+
+    #[test]
+    fn saved_hold_waits_for_the_body_and_restores_carry_physics() {
+        let mut app = App::new();
+        app.insert_resource(PropRestore(None, Some(7), Vec::new())).init_resource::<Held>()
+            .add_systems(Update, restore_held_prop);
+        app.update();
+        assert_eq!(app.world().resource::<PropRestore>().1, Some(7));
+        let body = app.world_mut().spawn((GravityScale(1.0), CollisionGroups::new(GROUP_PROP, LOOSE), Velocity::linear(Vec3::X), RigidBody::Fixed)).id();
+        let prop = app.world_mut().spawn(Prop {
+            index: 7, health: 10.0, body: Some(body), last_vel: Vec3::ZERO,
+            thrown: true, quiet: 0.0, released: 0.5, offset: Vec3::ZERO, settling: false, hung: false,
+        }).id();
+        app.update();
+        assert_eq!(app.world().resource::<Held>().0, Some(prop));
+        assert!(app.world().resource::<PropRestore>().1.is_none());
+        assert_eq!(app.world().get::<GravityScale>(body).unwrap().0, 0.0);
+        assert_eq!(*app.world().get::<RigidBody>(body).unwrap(), RigidBody::Dynamic);
+        assert_eq!(app.world().get::<Velocity>(body).unwrap().linear, Vec3::ZERO);
+        assert!(!app.world().get::<CollisionGroups>(body).unwrap().filters.intersects(GROUP_PLAYER));
+        assert!(!app.world().get::<Prop>(prop).unwrap().thrown);
+        // Restoration is one-shot: a later drop must not be undone.
+        app.world_mut().resource_mut::<Held>().0 = None;
+        app.update();
+        assert!(app.world().resource::<Held>().0.is_none());
+    }
+}
 
 /// The props as a save left them: the broken ones gone (quietly), the loose ones where they lay.
 fn restore_props(mut commands: Commands, mut restore: ResMut<PropRestore>, props: Query<(Entity, &Prop)>, mut tf: Query<&mut Transform>) {
@@ -404,6 +647,7 @@ fn hold_prop(
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
     level: Option<Res<LevelInfo>>,
     time: Res<Time>,
+    tc: Res<crate::gameplay::TimeControl>,
 ) {
     let dt = time.delta_secs();
     held.1 = (held.1 - dt).max(0.0);
@@ -411,7 +655,7 @@ fn hold_prop(
     // after release: back to colliding with Corvo
     for mut prop in &mut props {
         if prop.released > 0.0 {
-            prop.released -= dt;
+            prop.released -= dt * tc.world_scale();
             if prop.released <= 0.0 {
                 if let Some(Ok((_, _, mut g))) = prop.body.map(|b| bodies.get_mut(b)) {
                     let m = &level.scene.movables[prop.index];
@@ -435,6 +679,7 @@ fn hold_prop(
 fn prop_impacts(
     mut commands: Commands,
     time: Res<Time>,
+    tc: Res<crate::gameplay::TimeControl>,
     level: Option<Res<LevelInfo>>,
     assets: Option<Res<GameAssets>>,
     waters: Option<Res<crate::swim::Waters>>,
@@ -447,7 +692,8 @@ fn prop_impacts(
     (mut knocks, mut world_hits, mut npc_hits): (ResMut<PropKnocks>, MessageWriter<crate::worlddamage::WorldDamage>, MessageWriter<crate::gameplay::NpcHit>),
 ) {
     let (Some(level), Some(assets)) = (level, assets) else { return };
-    let dt = time.delta_secs();
+    let dt = time.delta_secs() * tc.world_scale();
+    if dt <= 0.0 { return; }
     for (e, mut prop, it) in &mut props {
         prop.quiet = (prop.quiet - dt).max(0.0);
         if prop.quiet <= 0.0 {
