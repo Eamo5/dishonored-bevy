@@ -310,8 +310,9 @@ pub(crate) fn prop_focus(
     player: Query<(Entity, &Player)>,
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
     (carry, possession, peek, stats): (Res<crate::carry::Carry>, Res<crate::possession::Possession>, Res<crate::keyhole::Peek>, Res<crate::gameplay::PlayerStats>),
-    (mut sfx, attrs): (MessageWriter<PostEvent>, Res<crate::gamedata::Attrs>),
+    (mut sfx, attrs, paused): (MessageWriter<PostEvent>, Res<crate::gamedata::Attrs>, Res<crate::hud::Paused>),
 ) {
+    if paused.0 { return; }
     let Some(level) = level else { return };
     let (Ok((pe, p)), Ok(c)) = (player.single(), cam.single()) else { return };
     let use_key = bind.key(Act::Use);

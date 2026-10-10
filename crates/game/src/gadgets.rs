@@ -222,6 +222,7 @@ impl Grenade {
 /// no inventory ammunition when thrown back.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn grenade_focus(
+    paused: Res<crate::hud::Paused>,
     (keys, mouse, bind): (Res<ButtonInput<KeyCode>>, Res<ButtonInput<MouseButton>>, Res<crate::bindings::Bindings>),
     mut focus: ResMut<crate::interact::InteractFocus>,
     mut held: ResMut<crate::props::Held>,
@@ -232,6 +233,7 @@ pub(crate) fn grenade_focus(
     (stats, attrs, carry, possession, peek): (Res<PlayerStats>, Res<crate::gamedata::Attrs>, Res<crate::carry::Carry>, Res<crate::possession::Possession>, Res<crate::keyhole::Peek>),
     mut sfx: MessageWriter<PostEvent>,
 ) {
+    if paused.0 { return; }
     let (Ok((pe, p)), Ok(camera)) = (player.single(), cam.single()) else { return };
     let use_key = bind.key(crate::bindings::Act::Use);
     if let Some(e) = held.0 {

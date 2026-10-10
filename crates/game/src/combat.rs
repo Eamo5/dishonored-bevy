@@ -85,6 +85,7 @@ fn lock_blades(v: &mut Versus, e: Entity, npc: &mut Npc, at: Vec3, sfx: &mut Mes
 #[allow(clippy::too_many_arguments)]
 fn versus(
     time: Res<Time>,
+    paused: Res<crate::hud::Paused>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut v: ResMut<Versus>,
     data: Res<crate::gamedata::Data>,
@@ -94,6 +95,7 @@ fn versus(
     mut msgs: ResMut<HudMessages>,
     mut sfx: MessageWriter<crate::audio::PostEvent>,
 ) {
+    if paused.0 { return; }
     let Some(e) = v.npc else { return };
     let Ok((pt, mut p, mut sword)) = player.single_mut() else { return };
     let Ok((mut npc, nt)) = npcs.get_mut(e) else {
@@ -421,7 +423,7 @@ fn sword_input(
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
     cursor: Single<&CursorOptions>,
     scripted: Option<Res<crate::script::Scripted>>,
-    (mut stats, attrs, possession): (ResMut<PlayerStats>, Res<crate::gamedata::Attrs>, Res<crate::possession::Possession>),
+    (mut stats, attrs, possession, paused): (ResMut<PlayerStats>, Res<crate::gamedata::Attrs>, Res<crate::possession::Possession>, Res<crate::hud::Paused>),
     mut msgs: ResMut<HudMessages>,
     (mut hits, mut noise, mut sfx, mut rats): (MessageWriter<NpcHit>, MessageWriter<Noise>, MessageWriter<crate::audio::PostEvent>, MessageWriter<crate::swarm::KillRats>),
     mut player: Query<(Entity, &Transform, &mut Player, &mut Sword), Without<Npc>>,
@@ -431,6 +433,7 @@ fn sword_input(
     (strikeables, mut struck, held, mut world_hits): (Query<(&crate::gameplay::Strikeable, &GlobalTransform)>, MessageWriter<crate::gameplay::Struck>, Res<crate::props::Held>, MessageWriter<crate::worlddamage::WorldDamage>),
     (mut versus, rigs, settings, data): (ResMut<Versus>, Query<&crate::anim::Animator, With<Npc>>, Res<crate::settings::Settings>, Res<crate::gamedata::Data>),
 ) {
+    if paused.0 { return; }
     let Ok((pe, pt, mut p, mut sword)) = player.single_mut() else { return };
     if std::env::var("DH_ATTACK_LOG").is_ok() && mouse.just_pressed(MouseButton::Left) {
         info!("attack: versus {} busy {} carrying {} dead {} locked {} host {} unarmed {} sheathed {}", versus.npc.is_some(), held.busy(), carry.carrying(), stats.dead, p.locked, possession.host.is_some(), stats.unarmed, stats.sheathed);
@@ -681,8 +684,40 @@ fn sword_input(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
+mod pause_tests {
+    use super::*;
+
+    #[test]
+    fn releasing_block_in_a_menu_does_not_end_a_chokehold() {
+        let mut app = App::new();
+        app.init_resource::<Time>().init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::bindings::Bindings>().init_resource::<crate::kismet::ScriptSwitches>()
+            .init_resource::<PlayerStats>().init_resource::<crate::gamedata::Attrs>()
+            .init_resource::<crate::props::Held>().init_resource::<crate::carry::Carry>()
+            .init_resource::<crate::possession::Possession>().init_resource::<HudMessages>()
+            .insert_resource(crate::hud::Paused(true)).add_message::<NpcHit>()
+            .add_systems(Update, chokehold);
+        let target = app.world_mut().spawn_empty().id();
+        let player = app.world_mut().spawn((Player {
+            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
+            grounded: true, lean: 0.0, noclip: false, eye_height: crate::player::STAND_EYE,
+            locked: true, air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
+            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO,
+        }, Transform::IDENTITY, Choking { npc: target, t: 0.5, duration: 3.0 })).id();
+        app.update();
+        assert_eq!(app.world().get::<Choking>(player).map(|ch| ch.t), Some(0.5));
+        assert!(app.world().get::<Player>(player).unwrap().locked);
+        app.world_mut().resource_mut::<crate::hud::Paused>().0 = false;
+        app.update();
+        assert!(app.world().get::<Choking>(player).is_none());
+        assert!(!app.world().get::<Player>(player).unwrap().locked);
+    }
+}
+
 fn chokehold(
     mut commands: Commands,
+    paused: Res<crate::hud::Paused>,
     switches: Res<crate::kismet::ScriptSwitches>,
     time: Res<Time>,
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
@@ -694,6 +729,7 @@ fn chokehold(
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
     mut npcs: Query<(Entity, &mut Npc, &mut Transform), Without<Player>>,
 ) {
+    if paused.0 { return; }
     let Ok((pe, pt, mut p, choking)) = player.single_mut() else { return };
     if stats.dead {
         return;

@@ -113,6 +113,7 @@ pub fn master_clip(phase: CarryPhase, moving: bool) -> Option<&'static str> {
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn carry_input(
     mut commands: Commands,
+    paused: Res<crate::hud::Paused>,
     time: Res<Time>,
     (keys, mouse, bind): (Res<ButtonInput<KeyCode>>, Res<ButtonInput<MouseButton>>, Res<crate::bindings::Bindings>),
     focus: Res<InteractFocus>,
@@ -128,6 +129,7 @@ fn carry_input(
     mut used: MessageWriter<Interaction>,
     (arms, mut anims, npc_anims): (Query<&Animator, With<ArmsRoot>>, Query<&mut Animator, Without<ArmsRoot>>, Query<&crate::npc::NpcAnim>),
 ) {
+    if paused.0 { return; }
     let dt = time.delta_secs();
     carry.t += dt;
     let Ok((p, _)) = player.single() else { return };

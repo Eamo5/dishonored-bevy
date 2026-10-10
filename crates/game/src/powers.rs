@@ -397,14 +397,14 @@ pub(crate) fn bolt_focus(
     positions: Query<&Transform>,
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
     player: Query<(Entity, &Player)>,
-    (mut stats, attrs, mut held, carry, possession): (ResMut<PlayerStats>, Res<Attrs>, ResMut<crate::props::Held>, Res<crate::carry::Carry>, Res<crate::possession::Possession>),
+    (mut stats, attrs, mut held, carry, possession, paused): (ResMut<PlayerStats>, Res<Attrs>, ResMut<crate::props::Held>, Res<crate::carry::Carry>, Res<crate::possession::Possession>, Res<crate::hud::Paused>),
     rapier: ReadRapierContext,
     mut sound: MessageWriter<PostEvent>,
     mut log: ResMut<crate::pickuplog::PickupLog>,
     mut messages: ResMut<HudMessages>,
 ) {
     let (Ok((pe, p)), Ok(camera), Ok(ctx)) = (player.single(), cam.single(), rapier.single()) else { return };
-    if stats.dead || p.locked || held.busy() || carry.carrying() || possession.host.is_some() { return; }
+    if paused.0 || stats.dead || p.locked || held.busy() || carry.carrying() || possession.host.is_some() { return; }
     let eye = camera.translation();
     let direction = camera.forward().as_vec3();
     let nearest = bolts.iter().filter(|(_, b, _)| b.recoverable).filter_map(|(e, bolt, t)| {
@@ -471,10 +471,10 @@ fn select_power(
     mut powers: ResMut<Powers>,
     mut equipped: MessageWriter<PowerEquipped>,
     mut sfx: MessageWriter<PostEvent>,
-    (possession, choice): (Res<crate::possession::Possession>, Res<crate::choice::Choice>),
+    (possession, choice, paused): (Res<crate::possession::Possession>, Res<crate::choice::Choice>, Res<crate::hud::Paused>),
 ) {
     // the number keys answer a choice on screen
-    if possession.host.is_some() || choice.pending.is_some() {
+    if paused.0 || possession.host.is_some() || choice.pending.is_some() {
         return;
     }
     let list = shortcuts(&stats);
@@ -603,8 +603,15 @@ fn use_power(
         Res<crate::possession::PossessOverrides>,
     ),
     (mut swarm, mut gadget, mut blast, mut door_blast, mut kill_cams): (MessageWriter<crate::swarm::SummonSwarm>, MessageWriter<crate::gadgets::UseGadget>, MessageWriter<crate::gadgets::Explosion>, MessageWriter<crate::interact::DoorBlast>, MessageWriter<crate::killcam::StartKillCam>),
-    (mut aim, held): (ResMut<crate::aim::Aim>, Res<crate::props::Held>),
+    (mut aim, held, paused): (ResMut<crate::aim::Aim>, Res<crate::props::Held>, Res<crate::hud::Paused>),
 ) {
+    if paused.0 {
+        // Menu mouse releases must not spend mana or queue a Blink on resume.
+        powers.aiming = false;
+        powers.blink_target = None;
+        if let Ok((_, mut visibility)) = marker.single_mut() { *visibility = Visibility::Hidden; }
+        return;
+    }
     let dt = time.delta_secs();
     powers.cooldown = (powers.cooldown - dt).max(0.0);
     powers.fov_kick = (powers.fov_kick - dt * 3.0).max(0.0);
@@ -1208,6 +1215,7 @@ mod projectile_tests {
 #[allow(clippy::too_many_arguments)]
 fn cook_grenade(
     time: Res<Time>,
+    paused: Res<crate::hud::Paused>,
     tc: Res<TimeControl>,
     mouse: Res<ButtonInput<MouseButton>>,
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
@@ -1216,6 +1224,7 @@ fn cook_grenade(
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
     mut gadget: MessageWriter<crate::gadgets::UseGadget>,
 ) {
+    if paused.0 { return; }
     let Some((p, t)) = powers.cooking else { return };
     let Ok(cg) = cam.single() else { return };
     if stats.dead || powers.selected != p {
@@ -1239,11 +1248,91 @@ fn cook_grenade(
     }
 }
 
+#[cfg(test)]
+mod elixir_input_tests {
+    use super::*;
+
+    #[test]
+    fn menu_number_keys_do_not_change_equipped_power() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>().init_resource::<AccumulatedMouseScroll>()
+            .init_resource::<PlayerStats>().init_resource::<Powers>()
+            .init_resource::<crate::possession::Possession>().init_resource::<crate::choice::Choice>()
+            .insert_resource(crate::hud::Paused(true))
+            .add_message::<PowerEquipped>().add_message::<PostEvent>().add_systems(Update, select_power);
+        app.world_mut().resource_mut::<PlayerStats>().weapons = true;
+        app.world_mut().resource_mut::<Powers>().selected = Power::Empty;
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Digit1);
+        app.update();
+        assert_eq!(app.world().resource::<Powers>().selected, Power::Empty);
+        app.world_mut().resource_mut::<crate::hud::Paused>().0 = false;
+        app.update();
+        assert_eq!(app.world().resource::<Powers>().selected, Power::Pistol);
+    }
+
+    #[test]
+    fn paused_mouse_release_keeps_a_cooking_grenade_in_hand() {
+        let mut app = App::new();
+        let mut powers = Powers::default();
+        powers.selected = Power::Grenade;
+        powers.cooking = Some((Power::Grenade, 0.5));
+        app.init_resource::<Time>().init_resource::<TimeControl>()
+            .init_resource::<ButtonInput<KeyCode>>().init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<crate::bindings::Bindings>().init_resource::<PlayerStats>()
+            .insert_resource(crate::hud::Paused(true)).insert_resource(powers)
+            .add_message::<crate::gadgets::UseGadget>().add_systems(Update, cook_grenade);
+        app.world_mut().spawn((PlayerCamera, GlobalTransform::IDENTITY));
+        app.update();
+        assert_eq!(app.world().resource::<Powers>().cooking, Some((Power::Grenade, 0.5)));
+        assert_eq!(app.world().resource::<Messages<crate::gadgets::UseGadget>>().len(), 0);
+        app.world_mut().resource_mut::<crate::hud::Paused>().0 = false;
+        app.update();
+        assert!(app.world().resource::<Powers>().cooking.is_none());
+        assert_eq!(app.world().resource::<Messages<crate::gadgets::UseGadget>>().len(), 1);
+    }
+
+    #[test]
+    fn paused_menu_shortcuts_do_not_drink_elixirs() {
+        let mut app = App::new();
+        let mut stats = PlayerStats::default();
+        stats.health = 10.0;
+        stats.max_health = 100.0;
+        stats.mana = 10.0;
+        stats.max_mana = 100.0;
+        stats.mana_cap = 10.0;
+        stats.health_elixirs = 2;
+        stats.mana_elixirs = 2;
+        app.init_resource::<Time>().init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::bindings::Bindings>().init_resource::<Attrs>()
+            .init_resource::<HudMessages>().insert_resource(crate::hud::Paused(true))
+            .insert_resource(stats)
+            .add_message::<PostEvent>().add_systems(Update, regenerate);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyR);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyT);
+        app.update();
+        let stats = app.world().resource::<PlayerStats>();
+        assert_eq!((stats.health_elixirs, stats.mana_elixirs), (2, 2));
+        assert_eq!((stats.health, stats.mana), (10.0, 10.0));
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut().resource_mut::<crate::hud::Paused>().0 = false;
+        app.update();
+        assert_eq!(app.world().resource::<PlayerStats>().health_elixirs, 2);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release_all();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyR);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyT);
+        app.update();
+        let stats = app.world().resource::<PlayerStats>();
+        assert_eq!((stats.health_elixirs, stats.mana_elixirs), (1, 1));
+        assert!(stats.health > 10.0 && stats.mana > 10.0);
+    }
+}
+
 /// Mana and health regeneration (the original's step regeneration up to a cap) and elixirs
 /// (`GBA_HealthElixir` R, `GBA_ManaElixir` T).
 #[allow(clippy::too_many_arguments)]
 fn regenerate(
     time: Res<Time>,
+    paused: Res<crate::hud::Paused>,
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
     attrs: Res<Attrs>,
     mut stats: ResMut<PlayerStats>,
@@ -1251,6 +1340,7 @@ fn regenerate(
     mut sfx: MessageWriter<PostEvent>,
     mut last_health: Local<f32>,
 ) {
+    if paused.0 { return; }
     let dt = time.delta_secs();
     stats.damage_flash = (stats.damage_flash - dt * 1.5).max(0.0);
     if stats.dead {

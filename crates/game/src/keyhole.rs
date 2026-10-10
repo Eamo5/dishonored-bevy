@@ -99,6 +99,7 @@ fn spawn_mask(mut commands: Commands, mut ui: ResMut<crate::ui_images::UiImages>
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn keyhole_input(
     time: Res<Time>,
+    paused: Res<crate::hud::Paused>,
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<Bindings>),
     level: Option<Res<LevelInfo>>,
     mut peek: ResMut<Peek>,
@@ -110,6 +111,7 @@ fn keyhole_input(
     mut mask: Query<&mut Visibility, With<Mask>>,
     mut used: MessageWriter<Interaction>,
 ) {
+    if paused.0 { return; }
     let Some(level) = level else { return };
     let Ok((pt, mut p)) = player.single_mut() else { return };
     let use_key = bind.key(Act::Use);

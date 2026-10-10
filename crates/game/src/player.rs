@@ -200,6 +200,66 @@ fn cursor_grab(
     let _ = keys;
 }
 
+#[cfg(test)]
+mod look_tests {
+    use super::*;
+
+    #[test]
+    fn smoothing_does_not_replay_motion_after_wheel_or_cursor_release() {
+        let mut app = App::new();
+        app.init_resource::<AccumulatedMouseMotion>()
+            .insert_resource(MouseSettings { smoothing: true, ..default() })
+            .init_resource::<crate::wheel::Wheel>()
+            .init_resource::<crate::zoom::Zoom>()
+            .init_resource::<crate::aim::Aim>()
+            .init_resource::<Paused>()
+            .add_systems(Update, player_look);
+        let cursor = app.world_mut().spawn(CursorOptions { grab_mode: CursorGrabMode::Locked, ..default() }).id();
+        let player = app.world_mut().spawn((Player {
+            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
+            grounded: false, lean: 0.0, noclip: false, eye_height: STAND_EYE, locked: false,
+            air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0, fall_speed: 0.0,
+            power_jump: 0.0, pull: Vec3::ZERO,
+        }, Transform::IDENTITY)).id();
+        for mode in 0..3 {
+            app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::new(100.0, 50.0);
+            app.update();
+            let before = app.world().get::<Player>(player).map(|p| (p.yaw, p.pitch)).unwrap();
+            if mode == 0 { app.world_mut().resource_mut::<crate::wheel::Wheel>().open = true; }
+            else if mode == 1 { app.world_mut().get_mut::<CursorOptions>(cursor).unwrap().grab_mode = CursorGrabMode::None; }
+            else { app.world_mut().resource_mut::<Paused>().0 = true; }
+            app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::splat(500.0);
+            app.update();
+            assert_eq!(app.world().get::<Player>(player).map(|p| (p.yaw, p.pitch)).unwrap(), before);
+            app.world_mut().resource_mut::<crate::wheel::Wheel>().open = false;
+            app.world_mut().resource_mut::<Paused>().0 = false;
+            app.world_mut().get_mut::<CursorOptions>(cursor).unwrap().grab_mode = CursorGrabMode::Locked;
+            app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::ZERO;
+            app.update();
+            assert_eq!(app.world().get::<Player>(player).map(|p| (p.yaw, p.pitch)).unwrap(), before);
+        }
+        app.world_mut().resource_mut::<MouseSettings>().smoothing = false;
+        app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::splat(100.0);
+        app.update();
+        let before = app.world().get::<Player>(player).map(|p| (p.yaw, p.pitch)).unwrap();
+        app.world_mut().resource_mut::<MouseSettings>().smoothing = true;
+        app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::ZERO;
+        app.update();
+        assert_eq!(app.world().get::<Player>(player).map(|p| (p.yaw, p.pitch)).unwrap(), before);
+
+        app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::splat(100.0);
+        app.update();
+        let mut replacement = app.world_mut().entity_mut(player).take::<Player>().unwrap();
+        app.world_mut().despawn(player);
+        replacement.yaw = 0.0;
+        replacement.pitch = 0.0;
+        let next_player = app.world_mut().spawn((replacement, Transform::IDENTITY)).id();
+        app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::ZERO;
+        app.update();
+        assert_eq!(app.world().get::<Player>(next_player).map(|p| (p.yaw, p.pitch)).unwrap(), (0.0, 0.0));
+    }
+}
+
 fn player_look(
     motion: Res<AccumulatedMouseMotion>,
     cursor: Single<&CursorOptions>,
@@ -207,19 +267,24 @@ fn player_look(
     settings: Res<MouseSettings>,
     mut q: Query<(&mut Player, &mut Transform), Without<PlayerCamera>>,
     mut cam: Query<&mut Transform, With<PlayerCamera>>,
-    (wheel, zoom, aim): (Res<crate::wheel::Wheel>, Res<crate::zoom::Zoom>, Res<crate::aim::Aim>),
+    (wheel, zoom, aim, paused): (Res<crate::wheel::Wheel>, Res<crate::zoom::Zoom>, Res<crate::aim::Aim>, Res<Paused>),
     mut last: Local<Vec2>,
 ) {
-    let Ok((mut p, mut t)) = q.single_mut() else { return };
+    let Ok((mut p, mut t)) = q.single_mut() else { *last = Vec2::ZERO; return };
+    if p.is_added() { *last = Vec2::ZERO; }
     // the wheel takes the mouse while it's open; the lens slows the aim
-    if cursor.grab_mode != CursorGrabMode::None && scripted.is_none() && !wheel.open {
+    if !paused.0 && cursor.grab_mode != CursorGrabMode::None && scripted.is_none() && !wheel.open {
         let raw = motion.delta;
         let d = if settings.smoothing { (raw + *last) * 0.5 } else { raw };
-        *last = raw;
+        *last = if settings.smoothing { raw } else { Vec2::ZERO };
         let sens = settings.sensitivity / zoom.factor.max(1.0);
         p.yaw -= d.x * sens;
         let dy = if settings.invert_y { -d.y } else { d.y };
         p.pitch = (p.pitch - dy * sens).clamp(-1.5, 1.5);
+    } else {
+        // Menu/wheel motion belongs to the UI. Do not replay the last gameplay
+        // delta through the smoothing filter when mouse-look resumes.
+        *last = Vec2::ZERO;
     }
     t.rotation = Quat::from_rotation_y(p.yaw);
     if let Ok(mut ct) = cam.single_mut() {
@@ -240,7 +305,7 @@ fn player_move(
     (mut msgs, attrs): (ResMut<HudMessages>, Res<crate::gamedata::Attrs>),
     (swim, waters, carry, possession): (Res<crate::swim::Swim>, Option<Res<crate::swim::Waters>>, Res<crate::carry::Carry>, Res<crate::possession::Possession>),
     (mut climb, climbables, mut sfx): (ResMut<crate::climb::Climb>, Option<Res<crate::climb::Climbables>>, MessageWriter<crate::audio::PostEvent>),
-    (cine, settings): (Res<crate::script_world::Cinematic>, Res<crate::settings::Settings>),
+    (cine, settings, paused): (Res<crate::script_world::Cinematic>, Res<crate::settings::Settings>, Res<Paused>),
     mut q: Query<(
         Entity,
         &mut Player,
@@ -251,6 +316,10 @@ fn player_move(
     )>,
 ) {
     let Ok((entity, mut p, mut t, mut kcc, mut col, out)) = q.single_mut() else { return };
+    if paused.0 {
+        kcc.translation = None;
+        return;
+    }
     let dt = time.delta_secs().min(0.05);
     if keys.just_pressed(KeyCode::KeyV) {
         p.noclip = !p.noclip;
@@ -543,6 +612,7 @@ fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, t: &Trans
 
 fn mantle(
     time: Res<Time>,
+    paused: Res<Paused>,
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
     rapier: ReadRapierContext,
     stats: Res<PlayerStats>,
@@ -551,6 +621,7 @@ fn mantle(
     mut spot: ResMut<MantleSpot>,
 ) {
     spot.0 = false;
+    if paused.0 { return; }
     let Ok((e, mut p, mut t)) = q.single_mut() else { return };
     if let Some((from, to, k)) = p.mantle {
         // Acrobat modifies MantleAnimRate; the head's additive mantle clip uses

@@ -559,6 +559,7 @@ fn find_focus(
 #[allow(clippy::too_many_arguments)]
 pub fn use_focus(
     mut commands: Commands,
+    paused: Res<crate::hud::Paused>,
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
     focus: Res<InteractFocus>,
     mut stats: ResMut<PlayerStats>,
@@ -572,6 +573,7 @@ pub fn use_focus(
     (level, mut timed, data, mut ambients, mut read, attrs): (Option<Res<LevelInfo>>, ResMut<crate::audio::TimedSounds>, Res<crate::gamedata::Data>, ResMut<crate::audio::Ambients>, MessageWriter<crate::journal::ReadNote>, Res<crate::gamedata::Attrs>),
     (keyholes, peek, mut plog, mut tw): (Query<(), With<crate::keyhole::KeyholeDoor>>, Res<crate::keyhole::Peek>, ResMut<crate::pickuplog::PickupLog>, ResMut<crate::tutwindow::TutorialWindow>),
 ) {
+    if paused.0 { return; }
     let use_key = bind.key(crate::bindings::Act::Use);
     let Some(e) = focus.1 else { return };
     // a shut door with a keyhole: a tap (on release) opens it, a hold looks through

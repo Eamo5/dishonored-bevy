@@ -368,6 +368,7 @@ fn tank_seats(
 /// [Use] holding a whale oil tank at an empty receptacle: the tank goes in.
 #[allow(clippy::too_many_arguments)]
 fn insert_tank(
+    paused: Res<crate::hud::Paused>,
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
     level: Option<Res<LevelInfo>>,
     devices: Res<Devices>,
@@ -378,6 +379,7 @@ fn insert_tank(
     cam: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
     mut focus: ResMut<crate::interact::InteractFocus>,
 ) {
+    if paused.0 { return; }
     let (Some(level), Some(e)) = (level, held.0) else { return };
     let Ok(p) = props.get(e) else { return };
     if level.scene.movables.get(p.index).is_none_or(|m| m.tank.is_none()) {
