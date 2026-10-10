@@ -6453,25 +6453,29 @@ struct AnimLayout {
 /// another character's skeleton that has them all provides the order.
 fn anim_layout(set: &Obj, p: &PendingAnims, refs: &[&[String]]) -> Result<AnimLayout> {
     let od = upk::read_object(&set.pkg, set.idx)?;
-    let mut tracks = HashSet::new();
-    let mut count = 0;
+    let mut tracks = Vec::new();
     if let Some((n, offset, _)) = od.props.array("TrackBoneNames") {
         let mut r = Reader::at(&set.pkg.data, offset);
         for _ in 0..n {
-            tracks.insert(set.pkg.read_name(&mut r)?.to_ascii_lowercase());
-        }
-        count = n;
-    }
-    let filter = |bones: &[String]| -> Vec<String> { bones.iter().filter(|b| tracks.contains(&b.to_ascii_lowercase())).cloned().collect() };
-    let mut names = filter(&p.bones);
-    if names.len() != count {
-        if let Some(r) = refs.iter().map(|r| filter(r)).find(|n| n.len() == count) {
-            names = r;
+            tracks.push(set.pkg.read_name(&mut r)?);
         }
     }
+    let names = animation_binding_names(&tracks, &p.bones, refs);
     let root = p.bones.first().and_then(|r| names.iter().position(|n| n.eq_ignore_ascii_case(r)));
     let hash = anim_layout_hash(&names, root, p.root_rot, p.root_offset);
     Ok(AnimLayout { names, root, root_rot: p.root_rot, root_offset: p.root_offset, hash })
+}
+
+fn animation_binding_names(tracks: &[String], bones: &[String], refs: &[&[String]]) -> Vec<String> {
+    let keys: HashSet<_> = tracks.iter().map(|t| t.to_ascii_lowercase()).collect();
+    let filter = |bones: &[String]| bones.iter().filter(|b| keys.contains(&b.to_ascii_lowercase())).cloned().collect::<Vec<_>>();
+    let names = filter(bones);
+    if names.len() == tracks.len() { return names; }
+    refs.iter().map(|r| filter(r)).find(|n| n.len() == tracks.len()).unwrap_or_else(|| {
+        // Some original devices reference a clip for an unrelated rig. Keep its
+        // timeline/notifies and source names; runtime binding ignores absent bones.
+        tracks.to_vec()
+    })
 }
 
 /// Every binding input that changes cooked tracks belongs in the cache identity.
@@ -6483,7 +6487,7 @@ fn anim_layout_hash(names: &[String], root: Option<usize>, rotation: glam::Quat,
             h = (h ^ x as u32).wrapping_mul(0x0100_0193);
         }
     };
-    eat(b"anim-layout-v2/");
+    eat(b"anim-layout-v3/");
     for n in names {
         eat(n.to_ascii_lowercase().as_bytes());
         eat(b"/");
@@ -6498,6 +6502,20 @@ fn anim_layout_hash(names: &[String], root: Option<usize>, rotation: glam::Quat,
 #[cfg(test)]
 mod anim_cache_tests {
     use super::*;
+
+    #[test]
+    fn unmatched_animation_rigs_keep_source_tracks_without_partial_reindexing() {
+        let tracks = vec!["Root_jnt".into(), "rope_right_jnt".into(), "Cart_jnt".into()];
+        let launcher = vec!["Root_trap_jnt".into(), "launcher_jnt".into()];
+        assert_eq!(animation_binding_names(&tracks, &launcher, &[]), tracks);
+        let partial = vec!["Root_jnt".into(), "Other_jnt".into()];
+        assert_eq!(animation_binding_names(&tracks, &partial, &[]), tracks);
+        let reference = vec!["root_jnt".into(), "Cart_jnt".into(), "rope_right_jnt".into(), "Extra_jnt".into()];
+        let expected = reference[..3].to_vec();
+        assert_eq!(animation_binding_names(&tracks, &launcher, &[&reference]), expected);
+        assert_eq!(animation_binding_names(&tracks, &reference, &[]), expected);
+        assert!(animation_binding_names(&[], &launcher, &[]).is_empty());
+    }
 
     #[test]
     fn animation_cache_distinguishes_root_binding_and_component_transforms() {
@@ -6599,7 +6617,8 @@ fn cook_anim_set(set: &Obj, layout: &AnimLayout, path: &Path) -> Result<bool> {
         let (Ok(_), Ok(len)) = (r.i32(), r.i32()) else { continue };
         let Ok(blob) = r.bytes(len.max(0) as usize) else { continue };
         let a = match edge::EdgeAnim::decode(blob) {
-            Ok(a) if a.num_joints == layout.names.len() => a,
+            // A zero-track sequence can still carry duration and sound notifies.
+            Ok(a) if a.num_joints == 0 || a.num_joints == layout.names.len() => a,
             _ => {
                 skipped += 1;
                 continue;

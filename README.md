@@ -987,6 +987,18 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- The trap-clip audit found an authored mismatch: prison-sewer launcher meshes
+  have `Root_trap_jnt`/`launcher_jnt`, while `TripodTrap_Fire` addresses seven other
+  bones. The cooker now retains source names when no complete reference rig fits,
+  preserving timelines/notifies instead of dropping those clips. Zero-track clips
+  also survive (`TripodTrap_Defuse`). Scene version 103 and animation-layout v3
+  invalidate old caches. Four cooker and 95 game tests pass
+  (`cache/parity_trap_animation_suite.log`). Automatic recooking produced both clips;
+  a stopped-time runtime save/load retained launcher 0's `TripodTrap_Fire` cursor
+  exactly (`cache/parity_trap_animation_runtime.log`,
+  `cache/parity_trap_animation_audit.log`). Unmatched bones remain unbound; this does
+  not establish original visual motion for that mismatched device.
+
 - Trap saves now retain launcher firing progress, triggered/disarmed state,
   animation cursor/rate/sound settings and in-flight darts. Dart source colliders
   remap by trap index; trails use the remaining lifetime. The optional snapshot
