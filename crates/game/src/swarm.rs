@@ -736,6 +736,13 @@ mod kill_tests {
             assert_eq!(app.world().get::<Transform>(rat).unwrap().translation, Vec3::ZERO);
             assert_eq!(app.world().get::<Animator>(rat).unwrap().time_scale, 0.0);
         }
+        app.world_mut().entity_mut(rat).insert(crate::possession::Possessed);
+        app.update();
+        assert_eq!(app.world().get::<Animator>(rat).unwrap().time_scale, 1.0);
+        assert_eq!(app.world().get::<Transform>(rat).unwrap().translation, Vec3::ZERO, "the swarm must not steer Corvo's host");
+        app.world_mut().entity_mut(rat).remove::<crate::possession::Possessed>();
+        app.update();
+        assert_eq!(app.world().get::<Animator>(rat).unwrap().time_scale, 0.0);
         app.world_mut().resource_mut::<TimeControl>().world_dilation = 0.5;
         app.update();
         let r = app.world().get::<Rat>(rat).unwrap();
@@ -1243,7 +1250,7 @@ fn move_rats(
     tc: Res<TimeControl>,
     rapier: ReadRapierContext,
     swarms: Query<(&Swarm, &Transform)>,
-    mut rats: Query<(&mut Rat, &mut Transform, &mut Animator), (Without<Swarm>, Without<crate::possession::Possessed>)>,
+    mut rats: Query<(&mut Rat, &mut Transform, &mut Animator, Has<crate::possession::Possessed>), Without<Swarm>>,
 ) {
     let dt = time.delta_secs() * tc.world_scale().max(0.0);
     let ctx = rapier.single().ok();
@@ -1251,7 +1258,12 @@ fn move_rats(
     for (s, st) in &swarms {
         let busy = s.target.is_some() || s.eating.is_some();
         for (k, &re) in s.rats.iter().enumerate() {
-            let Ok((mut r, mut t, mut a)) = rats.get_mut(re) else { continue };
+            let Ok((mut r, mut t, mut a, possessed)) = rats.get_mut(re) else { continue };
+            if possessed {
+                a.time_scale = 1.0;
+                a.frozen = false;
+                continue;
+            }
             a.time_scale = tc.world_scale().max(0.0);
             if dt <= 0.0 { continue; }
             let c = clips(&a);

@@ -186,6 +186,40 @@ mod cover_tests {
     struct Reachable(bool);
 
     #[test]
+    fn fish_animation_clock_stops_resumes_and_follows_possession() {
+        let mut app = App::new();
+        app.init_resource::<Time>().init_resource::<TimeControl>().init_resource::<crate::settings::Settings>()
+            .init_resource::<Swim>().init_resource::<PlayerStats>().init_resource::<HudMessages>()
+            .init_resource::<crate::possession::Possession>().add_message::<PostEvent>()
+            .add_systems(Update, fish_brain);
+        let skeleton = dhcook::format::SkeletonDef::default();
+        let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![]));
+        let entity = app.world_mut().spawn((Fish { index: 0, home: Vec3::ZERO, goal: Vec3::ZERO,
+            doing: Doing::Roam, bite_t: 0.0, vel: Vec3::ZERO, clips: FishClips::default(), collider: Entity::PLACEHOLDER },
+            Transform::default(), Animator::new(lib, &skeleton, vec![]))).id();
+        // No level/water is needed to update clocks, including a zero-delta load frame.
+        app.world_mut().resource_mut::<TimeControl>().bend_remaining = 10.0;
+        app.update();
+        assert_eq!(app.world().get::<Animator>(entity).unwrap().time_scale, 0.0);
+        app.world_mut().resource_mut::<TimeControl>().world_dilation = 0.25;
+        app.update();
+        assert_eq!(app.world().get::<Animator>(entity).unwrap().time_scale, 0.25);
+        app.world_mut().get_mut::<Animator>(entity).unwrap().frozen = true;
+        app.world_mut().entity_mut(entity).insert(crate::possession::Possessed);
+        app.update();
+        let anim = app.world().get::<Animator>(entity).unwrap();
+        assert_eq!(anim.time_scale, 1.0);
+        assert!(!anim.frozen);
+        app.world_mut().entity_mut(entity).remove::<crate::possession::Possessed>();
+        app.world_mut().resource_mut::<TimeControl>().world_dilation = 0.0;
+        app.update();
+        assert_eq!(app.world().get::<Animator>(entity).unwrap().time_scale, 0.0);
+        app.world_mut().resource_mut::<TimeControl>().bend_remaining = 0.0;
+        app.update();
+        assert_eq!(app.world().get::<Animator>(entity).unwrap().time_scale, 1.0);
+    }
+
+    #[test]
     fn nearby_fish_targets_require_clear_water_through_world_and_prop_cover() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
@@ -229,6 +263,12 @@ fn fish_brain(
     mut sfx: MessageWriter<PostEvent>,
     mut eaten: Local<HashMap<Entity, f32>>,
 ) {
+    // Update animation clocks even when the brain cannot advance. Possessed
+    // creatures follow Corvo's clock, including when entered during Bend Time.
+    for (_, _, mut anim, _, possessed) in &mut fish {
+        anim.time_scale = if possessed { 1.0 } else { tc.world_scale().max(0.0) };
+        if possessed { anim.frozen = false; }
+    }
     let (Some(level), Some(waters)) = (level, waters) else { return };
     let dt = time.delta_secs() * tc.world_scale();
     if dt <= 0.0 {
@@ -263,7 +303,6 @@ fn fish_brain(
             f.goal = me;
             continue;
         }
-        a.time_scale = tc.world_scale();
         // far from the eye the skeleton rests (`m_fSkeletonUpdateDistanceMax`)
         a.frozen = eye.is_some_and(|e| e.distance(me) > 30.0);
         if let Doing::Dead(s) = f.doing {

@@ -987,6 +987,13 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Hagfish animation clocks now update before the stopped-time/level-data early
+  returns, so Bend Time freezes both AI and skeletal playback. Possessed fish and
+  rats use Corvo's animation clock instead of retaining a previously frozen world
+  clock; releasing them reapplies the world rate. Regressions cover stopped/slowed
+  time, possession/release, culling freeze removal and zero-delta load frames.
+  All 81 tests pass (`cache/parity_creature_clocks_suite.log`).
+
 - Wild/summoned swarm centres and individual rats now sweep a small ground-level
   volume against world and movable cover before moving. Thin obstacles cannot be
   crossed between frames; sensors neither obstruct travel nor provide ground support.
