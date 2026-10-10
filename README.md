@@ -987,6 +987,12 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Possessed river krusts now ignore paused menu input and reset their animation
+  clock to Corvo's rate, clearing a stale frozen state from Bend Time. A gameplay
+  regression verifies menu clicks do not queue firing, unpause alone does not fire,
+  and a fresh gameplay click does. All 85 tests pass
+  (`cache/parity_krust_input_suite.log`).
+
 - River-krust blasts now measure range to the shell collider and check world/prop
   cover, ignoring the target's own shell and trigger sensors. Combat death and
   dead-log restoration remove possession eligibility. Regression coverage includes

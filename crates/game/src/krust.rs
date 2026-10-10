@@ -153,6 +153,52 @@ impl Krust {
 mod cover_tests {
     use super::*;
 
+    fn test_krust(collider: Entity) -> Krust {
+        let socket = (Entity::PLACEHOLDER, Transform::IDENTITY);
+        Krust {
+            facing: Vec3::X, index: 0, state: AGGRESSIVE, mode: Mode::Aggressive, hp: 10.0,
+            near_t: 0.0, away_t: 0.0, exit_delay: 0.0, volley: 0.0, shots: 0, fired: false,
+            death_fx: false, reaction: 0.0, lost: 0.0, order: None, launch: socket, spew: socket,
+            vision: socket, center: Entity::PLACEHOLDER, pearl: None, pearl_pickup: None,
+            pearl_lying: false, collider, eye: Vec3::ZERO, blocked: None,
+        }
+    }
+
+    #[test]
+    fn possessed_krust_ignores_menu_clicks_and_restores_player_animation_clock() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<MouseButton>>().insert_resource(crate::hud::Paused(true))
+            .init_resource::<crate::settings::Settings>()
+            .insert_resource(LevelInfo { scene: dhcook::format::Scene { krusts: vec![KrustDef::default()], ..default() } })
+            .add_message::<SpawnEffect>().add_systems(Update, possessed_krust);
+        let skeleton = dhcook::format::SkeletonDef::default();
+        let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![]));
+        let mut anim = Animator::new(lib, &skeleton, vec![]);
+        anim.time_scale = 0.0;
+        anim.frozen = true;
+        let mut krust = test_krust(Entity::PLACEHOLDER);
+        krust.state = POSSESSED;
+        let entity = app.world_mut().spawn((krust, anim, crate::possession::Possessed)).id();
+        app.world_mut().spawn((PlayerCamera, GlobalTransform::IDENTITY));
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        let k = app.world().get::<Krust>(entity).unwrap();
+        assert_eq!(k.state, POSSESSED);
+        assert!(k.order.is_none());
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().reset_all();
+        app.world_mut().resource_mut::<crate::hud::Paused>().0 = false;
+        app.update();
+        assert_eq!(app.world().get::<Krust>(entity).unwrap().state, POSSESSED);
+        let anim = app.world().get::<Animator>(entity).unwrap();
+        assert_eq!(anim.time_scale, 1.0);
+        assert!(!anim.frozen);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        let k = app.world().get::<Krust>(entity).unwrap();
+        assert_eq!(k.state, FIRING);
+        assert!(k.order.is_some());
+    }
+
     #[test]
     fn krust_blasts_use_shell_position_cover_and_remove_dead_hosts() {
         let mut app = App::new();
@@ -166,15 +212,8 @@ mod cover_tests {
             CollisionGroups::new(GROUP_PROP, Group::ALL), Strikeable(Entity::PLACEHOLDER))).id();
         let skeleton = dhcook::format::SkeletonDef::default();
         let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![]));
-        let socket = (Entity::PLACEHOLDER, Transform::IDENTITY);
         let host = crate::possession::Host { npc_type: None, rooted: true, fish: false, seat: Vec3::ZERO, facing: Vec3::X };
-        let entity = app.world_mut().spawn((Krust {
-            facing: Vec3::X, index: 0, state: AGGRESSIVE, mode: Mode::Aggressive, hp: 10.0,
-            near_t: 0.0, away_t: 0.0, exit_delay: 0.0, volley: 0.0, shots: 0, fired: false,
-            death_fx: false, reaction: 0.0, lost: 0.0, order: None, launch: socket, spew: socket,
-            vision: socket, center: Entity::PLACEHOLDER, pearl: None, pearl_pickup: None,
-            pearl_lying: false, collider: shell, eye: Vec3::ZERO, blocked: None,
-        }, Animator::new(lib, &skeleton, vec![]), Transform::from_xyz(20.0, 0.0, 0.0), host)).id();
+        let entity = app.world_mut().spawn((test_krust(shell), Animator::new(lib, &skeleton, vec![]), Transform::from_xyz(20.0, 0.0, 0.0), host)).id();
         let cover = app.world_mut().spawn((Transform::from_xyz(1.0, 0.0, 0.0), Collider::cuboid(0.01, 2.0, 2.0),
             CollisionGroups::new(GROUP_WORLD, Group::ALL))).id();
         let blast = |app: &mut App| {
@@ -817,6 +856,7 @@ fn krust_brain(
 fn possessed_krust(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
+    paused: Res<crate::hud::Paused>,
     (level, settings): (Option<Res<LevelInfo>>, Res<crate::settings::Settings>),
     rapier: ReadRapierContext,
     player: Query<Entity, With<Player>>,
@@ -825,12 +865,16 @@ fn possessed_krust(
     joints: Query<&GlobalTransform>,
     mut fx: MessageWriter<SpawnEffect>,
 ) {
+    if paused.0 { return; }
     let Some(level) = level else { return };
     for (mut k, mut a) in &mut krusts {
         let Some(def) = level.scene.krusts.get(k.index as usize) else { continue };
         if k.dead() {
             continue;
         }
+        // Corvo's host must not retain the world's stopped/slowed clock.
+        a.time_scale = 1.0;
+        a.frozen = false;
         if k.state == FIRING {
             let t = a.current().map(|c| c.t).unwrap_or(0.0);
             if !k.fired && t >= FIRE_AT {
