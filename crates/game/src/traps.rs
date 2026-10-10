@@ -64,6 +64,7 @@ pub struct TrapPart {
     wire: (Vec3, Vec3),
     /// its sockets: (name, joint, offset from the joint)
     sockets: Vec<(String, Entity, Transform)>,
+    collider: Option<Entity>,
 }
 
 impl TrapPart {
@@ -84,6 +85,7 @@ impl TrapPart {
 #[derive(Component)]
 struct Dart {
     trap: u32,
+    source: Option<Entity>,
     vel: Vec3,
     gravity: f32,
     life: f32,
@@ -154,13 +156,14 @@ fn spawn_trap(commands: &mut Commands, vis: &crate::level::NpcVisual, def: &Trap
         let b = at(&["wheel_right_jnt1", "wheel_right_jnt"]).or_else(|| rope.first().map(|&i| root_tf.transform_point(model[i].translation)));
         (a.unwrap_or(root_tf.translation), b.unwrap_or(root_tf.translation))
     };
-    if def.launcher {
+    let collider = if def.launcher {
         // the tripod stands in the way
         let c = commands.spawn((Transform::from_translation(Vec3::Y * 0.35), Collider::cuboid(0.3, 0.35, 0.3), CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
         commands.entity(root).add_child(c);
-    }
+        Some(c)
+    } else { None };
     let mut ec = commands.entity(root);
-    ec.insert(TrapPart { index, launcher: def.launcher, sprung: false, disarmed: false, firing: None, wire, sockets });
+    ec.insert(TrapPart { index, launcher: def.launcher, sprung: false, disarmed: false, firing: None, wire, sockets, collider });
     if let Some(lib) = vis.anims.clone() {
         ec.insert(Animator::new(lib, &vis.skeleton, joints));
     }
@@ -298,7 +301,7 @@ fn launch(
         if !def.fly_sound.is_empty() {
             sfx.write(PostEvent::named(&def.fly_sound, Some(from)));
         }
-        let dart = commands.spawn((Dart { trap: t.index, vel, gravity: g, life: 5.0 }, Transform::from_translation(from), Visibility::default(), DespawnOnExit(GameState::InGame))).id();
+        let dart = commands.spawn((Dart { trap: t.index, source: t.collider, vel, gravity: g, life: 5.0 }, Transform::from_translation(from), Visibility::default(), DespawnOnExit(GameState::InGame))).id();
         if let Some(trail) = def.trail {
             fx.write(SpawnEffect { follow: Some(dart), system: Some(trail), secs: 5.0, ..SpawnEffect::at("", Vec3::ZERO) });
         }
@@ -333,7 +336,7 @@ fn fly_darts(
     level: Option<Res<LevelInfo>>,
     settings: Res<crate::settings::Settings>,
     mut darts: Query<(Entity, &mut Dart, &mut Transform)>,
-    player: Query<&Transform, (With<Player>, Without<Dart>)>,
+    player: Query<(&Transform, &Player), Without<Dart>>,
     npcs: Query<(Entity, &crate::npc::Npc, &Transform), Without<Dart>>,
     (mut stats, mut msgs): (ResMut<PlayerStats>, ResMut<HudMessages>),
     (mut blasts, mut hits): (MessageWriter<crate::gadgets::Explosion>, MessageWriter<NpcHit>),
@@ -342,8 +345,8 @@ fn fly_darts(
     let Some(level) = level else { return };
     let dt = time.delta_secs() * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
-    let walls = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
-    let pp = player.single().ok().map(|t| t.translation);
+    let walls = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
+    let pp = player.single().ok().map(|(t, p)| (t.translation, p.crouched));
     for (e, mut d, mut t) in &mut darts {
         d.life -= dt;
         let Some(def) = level.scene.traps.get(d.trap as usize).filter(|_| d.life > 0.0) else {
@@ -357,22 +360,24 @@ fn fly_darts(
             continue;
         }
         let a = t.translation;
-        // what it strikes first: a character in the way, else the world
-        let mut hit: Option<(Vec3, Option<Entity>, bool)> = None;
-        if let Some((ne, _, _)) = npcs.iter().find(|(_, n, nt)| {
-            !n.is_down() && crate::krust::segment_distance(a, a + step, nt.translation - Vec3::Y * crate::npc::NPC_HALF, nt.translation + Vec3::Y * crate::npc::NPC_HALF) < crate::npc::NPC_RADIUS + 0.05
-        }) {
-            hit = Some((a + step * 0.5, Some(ne), false));
-        }
-        if let Some(p) = pp.filter(|_| hit.is_none() && !stats.dead) {
-            let (lo, hi) = (p - Vec3::Y * crate::player::STAND_HALF, p + Vec3::Y * crate::player::STAND_HALF);
-            if crate::krust::segment_distance(a, a + step, lo, hi) < crate::player::RADIUS + 0.05 {
-                hit = Some((a + step * 0.5, None, true));
+        let direction = step / len;
+        let filter = d.source.map(|e| walls.exclude_collider(e)).unwrap_or(walls);
+        let wall = ctx.cast_ray_and_get_normal(a, direction, len, true, filter);
+        let mut nearest = wall.as_ref().map(|(_, h)| h.time_of_impact).unwrap_or(len);
+        let mut hit = wall.map(|(_, h)| (a + direction * h.time_of_impact + h.normal * 0.1, None, false));
+        for (ne, n, nt) in &npcs {
+            if n.is_down() { continue; }
+            if let Some(distance) = crate::krust::capsule_ray_hit(a, direction, nearest, nt.translation,
+                crate::npc::NPC_HALF, crate::npc::NPC_RADIUS + 0.05).filter(|d| hit.is_none() || *d < nearest) {
+                nearest = distance;
+                hit = Some((a + direction * distance, Some(ne), false));
             }
         }
-        if hit.is_none() {
-            if let Some((_, h)) = ctx.cast_ray_and_get_normal(a, step / len, len, true, walls) {
-                hit = Some((a + step / len * h.time_of_impact + h.normal * 0.1, None, false));
+        if let Some((p, crouched)) = pp.filter(|_| !stats.dead) {
+            let half = if crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF };
+            if let Some(distance) = crate::krust::capsule_ray_hit(a, direction, nearest, p, half, crate::player::RADIUS + 0.05)
+                .filter(|d| hit.is_none() || *d < nearest) {
+                hit = Some((a + direction * distance, None, true));
             }
         }
         let Some((at, npc, on_player)) = hit else {
@@ -399,6 +404,61 @@ fn fly_darts(
             }
         }
         commands.entity(e).despawn();
+    }
+}
+
+#[cfg(test)]
+mod projectile_tests {
+    use super::*;
+
+    #[test]
+    fn fast_darts_respect_cover_crouching_and_explode_at_first_contact() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>().init_resource::<TimeControl>().init_resource::<PlayerStats>()
+            .init_resource::<HudMessages>().init_resource::<crate::settings::Settings>()
+            .add_message::<NpcHit>().add_message::<PostEvent>().add_message::<crate::gadgets::Explosion>()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
+            .insert_resource(LevelInfo { scene: dhcook::format::Scene { traps: vec![dhcook::format::Trap { damage: 7.0, ..default() }], ..default() } })
+            .add_systems(Last, fly_darts);
+        let player = app.world_mut().spawn((Transform::from_xyz(3.0, 0.0, 0.0), Player {
+            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
+            grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
+            air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
+            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO,
+        })).id();
+        let source = app.world_mut().spawn((Collider::ball(0.8), Transform::default(), CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
+        let wall = app.world_mut().spawn((Collider::cuboid(0.01, 2.0, 2.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(GROUP_WORLD, Group::ALL))).id();
+        let fire = |app: &mut App, y| {
+            let e = app.world_mut().spawn((Dart { trap: 0, source: Some(source), vel: Vec3::X * 50.0, gravity: 0.0, life: 5.0 }, Transform::from_xyz(0.0, y, 0.0))).id();
+            app.update();
+            e
+        };
+        app.update();
+        let health = app.world().resource::<PlayerStats>().health;
+        for group in [GROUP_WORLD, GROUP_PROP] {
+            app.world_mut().entity_mut(wall).insert(CollisionGroups::new(group, Group::ALL));
+            let dart = fire(&mut app, 0.6);
+            assert!(app.world().get::<Dart>(dart).is_none());
+            assert_eq!(app.world().resource::<PlayerStats>().health, health);
+        }
+        app.world_mut().entity_mut(wall).insert(Sensor);
+        fire(&mut app, 0.6);
+        assert_eq!(app.world().resource::<PlayerStats>().health, health - 7.0);
+        app.world_mut().get_mut::<Player>(player).unwrap().crouched = true;
+        app.world_mut().get_mut::<Transform>(player).unwrap().translation.y = -0.4;
+        let overhead = fire(&mut app, 0.6);
+        assert!(app.world().get::<Dart>(overhead).is_some());
+        assert_eq!(app.world().resource::<PlayerStats>().health, health - 7.0);
+        fire(&mut app, -0.4);
+        assert_eq!(app.world().resource::<PlayerStats>().health, health - 14.0);
+        app.world_mut().entity_mut(wall).remove::<Sensor>();
+        app.world_mut().resource_mut::<LevelInfo>().scene.traps[0].blast = Some(dhcook::format::TrapBlast { damage: [20.0; 4], ..default() });
+        fire(&mut app, 0.0);
+        let blasts = app.world().resource::<Messages<crate::gadgets::Explosion>>();
+        let mut cursor = blasts.get_cursor();
+        let blast = cursor.read(blasts).next().unwrap();
+        assert!((blast.at.x - 0.89).abs() < 0.001, "blast must be on the near side of cover, not at a farther victim: {:?}", blast.at);
     }
 }
 

@@ -987,6 +987,13 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Trap darts now resolve capsule hits and solid world/prop impacts in travel order,
+  use Corvo's current stance, and exclude their source launcher and trigger sensors.
+  Explosive shots detonate at the first contact rather than a guessed midpoint.
+  The high-speed gameplay regression covers both cover groups, standing/crouching,
+  low shots and blast placement on the near side of cover. All 92 tests pass
+  (`cache/parity_trap_projectile_suite.log`).
+
 - Krust sight now checks movable props as well as world cover, excluding trigger
   sensors and its own shell. The perception-system regression verifies an unaware
   krust remains ambient behind either cover group, then becomes aggressive when

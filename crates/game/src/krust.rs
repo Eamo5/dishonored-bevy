@@ -1223,13 +1223,13 @@ fn fly_spit(
         // Resolve all candidates along the swept segment, not by entity iteration
         // order. A character behind the first solid impact cannot intercept it.
         let npc = npcs.iter().filter(|(_, n, _)| !n.is_down()).filter_map(|(ne, _, nt)| {
-            spit_capsule_hit(a, direction, limit, nt.translation, crate::npc::NPC_HALF, crate::npc::NPC_RADIUS + 0.1)
+            capsule_ray_hit(a, direction, limit, nt.translation, crate::npc::NPC_HALF, crate::npc::NPC_RADIUS + 0.1)
                 .filter(|hit| wall.is_none() || *hit < limit).map(|hit| (ne, nt.translation, hit))
         }).min_by(|a, b| a.2.total_cmp(&b.2));
         // Corvo (not while he's in a creature)
         if let Some((p, crouched)) = pp.filter(|_| !stats.dead && possession.body.is_none()) {
             let half = if crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF };
-            let player_hit = spit_capsule_hit(a, direction, limit, p + Vec3::Y * 0.05,
+            let player_hit = capsule_ray_hit(a, direction, limit, p + Vec3::Y * 0.05,
                 half + 0.15, crate::player::RADIUS + 0.12)
                 .filter(|hit| (wall.is_none() || *hit < limit) && npc.is_none_or(|n| *hit < n.2));
             if let Some(hit) = player_hit {
@@ -1266,7 +1266,7 @@ fn fly_spit(
     }
 }
 
-fn spit_capsule_hit(from: Vec3, direction: Vec3, distance: f32, center: Vec3, half: f32, radius: f32) -> Option<f32> {
+pub(crate) fn capsule_ray_hit(from: Vec3, direction: Vec3, distance: f32, center: Vec3, half: f32, radius: f32) -> Option<f32> {
     Collider::capsule_y(half, radius).cast_ray(center, Quat::IDENTITY, from, direction, distance, true)
 }
 
@@ -1363,13 +1363,13 @@ mod tests {
 
     #[test]
     fn spit_capsule_query_reports_entry_distance_and_respects_cover_limit() {
-        let near = spit_capsule_hit(Vec3::ZERO, Vec3::X, 10.0, Vec3::X * 2.0, 0.6, 0.4).unwrap();
-        let far = spit_capsule_hit(Vec3::ZERO, Vec3::X, 10.0, Vec3::X * 4.0, 0.6, 0.4).unwrap();
+        let near = capsule_ray_hit(Vec3::ZERO, Vec3::X, 10.0, Vec3::X * 2.0, 0.6, 0.4).unwrap();
+        let far = capsule_ray_hit(Vec3::ZERO, Vec3::X, 10.0, Vec3::X * 4.0, 0.6, 0.4).unwrap();
         // Convex ray casts use an iterative solver: require millimetre accuracy.
         assert!((near - 1.6).abs() < 0.001, "entry {near}");
         assert!((far - 3.6).abs() < 0.001, "entry {far}");
         assert!(near < far);
-        assert!(spit_capsule_hit(Vec3::ZERO, Vec3::X, 1.0, Vec3::X * 2.0, 0.6, 0.4).is_none());
+        assert!(capsule_ray_hit(Vec3::ZERO, Vec3::X, 1.0, Vec3::X * 2.0, 0.6, 0.4).is_none());
     }
 
     #[test]
