@@ -31,7 +31,7 @@ impl Plugin for SecurityPlugin {
 /// script actors.
 pub const SECURITY_USABLE: u32 = 0xFFFF_0000;
 
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Default, Debug, serde::Serialize, serde::Deserialize)]
 enum Phase {
     #[default]
     Idle,
@@ -51,6 +51,8 @@ pub struct Device {
     pub rewired: bool,
     phase: Phase,
     cooldown: f32,
+    /// Time a nearby fighting guard has spent approaching this alarm.
+    fighting_near: f32,
     /// walls of light: the wall's box (world -> local matrix and local bounds)
     wall: Option<(Mat4, Vec3, Vec3)>,
     /// level instances of the actor (tanks to hide)
@@ -105,6 +107,8 @@ pub struct Devices {
 pub struct DevicesSave {
     states: Vec<(usize, bool, bool)>,
     charges: Vec<(usize, f32)>,
+    #[serde(default)]
+    progress: Vec<(usize, Phase, f32, f32)>,
 }
 
 impl Device {
@@ -119,10 +123,23 @@ impl Devices {
         DevicesSave {
             states: self.list.iter().enumerate().map(|(i, d)| (i, d.rewired, d.off)).collect(),
             charges: props.filter_map(|(entity, index)| self.charges.get(&entity).map(|charge| (index, *charge))).collect(),
+            progress: self.list.iter().enumerate().map(|(i, d)| (i, d.phase, d.cooldown, d.fighting_near)).collect(),
         }
     }
 
     pub fn restore(&mut self, saved: DevicesSave, props: impl Iterator<Item = (Entity, usize)>) {
+        for d in &mut self.list {
+            d.phase = Phase::Idle;
+            d.cooldown = 0.0;
+            d.fighting_near = 0.0;
+        }
+        for (index, phase, cooldown, fighting_near) in saved.progress {
+            if let Some(d) = self.list.get_mut(index) {
+                d.phase = phase;
+                d.cooldown = cooldown;
+                d.fighting_near = fighting_near;
+            }
+        }
         for (index, rewired, off) in saved.states {
             if let Some(device) = self.list.get_mut(index) {
                 device.rewired = rewired;
@@ -256,6 +273,23 @@ mod save_tests {
     use super::*;
 
     #[test]
+    fn security_progress_restores_all_phases_and_legacy_saves_clear_stale_timers() {
+        let mut devices = Devices::default();
+        devices.list = [Phase::Charging(0.8), Phase::Firing(0.3), Phase::Ringing(12.0), Phase::Idle]
+            .into_iter().map(|phase| Device { phase, cooldown: 2.0, fighting_near: 3.5, ..default() }).collect();
+        let saved = serde_json::to_value(devices.save(std::iter::empty())).unwrap();
+        devices.list.reverse();
+        devices.restore(serde_json::from_value(saved.clone()).unwrap(), std::iter::empty());
+        assert_eq!(devices.list.iter().map(|d| d.phase).collect::<Vec<_>>(),
+            vec![Phase::Charging(0.8), Phase::Firing(0.3), Phase::Ringing(12.0), Phase::Idle]);
+        assert!(devices.list.iter().all(|d| d.cooldown == 2.0 && d.fighting_near == 3.5));
+        let mut legacy = saved;
+        legacy.as_object_mut().unwrap().remove("progress");
+        devices.restore(serde_json::from_value(legacy).unwrap(), std::iter::empty());
+        assert!(devices.list.iter().all(|d| d.phase == Phase::Idle && d.cooldown == 0.0 && d.fighting_near == 0.0));
+    }
+
+    #[test]
     fn security_round_trip_remaps_tanks_and_keeps_empty_tanks_empty() {
         let mut world = World::new();
         let old_empty = world.spawn_empty().id();
@@ -288,7 +322,7 @@ mod save_tests {
     #[test]
     fn missing_devices_and_tanks_in_an_older_level_do_not_break_restore() {
         let mut devices = Devices::default();
-        let saved = DevicesSave { states: vec![(99, true, true)], charges: vec![(42, 0.0)] };
+        let saved = DevicesSave { states: vec![(99, true, true)], charges: vec![(42, 0.0)], ..default() };
         devices.restore(saved, std::iter::empty());
         assert!(devices.list.is_empty());
         assert!(devices.charges.is_empty());
@@ -864,7 +898,6 @@ fn alarms(
     mut msgs: ResMut<HudMessages>,
     player: Query<&Transform, With<Player>>,
     mut npcs: Query<(&mut Npc, &Transform), Without<Player>>,
-    mut fighting_near: Local<HashMap<usize, f32>>,
     mut stats: ResMut<PlayerStats>,
 ) {
     let dt = time.delta_secs();
@@ -900,7 +933,7 @@ fn alarms(
                 // a guard fighting near the bell goes and rings it
                 let reach = d.def.params.get("m_fNPCGoToAlarmCloseness").copied().unwrap_or(3500.0) * 0.01;
                 let fighting = npcs.iter().any(|(n, t)| n.hostile() && n.mode == Mode::Combat && !n.is_down() && t.translation.distance(pos) < reach);
-                let w = fighting_near.entry(i).or_insert(0.0);
+                let w = &mut d.fighting_near;
                 *w = if fighting { *w + dt } else { 0.0 };
                 // the time it takes a guard to get there
                 if *w > 4.0 && d.cooldown <= 0.0 {

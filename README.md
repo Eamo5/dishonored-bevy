@@ -987,6 +987,14 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Security device snapshots now retain pylon charging/firing, alarm ringing,
+  cooldowns and guards' alarm-approach timers by stable device index. Approach timers
+  belong to the level's device state instead of a system-local map that survived
+  reloads. Older saves without progress reset these timers. All 100 game tests pass
+  (`cache/parity_security_progress_suite.log`), including every phase and legacy
+  restoration. Live mid-charge/mid-alarm save checks and the security world-time
+  audit remain outstanding.
+
 - Pending scripted tower volleys and control orders now persist in Kismet saves,
   including orders waiting for Bend Time to end. Loading replaces these queues;
   older saves default to empty queues. All 99 tests pass
