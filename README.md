@@ -987,8 +987,82 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Full-body cinematic, carrying and swimming poses now suppress the powers/ranged
+  overlay and held weapons. Normal equipment visibility returns afterward.
+  Boyle mid-ride and post-arrival captures verify scene-hand priority and recovery
+  (`cache/shots/parity_scene_hands{,_released}.png`); carrying with Crossbow selected
+  hides the weapon and throwing restores it (`cache/shots/parity_carry_overlay_{suppressed,released}.png`).
+  All 75 game tests pass (`cache/parity_fullbody_overlay_suite.log`).
+
+- Fixed cooker ordering that silently skipped player cinematic animation sets:
+  scene bindings are now collected after `cook_props` creates `player_arms`.
+  Scene version 102 triggers automatic recooking. Boyle's player rig now includes
+  `Ply_SC_Generic` with `SC_boat` and `SC_boat_Out`; the exit clip contains cooked
+  root movement [0.6112, 0.4527, -2.2051] metres. All 3 cooker and 74 game tests
+  pass (`cache/parity_player_scene_cook_suite.log`). The initial runtime fell into
+  water after arrival; subsequent source inspection showed no enabled root-snap
+  flag on Boyle's player group, so forcing `SC_boat_Out` was not justified.
+  The actual support failure was the ignored `Boat_Attach` prop socket.
+  (`cache/parity_boat_player_runtime.log`, `cache/parity_boat_animation_audit.log`).
+
+- Hagfish now require unobstructed water to acquire swimmers/corpses and retain
+  feeding targets. World geometry and movable cover also block swimming; trigger
+  sensors do not. The physics regression covers thin world/prop barriers within
+  bite range, removal and sensors; all 72 tests pass (`cache/parity_fish_cover_suite.log`).
+  Open-water bites still occurred after Boyle's arrival finished
+  (`cache/parity_fish_open_water.log`). An earlier arrival save/load capture showed
+  a displaced seated NPC (`cache/shots/parity_fish_cover_runtime.png`); cinematic
+  actor restoration was subsequently traced to applying boat movement twice.
+  Passenger snapshots now retain their pre-ride transform, remap it to the restored
+  NPC and install it before Matinee playback. NPC 17's base survived loading exactly;
+  Samuel remains seated beside Corvo in `cache/shots/parity_ride_{before,after}.png`.
+  All 73 tests pass, including a translated/rotated vehicle regression
+  (`cache/parity_ride_restore_runtime.log`, `cache/parity_ride_restore_suite.log`).
+  Player ride saves now likewise retain the active operation and pre-ride transform.
+  Boyle operation 1281 retained that matrix exactly across loading and cleared the
+  ride state after completion; all 74 tests pass (`cache/parity_player_ride_suite.log`).
+  The cached-map audit found no player Attach groups without explicit stage marks;
+  the no-mark fallback has a synthetic regression. Older mid-ride snapshots lack
+  these optional bases. The completion capture (`cache/shots/parity_ride_completed.png`)
+  showed Corvo in the water beside the boat. Prop rigs now expose named bones and
+  sockets to bound prop attachments, aligning the collision model with the boat.
+  Multiple platform writes are coalesced to frame endpoints, and scripted riding
+  suppresses additional platform carrying. The updated run includes mid-ride
+  save/load and ends grounded on the boat beside the dock, with stable facing
+  (`cache/shots/parity_boat_socket_{ride,end}.png`). All 75 tests pass, including
+  intermediate platform-transform regression (`cache/parity_boat_socket_suite.log`).
+  Player/NPC attachments retain the stage-mark path pending capsule-origin handling;
+  stretched-animation phase playback and wider cinematic parity remain outstanding.
+
+- Rat/hagfish-consumed corpses now have a distinct persisted state. Loading keeps
+  them hidden; carry targeting and guard body-discovery queries exclude them.
+  Temporary possession hiding remains separate. In-game Devouring Swarm consumed
+  NPCs 35/36, then 40; all three restored hidden and remained consumed in the next
+  save (`cache/parity_consumed_body_runtime.log`, `cache/parity_consumed_body_restore.log`).
+  All 71 game tests pass. Older saves without the optional consumed flag still load,
+  but cannot recover consumption information they never recorded.
+
+- Corpse feeding now requires `m_EatRequiredRatCount` rats (original default five),
+  for both wild and summoned swarms. Falling below the minimum clears partial
+  feeding progress. Wild spawner overrides and summoned power-level overrides are
+  respected. All 70 tests pass (`cache/parity_wild_rat_tweaks.log`,
+  `cache/parity_rat_feeding_suite.log`). Wild feeding now also reads each spawner's
+  startup/per-limb timings: the map audit found 414 common 4s/2.5s pairs, one prison
+  sewer 10s/2.5s override, and three class-default 2s/1.85s pairs. All 71 game tests
+  pass (`cache/parity_wild_feeding_timing_suite.log`). The existing four-stage body
+  approximation remains; anatomical limb progression and post-kill delay still
+  need original-behavior alignment.
+
+- Wild-rat bites now use the original player stance distances: standing 200cm and
+  crouched 60cm, from `Default__DisTweaks_PlayerPawn`, replacing the fixed 1.4m
+  cutoff. A gameplay-system test verifies standing bites at 1.7m, no crouched bites
+  there, crouched bites at 0.5m, and cooked overrides. All 70 game tests pass
+  (`cache/parity_player_rat_tweaks.log`, `cache/parity_rat_stance_suite.log`).
+  This does not resolve Rat Scent's native reduction formula or Scavenger's grant
+  calculation; both charm effects still require source-behavior investigation.
+
 Full original-game parity has **not** been verified. Current regression coverage includes
-47 game release tests, plus isolated-profile gameplay checks for grenade throwback attribution,
+62 game release tests, plus isolated-profile gameplay checks for grenade throwback attribution,
 explosive save/load, post-load rendering, Vengeance/Sustained Rage timing, surface/body/
 mid-air bolt recovery across loading, and ammunition grants at upgraded capacities.
 Saves also preserve equipped powers, Dark Vision/Bend Time timers, cooking grenades,
@@ -996,8 +1070,167 @@ and Blink traversal state; stopped bolts retain their position and lifetime afte
 Crossbow projectiles use the original 200 m/s base firing speed, per-variant speed
 and gravity multipliers, and default world gravity. A stopped-time runtime check
 confirmed speeds of 200/140/40 m/s for ordinary/sleep/incendiary bolts.
+The keyboard-mapping screen was checked in an isolated profile: rebinding Move Forward
+to Z persisted across restarting the game, and Restore Settings returned it to W.
+Further runtime checks cover scrolling to Zoom, cancelling key capture, and swapping
+Forward/Backward bindings. Capture shows explicit key/cancel instructions; category
+changes are blocked during capture or confirmation so Restore Settings cannot be
+redirected to another category (covered by a regression test).
+Screenshots and runtime logs are under `cache/shots/parity_bindings_*` and
+`cache/parity_bindings*_runtime.log`.
+Mouse smoothing now discards stale deltas when the weapon wheel or released cursor
+suspends mouse-look, when smoothing is disabled, and when the player is replaced.
+A system-level regression reproduced and fixed camera movement on resuming with zero
+mouse input (`cache/parity_mouse_resume_{before,after,final}.log`).
+Paused-menu input no longer consumes elixirs. A regression reproduced both R/T leaks;
+runtime verification retained 10 health and two health elixirs while paused, then a
+fresh R press after resuming restored health to 50 and consumed one elixir.
+Evidence: `cache/parity_elixir_pause_{before,after,runtime}.log`.
+World pickup/door use, body handling, and held prop/grenade interaction also reject
+paused input. A runtime before/after check reproduced F eating food through the pause
+menu and verified the fix. A held grenade stayed in hand during a paused attack click,
+then threw normally on a fresh click after resuming. Evidence:
+`cache/parity_pickup_pause_{before,after}.log` and `cache/parity_grenade_pause_runtime.log`.
+The pause guard also covers bolt recovery, whale-oil insertion, keyhole input,
+weapon shortcuts and grenade cooking. Releasing a cooking grenade's button while
+paused now retains it in hand until gameplay resumes. Runtime snapshots verified
+0.219 seconds of cooking and no projectile while paused, followed by a normal throw
+after resuming (`cache/parity_cooking_pause_runtime.log`).
+Player movement, mouse-look and mantle input also honor pause. Runtime before/after
+checks reproduced C changing stance/capsule height in the pause menu, then verified
+standing was retained until a fresh crouch press after resuming. Evidence:
+`cache/parity_stance_pause_{before,after}.log` and `cache/parity_player_pause_tests.log`.
+Melee input and blade-lock presses now honor pause as well. A system-level regression
+reproduced release of a chokehold from menu input, then verified the hold remains
+intact while paused and releases after resuming (`cache/parity_choke_pause_before.log`,
+`cache/parity_combat_pause_tests.log`).
+Power input also honors pause, cancelling a pending Blink aim and hiding its marker.
+Runtime checks reproduced a paused mouse release spending 20 mana and queuing a
+teleport; after the fix, mana stayed at 100 and no traversal was queued, while a
+fresh cast after resuming still teleported normally. Evidence:
+`cache/parity_blink_pause_{before,after,tests}.log`.
+Save slots are written to a sibling temporary file, flushed, then renamed over the
+destination. A simulated partial-write failure preserves the previous slot; tests
+also cover replacement, new slots and stale temporary files. A runtime overwrite/load
+cycle restored the newer 60-health snapshot with no temporary files left behind.
+Evidence: `cache/parity_atomic_save_{tests,runtime}.log`.
+Held movable props now persist by their stable map index. Loading restores the hold,
+dynamic body, zero gravity and player collision exclusion without replaying pickup
+events. Tests cover delayed body creation and one-shot restoration; a runtime round
+trip retained movable 39 in hand and a subsequent throw released it normally.
+Evidence: `cache/parity_held_prop_{tests,runtime}.log`.
+Loose-prop saves now retain damage, linear/angular momentum, gravity/body mode,
+throw attribution state, impact cooldown and release timing. A delayed-body regression
+verifies restoration; runtime logging confirmed prop 39 resumed its saved 19.8 m/s
+throw (`cache/parity_prop_state_{tests,restore}.log`).
 
 Known outstanding gameplay gaps from source and original-data inspection:
+
+- Loose-prop physics now uses world-time scaling during Rapier's step, with canonical
+  velocities retained for saves. Stopped props resist gravity/impulses, held props
+  remain movable, and impact/release timers stop with world time. A physics-backed
+  test covers stop, resume, half-speed displacement and held-prop exemption; runtime
+  saved/loaded throws preserve position, momentum, health and timers under Bend Time
+  (`cache/parity_prop_time_{suite,runtime}.log`). Linear/angular damping now scales
+  during the step too; physics-backed checks verify reduced drag in half-speed time,
+  no momentum loss when stopped, and restored damping settings afterward
+  (`cache/parity_prop_damping_suite.log`). Broader original-game comparisons
+  of time-dilated collisions and damping remain outstanding.
+  Thrown/dropped bodies now use world time too, with their release pose set once
+  even when time is stopped. A normal carry/throw runtime check kept NPC 40 at an
+  identical position across two stopped-time snapshots, then verified movement after
+  Bend Time ended (`cache/parity_body_time_final.log`). Automation's `body` command
+  faces the nearest downed NPC for testing the ordinary carry interaction.
+  Saves retain thrown bodies' velocity and release-placement state. NPC steering
+  excludes these bodies so its floor snapping cannot override flight restoration.
+  A frozen NPC 40 retained exact position/flight state across loading, then landed
+  after time resumed (`cache/parity_falling_save_final.log`); old saves still load.
+  Shoulder carrying now saves the NPC spawner, phase and phase time; loading remaps
+  the NPC, rebuilds view parts and suppresses duplicate pickup events. Runtime NPC 40
+  returned in Hold and could be thrown (`cache/parity_carry_save_runtime.log`).
+  The restored carry screenshot (`cache/shots/parity_carry_restored.png`) shows mesh
+  distortion; carried-body rendering still needs investigation and original comparison.
+  Follow-up: the slave clip's `anchor_jnt` was ignored. Placement now aligns that
+  anchor with the carrier root after animation posing, instead of overlapping the
+  two mesh origins. The central intersection is absent in the aligned captures
+  (`cache/shots/parity_carry_aligned*.png`), including pitched views and a new lift.
+  Drop, re-lift and throw completed; a separate crouched run selected LowSneak and
+  released the body (`cache/parity_carry_aligned_crouch.log`). All 63 game tests pass,
+  including anchor alignment through camera/visual transforms. Exact shoulder framing
+  and transition fidelity still require original-game comparison.
+  Carry saves also retain the master clip/cursor. Loading resumes one-shot lift/drop
+  animations instead of restarting them; the slave follows the restored master.
+  Runtime saved/resumed LowSneak at 0.301s and lift at 0.363s, then reached released
+  and Hold states respectively (`cache/parity_carry_transition.log`,
+  `cache/parity_carry_lift_transition.log`). All 64 tests pass, including legacy saves
+  without the optional cursor and a transition-state serialization round trip.
+  Carried slave animations now inherit the master's playback rate and resume posing
+  even when the NPC previously had stopped-world time or distance-based pose freezing.
+  A regression failed before the fix (cursor mismatch) and now verifies matching
+  cursors and completed pose blending; all 65 tests pass. Runtime pickup during
+  Bend Time reached Hold, then throwing released NPC 40 with world scale 0
+  (`cache/parity_carry_clock_runtime.log`, `cache/parity_carry_clock_tests.log`).
+  Thrown bodies sweep their NPC radius horizontally against world/prop cover before
+  ground settling. Thin walls cannot be crossed between frame endpoints; impacts
+  stop horizontal momentum while gravity continues. Trigger volumes are ignored,
+  and bodies already touching cover can move away. All 66 tests pass, including
+  thin world/prop cover, removal, sensors and separating motion. Runtime NPC 40 was
+  blocked at release and settled without horizontal displacement
+  (`cache/parity_body_wall_runtime.log`). This is a body-width flight approximation;
+  articulated ragdoll collision parity is still unverified.
+  Ground settling now waits for descent, so a nearby floor cannot cancel the upward
+  throw impulse. A physics regression verifies ascent and subsequent landing; all
+  67 game tests pass. Runtime NPC 40 rose from Y=30.761 to above Y=30.820, hit cover,
+  and settled with downward velocity -1.027 m/s (`cache/parity_body_arc_runtime.log`,
+  `cache/parity_body_arc_suite.log`).
+  NPC restoration now applies saved yaw directly to the transform, including flying
+  bodies excluded from ordinary steering. Restored flight selects the same settled
+  lying pose as release, without a world-time crossfade that can stall during Bend
+  Time. Runtime NPC 40 restored yaw -2.441582 and its corresponding quaternion,
+  retained exact frozen position/velocity, then landed after time resumed
+  (`cache/parity_body_facing_runtime.log`, `cache/parity_flight_pose_runtime.log`).
+  All 68 tests pass, including settled posing with stopped time and a frozen rig.
+  Releases now explicitly capture the previous carried pose's hip position before
+  selecting the lying animation. The pending release origin is saved, with a legacy
+  fallback for older flight snapshots. Runtime stopped-time placement matched the
+  sampled hips plus the existing 0.2m offset and survived loading exactly
+  (`cache/parity_release_origin_runtime.log`); all 69 tests pass, including pending
+  origin serialization and legacy flight-state decoding.
+  Animation-cache identity now includes the root-bone index, exact component
+  rotation and component offset, alongside case-insensitive bone names. Previously
+  17 Streets1 animation bindings were shared by characters with differing root
+  translations; after force-recooking L_Streets1_P, none are. The new key prevents
+  offset-dependent tracks from being reused across incompatible character meshes.
+  Cooker tests (3) and game tests (66) pass; an older carry save restored NPC 40
+  and throwing worked on the recooked map (`cache/parity_animation_cache_suite.log`,
+  `cache/parity_animation_cache_runtime.log`). Scene version 101 now automatically
+  recooks older maps on load to reference the corrected animation bindings. Verified
+  this migration in Hound Pits and Daud's base without the recook flag: both reached
+  gameplay, wrote version 101 scenes and had zero shared-offset binding conflicts
+  (`cache/parity_pub_cache101.log`, `cache/parity_daud_cache101.log`, corresponding
+  screenshots in `cache/shots/`). Other maps will migrate on their next load.
+  Isolation captures show the distortion disappears with `DH_CARRY_HIDE_VIEW=1`
+  (Corvo's hand remains intact) and persists with `DH_CARRY_WORLD_MATERIAL=1`.
+  These diagnostic switches narrow the issue to the carried NPC rather than the
+  foreground projection alone. Evidence: `cache/shots/parity_carry_arms_only.png`,
+  `cache/shots/parity_carry_world_material.png`, and `cache/parity_carry_visual_audit.log`.
+
+- Food now uses each tweak's `m_HealthChange`, rather than a universal 10 health,
+  for world/factory pickups and cooked scripted grants. Healthy Appetite adds its
+  bonus, capped by maximum health. Runtime checks in `L_Pub_Day_P` confirmed a pear
+  healed 10→15 and bluejawed hagfish eggs healed 15→45. Recook maps to include food
+  values (verified: `L_Pub_Day_P`); older map caches retain the 10-health fallback.
+  Evidence: `cache/parity_food_health_{tests,cook,runtime}.log`.
+
+- Ammunition range audits covered 470 base-game and 434 DLC packages. The base game's
+  128 records are fixed; among 471 DLC records, Daud's bolt purse has a 2–3 range.
+  Cooking now preserves lower bounds, and world/factory pickups and scripted grants
+  roll inclusive quantities. Save restoration retains quantities and weapon identity.
+  A runtime round trip retained purse counts 3/2/2/3 in `DLC06_DaudBase_P`.
+  Recook maps to include variable ranges (verified: `DLC06_DaudBase_P`). Evidence:
+  `cache/ammo_range_audit*/summary.json`, per-package logs, and
+  `cache/parity_variable_ammo_runtime_second.log`. The inspection tool now includes
+  nonzero static-array indices, which previously hid most ammunition types.
 
 - Bolt recovery now uses `Twk_Projectiles.Twk_Proj_Arrow`'s recovery flags and break
   chance, with the charm's `ArrowBreakingModifier`. Surface, body and mid-air recovery
@@ -1006,7 +1239,7 @@ Known outstanding gameplay gaps from source and original-data inspection:
   White rats now use the original white material and swarm probability; Albinos adds
   its chance bonus, and Welcoming Host extends white-rat possession. The runtime log
   confirms a 30-second duration with Welcoming Host. Maps need recooking to include
-  the white material (currently recooked: `L_Streets1_P`); visual and save/load audits
+  the white material (currently recooked: `L_Streets1_P`, `DLC06_DaudBase_P`, `L_Pub_Day_P`); visual and save/load audits
   beyond the current map remain outstanding. Swarm saves now preserve surviving rats,
   their colors, positions, movement state, targets, bite timers and summoned lifetimes.
   A stopped-time runtime round trip retained an identical snapshot of 17 swarms,
@@ -1019,6 +1252,11 @@ Known outstanding gameplay gaps from source and original-data inspection:
   Wild-swarm bite intervals, initial delays and minimum/maximum damage now use their
   original tweak values, with regression coverage for slow-frame timing; runtime
   comparison with the original remains outstanding.
+  Wild and summoned swarms check walls and movable cover before targeting, biting
+  or feeding; a physics-backed regression verifies obstruction and removal of cover.
+  Devouring Swarm now reads its level-specific detection, bite interval/damage,
+  initial delay, feeding durations and white-rat ratio from the original tweaks.
+  Recook game data to populate the new `swarm.1.*` and `swarm.2.*` settings.
 - Ammunition capacities and upgrades now apply to world pickups, scripted grants,
   trap salvage and shops. Full ammunition pickups remain available and full shop items
   cannot spend coins. Repeated inventory confiscation preserves previously stashed gear;
