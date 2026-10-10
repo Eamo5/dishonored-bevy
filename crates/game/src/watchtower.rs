@@ -27,8 +27,9 @@ impl Plugin for WatchTowerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Blinding>()
             .init_resource::<ArrowRestore>()
+            .init_resource::<TowerRestore>()
             .add_systems(OnEnter(GameState::InGame), setup_towers.after(LevelSpawnSet))
-            .add_systems(Update, (restore_arrows.after(crate::save::restore_npcs), towers, fly_arrows).chain().run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (restore_arrows.after(crate::save::restore_npcs), restore_towers, towers, fly_arrows).chain().run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -36,7 +37,7 @@ impl Plugin for WatchTowerPlugin {
 #[derive(Resource, Default)]
 pub struct Blinding(pub f32);
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 enum State {
     /// sweeping (seconds into the sweep)
     Explore,
@@ -47,7 +48,7 @@ enum State {
 }
 
 #[derive(Component)]
-struct Tower {
+pub(crate) struct Tower {
     /// `scene.security`
     index: usize,
     origin: Vec3,
@@ -73,6 +74,44 @@ struct Tower {
     pivot: Vec3,
     yaw0: f32,
     head: Vec<(Entity, Transform)>,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct TowerRestore(pub Option<Vec<TowerSave>>);
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct TowerSave {
+    index: usize,
+    tank: Option<[f32; 3]>,
+    tank_found: bool,
+    yaw: f32,
+    pitch: f32,
+    sweep: f32,
+    state: State,
+    lost: f32,
+    warned: bool,
+}
+
+impl TowerSave {
+    pub(crate) fn capture(t: &Tower) -> Self {
+        Self { index: t.index, tank: t.tank.map(|v| v.to_array()), tank_found: t.tank_found,
+            yaw: t.yaw, pitch: t.pitch, sweep: t.sweep, state: t.state, lost: t.lost, warned: t.warned }
+    }
+}
+
+fn restore_towers(mut pending: ResMut<TowerRestore>, mut towers: Query<&mut Tower>) {
+    let Some(saved) = pending.0.take() else { return };
+    for mut t in &mut towers {
+        let Some(s) = saved.iter().find(|s| s.index == t.index) else { continue };
+        t.tank = s.tank.map(Vec3::from);
+        t.tank_found = s.tank_found;
+        t.yaw = s.yaw;
+        t.pitch = s.pitch;
+        t.sweep = s.sweep;
+        t.state = s.state;
+        t.lost = s.lost;
+        t.warned = s.warned;
+    }
 }
 
 #[derive(Component)]
@@ -238,9 +277,8 @@ fn towers(
     let Some(level) = level else { return };
     let Ok(ctx) = rapier.single() else { return };
     let dt = time.delta_secs() * tc.world_scale();
-    // Keep due attacks and scripted volleys queued while the world is stopped.
-    // A zero delta alone would still allow perception and zero-delay shots.
-    if dt <= 0.0 { return; }
+    // Presentation still updates at zero delta (including after a stopped-time
+    // load), but decisions and queued shots must wait for world time to resume.
     let mut blind = 0.0f32;
     let Ok((pe, pt)) = player.single() else { return };
     let chest = pt.translation + Vec3::Y * 0.3;
@@ -261,7 +299,7 @@ fn towers(
         let arrow_at = round(t.arrow);
         // the scripts' order to fire at something (`DisSeqAct_WatchTowerShootAtTarget`): a volley
         let ordered: Vec<Vec3> = match vm.as_mut() {
-            Some(vm) if vm.tower_shots.iter().any(|(a, _)| *a == d.actor) => {
+            Some(vm) if dt > 0.0 && vm.tower_shots.iter().any(|(a, _)| *a == d.actor) => {
                 let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut vm.tower_shots).into_iter().partition(|(a, _)| *a == d.actor);
                 vm.tower_shots = rest;
                 mine.into_iter().map(|(_, at)| at).collect()
@@ -286,7 +324,7 @@ fn towers(
         // the scripts working it (`DisSeqAct_WatchTower`): off, on, toggled, made to explore or
         // to look for someone, its polarity switched
         let cmds: Vec<(u8, Vec<crate::kismet::Val>)> = match vm.as_mut() {
-            Some(vm) if !vm.tower_cmds.is_empty() => {
+            Some(vm) if dt > 0.0 && !vm.tower_cmds.is_empty() => {
                 let g = vm.g.clone();
                 let is_me = |vals: &Vec<crate::kismet::Val>| vals.iter().any(|v| matches!(v, crate::kismet::Val::Actor(a) if g.actors.get(*a as usize).is_some_and(|ka| ka.name == d.actor)));
                 let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut vm.tower_cmds).into_iter().partition(|(targets, _, _)| is_me(targets));
@@ -328,7 +366,7 @@ fn towers(
             }
         }
         if !powered {
-            t.state = State::Explore;
+            if dt > 0.0 { t.state = State::Explore; }
             continue;
         }
         let reach = p("m_fLightRadius", 7000.0) * 0.01;
@@ -387,7 +425,7 @@ fn towers(
                 sfx.write(PostEvent::named(s, Some(at)));
             }
         };
-        match t.state {
+        if dt > 0.0 { match t.state {
             State::Explore => {
                 // the sweep: round the tower, the beam nodding between its angles
                 t.sweep += dt;
@@ -472,6 +510,7 @@ fn towers(
                 };
             }
         }
+        }
         // the beam drawn: from the lamp to where it falls
         if let Some((mut ct, _)) = t.cone.and_then(|c| cones.get_mut(c).ok()) {
             let dir = beam_dir(t.yaw, t.pitch);
@@ -548,10 +587,11 @@ mod projectile_tests {
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
             .init_resource::<Assets<Mesh>>().init_resource::<crate::gameplay::TimeControl>()
             .init_resource::<PlayerStats>().init_resource::<Blinding>().init_resource::<crate::security::Devices>()
+            .init_resource::<TowerRestore>()
             .add_message::<PostEvent>().add_message::<SpawnEffect>()
             .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
             .insert_resource(LevelInfo { scene: dhcook::format::Scene { security: vec![dhcook::format::Security::default()], ..default() } })
-            .add_systems(Last, towers);
+            .add_systems(Last, (restore_towers, towers).chain());
         app.world_mut().spawn((Transform::default(), Player {
             velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
             grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
@@ -565,6 +605,30 @@ mod projectile_tests {
             cone: None, cone_size: Vec3::ONE, pivot: Vec3::ZERO, yaw0: 0.0, head: vec![],
         }).id();
         app.world_mut().resource_mut::<crate::gameplay::TimeControl>().bend_remaining = 10.0;
+        let original = serde_json::to_string(&vec![TowerSave::capture(app.world().get::<Tower>(tower).unwrap())]).unwrap();
+        let head = app.world_mut().spawn((Transform::default(), Visibility::default())).id();
+        let cone = app.world_mut().spawn((Transform::default(), Visibility::default())).id();
+        let mut saved: Vec<TowerSave> = serde_json::from_str(&original).unwrap();
+        saved[0].yaw = 1.0;
+        saved[0].pitch = 0.4;
+        saved[0].sweep = 3.0;
+        saved[0].lost = 0.7;
+        saved[0].warned = true;
+        saved[0].state = State::Attack(0.15, 2);
+        let encoded = serde_json::to_string(&saved).unwrap();
+        app.world_mut().resource_mut::<TowerRestore>().0 = Some(saved);
+        {
+            let mut t = app.world_mut().get_mut::<Tower>(tower).unwrap();
+            t.head.push((head, Transform::from_translation(Vec3::X)));
+            t.cone = Some(cone);
+        }
+        app.update();
+        assert_eq!(serde_json::to_string(&vec![TowerSave::capture(app.world().get::<Tower>(tower).unwrap())]).unwrap(), encoded);
+        assert!(app.world().get::<Transform>(head).unwrap().translation.abs_diff_eq(Quat::from_rotation_y(1.0) * Vec3::X, 1.0e-6));
+        let beam = app.world().get::<Transform>(cone).unwrap();
+        assert!(beam.translation.abs_diff_eq(Vec3::new(0.0, 10.0, 0.0), 1.0e-6));
+        assert!((beam.rotation * Vec3::NEG_Y).abs_diff_eq(beam_dir(1.0, 0.4), 1.0e-6));
+        app.world_mut().resource_mut::<TowerRestore>().0 = Some(serde_json::from_str(&original).unwrap());
         for _ in 0..3 { app.update(); }
         let t = app.world().get::<Tower>(tower).unwrap();
         assert_eq!((t.state, t.yaw, t.pitch, t.lost), (State::Attack(0.0, 3), 0.0, 0.0, 0.0));

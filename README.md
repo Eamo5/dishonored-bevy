@@ -987,6 +987,16 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Tower snapshots now preserve aim, sweep progress, alert/volley state, lost-target
+  timer, warning state and tank discovery. Older saves may omit the snapshot.
+  Stopped-time presentation refreshes restored heads and beams while AI decisions
+  and scripted orders remain suspended. All 98 tests pass
+  (`cache/parity_tower_state_suite.log`), including restoration of a partial attack
+  and frozen head/beam transforms. A live Streets2 save/load retained both towers'
+  exploration states and all three flying arrows exactly
+  (`cache/parity_tower_state_runtime.log`). Live mid-attack campaign coverage remains
+  outstanding; the partial-attack restoration check is a system-level regression.
+
 - Watchtower arrows now survive save/load with position, velocity, gravity,
   remaining lifetime and tower association; restored trails follow the new entities
   for their remaining lifetime. The optional field preserves older-save loading.
