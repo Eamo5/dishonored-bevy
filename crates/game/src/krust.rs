@@ -31,9 +31,9 @@ pub struct KrustPlugin;
 
 impl Plugin for KrustPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<KrustLog>().init_resource::<SpitRestore>()
+        app.init_resource::<KrustLog>().init_resource::<SpitRestore>().init_resource::<KrustRestore>()
             .add_systems(OnEnter(GameState::InGame), spawn_krusts.after(crate::level::LevelSpawnSet))
-            .add_systems(Update, (restore_krusts, restore_spits.after(crate::save::restore_npcs), scripted_spits, krust_hits, possessed_krust, krust_brain, fly_spit).chain().run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (restore_krusts.after(crate::save::restore_npcs), restore_krust_state, restore_spits, scripted_spits, krust_hits, possessed_krust, krust_brain, fly_spit).chain().run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -68,7 +68,7 @@ const LOST_RETENTION: f32 = 2.0;
 const LOOP_SOUND: &str = "River_Krust_Hostile_Idle_Loop";
 
 /// What the shell does about who's around (`RiverKrustState_*`).
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 enum Mode {
     Ambient,
     Defensive,
@@ -162,6 +162,50 @@ mod cover_tests {
             vision: socket, center: Entity::PLACEHOLDER, pearl: None, pearl_pickup: None,
             pearl_lying: false, collider, eye: Vec3::ZERO, blocked: None,
         }
+    }
+
+    #[test]
+    fn krust_save_preserves_wounds_and_does_not_repeat_a_fired_shot() {
+        let mut app = App::new();
+        app.init_resource::<KrustRestore>().init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<crate::hud::Paused>().init_resource::<crate::settings::Settings>()
+            .insert_resource(LevelInfo { scene: dhcook::format::Scene { krusts: vec![KrustDef::default()], ..default() } })
+            .add_message::<SpawnEffect>().add_systems(Update, (restore_krust_state, possessed_krust).chain());
+        let skeleton = dhcook::format::SkeletonDef::default();
+        let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![std::sync::Arc::new(dhcook::format::AnimFile {
+            bones: vec![], clips: vec![dhcook::format::AnimClip { name: "Spit".into(), duration: 1.0, ..default() }],
+        })]));
+        let mut anim = Animator::new(lib.clone(), &skeleton, vec![]);
+        anim.restart(lib.find("Spit").unwrap(), false, 0.75, 0.0);
+        anim.seek(0.4);
+        let mut source = test_krust(Entity::PLACEHOLDER);
+        source.state = FIRING;
+        source.hp = 3.5;
+        source.near_t = 0.2;
+        source.away_t = 0.3;
+        source.exit_delay = 1.2;
+        source.volley = 2.0;
+        source.shots = 2;
+        source.fired = true;
+        source.reaction = 0.6;
+        source.lost = 0.7;
+        source.order = Some(Vec3::X * 10.0);
+        let saved = KrustSave::capture(&source, Some(&anim));
+        let expected = serde_json::to_value(&saved).unwrap();
+        let restored = serde_json::from_value(expected.clone()).unwrap();
+        let entity = app.world_mut().spawn((test_krust(Entity::PLACEHOLDER), Animator::new(lib, &skeleton, vec![]), crate::possession::Possessed)).id();
+        app.world_mut().resource_mut::<KrustRestore>().0 = Some(vec![restored]);
+        app.update();
+        let k = app.world().get::<Krust>(entity).unwrap();
+        let a = app.world().get::<Animator>(entity).unwrap();
+        assert_eq!(serde_json::to_value(KrustSave::capture(k, Some(a))).unwrap(), expected);
+        assert_eq!(app.world_mut().query::<&Spit>().iter(app.world()).count(), 0);
+        assert_eq!(app.world().resource::<Messages<SpawnEffect>>().len(), 0, "a restored already-fired frame must not spew twice");
+        app.world_mut().get_mut::<Animator>(entity).unwrap().seek(1.0);
+        app.update();
+        let k = app.world().get::<Krust>(entity).unwrap();
+        assert_eq!(k.state, POSSESSED);
+        assert_eq!(k.hp, 3.5);
     }
 
     #[test]
@@ -298,6 +342,64 @@ mod cover_tests {
         app.update();
         assert_eq!(app.world().get::<Krust>(entity).unwrap().state, DEAD);
         assert!(app.world().get::<crate::possession::Host>(entity).is_none());
+    }
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct KrustRestore(pub Option<Vec<KrustSave>>);
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct KrustSave {
+    index: u32,
+    state: usize,
+    mode: Mode,
+    hp: f32,
+    near: f32,
+    away: f32,
+    exit_delay: f32,
+    volley: f32,
+    shots: u32,
+    fired: bool,
+    death_fx: bool,
+    reaction: f32,
+    lost: f32,
+    order: Option<[f32; 3]>,
+    animation: Option<(String, f32, f32, bool)>,
+}
+
+impl KrustSave {
+    pub(crate) fn capture(k: &Krust, anim: Option<&Animator>) -> Self {
+        Self { index: k.index, state: k.state, mode: k.mode, hp: k.hp, near: k.near_t, away: k.away_t,
+            exit_delay: k.exit_delay, volley: k.volley, shots: k.shots, fired: k.fired, death_fx: k.death_fx,
+            reaction: k.reaction, lost: k.lost, order: k.order.map(|v| v.to_array()),
+            animation: anim.and_then(|a| a.current().map(|c| (a.lib.clip(c.clip).name.clone(), c.t, c.speed, c.looping))) }
+    }
+}
+
+pub(crate) fn restore_krust_state(mut pending: ResMut<KrustRestore>, mut krusts: Query<(&mut Krust, Option<&mut Animator>)>) {
+    let Some(saved) = pending.0.take() else { return };
+    let saved: HashMap<_, _> = saved.into_iter().map(|s| (s.index, s)).collect();
+    for (mut k, anim) in &mut krusts {
+        let Some(s) = saved.get(&k.index) else { continue };
+        k.state = s.state;
+        k.mode = s.mode;
+        k.hp = s.hp;
+        k.near_t = s.near;
+        k.away_t = s.away;
+        k.exit_delay = s.exit_delay;
+        k.volley = s.volley;
+        k.shots = s.shots;
+        k.fired = s.fired;
+        k.death_fx = s.death_fx;
+        k.reaction = s.reaction;
+        k.lost = s.lost;
+        k.order = s.order.map(Vec3::from);
+        if let (Some(mut anim), Some((name, t, speed, looping))) = (anim, &s.animation) {
+            if let Some(clip) = anim.lib.find(name) {
+                anim.restart(clip, *looping, *speed, 0.0);
+                anim.seek(*t);
+            }
+        }
     }
 }
 

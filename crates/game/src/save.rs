@@ -130,6 +130,8 @@ pub struct SaveGame {
     #[serde(default)]
     krust_spit: Option<Vec<crate::krust::SpitSave>>,
     #[serde(default)]
+    krust_state: Option<Vec<crate::krust::KrustSave>>,
+    #[serde(default)]
     possession: Option<crate::possession::PossessionSave>,
     /// what the scripts set on the characters: senses, health, who stands how with whom
     #[serde(default)]
@@ -372,7 +374,7 @@ fn save_game(
         Query<(Entity, &crate::swarm::Rat, &Transform, Option<&crate::swarm::WhiteRat>)>,
         Res<crate::swarm::RatBites>,
         Res<crate::possession::Possession>, Res<crate::possession::PossessOverrides>,
-        Query<(Entity, &crate::fish::Fish, &Transform, Option<&crate::anim::Animator>)>, Query<(Entity, &crate::krust::Krust)>, Res<crate::fish::FishMeals>,
+        Query<(Entity, &crate::fish::Fish, &Transform, Option<&crate::anim::Animator>)>, Query<(Entity, &crate::krust::Krust, Option<&crate::anim::Animator>)>, Res<crate::fish::FishMeals>,
     ),
     (cine, script_ui, mut campaign, powers, tc, carry, matinee, krust_spit): (Res<crate::script_world::Cinematic>, Option<Res<crate::kismet::ScriptUi>>, ResMut<crate::gameplay::Campaign>, Res<crate::powers::Powers>, Res<crate::gameplay::TimeControl>, Res<crate::carry::Carry>, Res<crate::matinee::MatineeState>, Query<(&crate::krust::Spit, &Transform)>),
     mut saving: MessageWriter<crate::globalui::ShowSaving>,
@@ -424,12 +426,13 @@ fn save_game(
         powers: Some(crate::powers::PowersSave::capture(&powers, &tc)),
         swarms: Some(crate::swarm::SwarmsSave::capture(swarms.iter(), rats.iter(), npc_ids.iter().map(|(e, id)| (e, id.0)), bites.0, possession.host)),
         fish: Some(crate::fish::FishSaveWorld::capture(fish.iter().map(|(_, f, t, a)| (f, t, a)), &fish_meals, npc_ids.iter().map(|(e, id)| (e, id.0)))),
-        krust_spit: Some(crate::krust::save_spits(krust_spit.iter(), krust_hosts.iter().map(|(_, k)| k))),
+        krust_spit: Some(crate::krust::save_spits(krust_spit.iter(), krust_hosts.iter().map(|(_, k, _)| k))),
+        krust_state: Some(krust_hosts.iter().map(|(_, k, a)| crate::krust::KrustSave::capture(k, a)).collect()),
         possession: Some(crate::possession::PossessionSave::capture(&possession, &possess_overrides,
             npc_ids.iter().map(|(e, id)| (e, crate::possession::SavedHost::Npc(id.0)))
                 .chain(rats.iter().map(|(e, _, _, _)| (e, crate::possession::SavedHost::Rat)))
                 .chain(fish.iter().map(|(e, f, _, _)| (e, crate::possession::SavedHost::Fish(f.index()))))
-                .chain(krust_hosts.iter().map(|(e, k)| (e, crate::possession::SavedHost::Krust(k.index())))))),
+                .chain(krust_hosts.iter().map(|(e, k, _)| (e, crate::possession::SavedHost::Krust(k.index())))))),
         held_prop: held.0.and_then(|e| props.get(e).ok()).map(|(_, p, _)| p.index as u32),
         carry: carry.save(),
         player_ride: matinee.saved_player_ride(),
@@ -612,7 +615,7 @@ fn apply_pending(
     (pickups, mut ammo_pickups): (Query<(Entity, &Pickup)>, ResMut<crate::interact::AmmoPickupRestore>),
     mut instances: Query<(Entity, &LevelInstance, &mut Visibility, &mut Transform, Option<&mut Door>, Option<&crate::level::InstanceCollider>), Without<Player>>,
     mut lights: Query<(&LevelLight, &mut Visibility), (Without<LevelInstance>, Without<Player>)>,
-    (mut krusts, mut prop_restore, mut traps, mut usables, mut carry_restore, mut krust_spit): (ResMut<crate::krust::KrustLog>, ResMut<crate::props::PropRestore>, ResMut<crate::traps::TrapLog>, ResMut<crate::usables::UsableLog>, ResMut<crate::carry::CarryRestore>, ResMut<crate::krust::SpitRestore>),
+    (mut krusts, mut prop_restore, mut traps, mut usables, mut carry_restore, mut krust_spit, mut krust_state): (ResMut<crate::krust::KrustLog>, ResMut<crate::props::PropRestore>, ResMut<crate::traps::TrapLog>, ResMut<crate::usables::UsableLog>, ResMut<crate::carry::CarryRestore>, ResMut<crate::krust::SpitRestore>, ResMut<crate::krust::KrustRestore>),
     (mut overrides, mut devices, props, mut gadgets, mut projectiles, mut swarms, mut possession, mut fish): (ResMut<crate::script_world::SpawnerOverrides>, ResMut<crate::security::Devices>, Query<(Entity, &crate::props::Prop)>, ResMut<crate::gadgets::GadgetRestore>, ResMut<crate::powers::ProjectileRestore>, ResMut<crate::swarm::SwarmRestore>, ResMut<crate::possession::PossessionRestore>, ResMut<crate::fish::FishRestore>),
     (mut cine, mut matinee, mut collider_tfs, script_ui, mut campaign, settings, mut cinematic_fade, mut powers, mut tc): (
         ResMut<crate::script_world::Cinematic>,
@@ -773,6 +776,7 @@ fn apply_pending(
     swarms.0 = s.swarms.take();
     fish.0 = s.fish.take();
     krust_spit.0 = s.krust_spit.take();
+    krust_state.0 = s.krust_state.take();
     ammo_pickups.0 = std::mem::take(&mut s.ammo_pickups);
     possession.0 = s.possession.take().map(|saved| if level_only { saved.level_return() } else { saved });
     if let Some(security) = s.security.take() {

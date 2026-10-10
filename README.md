@@ -987,6 +987,15 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Krust snapshots now preserve health, AI/animation state, reaction/visibility/
+  proximity timers, volley progress, fired flag and scripted targets. Restoration
+  follows the legacy death/pearl log and precedes possession restoration; older
+  snapshots retain the previous loading path. A regression preserves wounds and
+  a fired animation frame without duplicating its projectile/effects. All 90 tests
+  pass (`cache/parity_krust_state_suite.log`). A stopped-time Hound Pits save/load
+  restored all fields and animation cursors of all three krusts exactly
+  (`cache/parity_krust_state_runtime.log`).
+
 - Unpossessed krusts now update their animation clocks before returning on zero
   world delta, preventing state transitions and new volleys during Bend Time.
   A regression retains a scripted target while stopped and starts its volley only
