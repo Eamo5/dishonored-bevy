@@ -987,6 +987,11 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Trap skeletons now use the world-time clock. Launchers retain queued orders but
+  do not advance firing timers or emit even zero-delay shots while stopped. A
+  regression verifies the queued shot fires exactly once on half-speed resumption;
+  all 94 tests pass (`cache/parity_trap_time_suite.log`).
+
 - Trap disarming now requires active gameplay and an unobstructed ray to the
   launcher. World and movable cover block interaction; trigger sensors and the
   launcher's own collider do not. A system regression covers paused input, death,

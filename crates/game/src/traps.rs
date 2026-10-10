@@ -34,7 +34,7 @@ impl Plugin for TrapsPlugin {
         app.init_resource::<TrapLog>()
             .add_systems(OnEnter(GameState::InGame), spawn_traps.after(crate::level::LevelSpawnSet))
             .add_systems(Update, disarm_focus.after(crate::interact::FocusSet).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (restore_traps, trip_wires, launch, fly_darts).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (restore_traps, trap_clocks, trip_wires, launch, fly_darts).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -242,6 +242,11 @@ fn trip_wires(
     }
 }
 
+/// Both tripwire and launcher skeletons advance on the same clock as their timers.
+fn trap_clocks(tc: Res<TimeControl>, mut traps: Query<&mut Animator, With<TrapPart>>) {
+    for mut anim in &mut traps { anim.time_scale = tc.world_scale().max(0.0); }
+}
+
 /// Launchers the scripts fire: their sequence, and the shot at its notify.
 #[allow(clippy::too_many_arguments)]
 fn launch(
@@ -257,7 +262,7 @@ fn launch(
     (mut sfx, mut fx): (MessageWriter<PostEvent>, MessageWriter<SpawnEffect>),
 ) {
     let Some(level) = level else { return };
-    let dt = time.delta_secs() * tc.world_scale();
+    let dt = time.delta_secs() * tc.world_scale().max(0.0);
     let orders = vm.map(|mut vm| std::mem::take(&mut vm.launches)).unwrap_or_default();
     let log_on = std::env::var("DH_TRAP_LOG").is_ok();
     for (mut t, tf, a) in &mut traps {
@@ -277,6 +282,8 @@ fn launch(
             }
         }
         let Some((secs, shot)) = t.firing else { continue };
+        // Accept the order while stopped, but defer its timer and projectile.
+        if dt <= 0.0 { continue; }
         let secs = secs + dt;
         t.firing = Some((secs, shot));
         if shot || secs < def.fire_at {
@@ -410,6 +417,33 @@ fn fly_darts(
 #[cfg(test)]
 mod projectile_tests {
     use super::*;
+
+    #[test]
+    fn stopped_launcher_retains_zero_delay_shot_until_time_resumes() {
+        let mut app = App::new();
+        app.init_resource::<Time>().insert_resource(TimeControl { bend_remaining: 10.0, world_dilation: 0.0, ..default() })
+            .init_resource::<TrapLog>().add_message::<PostEvent>().add_message::<SpawnEffect>()
+            .insert_resource(LevelInfo { scene: dhcook::format::Scene { traps: vec![dhcook::format::Trap {
+                launcher: true, speed: 10.0, fire_at: 0.0, ..default()
+            }], ..default() } }).add_systems(Update, (trap_clocks, launch).chain());
+        let skeleton = dhcook::format::SkeletonDef::default();
+        let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![]));
+        let trap = app.world_mut().spawn((TrapPart { index: 0, launcher: true, sprung: true, disarmed: false,
+            firing: Some((0.0, false)), wire: (Vec3::ZERO, Vec3::ZERO), sockets: vec![], collider: None },
+            Transform::default(), Animator::new(lib, &skeleton, vec![]))).id();
+        app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(100));
+        app.update();
+        assert_eq!(app.world().get::<TrapPart>(trap).unwrap().firing, Some((0.0, false)));
+        assert_eq!(app.world().get::<Animator>(trap).unwrap().time_scale, 0.0);
+        assert_eq!(app.world_mut().query::<&Dart>().iter(app.world()).count(), 0);
+        app.world_mut().resource_mut::<TimeControl>().world_dilation = 0.5;
+        app.update();
+        assert_eq!(app.world().get::<TrapPart>(trap).unwrap().firing, Some((0.05, true)));
+        assert_eq!(app.world().get::<Animator>(trap).unwrap().time_scale, 0.5);
+        assert_eq!(app.world_mut().query::<&Dart>().iter(app.world()).count(), 1);
+        app.update();
+        assert_eq!(app.world_mut().query::<&Dart>().iter(app.world()).count(), 1, "resuming must fire the queued shot only once");
+    }
 
     #[test]
     fn disarming_requires_active_gameplay_and_clear_access_to_launcher() {
