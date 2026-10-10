@@ -24,6 +24,13 @@ impl Plugin for PropAnimPlugin {
 #[derive(Component)]
 pub struct PropRig {
     pub actor: u32,
+    attachments: std::collections::HashMap<String, (Entity, Transform)>,
+}
+
+impl PropRig {
+    pub fn attachment(&self, name: &str) -> Option<(Entity, Transform)> {
+        self.attachments.get(&name.to_ascii_lowercase()).copied()
+    }
 }
 
 fn spawn_prop_rigs(
@@ -78,7 +85,15 @@ fn spawn_prop_rigs(
                 commands.entity(root).add_child(m);
             }
             let mut ec = commands.entity(root);
-            ec.insert(PropRig { actor: ai as u32 });
+            let mut attachments: std::collections::HashMap<_, _> = bones.iter().zip(&joints)
+                .map(|(bone, &entity)| (bone.name.to_ascii_lowercase(), (entity, Transform::IDENTITY))).collect();
+            for socket in &vis.skeleton.sockets {
+                if let Some(index) = bones.iter().position(|b| b.name.eq_ignore_ascii_case(&socket.bone)) {
+                    attachments.insert(socket.name.to_ascii_lowercase(), (joints[index],
+                        Transform::from_translation(Vec3::from(socket.translation)).with_rotation(Quat::from_array(socket.rotation).normalize())));
+                }
+            }
+            ec.insert(PropRig { actor: ai as u32, attachments });
             if let Some(lib) = vis.anims.clone() {
                 ec.insert(Animator::new(lib, &vis.skeleton, joints));
             }

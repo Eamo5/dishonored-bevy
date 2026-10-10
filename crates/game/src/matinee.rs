@@ -383,6 +383,18 @@ fn play_matinees(
                         .map(|gt| {
                             let (_, r, p) = gt.to_scale_rotation_translation();
                             Mat4::from_rotation_translation(r, p)
+                        })
+                        .or_else(|| {
+                            // A bound actor uses its initial transform to turn a
+                            // socket's world placement into a movement delta.
+                            // Player and NPC capsule origins differ from model
+                            // socket origins; those retain their stage-mark path.
+                            if target_player || ta.and_then(|a| g.actors.get(a as usize)).is_some_and(|a| a.spawner.is_some()) {
+                                return None;
+                            }
+                            props.iter().find(|(_, rig, _)| rig.actor == oa)
+                                .and_then(|(_, rig, _)| rig.attachment(&k.2))
+                                .and_then(|(joint, socket)| globals.get(joint).ok().map(|g| g.to_matrix() * socket.to_matrix()))
                         });
                     let delta = match bone {
                         Some(b) => Some(b * local * rider_init.inverse()),
@@ -455,7 +467,7 @@ fn play_matinees(
                                 // remember the motion: whoever stands on it rides along
                                 let prev = *tf;
                                 if prev.translation != new.translation || prev.rotation != new.rotation {
-                                    st.platforms.push((ent, prev, new));
+                                    st.record_platform_motion(ent, prev, new);
                                 }
                                 *tf = new;
                             }
@@ -766,7 +778,7 @@ fn ride_platforms(
     rapier: bevy_rapier3d::plugin::ReadRapierContext,
     mut player: Query<(Entity, &mut Transform, &mut Player)>,
 ) {
-    if st.platforms.is_empty() {
+    if st.platforms.is_empty() || st.player_base.is_some() {
         return;
     }
     let Ok((pe, mut t, mut p)) = player.single_mut() else { return };
