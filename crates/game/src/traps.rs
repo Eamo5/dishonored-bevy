@@ -31,10 +31,10 @@ pub struct TrapsPlugin;
 
 impl Plugin for TrapsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TrapLog>()
+        app.init_resource::<TrapLog>().init_resource::<TrapRestore>()
             .add_systems(OnEnter(GameState::InGame), spawn_traps.after(crate::level::LevelSpawnSet))
             .add_systems(Update, disarm_focus.after(crate::interact::FocusSet).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (restore_traps, trap_clocks, trip_wires, launch, fly_darts).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (restore_traps.after(crate::save::restore_npcs), restore_trap_state, trap_clocks, trip_wires, launch, fly_darts).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -83,12 +83,78 @@ impl TrapPart {
 
 /// A launcher's shot in flight.
 #[derive(Component)]
-struct Dart {
+pub(crate) struct Dart {
     trap: u32,
     source: Option<Entity>,
     vel: Vec3,
     gravity: f32,
     life: f32,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct TrapRestore(pub Option<TrapsSave>);
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct TrapsSave {
+    parts: Vec<TrapSave>,
+    darts: Vec<DartSave>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct TrapSave {
+    index: u32,
+    sprung: bool,
+    disarmed: bool,
+    firing: Option<(f32, bool)>,
+    animation: Option<(String, f32, f32, bool, bool)>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DartSave {
+    trap: u32,
+    position: [f32; 3],
+    velocity: [f32; 3],
+    gravity: f32,
+    life: f32,
+}
+
+impl TrapsSave {
+    pub(crate) fn capture<'a>(parts: impl IntoIterator<Item = (&'a TrapPart, Option<&'a Animator>)>, darts: impl IntoIterator<Item = (&'a Dart, &'a Transform)>) -> Self {
+        Self {
+            parts: parts.into_iter().map(|(t, a)| TrapSave { index: t.index, sprung: t.sprung, disarmed: t.disarmed, firing: t.firing,
+                animation: a.and_then(|a| a.current().map(|c| (a.lib.clip(c.clip).name.clone(), c.t, c.speed, c.looping, a.sounds))) }).collect(),
+            darts: darts.into_iter().map(|(d, t)| DartSave { trap: d.trap, position: t.translation.to_array(),
+                velocity: d.vel.to_array(), gravity: d.gravity, life: d.life }).collect(),
+        }
+    }
+}
+
+fn restore_trap_state(mut commands: Commands, mut pending: ResMut<TrapRestore>, level: Option<Res<LevelInfo>>,
+    mut traps: Query<(&mut TrapPart, Option<&mut Animator>)>, darts: Query<Entity, With<Dart>>, mut fx: MessageWriter<SpawnEffect>) {
+    let Some(saved) = pending.0.take() else { return };
+    let sources: HashMap<_, _> = traps.iter().filter_map(|(t, _)| t.collider.map(|e| (t.index, e))).collect();
+    for e in &darts { commands.entity(e).despawn(); }
+    for d in saved.darts {
+        let e = commands.spawn((Dart { trap: d.trap, source: sources.get(&d.trap).copied(), vel: Vec3::from(d.velocity), gravity: d.gravity, life: d.life },
+            Transform::from_translation(Vec3::from(d.position)), Visibility::default(), DespawnOnExit(GameState::InGame))).id();
+        if let Some(trail) = level.as_ref().and_then(|l| l.scene.traps.get(d.trap as usize)).and_then(|t| t.trail) {
+            fx.write(SpawnEffect { follow: Some(e), system: Some(trail), secs: d.life, ..SpawnEffect::at("", Vec3::ZERO) });
+        }
+    }
+    let saved: HashMap<_, _> = saved.parts.into_iter().map(|s| (s.index, s)).collect();
+    for (mut t, a) in &mut traps {
+        let Some(s) = saved.get(&t.index) else { continue };
+        t.sprung = s.sprung;
+        t.disarmed = s.disarmed;
+        t.firing = s.firing;
+        if let (Some(mut a), Some((name, time, speed, looping, sounds))) = (a, &s.animation) {
+            if let Some(clip) = a.lib.find(name) {
+                a.restart(clip, *looping, *speed, 0.0);
+                a.seek(*time);
+                a.sounds = *sounds;
+            }
+        }
+    }
 }
 
 fn spawn_traps(mut commands: Commands, assets: Option<Res<GameAssets>>, level: Option<Res<LevelInfo>>, mut wl: Option<ResMut<WorldLighting>>, mut log: ResMut<TrapLog>) {
@@ -417,6 +483,59 @@ fn fly_darts(
 #[cfg(test)]
 mod projectile_tests {
     use super::*;
+
+    #[test]
+    fn trap_save_restores_pending_firing_and_in_flight_darts_without_duplicates() {
+        let mut app = App::new();
+        app.init_resource::<Time>().init_resource::<TimeControl>().init_resource::<TrapLog>().init_resource::<TrapRestore>()
+            .add_message::<SpawnEffect>().add_message::<PostEvent>()
+            .insert_resource(LevelInfo { scene: dhcook::format::Scene { traps: vec![dhcook::format::Trap {
+                launcher: true, speed: 10.0, fire_at: 0.3, trail: Some(9), ..default()
+            }], ..default() } }).add_systems(Update, (restore_trap_state, launch).chain());
+        let skeleton = dhcook::format::SkeletonDef::default();
+        let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![std::sync::Arc::new(dhcook::format::AnimFile {
+            bones: vec![], clips: vec![dhcook::format::AnimClip { name: "Fire".into(), duration: 1.0, ..default() }],
+        })]));
+        let mut anim = Animator::new(lib.clone(), &skeleton, vec![]);
+        anim.restart(lib.find("Fire").unwrap(), false, 0.75, 0.0);
+        anim.seek(0.4);
+        let part = TrapPart { index: 0, launcher: true, sprung: true, disarmed: false,
+            firing: Some((0.5, true)), wire: (Vec3::ZERO, Vec3::ZERO), sockets: vec![], collider: None };
+        let dart = Dart { trap: 0, source: None, vel: Vec3::X * 8.0, gravity: 1.5, life: 2.0 };
+        let position = Transform::from_xyz(4.0, 2.0, 1.0);
+        let saved = TrapsSave::capture([(&part, Some(&anim))], [(&dart, &position)]);
+        let encoded = serde_json::to_string(&saved).unwrap();
+        let shell = app.world_mut().spawn_empty().id();
+        let trap = app.world_mut().spawn((TrapPart { collider: Some(shell), firing: None, ..part }, Transform::default(),
+            Animator::new(lib, &skeleton, vec![]))).id();
+        app.world_mut().resource_mut::<TrapRestore>().0 = Some(serde_json::from_str(&encoded).unwrap());
+        app.update();
+        assert_eq!(app.world().get::<TrapPart>(trap).unwrap().firing, Some((0.5, true)));
+        let a = app.world().get::<Animator>(trap).unwrap();
+        assert_eq!((a.current().unwrap().t, a.current().unwrap().speed), (0.4, 0.75));
+        assert!(a.sounds);
+        let mut q = app.world_mut().query::<(&Dart, &Transform)>();
+        let (d, t) = q.single(app.world()).unwrap();
+        assert_eq!((d.source, d.vel, d.gravity, d.life), (Some(shell), Vec3::X * 8.0, 1.5, 2.0));
+        assert_eq!(t.translation, position.translation);
+        let effects = app.world().resource::<Messages<SpawnEffect>>();
+        let mut cursor = effects.get_cursor();
+        let effect = cursor.read(effects).next().unwrap();
+        assert_eq!((effect.system, effect.secs), (Some(9), 2.0));
+        app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(100));
+        app.update();
+        assert_eq!(q.iter(app.world()).count(), 1, "already-fired launcher must not duplicate its saved dart");
+        let mut pending: TrapsSave = serde_json::from_str(&encoded).unwrap();
+        pending.parts[0].firing = Some((0.25, false));
+        pending.darts.clear();
+        app.world_mut().resource_mut::<TrapRestore>().0 = Some(pending);
+        app.update();
+        assert!(app.world().get::<TrapPart>(trap).unwrap().firing.unwrap().1);
+        let (d, _) = q.single(app.world()).unwrap();
+        assert_eq!(d.life, 5.0, "queued shot survives loading and emits a new dart");
+        app.update();
+        assert_eq!(q.iter(app.world()).count(), 1);
+    }
 
     #[test]
     fn stopped_launcher_retains_zero_delay_shot_until_time_resumes() {

@@ -987,6 +987,16 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Trap saves now retain launcher firing progress, triggered/disarmed state,
+  animation cursor/rate/sound settings and in-flight darts. Dart source colliders
+  remap by trap index; trails use the remaining lifetime. The optional snapshot
+  follows legacy trap-log restoration. All 95 tests pass
+  (`cache/parity_trap_save_suite.log`). Prison-sewer launcher 0 retained its queued
+  zero-time firing state through a stopped-time save/load, then fired once after
+  time resumed (`cache/parity_trap_save_runtime.log`,
+  `cache/parity_trap_resume_runtime.log`). These live trap snapshots had no active
+  animation clips; their animation bindings still need investigation.
+
 - Trap skeletons now use the world-time clock. Launchers retain queued orders but
   do not advance firing timers or emit even zero-delay shots while stopped. A
   regression verifies the queued shot fires exactly once on half-speed resumption;
