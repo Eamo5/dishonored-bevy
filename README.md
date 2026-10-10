@@ -999,6 +999,10 @@ fullscreen display, vertical sync and the crosshair.
   from initial overlap and zero movement; all 78 tests pass
   (`cache/parity_rat_sliding_suite.log`). Obstacle-routing and exact original crowd
   behaviour remain outstanding.
+  Targeting and rat-damage cover checks now also ignore trigger sensors, matching
+  movement. A gameplay regression keeps a rat alive behind solid cover, then
+  confirms the same strike kills it when that collider becomes a sensor; all 79
+  tests pass (`cache/parity_rat_sensor_suite.log`).
 
 - Full-body cinematic, carrying and swimming poses now suppress the powers/ranged
   overlay and held weapons. Normal equipment visibility returns afterward.

@@ -640,7 +640,7 @@ fn kill_rats(mut commands: Commands, mut kills: MessageReader<KillRats>, mut swa
                     let to = t.translation + Vec3::Y * 0.05 - k.source;
                     let distance = to.length();
                     if distance > 0.05 && context.as_ref().is_some_and(|ctx| ctx.cast_ray(k.source, to / distance, distance - 0.05, true,
-                        QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP))).is_some()) {
+                        QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP))).is_some()) {
                         return true;
                     }
                     commands.entity(r).despawn();
@@ -752,9 +752,12 @@ mod kill_tests {
         app.world_mut().despawn(wall);
         app.update();
         assert!(app.world().resource::<VisibilityResult>().0);
-        app.world_mut().spawn((Collider::cuboid(0.1, 2.0, 2.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(GROUP_PROP, Group::ALL)));
+        let prop = app.world_mut().spawn((Collider::cuboid(0.1, 2.0, 2.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
         app.update();
         assert!(!app.world().resource::<VisibilityResult>().0);
+        app.world_mut().entity_mut(prop).insert(Sensor);
+        app.update();
+        assert!(app.world().resource::<VisibilityResult>().0, "trigger volumes do not block targets");
     }
 
     #[test]
@@ -811,6 +814,30 @@ mod kill_tests {
         assert_eq!(app.world().resource::<PlayerStats>().adrenaline, 10.0);
         let mut q = app.world_mut().query::<&Rat>();
         assert_eq!(q.iter(app.world()).count(), 0);
+    }
+
+    #[test]
+    fn solid_cover_protects_rats_but_trigger_volumes_do_not() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>().init_resource::<PlayerStats>()
+            .init_resource::<crate::gamedata::Attrs>().add_message::<KillRats>()
+            .add_systems(Last, kill_rats);
+        let rat = app.world_mut().spawn((Rat { offset: Vec3::ZERO, speed: 0.0, yaw: 0.0, state: RatAnim::Idle, spawn_t: 1.0 }, Transform::from_xyz(2.0, 0.0, 0.0))).id();
+        let swarm = app.world_mut().spawn(Swarm { wild: None, spawner: None, left: 30.0, level: 1, target: None, eating: None, delay: 0.0, bite_t: 0.0, rats: vec![rat], scattering: false }).id();
+        let cover = app.world_mut().spawn((Collider::cuboid(0.1, 2.0, 2.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
+        app.update();
+        let strike = |app: &mut App| {
+            app.world_mut().write_message(KillRats { at: Vec3::ZERO, radius: 3.0, by_player: true, source: Vec3::Y });
+            app.update();
+        };
+        strike(&mut app);
+        assert!(app.world().get::<Rat>(rat).is_some());
+        assert_eq!(app.world().get::<Swarm>(swarm).unwrap().rats, vec![rat]);
+        app.world_mut().entity_mut(cover).insert(Sensor);
+        strike(&mut app);
+        assert!(app.world().get::<Rat>(rat).is_none());
+        assert!(app.world().get::<Swarm>(swarm).unwrap().rats.is_empty());
     }
 }
 
@@ -1152,7 +1179,7 @@ fn swarm_target_visible(ctx: &RapierContext, center: Vec3, target: Vec3) -> bool
     let to = target - eye;
     let distance = to.length();
     distance < 0.01 || ctx.cast_ray(eye, to / distance, distance, true,
-        QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP))).is_none()
+        QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP))).is_none()
 }
 
 /// A swarm's step kept out of the level's rat repulsors (pushed back to their edge).
