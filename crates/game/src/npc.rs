@@ -17,6 +17,13 @@ use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 pub struct NpcPlugin;
 
+pub(crate) fn age_corpses(time: Res<Time>, tc: Res<TimeControl>, mut npcs: Query<&mut Npc>) {
+    let dt = time.delta_secs() * tc.world_scale().max(0.0);
+    for mut npc in &mut npcs {
+        npc.corpse_age = if npc.mode == Mode::Dead { npc.corpse_age + dt } else { 0.0 };
+    }
+}
+
 impl Plugin for NpcPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PlayerTrail>()
@@ -39,6 +46,7 @@ impl Plugin for NpcPlugin {
                     record_trail,
                     spawn_requested,
                     npc_hits,
+                    age_corpses,
                     ash_marked,
                     burn_ashes,
                     npc_shots,
@@ -180,6 +188,8 @@ pub struct Npc {
     pub anim_speed: f32,
     pub hit_react: f32,
     pub down_t: f32,
+    /// World-time seconds since death; separate from the short fall blend.
+    pub corpse_age: f32,
     pub look: f32,
     pub has_sword: bool,
     /// ranged weapon: 0 none, 1 pistol (elite guards), 2 bow (tallboys)
@@ -1208,6 +1218,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         anim_speed: 0.0,
         hit_react: 0.0,
         down_t: if corpse { 1.0 } else { 0.0 },
+        corpse_age: if corpse { 1_000_000.0 } else { 0.0 },
         look: 0.0,
         has_sword,
         ranged,

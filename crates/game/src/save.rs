@@ -57,6 +57,8 @@ pub struct NpcSave {
     falling: Option<crate::carry::Falling>,
     #[serde(default)]
     consumed: bool,
+    #[serde(default)]
+    corpse_age: Option<f32>,
     /// Original passenger placement, before a cinematic vehicle's movement.
     #[serde(default)]
     ride_base: Option<[f32; 16]>,
@@ -452,6 +454,7 @@ fn save_game(
                 severed: sev.map(|s| s.0.clone()).unwrap_or_default(),
                 falling: falling.cloned(),
                 consumed,
+                corpse_age: Some(n.corpse_age),
                 ride_base: matinee.saved_ride_base(entity),
             })
             .collect(),
@@ -777,6 +780,9 @@ pub(crate) fn restore_npcs(mut commands: Commands, mut q: Query<(Entity, &Restor
         // Falling bodies bypass NPC steering, which otherwise updates this rotation.
         t.rotation = Quat::from_rotation_y(s.yaw);
         n.yaw = s.yaw;
+        // Older snapshots have no death clock: treat their bodies as established
+        // corpses rather than imposing a new post-kill delay on every load.
+        n.corpse_age = if s.mode == Mode::Dead { s.corpse_age.unwrap_or(1_000_000.0).max(0.0) } else { 0.0 };
         if let Some(base) = s.ride_base {
             matinee.restore_ride_base(e, base);
         }

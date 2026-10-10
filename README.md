@@ -1050,8 +1050,15 @@ fullscreen display, vertical sync and the crosshair.
   startup/per-limb timings: the map audit found 414 common 4s/2.5s pairs, one prison
   sewer 10s/2.5s override, and three class-default 2s/1.85s pairs. All 71 game tests
   pass (`cache/parity_wild_feeding_timing_suite.log`). The existing four-stage body
-  approximation remains; anatomical limb progression and post-kill delay still
-  need original-behavior alignment.
+  approximation remains; anatomical limb progression still needs original-behavior
+  alignment. Fresh corpses now respect `m_fEatStartupDelayAfterKill` (class default
+  1s), using wild-spawner and summoned-level settings. A separate world-time death
+  clock survives saves, carrying and flight; older saves treat corpses as established.
+  Boundary checks cover partial frames, old corpses, overrides and stopped time.
+  All 76 tests pass (`cache/parity_feeding_delay_suite.log`). A Streets1 runtime
+  save/load preserved NPC 3's death clock (0.2606s before load, 3.3821s after the
+  scripted three-second load wait; `cache/parity_feeding_delay_runtime.log`). Exact
+  original post-kill animation/FX sequencing remains unverified.
 
 - Wild-rat bites now use the original player stance distances: standing 200cm and
   crouched 60cm, from `Default__DisTweaks_PlayerPawn`, replacing the fixed 1.4m

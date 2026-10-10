@@ -48,6 +48,31 @@ fn wild_feeding_duration(spawner: Option<&dhcook::format::RatSpawner>) -> f32 {
     param("m_fEatStartupDuration", 2.0) + param("m_fEatPerLimbDuration", 1.85) * 4.0
 }
 
+/// Only the portion of this world-time step after the post-kill delay can feed.
+fn feeding_step(corpse_age: f32, delay: f32, dt: f32) -> f32 {
+    (corpse_age - delay.max(0.0)).clamp(0.0, dt.max(0.0))
+}
+
+#[cfg(test)]
+mod feeding_delay_tests {
+    use super::feeding_step;
+
+    #[test]
+    fn fresh_corpses_wait_while_old_corpses_feed_immediately() {
+        let mut age = 0.0;
+        let mut fed = 0.0;
+        for _ in 0..6 {
+            age += 0.2;
+            fed += feeding_step(age, 1.0, 0.2);
+        }
+        assert!((fed - 0.2).abs() < 1e-5);
+        assert!((feeding_step(1.05, 1.0, 0.1) - 0.05).abs() < 1e-5);
+        assert_eq!(feeding_step(40.0, 1.0, 0.1), 0.1);
+        assert_eq!(feeding_step(40.0, 1.0, 0.0), 0.0);
+        assert_eq!(feeding_step(1.2, 2.0, 0.2), 0.0);
+    }
+}
+
 fn summon_setting(data: &Data, level: u8, name: &str, fallback: f32) -> f32 {
     data.pawn(&format!("swarm.{}.{name}", level.clamp(1, 2)), fallback)
 }
@@ -69,7 +94,7 @@ impl Plugin for SwarmPlugin {
             .add_message::<KillRats>()
             .add_systems(OnEnter(GameState::InGame), level_swarms.after(crate::level::LevelSpawnSet))
             .add_systems(Update, restore_swarms.after(crate::save::restore_npcs).before(summon).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (summon, scripted_swarms, color_rats, swarm_brain, move_rats, npc_stomps, kill_rats).chain().run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (summon, scripted_swarms, color_rats, swarm_brain, move_rats, npc_stomps, kill_rats).chain().after(crate::npc::age_corpses).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -906,13 +931,14 @@ fn swarm_brain(
                         .min_by(|a, b| a.2.translation.distance(center).total_cmp(&b.2.translation.distance(center)))
                         .map(|(e, _, _, _)| e)
                 });
-                if let Some((be, _, bt, _)) = body.and_then(|b| npcs.get(b).ok()) {
+                if let Some((be, corpse, bt, _)) = body.and_then(|b| npcs.get(b).ok()) {
                     goal = Some(bt.translation);
                     busy = true;
                     let t = if s.eating.map(|x| x.0) == Some(be) { s.eating.unwrap().1 } else { 0.0 };
-                    let t = if bt.translation.distance(center) < 1.2 { t + dt } else { t };
+                    let delay = spawner.and_then(|s| s.params.get("m_fEatStartupDelayAfterKill")).copied().unwrap_or(1.0);
+                    let t = if bt.translation.distance(center) < 1.2 { t + feeding_step(corpse.corpse_age, delay, dt) } else { t };
                     s.eating = Some((be, t));
-                    if t >= wild_feeding_duration(spawner) {
+                    if corpse.corpse_age >= delay.max(0.0) && t >= wild_feeding_duration(spawner) {
                         commands.entity(be).insert((crate::npc::ConsumedBody, Visibility::Hidden));
                         s.eating = None;
                     }
@@ -999,16 +1025,17 @@ fn swarm_brain(
                     .map(|(e, _, _, _)| e)
             });
             match body.and_then(|b| npcs.get(b).ok()) {
-                Some((be, _, bt, _)) => {
+                Some((be, corpse, bt, _)) => {
                     goal = bt.translation;
                     let t = if s.eating.map(|x| x.0) == Some(be) { s.eating.unwrap().1 } else { 0.0 };
-                    let t = if bt.translation.distance(center) < 1.2 { t + dt } else { t };
+                    let delay = summon_setting(&data, s.level, "m_fEatStartupDelayAfterKill", 1.0);
+                    let t = if bt.translation.distance(center) < 1.2 { t + feeding_step(corpse.corpse_age, delay, dt) } else { t };
                     s.eating = Some((be, t));
                     // startup then the limbs (`m_fEatStartupDuration`, `m_fEatPerLimbDuration`)
                     let default_duration = if s.level >= 2 { 0.75 } else { 1.5 };
                     let eat = summon_setting(&data, s.level, "m_fEatStartupDuration", default_duration)
                         + summon_setting(&data, s.level, "m_fEatPerLimbDuration", default_duration) * if s.level >= 2 { 3.0 } else { 5.0 };
-                    if t >= eat {
+                    if corpse.corpse_age >= delay.max(0.0) && t >= eat {
                         commands.entity(be).insert((crate::npc::ConsumedBody, Visibility::Hidden));
                         s.eating = None;
                     }
