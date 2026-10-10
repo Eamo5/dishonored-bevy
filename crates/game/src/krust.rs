@@ -149,6 +149,60 @@ impl Krust {
     }
 }
 
+#[cfg(test)]
+mod cover_tests {
+    use super::*;
+
+    #[test]
+    fn krust_blasts_use_shell_position_cover_and_remove_dead_hosts() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>().init_resource::<KrustLog>()
+            .insert_resource(LevelInfo { scene: dhcook::format::Scene { krusts: vec![KrustDef::default()], ..default() } })
+            .add_message::<Struck>().add_message::<Explosion>().add_message::<PostEvent>()
+            .add_message::<StopEvent>().add_message::<SpawnEffect>()
+            .add_systems(Last, (restore_krusts, krust_hits).chain());
+        let shell = app.world_mut().spawn((Transform::from_xyz(2.0, 0.0, 0.0), Collider::ball(0.35),
+            CollisionGroups::new(GROUP_PROP, Group::ALL), Strikeable(Entity::PLACEHOLDER))).id();
+        let skeleton = dhcook::format::SkeletonDef::default();
+        let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![]));
+        let socket = (Entity::PLACEHOLDER, Transform::IDENTITY);
+        let host = crate::possession::Host { npc_type: None, rooted: true, fish: false, seat: Vec3::ZERO, facing: Vec3::X };
+        let entity = app.world_mut().spawn((Krust {
+            facing: Vec3::X, index: 0, state: AGGRESSIVE, mode: Mode::Aggressive, hp: 10.0,
+            near_t: 0.0, away_t: 0.0, exit_delay: 0.0, volley: 0.0, shots: 0, fired: false,
+            death_fx: false, reaction: 0.0, lost: 0.0, order: None, launch: socket, spew: socket,
+            vision: socket, center: Entity::PLACEHOLDER, pearl: None, pearl_pickup: None,
+            pearl_lying: false, collider: shell, eye: Vec3::ZERO, blocked: None,
+        }, Animator::new(lib, &skeleton, vec![]), Transform::from_xyz(20.0, 0.0, 0.0), host)).id();
+        let cover = app.world_mut().spawn((Transform::from_xyz(1.0, 0.0, 0.0), Collider::cuboid(0.01, 2.0, 2.0),
+            CollisionGroups::new(GROUP_WORLD, Group::ALL))).id();
+        let blast = |app: &mut App| {
+            app.world_mut().write_message(Explosion { at: Vec3::ZERO, radius: 3.0, full: 3.0, damage: 100.0,
+                effect: "", player: None, kind: HitKind::Explosion });
+            app.update();
+        };
+        app.update();
+        blast(&mut app);
+        assert_eq!(app.world().get::<Krust>(entity).unwrap().hp, 10.0);
+        app.world_mut().entity_mut(cover).insert(CollisionGroups::new(GROUP_PROP, Group::ALL));
+        blast(&mut app);
+        assert_eq!(app.world().get::<Krust>(entity).unwrap().hp, 10.0);
+        app.world_mut().entity_mut(cover).insert(Sensor);
+        blast(&mut app);
+        assert!(app.world().get::<Krust>(entity).unwrap().dead(), "the exposed shell is in range even though its actor origin is not");
+        assert!(app.world().get::<crate::possession::Host>(entity).is_none());
+        assert!(app.world().get::<Strikeable>(shell).is_none());
+        assert_eq!(app.world().resource::<KrustLog>().dead.get(&0), Some(&false));
+        // A map spawn restores Host before the dead log is applied on load.
+        app.world_mut().entity_mut(entity).insert(crate::possession::Host { npc_type: None, rooted: true, fish: false, seat: Vec3::ZERO, facing: Vec3::X });
+        app.world_mut().resource_mut::<KrustLog>().restore = true;
+        app.update();
+        assert_eq!(app.world().get::<Krust>(entity).unwrap().state, DEAD);
+        assert!(app.world().get::<crate::possession::Host>(entity).is_none());
+    }
+}
+
 /// A gob of acid in flight.
 #[derive(Component)]
 struct Spit {
@@ -358,20 +412,21 @@ fn restore_krusts(
     mut commands: Commands,
     mut log: ResMut<KrustLog>,
     level: Option<Res<LevelInfo>>,
-    mut krusts: Query<(&mut Krust, &mut Animator)>,
+    mut krusts: Query<(Entity, &mut Krust, &mut Animator)>,
 ) {
     if !log.restore {
         return;
     }
     log.restore = false;
     let Some(level) = level else { return };
-    for (mut k, mut a) in &mut krusts {
+    for (e, mut k, mut a) in &mut krusts {
         let Some(&taken) = log.dead.get(&k.index) else { continue };
         let Some(def) = level.scene.krusts.get(k.index as usize) else { continue };
         k.state = DEAD;
         k.death_fx = true;
         play(&mut a, def, DEAD, true);
         commands.entity(k.collider).remove::<Strikeable>();
+        commands.entity(e).remove::<crate::possession::Host>();
         if taken {
             if let Some(p) = k.pearl.take() {
                 commands.entity(p).despawn();
@@ -425,6 +480,7 @@ fn krust_hits(
     mut sfx: MessageWriter<PostEvent>,
     mut stop: MessageWriter<StopEvent>,
     mut fx: MessageWriter<SpawnEffect>,
+    (rapier, globals): (ReadRapierContext, Query<&GlobalTransform>),
 ) {
     let Some(level) = level else {
         struck.clear();
@@ -432,10 +488,15 @@ fn krust_hits(
         return;
     };
     let mut hits: Vec<(Entity, &'static str, f32, Vec3)> = struck.read().map(|s| (s.target, damage_type(s.kind), s.damage, s.at)).collect();
+    let context = rapier.single().ok();
     for b in blasts.read() {
-        for (e, _, _, g) in &krusts {
-            let d = g.translation().distance(b.at);
-            if d < b.radius {
+        for (e, k, _, g) in &krusts {
+            let at = globals.get(k.collider).map(|g| g.translation()).unwrap_or(g.translation());
+            let d = at.distance(b.at);
+            let blocked = d < b.radius && d > 0.001 && context.as_ref().is_some_and(|ctx| ctx.cast_ray(b.at, (at - b.at) / d, d, true,
+                QueryFilter::default().exclude_collider(k.collider).exclude_sensors()
+                    .groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP))).is_some());
+            if d < b.radius && !blocked {
                 let k = if d <= b.full { 1.0 } else { (1.0 - (d - b.full) / (b.radius - b.full).max(0.01)).max(0.0) };
                 hits.push((e, "DishonoredDamageType_Explosion", b.damage * k, b.at));
             }
@@ -466,6 +527,7 @@ fn krust_hits(
             play(&mut a, def, death, false);
             stop.write(StopEvent(event_id(LOOP_SOUND)));
             commands.entity(k.collider).remove::<Strikeable>();
+            commands.entity(e).remove::<crate::possession::Host>();
             log.dead.insert(k.index, false);
             if std::env::var("DH_KRUST_LOG").is_ok() {
                 info!("krust {} killed ({ty}, {dmg:.1})", def.name);

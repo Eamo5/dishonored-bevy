@@ -987,6 +987,12 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- River-krust blasts now measure range to the shell collider and check world/prop
+  cover, ignoring the target's own shell and trigger sensors. Combat death and
+  dead-log restoration remove possession eligibility. Regression coverage includes
+  an offset actor origin, both cover groups, sensor conversion and dead restoration;
+  all 84 tests pass (`cache/parity_krust_blast_suite.log`).
+
 - Hagfish explosion damage now checks solid world/prop cover, matching bite and
   feeding visibility. Regression blasts leave covered fish alive, then kill them
   through the same collider when it becomes a trigger sensor, removing dead hosts
