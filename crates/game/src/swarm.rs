@@ -23,6 +23,41 @@ use std::f32::consts::FRAC_PI_2;
 
 pub struct SwarmPlugin;
 
+fn player_bite_distance(data: &Data, crouched: bool) -> f32 {
+    let (key, fallback) = if crouched {
+        ("m_fCrouchedRatSwarmAttackDistance", 60.0)
+    } else {
+        ("m_fStandUpRatSwarmAttackDistance", 200.0)
+    };
+    data.pawn(key, fallback).max(0.0) * 0.01
+}
+
+fn feeding_required(data: &Data, swarm: &Swarm, spawner: Option<&dhcook::format::RatSpawner>) -> usize {
+    let count = if swarm.wild.is_some() {
+        spawner.and_then(|s| s.params.get("m_EatRequiredRatCount")).copied().unwrap_or(5.0)
+    } else {
+        summon_setting(data, swarm.level, "m_EatRequiredRatCount", 5.0)
+    };
+    count.max(0.0) as usize
+}
+
+fn wild_feeding_duration(spawner: Option<&dhcook::format::RatSpawner>) -> f32 {
+    let param = |key, fallback| spawner.and_then(|s| s.params.get(key)).copied().unwrap_or(fallback).max(0.0);
+    // Preserve the current four-stage body approximation; the stage timings come
+    // from the actual swarm, with DisTweaks_RatSwarm class defaults as fallback.
+    param("m_fEatStartupDuration", 2.0) + param("m_fEatPerLimbDuration", 1.85) * 4.0
+}
+
+fn summon_setting(data: &Data, level: u8, name: &str, fallback: f32) -> f32 {
+    data.pawn(&format!("swarm.{}.{name}", level.clamp(1, 2)), fallback)
+}
+
+fn summoned_bite_damage(data: &Data, level: u8, rats: usize) -> f32 {
+    let min = summon_setting(data, level, "m_fMinDamage", 2.0).max(0.0);
+    let max = summon_setting(data, level, "m_fMaxDamage", if level >= 2 { 10.0 } else { 5.0 }).max(min);
+    (summon_setting(data, level, "m_fDamagePerBite", 0.4) * rats as f32).clamp(min, max)
+}
+
 /// Bites Corvo took from rats (`DisSeqEvent_AttackedByRats`).
 #[derive(Resource, Default)]
 pub struct RatBites(pub u32);
@@ -103,6 +138,30 @@ fn advance_bites(delay: &mut f32, elapsed: &mut f32, dt: f32, interval: f32) -> 
 #[cfg(test)]
 mod bite_tests {
     use super::*;
+
+    #[test]
+    fn wild_feeding_respects_sewer_startup_override_and_class_defaults() {
+        let mut spawner = dhcook::format::RatSpawner::default();
+        assert!((wild_feeding_duration(Some(&spawner)) - 9.4).abs() < 1e-5);
+        spawner.params.insert("m_fEatStartupDuration".into(), 4.0);
+        spawner.params.insert("m_fEatPerLimbDuration".into(), 2.5);
+        assert_eq!(wild_feeding_duration(Some(&spawner)), 14.0);
+        spawner.params.insert("m_fEatStartupDuration".into(), 10.0);
+        assert_eq!(wild_feeding_duration(Some(&spawner)), 20.0);
+    }
+
+    #[test]
+    fn summoned_swarm_levels_have_distinct_damage_caps() {
+        let mut data = Data::default();
+        assert_eq!(summoned_bite_damage(&data, 1, 30), 5.0);
+        assert_eq!(summoned_bite_damage(&data, 2, 30), 10.0);
+        assert_eq!(summoned_bite_damage(&data, 1, 1), 2.0);
+        data.0.pawn.insert("swarm.2.m_fMaxDamage".into(), 7.0);
+        data.0.pawn.insert("swarm.2.m_fDamagePerBite".into(), 0.5);
+        assert_eq!(summoned_bite_damage(&data, 2, 8), 4.0);
+        assert_eq!(summoned_bite_damage(&data, 2, 30), 7.0);
+        assert_eq!(summoned_bite_damage(&data, 1, 30), 5.0);
+    }
 
     #[test]
     fn albinos_adds_to_original_white_rat_probability() {
@@ -201,6 +260,19 @@ mod bite_tests {
         assert_eq!(wild.bite_damage(1), 1.0);
         assert_eq!(wild.bite_damage(10), 2.0);
         assert_eq!(wild.bite_damage(100), 10.0);
+        let mut data = Data::default();
+        let mut swarm = Swarm { wild: Some(wild), spawner: Some(0), left: 100.0, level: 1,
+            target: None, eating: None, delay: 0.0, bite_t: 0.0, rats: vec![], scattering: false };
+        let mut spawner = dhcook::format::RatSpawner::default();
+        assert_eq!(feeding_required(&data, &swarm, Some(&spawner)), 5);
+        spawner.params.insert("m_EatRequiredRatCount".into(), 8.0);
+        assert_eq!(feeding_required(&data, &swarm, Some(&spawner)), 8);
+        swarm.wild = None;
+        assert_eq!(feeding_required(&data, &swarm, Some(&spawner)), 5);
+        data.0.pawn.insert("swarm.2.m_EatRequiredRatCount".into(), 3.0);
+        assert_eq!(feeding_required(&data, &swarm, None), 5);
+        swarm.level = 2;
+        assert_eq!(feeding_required(&data, &swarm, None), 3);
     }
 }
 
@@ -374,7 +446,7 @@ fn summon(
             let yaw = rand::random::<f32>() * std::f32::consts::TAU;
             let e = spawn_rat(&mut commands, vis, level.scene.rat_type, r.at + offset, yaw, slot);
             // Both original Devouring Swarm level tweaks override the base 10%.
-            commands.entity(e).insert(RatWhiteChance(0.15));
+            commands.entity(e).insert(RatWhiteChance(summon_setting(&data, r.level, "m_fWhiteRatRatio", 0.15)));
             commands.entity(e).insert(Rat { offset, speed: 3.0 + rand::random::<f32>() * 1.2, yaw, state: RatAnim::Spawn, spawn_t: rand::random::<f32>() * 0.35 });
             rats.push(e);
         }
@@ -387,7 +459,7 @@ fn summon(
                 level: r.level,
                 target: None,
                 eating: None,
-                delay: 2.0,
+                delay: summon_setting(&data, r.level, "m_fInitialDelayBeforeDealingDamage", 2.0).max(0.0),
                 bite_t: 0.0,
                 rats,
                 scattering: false,
@@ -563,6 +635,75 @@ mod kill_tests {
     use super::*;
 
     #[test]
+    fn wild_swarm_bites_use_player_stance_and_original_distances() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>().init_resource::<Data>().init_resource::<TimeControl>()
+            .init_resource::<PlayerStats>().init_resource::<RatBites>()
+            .add_message::<NpcHit>().add_message::<NpcStagger>().add_message::<PostEvent>()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
+            .add_systems(Last, swarm_brain);
+        let player = app.world_mut().spawn((Transform::from_xyz(1.7, 0.0, 0.0), crate::player::Player {
+            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: true, sprinting: false,
+            grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
+            air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
+            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO,
+        })).id();
+        let swarm = app.world_mut().spawn((Transform::default(), Swarm {
+            wild: Some(Wild { home: Vec3::ZERO, roam: 0.0, detect: 10.0, escape: 1.0,
+                aggressive: 1, bite: 1.0, min_damage: 1.0, max_damage: 1.0,
+                bite_interval: 0.1, initial_delay: 0.0, goal: Vec3::ZERO, wait: 100.0 }),
+            spawner: None, left: 100.0, level: 1, target: None, eating: None,
+            delay: 0.0, bite_t: 0.0, rats: vec![Entity::PLACEHOLDER], scattering: false,
+        })).id();
+        // Reset the swarm position each frame to measure bite reach, not approach speed.
+        let tick = |app: &mut App| {
+            app.world_mut().get_mut::<Transform>(swarm).unwrap().translation = Vec3::ZERO;
+            app.update();
+        };
+        tick(&mut app);
+        tick(&mut app);
+        assert_eq!(app.world().resource::<RatBites>().0, 0);
+        app.world_mut().get_mut::<crate::player::Player>(player).unwrap().crouched = false;
+        tick(&mut app);
+        assert!(app.world().resource::<RatBites>().0 > 0, "standing reach is 2m, beyond the old 1.4m cutoff");
+        app.world_mut().get_mut::<crate::player::Player>(player).unwrap().crouched = true;
+        let before = app.world().resource::<RatBites>().0;
+        app.world_mut().get_mut::<Transform>(player).unwrap().translation = Vec3::X * 0.5;
+        tick(&mut app);
+        assert!(app.world().resource::<RatBites>().0 > before, "crouching is vulnerable within 0.6m");
+        app.world_mut().resource_mut::<Data>().0.pawn.insert("m_fCrouchedRatSwarmAttackDistance".into(), 20.0);
+        let before = app.world().resource::<RatBites>().0;
+        tick(&mut app);
+        assert_eq!(app.world().resource::<RatBites>().0, before, "cooked overrides use centimetres");
+    }
+
+    #[derive(Resource, Default)]
+    struct VisibilityResult(bool);
+
+    #[test]
+    fn swarm_targeting_respects_walls_and_removed_cover() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<VisibilityResult>()
+            .add_systems(Last, |ctx: ReadRapierContext, mut result: ResMut<VisibilityResult>| {
+                result.0 = swarm_target_visible(&ctx.single().unwrap(), Vec3::ZERO, Vec3::new(2.0, 0.8, 0.0));
+            });
+        app.update();
+        assert!(app.world().resource::<VisibilityResult>().0);
+        let wall = app.world_mut().spawn((Collider::cuboid(0.1, 2.0, 2.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(GROUP_WORLD, Group::ALL))).id();
+        app.update();
+        assert!(!app.world().resource::<VisibilityResult>().0);
+        app.world_mut().despawn(wall);
+        app.update();
+        assert!(app.world().resource::<VisibilityResult>().0);
+        app.world_mut().spawn((Collider::cuboid(0.1, 2.0, 2.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(GROUP_PROP, Group::ALL)));
+        app.update();
+        assert!(!app.world().resource::<VisibilityResult>().0);
+    }
+
+    #[test]
     fn carrion_killer_counts_each_player_rat_kill_once() {
         let mut app = App::new();
         let mut stats = PlayerStats::default();
@@ -692,18 +833,21 @@ fn swarm_brain(
     mut hits: MessageWriter<NpcHit>,
     mut stagger: MessageWriter<NpcStagger>,
     mut sfx: MessageWriter<PostEvent>,
-    (player, mut stats, mut bites): (Query<&Transform, (With<crate::player::Player>, Without<Swarm>, Without<Npc>)>, ResMut<crate::gameplay::PlayerStats>, ResMut<RatBites>),
+    (player, mut stats, mut bites): (Query<(&Transform, &crate::player::Player), (Without<Swarm>, Without<Npc>)>, ResMut<crate::gameplay::PlayerStats>, ResMut<RatBites>),
     level: Option<Res<LevelInfo>>,
 ) {
     let dt = time.delta_secs() * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
     let ground = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
-    let ppos = player.single().map(|t| t.translation).ok();
+    let ppos = player.single().map(|(t, p)| (t.translation, player_bite_distance(&data, p.crouched))).ok();
     for (se, mut s, mut st) in &mut swarms {
         if s.rats.is_empty() {
             commands.entity(se).despawn();
             continue;
         }
+        let spawner = level.as_ref().and_then(|l| s.spawner.and_then(|i| l.scene.rat_spawners.get(i as usize)));
+        let can_eat = s.rats.len() >= feeding_required(&data, &s, spawner);
+        if !can_eat { s.eating = None; }
         if let Some(mut w) = s.wild.clone() {
             let center = st.translation;
             let n = s.rats.len();
@@ -711,12 +855,12 @@ fn swarm_brain(
             let mut goal: Option<Vec3> = None;
             let mut busy = false;
             // Corvo: a big swarm goes for him, a small one runs
-            if let Some(pp) = ppos.filter(|_| !stats.dead) {
+            if let Some((pp, attack_distance)) = ppos.filter(|_| !stats.dead) {
                 let d = pp.distance(center);
-                if big && d < w.detect {
+                if big && d < w.detect && swarm_target_visible(&ctx, center, pp) {
                     goal = Some(pp);
                     busy = true;
-                    if d < 1.4 {
+                    if d < attack_distance {
                         let swarm = &mut *s;
                         let count = advance_bites(&mut swarm.delay, &mut swarm.bite_t, dt, w.bite_interval);
                         if count > 0 {
@@ -738,7 +882,7 @@ fn swarm_brain(
             if goal.is_none() && big {
                 if let Some((te, tt)) = npcs
                     .iter()
-                    .filter(|(_, nn, t, _)| !nn.is_down() && matches!(nn.kind, Kind::Guard | Kind::Thug | Kind::Civilian) && t.translation.distance(center) < w.detect)
+                    .filter(|(_, nn, t, _)| !nn.is_down() && matches!(nn.kind, Kind::Guard | Kind::Thug | Kind::Civilian) && t.translation.distance(center) < w.detect && swarm_target_visible(&ctx, center, t.translation))
                     .min_by(|a, b| a.2.translation.distance(center).total_cmp(&b.2.translation.distance(center)))
                     .map(|(e, _, t, _)| (e, t.translation))
                 {
@@ -755,10 +899,10 @@ fn swarm_brain(
                     }
                 }
             }
-            if goal.is_none() {
-                let body = s.eating.map(|e| e.0).filter(|e| npcs.get(*e).is_ok_and(|(_, nn, _, v)| nn.mode == Mode::Dead && v != Some(&Visibility::Hidden))).or_else(|| {
+            if goal.is_none() && can_eat {
+                let body = s.eating.map(|e| e.0).filter(|e| npcs.get(*e).is_ok_and(|(_, nn, t, v)| nn.mode == Mode::Dead && v != Some(&Visibility::Hidden) && swarm_target_visible(&ctx, center, t.translation))).or_else(|| {
                     npcs.iter()
-                        .filter(|(_, nn, t, v)| nn.mode == Mode::Dead && !nn.corpse && *v != Some(&Visibility::Hidden) && t.translation.distance(w.home) < w.detect * 2.0)
+                        .filter(|(_, nn, t, v)| nn.mode == Mode::Dead && !nn.corpse && *v != Some(&Visibility::Hidden) && t.translation.distance(w.home) < w.detect * 2.0 && swarm_target_visible(&ctx, center, t.translation))
                         .min_by(|a, b| a.2.translation.distance(center).total_cmp(&b.2.translation.distance(center)))
                         .map(|(e, _, _, _)| e)
                 });
@@ -768,8 +912,8 @@ fn swarm_brain(
                     let t = if s.eating.map(|x| x.0) == Some(be) { s.eating.unwrap().1 } else { 0.0 };
                     let t = if bt.translation.distance(center) < 1.2 { t + dt } else { t };
                     s.eating = Some((be, t));
-                    if t >= 4.0 + 2.5 * 4.0 {
-                        commands.entity(be).insert(Visibility::Hidden);
+                    if t >= wild_feeding_duration(spawner) {
+                        commands.entity(be).insert((crate::npc::ConsumedBody, Visibility::Hidden));
                         s.eating = None;
                     }
                 } else {
@@ -818,39 +962,39 @@ fn swarm_brain(
             }
             continue;
         }
-        let detect = data.0.actives.iter().find(|a| a.name == "DevouringSwarm").map(|_| 7.0).unwrap_or(7.0);
+        let detect = summon_setting(&data, s.level, "m_fPawnDetectionRadius", 700.0) * 0.01;
         let center = st.translation;
         // keep the living target while it lives and stays close; else find another
-        let alive = |e: Entity| npcs.get(e).ok().filter(|(_, n, _, _)| !n.is_down());
+        let alive = |e: Entity| npcs.get(e).ok().filter(|(_, n, t, _)| !n.is_down() && swarm_target_visible(&ctx, center, t.translation));
         if s.target.and_then(alive).is_none_or(|(_, _, t, _)| t.translation.distance(center) > 9.0) {
             s.target = npcs
                 .iter()
-                .filter(|(_, n, t, _)| !n.is_down() && n.kind != Kind::Story && t.translation.distance(center) < detect)
+                .filter(|(_, n, t, _)| !n.is_down() && n.kind != Kind::Story && t.translation.distance(center) < detect && swarm_target_visible(&ctx, center, t.translation))
                 .min_by(|a, b| a.2.translation.distance(center).total_cmp(&b.2.translation.distance(center)))
                 .map(|(e, _, _, _)| e);
-            s.delay = 2.0;
+            s.delay = summon_setting(&data, s.level, "m_fInitialDelayBeforeDealingDamage", 2.0).max(0.0);
+            s.bite_t = 0.0;
         }
         let mut goal = center;
         if let Some((te, _, tt, _)) = s.target.and_then(alive) {
             goal = tt.translation;
             if tt.translation.distance(center) < 1.3 {
-                s.delay -= dt;
-                s.bite_t += dt;
-                if s.delay <= 0.0 && s.bite_t >= 1.0 {
-                    s.bite_t = 0.0;
-                    // bites per second from the rats on it, kept within the tweak's bounds
-                    let bite = 0.4 * s.rats.len() as f32;
-                    hits.write(NpcHit { npc: te, damage: bite.clamp(2.0, 5.0), kind: HitKind::Rats, from: center });
+                let interval = summon_setting(&data, s.level, "m_fDamageTimeInterval", 0.5);
+                let swarm = &mut *s;
+                let count = advance_bites(&mut swarm.delay, &mut swarm.bite_t, dt, interval);
+                if count > 0 {
+                    let bite = summoned_bite_damage(&data, s.level, s.rats.len());
+                    hits.write(NpcHit { npc: te, damage: bite * count as f32, kind: HitKind::Rats, from: center });
                     stagger.write(NpcStagger { npc: te, secs: 0.6, parried: false });
                     sfx.write(PostEvent::named("Imp_Rat_on_Body", Some(tt.translation)));
                 }
             }
             s.eating = None;
-        } else {
+        } else if can_eat {
             // a body to eat?
-            let body = s.eating.map(|e| e.0).filter(|e| npcs.get(*e).is_ok_and(|(_, n, _, v)| n.mode == Mode::Dead && v != Some(&Visibility::Hidden))).or_else(|| {
+            let body = s.eating.map(|e| e.0).filter(|e| npcs.get(*e).is_ok_and(|(_, n, t, v)| n.mode == Mode::Dead && v != Some(&Visibility::Hidden) && swarm_target_visible(&ctx, center, t.translation))).or_else(|| {
                 npcs.iter()
-                    .filter(|(_, n, t, v)| n.mode == Mode::Dead && *v != Some(&Visibility::Hidden) && t.translation.distance(center) < detect)
+                    .filter(|(_, n, t, v)| n.mode == Mode::Dead && *v != Some(&Visibility::Hidden) && t.translation.distance(center) < detect && swarm_target_visible(&ctx, center, t.translation))
                     .min_by(|a, b| a.2.translation.distance(center).total_cmp(&b.2.translation.distance(center)))
                     .map(|(e, _, _, _)| e)
             });
@@ -861,9 +1005,11 @@ fn swarm_brain(
                     let t = if bt.translation.distance(center) < 1.2 { t + dt } else { t };
                     s.eating = Some((be, t));
                     // startup then the limbs (`m_fEatStartupDuration`, `m_fEatPerLimbDuration`)
-                    let eat = 1.5 + 1.5 * if s.level >= 2 { 3.0 } else { 5.0 };
+                    let default_duration = if s.level >= 2 { 0.75 } else { 1.5 };
+                    let eat = summon_setting(&data, s.level, "m_fEatStartupDuration", default_duration)
+                        + summon_setting(&data, s.level, "m_fEatPerLimbDuration", default_duration) * if s.level >= 2 { 3.0 } else { 5.0 };
                     if t >= eat {
-                        commands.entity(be).insert(Visibility::Hidden);
+                        commands.entity(be).insert((crate::npc::ConsumedBody, Visibility::Hidden));
                         s.eating = None;
                     }
                 }
@@ -879,6 +1025,15 @@ fn swarm_brain(
         }
         st.translation = next;
     }
+}
+
+/// Rats see from ground level; walls and movable cover interrupt attacks and feeding.
+fn swarm_target_visible(ctx: &RapierContext, center: Vec3, target: Vec3) -> bool {
+    let eye = center + Vec3::Y * 0.15;
+    let to = target - eye;
+    let distance = to.length();
+    distance < 0.01 || ctx.cast_ray(eye, to / distance, distance, true,
+        QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP))).is_none()
 }
 
 /// A swarm's step kept out of the level's rat repulsors (pushed back to their edge).

@@ -169,6 +169,49 @@ fn fish_hits(
     }
 }
 
+/// Physical cover blocks a bite or feeding just as it blocks swimming.
+fn fish_target_visible(ctx: &RapierContext, from: Vec3, target: Vec3) -> bool {
+    let to = target - from;
+    let distance = to.length();
+    distance < 0.001 || ctx.cast_ray(from, to / distance, distance, true,
+        QueryFilter::default().exclude_sensors()
+            .groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP))).is_none()
+}
+
+#[cfg(test)]
+mod cover_tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct Reachable(bool);
+
+    #[test]
+    fn nearby_fish_targets_require_clear_water_through_world_and_prop_cover() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>().init_resource::<Reachable>()
+            .add_systems(Last, |ctx: ReadRapierContext, mut reachable: ResMut<Reachable>| {
+                reachable.0 = fish_target_visible(&ctx.single().unwrap(), Vec3::ZERO, Vec3::X * 0.4);
+            });
+        app.update();
+        assert!(app.world().resource::<Reachable>().0);
+        for group in [GROUP_WORLD, GROUP_PROP] {
+            let cover = app.world_mut().spawn((Collider::cuboid(0.01, 1.0, 1.0), Transform::from_xyz(0.2, 0.0, 0.0), CollisionGroups::new(group, Group::ALL))).id();
+            app.update();
+            assert!(!app.world().resource::<Reachable>().0, "even a target within bite reach is blocked");
+            app.world_mut().entity_mut(cover).insert(Sensor);
+            app.update();
+            assert!(app.world().resource::<Reachable>().0, "water/trigger sensors do not provide cover");
+            app.world_mut().entity_mut(cover).remove::<Sensor>();
+            app.update();
+            assert!(!app.world().resource::<Reachable>().0);
+            app.world_mut().despawn(cover);
+            app.update();
+            assert!(app.world().resource::<Reachable>().0);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn fish_brain(
     mut commands: Commands,
@@ -192,7 +235,7 @@ fn fish_brain(
         return;
     }
     let ctx = rapier.single().ok();
-    let walls = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+    let walls = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     let eye = cam.single().ok().map(|g| g.translation());
     let pp = player.single().ok().map(|t| t.translation);
     // a swimmer, in which water
@@ -237,11 +280,12 @@ fn fish_brain(
         }
         let water = waters.at(me).map(|w| w.0);
         // what it's doing
-        let target = swimmer.filter(|(w, e)| Some(*w) == water && e.distance(me) < NOTICE);
+        let visible = |target| ctx.as_ref().is_some_and(|c| fish_target_visible(c, me, target));
+        let target = swimmer.filter(|(w, e)| Some(*w) == water && e.distance(me) < NOTICE && visible(*e));
         f.doing = match (target, f.doing) {
             (Some(_), _) => Doing::Attack,
-            (None, Doing::Eat(b)) if floating.iter().any(|x| x.0 == b) => Doing::Eat(b),
-            _ => match floating.iter().filter(|x| Some(x.2) == water && x.1.distance(me) < NOTICE).min_by(|a, b| a.1.distance(me).total_cmp(&b.1.distance(me))) {
+            (None, Doing::Eat(b)) if floating.iter().any(|x| x.0 == b && Some(x.2) == water && visible(x.1 + Vec3::Y * 0.2)) => Doing::Eat(b),
+            _ => match floating.iter().filter(|x| Some(x.2) == water && x.1.distance(me) < NOTICE && visible(x.1 + Vec3::Y * 0.2)).min_by(|a, b| a.1.distance(me).total_cmp(&b.1.distance(me))) {
                 Some(&(b, _, _)) => Doing::Eat(b),
                 None => Doing::Roam,
             },
@@ -325,7 +369,7 @@ fn fish_brain(
                 let te = eaten.entry(b).or_insert(0.0);
                 *te += dt;
                 if *te >= def.consume {
-                    commands.entity(b).insert(Visibility::Hidden);
+                    commands.entity(b).insert((crate::npc::ConsumedBody, Visibility::Hidden));
                     if log_on {
                         info!("fish ate a body");
                     }

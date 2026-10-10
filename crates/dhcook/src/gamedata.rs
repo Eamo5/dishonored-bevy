@@ -996,6 +996,16 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
     audiographs(cooked, &startup, &mut d);
     player_stats(&game, &startup, &mut d);
     challenges(&game, &mut d);
+    // Summoned swarms have distinct level tweaks, inheriting the swarm defaults.
+    for level in 1..=2 {
+        let prefix = format!("swarm.{level}.");
+        for name in ["Default__DisTweaks_RatSwarm".to_string(), format!("Twk_RatSwarm.Twk_DevouringSwarm_Lvl{level}")] {
+            if let Some(p) = game.find_export(&name).and_then(|i| props(&game, i)) {
+                let top: Vec<_> = p.0.iter().filter(|p| matches!(p.value, Value::Float(..) | Value::Int(..) | Value::Bool(..))).cloned().collect();
+                flatten(&game, &top, &prefix, &mut d.pawn, &mut BTreeMap::new());
+            }
+        }
+    }
     // the player tweaks' class defaults (what Corvo's tweak leaves unchanged), and the
     // swimming state's
     if let Some(p) = game.find_export("Default__DisTweaks_PlayerPawn").and_then(|i| props(&game, i)) {
