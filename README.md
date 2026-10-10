@@ -987,6 +987,14 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Watchtower AI now shares the arrows' world-time clock. Stopped time suspends
+  detection, rotation, attack decisions and consumption of scripted volley orders;
+  slow time scales sweep and attack timers. A runtime-system regression verifies
+  a due attack stays pending while stopped, fires once on resume, pauses again
+  without consuming another shot, and sweeps at quarter speed under quarter-time.
+  All 97 game tests pass (`cache/parity_tower_clock_suite.log`). Scripted-volley
+  retention follows the same early return but still needs live campaign coverage.
+
 - Watchtower arrows now resolve the nearest character or world/prop contact instead
   of prioritizing every wall hit over characters and guessing a midpoint. Player
   capsules follow crouch state, downed NPCs are excluded, and sensors are ignored.

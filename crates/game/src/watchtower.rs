@@ -190,6 +190,7 @@ fn beam_dir(yaw: f32, pitch: f32) -> Vec3 {
 fn towers(
     mut commands: Commands,
     time: Res<Time>,
+    tc: Res<crate::gameplay::TimeControl>,
     level: Option<Res<LevelInfo>>,
     rapier: ReadRapierContext,
     mut towers: Query<&mut Tower>,
@@ -203,7 +204,10 @@ fn towers(
 ) {
     let Some(level) = level else { return };
     let Ok(ctx) = rapier.single() else { return };
-    let dt = time.delta_secs();
+    let dt = time.delta_secs() * tc.world_scale();
+    // Keep due attacks and scripted volleys queued while the world is stopped.
+    // A zero delta alone would still allow perception and zero-delay shots.
+    if dt <= 0.0 { return; }
     let mut blind = 0.0f32;
     let Ok((pe, pt)) = player.single() else { return };
     let chest = pt.translation + Vec3::Y * 0.3;
@@ -465,6 +469,49 @@ fn rand_unit() -> f32 {
 #[cfg(test)]
 mod projectile_tests {
     use super::*;
+
+    #[test]
+    fn tower_decisions_and_due_shots_wait_for_world_time() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>().init_resource::<crate::gameplay::TimeControl>()
+            .init_resource::<PlayerStats>().init_resource::<Blinding>().init_resource::<crate::security::Devices>()
+            .add_message::<PostEvent>().add_message::<SpawnEffect>()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
+            .insert_resource(LevelInfo { scene: dhcook::format::Scene { security: vec![dhcook::format::Security::default()], ..default() } })
+            .add_systems(Last, towers);
+        app.world_mut().spawn((Transform::default(), Player {
+            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
+            grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
+            air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
+            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO,
+        }));
+        let tower = app.world_mut().spawn(Tower {
+            index: 0, origin: Vec3::new(0.0, 10.0, 0.0), arrow: Vec3::new(0.0, 9.0, 0.0),
+            tank: None, receptacle: None, tank_found: true, yaw: 0.0, pitch: 0.0,
+            sweep: 0.0, state: State::Attack(0.0, 3), lost: 0.0, warned: false,
+            cone: None, cone_size: Vec3::ONE, pivot: Vec3::ZERO, yaw0: 0.0, head: vec![],
+        }).id();
+        app.world_mut().resource_mut::<crate::gameplay::TimeControl>().bend_remaining = 10.0;
+        for _ in 0..3 { app.update(); }
+        let t = app.world().get::<Tower>(tower).unwrap();
+        assert_eq!((t.state, t.yaw, t.pitch, t.lost), (State::Attack(0.0, 3), 0.0, 0.0, 0.0));
+        let mut arrows = app.world_mut().query::<&Arrow>();
+        assert_eq!(arrows.iter(app.world()).count(), 0);
+        app.world_mut().resource_mut::<crate::gameplay::TimeControl>().bend_remaining = 0.0;
+        app.update();
+        assert_eq!(arrows.iter(app.world()).count(), 1, "due shot fires on resume");
+        assert_eq!(app.world().get::<Tower>(tower).unwrap().state, State::Attack(0.2, 2));
+        app.world_mut().resource_mut::<crate::gameplay::TimeControl>().bend_remaining = 10.0;
+        app.update();
+        assert_eq!(arrows.iter(app.world()).count(), 1, "stopping again must not consume volley shots");
+        app.world_mut().get_mut::<Tower>(tower).unwrap().state = State::Explore;
+        app.world_mut().resource_mut::<crate::gameplay::TimeControl>().world_dilation = 0.25;
+        app.update();
+        let t = app.world().get::<Tower>(tower).unwrap();
+        assert!((t.sweep - 0.025).abs() < 1.0e-6);
+        assert!((t.yaw - 20.0_f32.to_radians() * 0.025).abs() < 1.0e-6);
+    }
 
     #[test]
     fn arrows_choose_nearest_contact_and_follow_player_stance() {
