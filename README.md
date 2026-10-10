@@ -987,6 +987,18 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Hagfish saves now retain transforms, home/goal, velocity, bite cooldown, attack/
+  feeding/death state and animation cursor/rate. Shared corpse-feeding progress uses
+  stable NPC spawners and restores after NPCs; possession restores afterward. Fish
+  absent from a snapshot stay absent, and dead fish cannot be possessed or struck
+  again. The optional field preserves older-save loading. All 82 tests pass
+  (`cache/parity_fish_save_suite.log`). Boyle runtime restored all 19 fish exactly
+  under Bend Time, including six explosion-killed fish (IDs 0/1/7/14/15/16), then
+  verified those six remained absent after their death timers elapsed and a second
+  save/load retained the other 13 (`cache/parity_fish_restore_runtime.log`,
+  `cache/parity_fish_despawn_runtime.log`). The initial combined build/runtime
+  command timed out after restoring; the direct-executable checks completed.
+
 - Hagfish animation clocks now update before the stopped-time/level-data early
   returns, so Bend Time freezes both AI and skeletal playback. Possessed fish and
   rats use Corvo's animation clock instead of retaining a previously frozen world

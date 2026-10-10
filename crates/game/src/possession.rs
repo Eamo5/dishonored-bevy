@@ -29,7 +29,7 @@ impl Plugin for PossessionPlugin {
                 *p = Possession::default();
                 *o = PossessOverrides::default();
             })
-            .add_systems(Update, restore_possession.after(crate::swarm::restore_swarms).after(crate::save::restore_npcs).before(script_overrides).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, restore_possession.after(crate::swarm::restore_swarms).after(crate::fish::restore_fish).after(crate::save::restore_npcs).before(script_overrides).run_if(in_state(GameState::InGame)))
             .add_systems(Update, (script_overrides, start, ride).chain().run_if(in_state(GameState::InGame)));
     }
 }

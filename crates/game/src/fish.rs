@@ -26,8 +26,9 @@ pub struct FishPlugin;
 
 impl Plugin for FishPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(GameState::InGame), spawn_fish.after(crate::level::LevelSpawnSet))
-            .add_systems(Update, (fish_hits, fish_brain).chain().run_if(in_state(GameState::InGame)));
+        app.init_resource::<FishRestore>().init_resource::<FishMeals>()
+            .add_systems(OnEnter(GameState::InGame), spawn_fish.after(crate::level::LevelSpawnSet))
+            .add_systems(Update, (restore_fish.after(crate::save::restore_npcs), fish_hits, fish_brain).chain().run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -68,6 +69,85 @@ impl Fish {
     }
 }
 
+#[derive(Resource, Default)]
+pub struct FishMeals(HashMap<Entity, f32>);
+
+#[derive(Resource, Default)]
+pub struct FishRestore(pub Option<FishSaveWorld>);
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct FishSaveWorld {
+    fish: Vec<FishSave>,
+    meals: Vec<(u32, f32)>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FishSave {
+    index: u32,
+    position: [f32; 3],
+    rotation: [f32; 4],
+    home: [f32; 3],
+    goal: [f32; 3],
+    velocity: [f32; 3],
+    bite: f32,
+    dead: Option<f32>,
+    eating: Option<u32>,
+    attacking: bool,
+    animation: Option<(String, f32, f32, bool)>,
+}
+
+impl FishSaveWorld {
+    pub fn capture<'a>(fish: impl IntoIterator<Item = (&'a Fish, &'a Transform, Option<&'a Animator>)>, meals: &FishMeals,
+        npcs: impl IntoIterator<Item = (Entity, u32)>) -> Self {
+        let npcs: HashMap<_, _> = npcs.into_iter().collect();
+        Self {
+            meals: meals.0.iter().filter_map(|(e, t)| npcs.get(e).map(|id| (*id, *t))).collect(),
+            fish: fish.into_iter().map(|(f, t, a)| FishSave {
+                index: f.index, position: t.translation.to_array(), rotation: t.rotation.to_array(),
+                home: f.home.to_array(), goal: f.goal.to_array(), velocity: f.vel.to_array(), bite: f.bite_t,
+                dead: if let Doing::Dead(t) = f.doing { Some(t) } else { None },
+                eating: if let Doing::Eat(e) = f.doing { npcs.get(&e).copied() } else { None },
+                attacking: f.doing == Doing::Attack,
+                animation: a.and_then(|a| a.current().map(|c| (a.lib.clip(c.clip).name.clone(), c.t, c.speed, c.looping))),
+            }).collect(),
+        }
+    }
+}
+
+pub(crate) fn restore_fish(mut commands: Commands, mut pending: ResMut<FishRestore>, mut meals: ResMut<FishMeals>,
+    mut fish: Query<(Entity, &mut Fish, &mut Transform, Option<&mut Animator>)>, npcs: Query<(Entity, &crate::npc::FromSpawner)>) {
+    let Some(saved) = pending.0.take() else { return };
+    let npcs: HashMap<_, _> = npcs.iter().map(|(e, id)| (id.0, e)).collect();
+    meals.0 = saved.meals.into_iter().filter_map(|(id, t)| npcs.get(&id).map(|e| (*e, t))).collect();
+    let saved: HashMap<_, _> = saved.fish.into_iter().map(|f| (f.index, f)).collect();
+    for (e, mut f, mut t, anim) in &mut fish {
+        let Some(s) = saved.get(&f.index) else {
+            // Fish already killed and despawned must not reappear on load.
+            commands.entity(e).despawn();
+            continue;
+        };
+        t.translation = Vec3::from(s.position);
+        t.rotation = Quat::from_array(s.rotation);
+        f.home = Vec3::from(s.home);
+        f.goal = Vec3::from(s.goal);
+        f.vel = Vec3::from(s.velocity);
+        f.bite_t = s.bite;
+        f.doing = if let Some(age) = s.dead { Doing::Dead(age) }
+            else if let Some(e) = s.eating.and_then(|id| npcs.get(&id).copied()) { Doing::Eat(e) }
+            else if s.attacking { Doing::Attack } else { Doing::Roam };
+        if s.dead.is_some() {
+            commands.entity(f.collider).remove::<Strikeable>();
+            commands.entity(e).remove::<crate::possession::Host>();
+        }
+        if let (Some(mut anim), Some((name, time, speed, looping))) = (anim, &s.animation) {
+            if let Some(clip) = anim.lib.find(name) {
+                anim.restart(clip, *looping, *speed, 0.0);
+                anim.seek(*time);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct FishClips {
     swim: Option<ClipId>,
@@ -76,7 +156,8 @@ struct FishClips {
     death: Option<ClipId>,
 }
 
-fn spawn_fish(mut commands: Commands, assets: Option<Res<GameAssets>>, level: Option<Res<LevelInfo>>, mut wl: Option<ResMut<WorldLighting>>) {
+fn spawn_fish(mut commands: Commands, assets: Option<Res<GameAssets>>, level: Option<Res<LevelInfo>>, mut wl: Option<ResMut<WorldLighting>>, mut meals: ResMut<FishMeals>) {
+    meals.0.clear();
     let (Some(assets), Some(level)) = (assets, level) else { return };
     let mut n = 0;
     for (i, def) in level.scene.fish.iter().enumerate() {
@@ -162,6 +243,7 @@ fn fish_hits(
             a.restart(d, false, 1.0, 0.1);
         }
         commands.entity(f.collider).remove::<Strikeable>();
+        commands.entity(e).remove::<crate::possession::Host>();
         sfx.write(PostEvent::named("Imp_Sword_on_Body", Some(t.translation)));
         if std::env::var("DH_FISH_LOG").is_ok() {
             info!("fish #{} killed", f.index);
@@ -186,10 +268,59 @@ mod cover_tests {
     struct Reachable(bool);
 
     #[test]
+    fn fish_save_restores_deaths_cooldowns_meals_and_animation_cursors() {
+        let mut app = App::new();
+        app.init_resource::<FishRestore>().init_resource::<FishMeals>().add_systems(Update, restore_fish);
+        let old_body = Entity::from_bits(100);
+        let body = app.world_mut().spawn(crate::npc::FromSpawner(42)).id();
+        let skeleton = dhcook::format::SkeletonDef::default();
+        let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![std::sync::Arc::new(dhcook::format::AnimFile {
+            bones: vec![], clips: vec![dhcook::format::AnimClip { name: "Swim".into(), duration: 3.0, ..default() }],
+        })]));
+        let mut anim = Animator::new(lib.clone(), &skeleton, vec![]);
+        anim.restart(lib.find("Swim").unwrap(), true, 0.75, 0.0);
+        anim.seek(1.25);
+        let make = |index, doing, collider| Fish { index, home: Vec3::X, goal: Vec3::Y, doing, bite_t: 0.7,
+            vel: Vec3::Z * 2.0, clips: FishClips::default(), collider };
+        let source = [make(0, Doing::Dead(3.0), Entity::PLACEHOLDER), make(1, Doing::Eat(old_body), Entity::PLACEHOLDER), make(2, Doing::Attack, Entity::PLACEHOLDER)];
+        let transform = Transform::from_xyz(2.0, -3.0, 4.0).with_rotation(Quat::from_rotation_y(0.7));
+        let meals = FishMeals(HashMap::from([(old_body, 2.5)]));
+        let snapshot = FishSaveWorld::capture(source.iter().map(|f| (f, &transform, Some(&anim))), &meals, [(old_body, 42)]);
+        let snapshot = serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+        let mut entities = Vec::new();
+        for index in 0..4 {
+            let collider = app.world_mut().spawn(Strikeable(Entity::PLACEHOLDER)).id();
+            let entity = app.world_mut().spawn((make(index, Doing::Roam, collider), Transform::default(),
+                Animator::new(lib.clone(), &skeleton, vec![]),
+                crate::possession::Host { npc_type: None, rooted: false, fish: true, seat: Vec3::ZERO, facing: Vec3::NEG_Z })).id();
+            entities.push((entity, collider));
+        }
+        app.world_mut().resource_mut::<FishRestore>().0 = Some(snapshot);
+        app.update();
+        assert!(app.world().get_entity(entities[3].0).is_err(), "previously despawned fish stay absent");
+        assert!(app.world().get::<crate::possession::Host>(entities[0].0).is_none());
+        assert!(app.world().get::<Strikeable>(entities[0].1).is_none());
+        assert_eq!(app.world().get::<Fish>(entities[0].0).unwrap().doing, Doing::Dead(3.0));
+        assert_eq!(app.world().get::<Fish>(entities[1].0).unwrap().doing, Doing::Eat(body));
+        assert_eq!(app.world().get::<Fish>(entities[2].0).unwrap().doing, Doing::Attack);
+        assert_eq!(app.world().resource::<FishMeals>().0.get(&body), Some(&2.5));
+        for &(entity, _) in &entities[..3] {
+            let f = app.world().get::<Fish>(entity).unwrap();
+            assert_eq!((f.bite_t, f.home, f.goal, f.vel), (0.7, Vec3::X, Vec3::Y, Vec3::Z * 2.0));
+            assert!(app.world().get::<Transform>(entity).unwrap().to_matrix().abs_diff_eq(transform.to_matrix(), 1e-6));
+            let current = app.world().get::<Animator>(entity).unwrap().current().unwrap();
+            assert_eq!((current.t, current.speed, current.looping), (1.25, 0.75, true));
+        }
+        // Older saves without a fish snapshot leave the level's fish untouched.
+        app.update();
+        assert!(app.world().get::<Fish>(entities[2].0).is_some());
+    }
+
+    #[test]
     fn fish_animation_clock_stops_resumes_and_follows_possession() {
         let mut app = App::new();
         app.init_resource::<Time>().init_resource::<TimeControl>().init_resource::<crate::settings::Settings>()
-            .init_resource::<Swim>().init_resource::<PlayerStats>().init_resource::<HudMessages>()
+            .init_resource::<Swim>().init_resource::<PlayerStats>().init_resource::<HudMessages>().init_resource::<FishMeals>()
             .init_resource::<crate::possession::Possession>().add_message::<PostEvent>()
             .add_systems(Update, fish_brain);
         let skeleton = dhcook::format::SkeletonDef::default();
@@ -261,7 +392,7 @@ fn fish_brain(
     bodies: Query<(Entity, &Npc, &Transform, Option<&Visibility>), Without<Fish>>,
     mut fish: Query<(Entity, &mut Fish, &mut Animator, &mut Transform, Has<crate::possession::Possessed>), Without<Npc>>,
     mut sfx: MessageWriter<PostEvent>,
-    mut eaten: Local<HashMap<Entity, f32>>,
+    mut meals: ResMut<FishMeals>,
 ) {
     // Update animation clocks even when the brain cannot advance. Possessed
     // creatures follow Corvo's clock, including when entered during Bend Time.
@@ -270,6 +401,7 @@ fn fish_brain(
         if possessed { anim.frozen = false; }
     }
     let (Some(level), Some(waters)) = (level, waters) else { return };
+    let eaten = &mut meals.0;
     let dt = time.delta_secs() * tc.world_scale();
     if dt <= 0.0 {
         return;
