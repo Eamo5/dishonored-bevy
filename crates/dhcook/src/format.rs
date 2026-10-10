@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::Path;
 
-pub const SCENE_VERSION: u32 = 100;
+// 102: collect player cinematic animation sets after creating the arms rig.
+pub const SCENE_VERSION: u32 = 102;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {

@@ -487,7 +487,6 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
     c.target_notification_ops();
     c.event_defaults();
     c.matinee_props();
-    c.matinee_pawn_anims();
     c.scripted_blasts();
     c.npc_set_materials();
     c.movie_lengths();
@@ -500,6 +499,9 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
     c.resolve_light_shadows();
     c.assign_routes();
     c.cook_props();
+    // cook_props creates player_arms; scene animation sets must be bound only
+    // after that rig exists, or every player cinematic clip is silently omitted.
+    c.matinee_pawn_anims();
     c.cook_anims();
     c.pack_lightmaps();
     c.cook_textures()?;
@@ -6468,21 +6470,49 @@ fn anim_layout(set: &Obj, p: &PendingAnims, refs: &[&[String]]) -> Result<AnimLa
         }
     }
     let root = p.bones.first().and_then(|r| names.iter().position(|n| n.eq_ignore_ascii_case(r)));
-    // FNV-1a over the bound bone names and the root orientation
+    let hash = anim_layout_hash(&names, root, p.root_rot, p.root_offset);
+    Ok(AnimLayout { names, root, root_rot: p.root_rot, root_offset: p.root_offset, hash })
+}
+
+/// Every binding input that changes cooked tracks belongs in the cache identity.
+/// In particular, meshes with the same names can have different component offsets.
+fn anim_layout_hash(names: &[String], root: Option<usize>, rotation: glam::Quat, offset: Vec3) -> u32 {
     let mut h: u32 = 0x811c_9dc5;
     let mut eat = |b: &[u8]| {
         for &x in b {
             h = (h ^ x as u32).wrapping_mul(0x0100_0193);
         }
     };
-    for n in &names {
+    eat(b"anim-layout-v2/");
+    for n in names {
         eat(n.to_ascii_lowercase().as_bytes());
         eat(b"/");
     }
-    for v in p.root_rot.to_array() {
-        eat(&((v * 1000.0).round() as i32).to_le_bytes());
+    eat(&root.map(|i| i as u32).unwrap_or(u32::MAX).to_le_bytes());
+    for v in rotation.to_array().into_iter().chain(offset.to_array()) {
+        eat(&v.to_bits().to_le_bytes());
     }
-    Ok(AnimLayout { names, root, root_rot: p.root_rot, root_offset: p.root_offset, hash: h })
+    h
+}
+
+#[cfg(test)]
+mod anim_cache_tests {
+    use super::*;
+
+    #[test]
+    fn animation_cache_distinguishes_root_binding_and_component_transforms() {
+        let names = vec!["root0_jnt".to_string(), "Root_jnt".to_string()];
+        let rotation = glam::Quat::IDENTITY;
+        let offset = Vec3::new(0.0, 0.0, -90.25);
+        let key = anim_layout_hash(&names, Some(0), rotation, offset);
+        // These offsets occur on small city guards and thugs in Streets1.
+        assert_ne!(key, anim_layout_hash(&names, Some(0), rotation, Vec3::new(0.0, 0.0, -91.0)));
+        assert_ne!(key, anim_layout_hash(&names, None, rotation, offset));
+        assert_ne!(key, anim_layout_hash(&names, Some(1), rotation, offset));
+        assert_ne!(key, anim_layout_hash(&names, Some(0), glam::Quat::from_rotation_z(0.0001), offset));
+        let uppercase = names.iter().map(|s| s.to_uppercase()).collect::<Vec<_>>();
+        assert_eq!(key, anim_layout_hash(&uppercase, Some(0), rotation, offset));
+    }
 }
 
 /// The sound notifies (`AnimNotify_AkEvent`) of an AnimSequence: (time, Wwise event name).
