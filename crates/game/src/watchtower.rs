@@ -211,7 +211,7 @@ fn towers(
     let mut blind = 0.0f32;
     let Ok((pe, pt)) = player.single() else { return };
     let chest = pt.translation + Vec3::Y * 0.3;
-    let walls = QueryFilter::default().exclude_collider(pe).groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+    let walls = QueryFilter::default().exclude_collider(pe).exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     for mut t in &mut towers {
         let t = &mut *t;
         let Some(d) = level.scene.security.get(t.index) else { continue };
@@ -471,7 +471,7 @@ mod projectile_tests {
     use super::*;
 
     #[test]
-    fn tower_decisions_and_due_shots_wait_for_world_time() {
+    fn tower_decisions_obey_world_time_and_solid_cover() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
             .init_resource::<Assets<Mesh>>().init_resource::<crate::gameplay::TimeControl>()
@@ -511,6 +511,24 @@ mod projectile_tests {
         let t = app.world().get::<Tower>(tower).unwrap();
         assert!((t.sweep - 0.025).abs() < 1.0e-6);
         assert!((t.yaw - 20.0_f32.to_radians() * 0.025).abs() < 1.0e-6);
+        app.world_mut().resource_mut::<crate::gameplay::TimeControl>().bend_remaining = 0.0;
+        let cover = app.world_mut().spawn((Collider::cuboid(2.0, 0.1, 2.0), Transform::from_xyz(0.0, 5.0, 0.0),
+            CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
+        for group in [GROUP_PROP, GROUP_WORLD] {
+            app.world_mut().entity_mut(cover).insert(CollisionGroups::new(group, Group::ALL));
+            let mut t = app.world_mut().get_mut::<Tower>(tower).unwrap();
+            t.state = State::Explore;
+            t.pitch = 0.0;
+            t.yaw = 0.0;
+            app.update();
+            assert_eq!(app.world().get::<Tower>(tower).unwrap().state, State::Explore, "solid cover hides the player");
+        }
+        app.world_mut().entity_mut(cover).insert(Sensor);
+        let mut t = app.world_mut().get_mut::<Tower>(tower).unwrap();
+        t.pitch = 0.0;
+        t.yaw = 0.0;
+        app.update();
+        assert_eq!(app.world().get::<Tower>(tower).unwrap().state, State::Alert(0.0), "trigger volumes must not hide the player");
     }
 
     #[test]

@@ -987,6 +987,12 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Watchtower searchlight obstruction and target visibility now include movable
+  prop colliders and exclude trigger sensors. The tower-system regression places
+  solid cover between lamp and player: both prop and world groups prevent alert,
+  while converting the cover to a sensor permits detection. All 97 game tests
+  pass (`cache/parity_tower_cover_suite.log`).
+
 - Watchtower AI now shares the arrows' world-time clock. Stopped time suspends
   detection, rotation, attack decisions and consumption of scripted volley orders;
   slow time scales sweep and attack timers. A runtime-system regression verifies
