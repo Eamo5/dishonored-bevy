@@ -706,6 +706,35 @@ mod kill_tests {
     #[derive(Resource, Default)]
     struct VisibilityResult(bool);
 
+    #[derive(Resource, Default)]
+    struct MovementResult(Vec3);
+
+    #[test]
+    fn rat_movement_sweeps_thin_cover_but_ignores_floor_and_sensors() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>().init_resource::<MovementResult>()
+            .add_systems(Last, |ctx: ReadRapierContext, mut result: ResMut<MovementResult>| {
+                result.0 = rat_ground_step(&ctx.single().unwrap(), Vec3::ZERO, Vec3::X * 2.0);
+            });
+        app.world_mut().spawn((Collider::cuboid(5.0, 0.1, 5.0), Transform::from_xyz(0.0, -0.1, 0.0), CollisionGroups::new(GROUP_WORLD, Group::ALL)));
+        app.update();
+        assert_eq!(app.world().resource::<MovementResult>().0, Vec3::X * 2.0);
+        for group in [GROUP_WORLD, GROUP_PROP] {
+            let wall = app.world_mut().spawn((Collider::cuboid(0.01, 0.5, 1.0), Transform::from_xyz(1.0, 0.5, 0.0), CollisionGroups::new(group, Group::ALL))).id();
+            app.update();
+            let stopped = app.world().resource::<MovementResult>().0;
+            assert!(stopped.x > 0.85 && stopped.x < 0.93, "{stopped:?}");
+            assert_eq!(stopped.y, 0.0);
+            app.world_mut().entity_mut(wall).insert(Sensor);
+            app.update();
+            assert_eq!(app.world().resource::<MovementResult>().0, Vec3::X * 2.0);
+            app.world_mut().despawn(wall);
+            app.update();
+            assert_eq!(app.world().resource::<MovementResult>().0, Vec3::X * 2.0);
+        }
+    }
+
     #[test]
     fn swarm_targeting_respects_walls_and_removed_cover() {
         let mut app = App::new();
@@ -863,7 +892,7 @@ fn swarm_brain(
 ) {
     let dt = time.delta_secs() * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
-    let ground = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
+    let ground = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     let ppos = player.single().map(|(t, p)| (t.translation, player_bite_distance(&data, p.crouched))).ok();
     for (se, mut s, mut st) in &mut swarms {
         if s.rats.is_empty() {
@@ -965,7 +994,8 @@ fn swarm_brain(
             let to = (goal - center).with_y(0.0);
             let speed = if busy { 3.4 } else { 1.6 };
             let step = to.normalize_or_zero() * (speed * dt).min(to.length());
-            let mut next = repel(level.as_deref(), center + step);
+            let desired = repel(level.as_deref(), center + step);
+            let mut next = rat_ground_step(&ctx, center, desired - center);
             if let Some((_, toi)) = ctx.cast_ray(next + Vec3::Y * 1.0, Vec3::NEG_Y, 3.0, true, ground) {
                 next.y = next.y + 1.0 - toi;
             }
@@ -1046,12 +1076,28 @@ fn swarm_brain(
         // the swarm moves as one, over the ground
         let to = (goal - center).with_y(0.0);
         let step = to.normalize_or_zero() * (3.6 * dt).min(to.length().max(0.0));
-        let mut next = repel(level.as_deref(), center + step);
+        let desired = repel(level.as_deref(), center + step);
+        let mut next = rat_ground_step(&ctx, center, desired - center);
         if let Some((_, toi)) = ctx.cast_ray(next + Vec3::Y * 1.0, Vec3::NEG_Y, 3.0, true, ground) {
             next.y = next.y + 1.0 - toi;
         }
         st.translation = next;
     }
+}
+
+/// Advance over the ground without crossing solid cover.
+fn rat_ground_step(ctx: &RapierContext, from: Vec3, step: Vec3) -> Vec3 {
+    let step = step.with_y(0.0);
+    if step.length_squared() < 1e-10 { return from; }
+    // Small ground-level volume, clear of the supporting floor. Sweeping the
+    // whole frame prevents fast/scattering rats from tunnelling through cover.
+    let shape = Collider::ball(0.08);
+    let filter = QueryFilter::default().exclude_sensors()
+        .groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
+    let fraction = ctx.cast_shape(from + Vec3::Y * 0.16, Quat::IDENTITY, step, shape.raw.as_ref(),
+        ShapeCastOptions { max_time_of_impact: 1.0, target_distance: 0.01, stop_at_penetration: false, ..default() }, filter)
+        .map(|(_, hit)| hit.time_of_impact.clamp(0.0, 1.0)).unwrap_or(1.0);
+    from + step * fraction
 }
 
 /// Rats see from ground level; walls and movable cover interrupt attacks and feeding.
@@ -1091,7 +1137,7 @@ fn move_rats(
 ) {
     let dt = time.delta_secs() * tc.world_scale();
     let ctx = rapier.single().ok();
-    let ground = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
+    let ground = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     for (s, st) in &swarms {
         let busy = s.target.is_some() || s.eating.is_some();
         for (k, &re) in s.rats.iter().enumerate() {
@@ -1115,7 +1161,7 @@ fn move_rats(
             let moving = d > 0.12;
             if moving {
                 let v = to / d * (r.speed * dt).min(d);
-                t.translation += v;
+                t.translation = ctx.as_ref().map(|ctx| rat_ground_step(ctx, t.translation, v)).unwrap_or(t.translation + v);
                 let want = (-to.x).atan2(-to.z);
                 let diff = (want - r.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
                 r.yaw += diff * (10.0 * dt).min(1.0);

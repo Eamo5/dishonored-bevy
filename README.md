@@ -987,6 +987,16 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Wild/summoned swarm centres and individual rats now sweep a small ground-level
+  volume against world and movable cover before moving. Thin obstacles cannot be
+  crossed between frames; sensors neither obstruct travel nor provide ground support.
+  The physics regression checks world/prop cover, removal, sensors and a supporting
+  floor. All 77 tests pass (`cache/parity_rat_movement_suite.log`). A live Streets1
+  level-two swarm still approaches and attacks after the boat intro
+  (`cache/parity_rat_movement_runtime.log`, `cache/shots/parity_rat_cover_movement.png`).
+  This adds collision stopping; obstacle-routing and exact original crowd behaviour
+  remain outstanding.
+
 - Full-body cinematic, carrying and swimming poses now suppress the powers/ranged
   overlay and held weapons. Normal equipment visibility returns afterward.
   Boyle mid-ride and post-arrival captures verify scene-hand priority and recovery
