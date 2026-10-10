@@ -508,7 +508,9 @@ fn animate_arms(
     }
     // swimming: both arms stroke (`Empty_Swim*` by the direction swum), the sword away
     let empty = stats.unarmed || stats.sheathed;
-    let away = swim.swimming() || carry.carrying() || empty;
+    let full_body = scene_arms.0.as_ref().is_some_and(|s| anim.lib.find(&s.0).is_some())
+        || swim.swimming() || carry.carrying();
+    let away = full_body || empty;
     if away != st.swimming {
         st.swimming = away;
         if let Some(mut v) = st.sword.and_then(|s| held.get_mut(s).ok()) {
@@ -747,6 +749,20 @@ fn animate_arms(
     }
 
     // ---- left arm (overlay): powers and ranged weapons
+    for (power, e) in &st.held {
+        if let Ok(mut v) = held.get_mut(*e) {
+            let want = if !full_body && *power == powers.selected { Visibility::Inherited } else { Visibility::Hidden };
+            if *v != want { *v = want; }
+        }
+    }
+    if full_body {
+        anim.stop_overlay(0.1);
+        // Do not replay casts or switches made before the full-body sequence
+        // when normal gameplay resumes.
+        st.cast_seq = powers.cast_seq;
+        st.selected = powers.selected;
+        return;
+    }
     let ranged = powers.selected.is_gadget();
     if powers.cast_seq != st.cast_seq {
         st.cast_seq = powers.cast_seq;
@@ -774,11 +790,6 @@ fn animate_arms(
     }
     if powers.selected != st.selected {
         st.selected = powers.selected;
-        for (power, e) in &st.held {
-            if let Ok(mut v) = held.get_mut(*e) {
-                *v = if *power == powers.selected { Visibility::Inherited } else { Visibility::Hidden };
-            }
-        }
     }
     let idle = if ranged { c.gadgets_idle } else { c.powers_idle };
     if anim.overlay_finished() || !(anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.razor_place)) {
