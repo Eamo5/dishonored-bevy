@@ -954,7 +954,7 @@ fn fly_spit(
     tc: Res<TimeControl>,
     rapier: ReadRapierContext,
     mut spits: Query<(Entity, &mut Spit, &mut Transform)>,
-    player: Query<&Transform, (With<Player>, Without<Spit>)>,
+    player: Query<(&Transform, &Player), Without<Spit>>,
     (npcs, mut hits, possession): (Query<(Entity, &crate::npc::Npc, &Transform), Without<Spit>>, MessageWriter<crate::gameplay::NpcHit>, Res<crate::possession::Possession>),
     cam: Query<Entity, With<PlayerCamera>>,
     mut stats: ResMut<PlayerStats>,
@@ -965,7 +965,7 @@ fn fly_spit(
     let dt = time.delta_secs() * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
     let walls = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
-    let pp = player.single().ok().map(|t| t.translation);
+    let pp = player.single().ok().map(|(t, p)| (t.translation, p.crouched));
     for (e, mut s, mut t) in &mut spits {
         s.life -= dt;
         if s.life <= 0.0 {
@@ -989,9 +989,10 @@ fn fly_spit(
                 .filter(|hit| wall.is_none() || *hit < limit).map(|hit| (ne, nt.translation, hit))
         }).min_by(|a, b| a.2.total_cmp(&b.2));
         // Corvo (not while he's in a creature)
-        if let Some(p) = pp.filter(|_| !stats.dead && possession.body.is_none()) {
+        if let Some((p, crouched)) = pp.filter(|_| !stats.dead && possession.body.is_none()) {
+            let half = if crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF };
             let player_hit = spit_capsule_hit(a, direction, limit, p + Vec3::Y * 0.05,
-                crate::player::STAND_HALF + 0.15, crate::player::RADIUS + 0.12)
+                half + 0.15, crate::player::RADIUS + 0.12)
                 .filter(|hit| (wall.is_none() || *hit < limit) && npc.is_none_or(|n| *hit < n.2));
             if let Some(hit) = player_hit {
                 stats.hit_from = Some(a);
@@ -1079,12 +1080,12 @@ mod tests {
                 .add_message::<crate::gameplay::NpcHit>().add_message::<PostEvent>().add_message::<SpawnEffect>()
                 .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
                 .add_systems(Last, fly_spit);
-            app.world_mut().spawn((Transform::from_xyz(3.0, 0.0, 0.0), Player {
+            let player = app.world_mut().spawn((Transform::from_xyz(3.0, 0.0, 0.0), Player {
                 velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
                 grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
                 air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
                 fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO,
-            }));
+            })).id();
             let source = app.world_mut().spawn((Collider::ball(0.4), Transform::default(), CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
             let cover = app.world_mut().spawn((Collider::cuboid(0.01, 1.0, 1.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(group, Group::ALL))).id();
             app.update();
@@ -1101,6 +1102,24 @@ mod tests {
             app.update();
             assert!(app.world().get::<Spit>(exposed).is_none());
             assert_eq!(app.world().resource::<PlayerStats>().health, before - 7.0, "source shell and triggers must not intercept the shot");
+            // The same head-height trajectory hits standing Corvo, then clears
+            // him after the controller lowers his capsule into a crouch.
+            let standing = shot(&mut app);
+            app.world_mut().get_mut::<Transform>(standing).unwrap().translation.y = 0.6;
+            app.update();
+            let after_standing = app.world().resource::<PlayerStats>().health;
+            assert_eq!(after_standing, before - 14.0);
+            app.world_mut().get_mut::<Player>(player).unwrap().crouched = true;
+            app.world_mut().get_mut::<Transform>(player).unwrap().translation.y -= crate::player::STAND_HALF - crate::player::CROUCH_HALF;
+            let overhead = shot(&mut app);
+            app.world_mut().get_mut::<Transform>(overhead).unwrap().translation.y = 0.6;
+            app.update();
+            assert_eq!(app.world().resource::<PlayerStats>().health, after_standing);
+            assert!(app.world().get::<Spit>(overhead).is_some(), "overhead spit must pass the crouching capsule");
+            let low = shot(&mut app);
+            app.world_mut().get_mut::<Transform>(low).unwrap().translation.y = -0.4;
+            app.update();
+            assert_eq!(app.world().resource::<PlayerStats>().health, after_standing - 7.0);
         }
     }
 

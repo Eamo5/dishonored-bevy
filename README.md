@@ -993,6 +993,9 @@ fullscreen display, vertical sync and the crosshair.
   shell and trigger sensors are excluded. High-speed physics regressions verify
   cover wins over a farther player within one frame and an unobstructed shot still
   deals damage. All 87 tests pass (`cache/parity_spit_cover_suite.log`).
+  Player capsule testing now follows crouch state. The gameplay regression verifies
+  one trajectory hits standing Corvo but clears him after crouching, while a lower
+  shot still damages him; all 87 tests pass (`cache/parity_spit_stance_suite.log`).
 
 - Possessed river krusts now ignore paused menu input and reset their animation
   clock to Corvo's rate, clearing a stale frozen state from Bend Time. A gameplay
