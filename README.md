@@ -994,8 +994,11 @@ fullscreen display, vertical sync and the crosshair.
   floor. All 77 tests pass (`cache/parity_rat_movement_suite.log`). A live Streets1
   level-two swarm still approaches and attacks after the boat intro
   (`cache/parity_rat_movement_runtime.log`, `cache/shots/parity_rat_cover_movement.png`).
-  This adds collision stopping; obstacle-routing and exact original crowd behaviour
-  remain outstanding.
+  Collision response now slides the remaining horizontal movement along cover and
+  sweeps again at corners. Tests cover rotated walls, world/prop corners, separating
+  from initial overlap and zero movement; all 78 tests pass
+  (`cache/parity_rat_sliding_suite.log`). Obstacle-routing and exact original crowd
+  behaviour remain outstanding.
 
 - Full-body cinematic, carrying and swimming poses now suppress the powers/ranged
   overlay and held weapons. Normal equipment visibility returns afterward.

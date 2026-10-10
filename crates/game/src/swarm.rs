@@ -758,6 +758,36 @@ mod kill_tests {
     }
 
     #[test]
+    fn rats_slide_along_rotated_cover_and_stop_at_corners() {
+        for yaw in [0.0, 0.6] {
+            let rotation = Quat::from_rotation_y(yaw);
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+                .init_resource::<Assets<Mesh>>().init_resource::<MovementResult>()
+                .add_systems(Last, move |ctx: ReadRapierContext, mut result: ResMut<MovementResult>| {
+                    let ctx = ctx.single().unwrap();
+                    result.0 = rotation.inverse() * rat_ground_step(&ctx, Vec3::ZERO, rotation * Vec3::new(2.0, 0.0, 2.0));
+                    let touching = rotation * Vec3::new(0.95, 0.0, 0.0);
+                    let away = rotation.inverse() * rat_ground_step(&ctx, touching, rotation * Vec3::NEG_X);
+                    assert!((away.x + 0.05).abs() < 0.01, "separating motion must escape overlap: {away:?}");
+                    assert_eq!(rat_ground_step(&ctx, touching, Vec3::ZERO), touching);
+                });
+            app.world_mut().spawn((Collider::cuboid(0.01, 0.5, 5.0),
+                Transform::from_translation(rotation * Vec3::new(1.0, 0.5, 0.0)).with_rotation(rotation), CollisionGroups::new(GROUP_WORLD, Group::ALL)));
+            app.update();
+            let slid = app.world().resource::<MovementResult>().0;
+            assert!(slid.x > 0.85 && slid.x < 0.93, "{slid:?}");
+            assert!((slid.z - 2.0).abs() < 0.01, "tangent movement must survive: {slid:?}");
+            app.world_mut().spawn((Collider::cuboid(5.0, 0.5, 0.01),
+                Transform::from_translation(rotation * Vec3::new(0.0, 0.5, 1.5)).with_rotation(rotation), CollisionGroups::new(GROUP_PROP, Group::ALL)));
+            app.update();
+            let corner = app.world().resource::<MovementResult>().0;
+            assert!(corner.x > 0.85 && corner.x < 0.93, "{corner:?}");
+            assert!(corner.z > 1.35 && corner.z < 1.43, "second sweep must block corner: {corner:?}");
+        }
+    }
+
+    #[test]
     fn carrion_killer_counts_each_player_rat_kill_once() {
         let mut app = App::new();
         let mut stats = PlayerStats::default();
@@ -1087,17 +1117,33 @@ fn swarm_brain(
 
 /// Advance over the ground without crossing solid cover.
 fn rat_ground_step(ctx: &RapierContext, from: Vec3, step: Vec3) -> Vec3 {
-    let step = step.with_y(0.0);
-    if step.length_squared() < 1e-10 { return from; }
+    let mut remaining = step.with_y(0.0);
+    let mut at = from;
     // Small ground-level volume, clear of the supporting floor. Sweeping the
     // whole frame prevents fast/scattering rats from tunnelling through cover.
     let shape = Collider::ball(0.08);
     let filter = QueryFilter::default().exclude_sensors()
         .groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
-    let fraction = ctx.cast_shape(from + Vec3::Y * 0.16, Quat::IDENTITY, step, shape.raw.as_ref(),
-        ShapeCastOptions { max_time_of_impact: 1.0, target_distance: 0.01, stop_at_penetration: false, ..default() }, filter)
-        .map(|(_, hit)| hit.time_of_impact.clamp(0.0, 1.0)).unwrap_or(1.0);
-    from + step * fraction
+    for _ in 0..3 {
+        if remaining.length_squared() < 1e-10 { break; }
+        let Some((_, hit)) = ctx.cast_shape(at + Vec3::Y * 0.16, Quat::IDENTITY, remaining, shape.raw.as_ref(),
+            ShapeCastOptions { max_time_of_impact: 1.0, target_distance: 0.01, stop_at_penetration: false,
+                compute_impact_geometry_on_penetration: true, ..default() }, filter) else {
+            at += remaining;
+            break;
+        };
+        let fraction = hit.time_of_impact.clamp(0.0, 1.0);
+        at += remaining * fraction;
+        remaining *= 1.0 - fraction;
+        // Rapier's first normal is the world collider's world-space normal.
+        // Remove only motion into it, then sweep the remaining tangent against
+        // the next obstacle as well (corners must not bypass collision).
+        let Some(normal) = hit.details.and_then(|d| d.normal1.with_y(0.0).try_normalize()) else { break };
+        let inward = remaining.dot(normal);
+        if inward >= -1e-6 { break; }
+        remaining -= normal * inward;
+    }
+    at
 }
 
 /// Rats see from ground level; walls and movable cover interrupt attacks and feeding.
