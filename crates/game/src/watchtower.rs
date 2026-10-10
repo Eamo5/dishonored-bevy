@@ -13,7 +13,7 @@
 
 use crate::audio::PostEvent;
 use crate::gameplay::PlayerStats;
-use crate::level::{GameAssets, LevelInfo, LevelSpawnSet, GROUP_WORLD};
+use crate::level::{GameAssets, LevelInfo, LevelSpawnSet, GROUP_PROP, GROUP_WORLD};
 use crate::particles::SpawnEffect;
 use crate::player::{Player, PlayerCamera};
 use crate::GameState;
@@ -462,6 +462,53 @@ fn rand_unit() -> f32 {
     (x as f32 / u32::MAX as f32) * 2.0 - 1.0
 }
 
+#[cfg(test)]
+mod projectile_tests {
+    use super::*;
+
+    #[test]
+    fn arrows_choose_nearest_contact_and_follow_player_stance() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>().init_resource::<crate::gameplay::TimeControl>()
+            .init_resource::<crate::settings::Settings>().add_message::<crate::gadgets::Explosion>()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
+            .insert_resource(LevelInfo { scene: dhcook::format::Scene { security: vec![dhcook::format::Security {
+                blast: Some(dhcook::format::TrapBlast::default()), ..default()
+            }], ..default() } }).add_systems(Last, fly_arrows);
+        let player = app.world_mut().spawn((Transform::from_xyz(2.0, 0.0, 0.0), Player {
+            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
+            grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
+            air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
+            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO,
+        })).id();
+        let cover = app.world_mut().spawn((Collider::cuboid(0.01, 2.0, 2.0), Transform::from_xyz(4.0, 0.0, 0.0), CollisionGroups::new(GROUP_WORLD, Group::ALL))).id();
+        app.update();
+        let fire = |app: &mut App, y| {
+            app.world_mut().resource_mut::<Messages<crate::gadgets::Explosion>>().clear();
+            app.world_mut().spawn((Arrow { tower: 0, vel: Vec3::X * 50.0, gravity: 0.0, life: 6.0 }, Transform::from_xyz(0.0, y, 0.0)));
+            app.update();
+            let blasts = app.world().resource::<Messages<crate::gadgets::Explosion>>();
+            let mut cursor = blasts.get_cursor();
+            cursor.read(blasts).next().map(|b| b.at)
+        };
+        let hit = fire(&mut app, 0.0).unwrap();
+        assert!((hit.x - 1.56).abs() < 0.001, "nearer player must intercept before farther wall: {hit:?}");
+        app.world_mut().get_mut::<Transform>(cover).unwrap().translation.x = 1.0;
+        for group in [GROUP_WORLD, GROUP_PROP] {
+            app.world_mut().entity_mut(cover).insert(CollisionGroups::new(group, Group::ALL));
+            let hit = fire(&mut app, 0.0).unwrap();
+            assert!((hit.x - 0.89).abs() < 0.001, "nearer cover must intercept before player: {hit:?}");
+        }
+        app.world_mut().entity_mut(cover).insert(Sensor);
+        assert!(fire(&mut app, 0.6).is_some());
+        app.world_mut().get_mut::<Player>(player).unwrap().crouched = true;
+        app.world_mut().get_mut::<Transform>(player).unwrap().translation.y = -0.4;
+        assert!(fire(&mut app, 0.6).is_none(), "head-height arrow clears a crouching player");
+        assert!(fire(&mut app, -0.4).is_some());
+    }
+}
+
 /// The towers' arrows: they burst on whatever they strike.
 #[allow(clippy::too_many_arguments)]
 fn fly_arrows(
@@ -472,15 +519,15 @@ fn fly_arrows(
     level: Option<Res<LevelInfo>>,
     settings: Res<crate::settings::Settings>,
     mut arrows: Query<(Entity, &mut Arrow, &mut Transform)>,
-    player: Query<(Entity, &Transform), (With<Player>, Without<Arrow>)>,
-    npcs: Query<&Transform, (With<crate::npc::Npc>, Without<Arrow>)>,
+    player: Query<(&Transform, &Player), Without<Arrow>>,
+    npcs: Query<(&crate::npc::Npc, &Transform), Without<Arrow>>,
     mut blasts: MessageWriter<crate::gadgets::Explosion>,
 ) {
     let Some(level) = level else { return };
     let Ok(ctx) = rapier.single() else { return };
     let dt = time.delta_secs() * tc.world_scale();
     let pl = player.single().ok();
-    let walls = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+    let walls = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     for (e, mut a, mut t) in &mut arrows {
         a.life -= dt;
         a.vel.y -= a.gravity * dt;
@@ -489,12 +536,25 @@ fn fly_arrows(
         let from = t.translation;
         let mut at = None;
         if len > 0.0 {
-            if let Some((_, h)) = ctx.cast_ray_and_get_normal(from, step / len, len, true, walls) {
-                at = Some(from + step / len * h.time_of_impact + h.normal * 0.1);
+            let direction = step / len;
+            let mut nearest = len;
+            if let Some((_, h)) = ctx.cast_ray_and_get_normal(from, direction, len, true, walls) {
+                nearest = h.time_of_impact;
+                at = Some(from + direction * nearest + h.normal * 0.1);
             }
-            let near = |p: Vec3| crate::krust::segment_distance(from, from + step, p - Vec3::Y * 0.8, p + Vec3::Y * 0.8) < 0.5;
-            if at.is_none() && (pl.is_some_and(|(_, pt)| near(pt.translation)) || npcs.iter().any(|n| near(n.translation))) {
-                at = Some(from + step * 0.5);
+            let mut character = |center, half, radius| {
+                if let Some(distance) = crate::krust::capsule_ray_hit(from, direction, nearest, center, half, radius)
+                    .filter(|d| at.is_none() || *d < nearest) {
+                    nearest = distance;
+                    at = Some(from + direction * distance);
+                }
+            };
+            for (n, t) in &npcs {
+                if !n.is_down() { character(t.translation, crate::npc::NPC_HALF, crate::npc::NPC_RADIUS + 0.12); }
+            }
+            if let Some((t, p)) = pl {
+                let half = if p.crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF };
+                character(t.translation, half, crate::player::RADIUS + 0.12);
             }
             if len > 0.01 {
                 t.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, step / len);

@@ -987,6 +987,13 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Watchtower arrows now resolve the nearest character or world/prop contact instead
+  of prioritizing every wall hit over characters and guessing a midpoint. Player
+  capsules follow crouch state, downed NPCs are excluded, and sensors are ignored.
+  High-speed regressions cover both hit orders, both cover groups, triggers and
+  standing/crouched trajectories. All 96 tests pass
+  (`cache/parity_tower_projectile_suite.log`).
+
 - The trap-clip audit found an authored mismatch: prison-sewer launcher meshes
   have `Root_trap_jnt`/`launcher_jnt`, while `TripodTrap_Fire` addresses seven other
   bones. The cooker now retains source names when no complete reference rig fits,
