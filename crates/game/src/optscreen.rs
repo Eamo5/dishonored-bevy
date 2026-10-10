@@ -314,7 +314,7 @@ fn draw(
                 words(&mut commands, turned(wc, Vec2::new(tx, 0.0)), Vec2::new(52.0, 30.0), shown, normal_font(25.0), DARK, Justify::Center, false);
             }
             Some(OptView::Key(k, waiting)) => {
-                let word = if waiting { "...".to_string() } else { k };
+                let word = if waiting { "Press a key...".to_string() } else { k };
                 words(&mut commands, wc, Vec2::new(350.0, 30.0), word, normal_font(25.0), if on { DARK } else { PALE }, Justify::Center, false);
             }
             None => {}
@@ -326,12 +326,14 @@ fn draw(
         }));
     }
     // the help bar's: restore the category's settings, back
-    let help = format!(
+    let help = if menu.capturing_binding() {
+        "PRESS A KEY    [Esc] CANCEL".to_string()
+    } else { format!(
         "[Tab] {}    [R] {}    [Esc] {}",
         data.text(MENU_BASE, OPT_CATEGORIES[((cat as usize) + 1) % n].0).to_uppercase(),
         data.text("DisGFxMoviePlayerMenuBase_Texts", "t_RestoreSettings").to_uppercase(),
         data.text("DisGFxMoviePlayerBase_Texts", "t_Back").to_uppercase()
-    );
+    ) };
     let p = off + Vec2::new(1184.0 - 700.0, 651.0 - 16.0) * s;
     commands.spawn((Text::new(help), title_font(21.0), TextColor(PALE), TextLayout::new(Justify::Right, LineBreak::NoWrap), Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(700.0 * s), ..default() }, Pickable::IGNORE, ChildOf(root)));
 }

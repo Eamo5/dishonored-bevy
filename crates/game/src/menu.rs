@@ -215,6 +215,9 @@ impl Menu {
     }
     /// Show another category (its first sub-category) or sub-category.
     pub fn set_options_tab(&mut self, cat: u8, sub: u8) {
+        if self.capture.is_some() || self.confirm.is_some() {
+            return;
+        }
         if (cat, sub) != (self.opt_cat, self.opt_sub) {
             self.opt_cat = cat.min(OPT_CATEGORIES.len() as u8 - 1);
             self.opt_sub = sub.min((OPT_CATEGORIES[self.opt_cat as usize].1.len() as u8).saturating_sub(1));
@@ -223,6 +226,11 @@ impl Menu {
             self.dirty = true;
         }
     }
+    /// Whether keyboard input is being captured for a binding.
+    pub fn capturing_binding(&self) -> bool {
+        self.capture.is_some()
+    }
+
     /// How the options' row `i` shows its value.
     pub fn option_view(&self, i: usize, s: &Settings, data: &crate::gamedata::Data) -> Option<OptView> {
         let words = |keys: &[&str]| keys.iter().map(|k| data.text("Settings.ProfileSettingValues", k)).collect::<Vec<_>>();
@@ -542,6 +550,35 @@ fn adjust(s: &mut Settings, o: Opt, dir: f32) {
     }
 }
 
+#[cfg(test)]
+mod modal_tests {
+    use super::*;
+
+    #[test]
+    fn option_tabs_cannot_redirect_a_pending_restore_or_key_capture() {
+        let mut menu = Menu::default();
+        menu.set_options_tab(1, 0);
+        menu.confirm = Some(("Restore keyboard mappings?".into(), Action::ResetBindings, 0));
+        menu.set_options_tab(2, 0);
+        assert_eq!(menu.options_tab(), (1, 0));
+        let mut settings = Settings::default();
+        settings.bindings.push(("forward".into(), "KeyZ".into()));
+        settings.brightness = 1.3;
+        menu.restore_settings(&mut settings);
+        assert!(settings.bindings.is_empty());
+        assert_eq!(settings.brightness, 1.3);
+
+        menu.confirm = None;
+        menu.capture = Some(crate::bindings::Act::Forward);
+        menu.set_options_tab(1, 1);
+        assert_eq!(menu.options_tab(), (1, 0));
+        assert!(menu.capturing_binding());
+        menu.capture = None;
+        menu.set_options_tab(2, 0);
+        assert_eq!(menu.options_tab(), (2, 0));
+    }
+}
+
 fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::gamedata::Data, profile: &crate::challenge::ChallengeProfile) -> Vec<(String, Action)> {
     let has_saves = slots.any();
     match (menu.open, menu.page) {
@@ -673,28 +710,6 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
                 ],
             };
             return rows.into_iter().map(|(k, o)| (label(k), Action::Adjust(o))).collect();
-        }
-        #[allow(unreachable_code)]
-        (_, Page::Controls) => {
-            let opts = [
-                ("Mouse Sensitivity", Opt::Sensitivity),
-                ("Invert Mouse", Opt::InvertY),
-                ("Field of View", Opt::Fov),
-                ("Master Volume", Opt::Master),
-                ("Music Volume", Opt::Music),
-                ("Effects Volume", Opt::Sfx),
-                ("Voice Volume", Opt::Voice),
-                ("Subtitles", Opt::Subtitles),
-                ("Brightness", Opt::Brightness),
-                ("Display", Opt::Fullscreen),
-                ("Vertical Sync", Opt::VSync),
-                ("Crosshair", Opt::Crosshair),
-                ("Objective Markers", Opt::Markers),
-            ];
-            let mut v: Vec<(String, Action)> = opts.iter().map(|(n, o)| (format!("{n}   <  {}  >", opt_value(settings, *o)), Action::Adjust(*o))).collect();
-            v.push(("Controls".into(), Action::Page(Page::Controls)));
-            v.push(("Back".into(), Action::Back));
-            v
         }
         (_, Page::Controls) => {
             let bind = crate::bindings::Bindings::from_settings(settings);
