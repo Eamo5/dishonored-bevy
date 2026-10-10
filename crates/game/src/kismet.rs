@@ -237,7 +237,34 @@ pub enum TaskState {
     Failed,
 }
 
-/// The level script interpreter.
+#[cfg(test)]
+mod tower_save_tests {
+    use super::*;
+
+    #[test]
+    fn pending_tower_orders_replace_runtime_queues_and_default_for_older_saves() {
+        let mut vm = Vm::new(Arc::new(Graph::default()), &[]);
+        vm.tower_shots.push(("DisWatchTower_0".into(), Vec3::new(1.0, 2.0, 3.0)));
+        vm.tower_cmds.push((vec![Val::Actor(7)], 4, vec![Val::Player]));
+        let saved = serde_json::to_value(vm.save_state()).unwrap();
+        vm.tower_shots.push(("Unrelated".into(), Vec3::ZERO));
+        vm.tower_cmds.clear();
+        assert!(vm.restore_state(serde_json::from_value(saved.clone()).unwrap()));
+        assert_eq!(vm.tower_shots, vec![("DisWatchTower_0".into(), Vec3::new(1.0, 2.0, 3.0))]);
+        assert_eq!(serde_json::to_value(&vm.tower_cmds).unwrap(), saved["tower_cmds"]);
+        // Re-loading replaces queues rather than appending the same order again.
+        assert!(vm.restore_state(serde_json::from_value(saved.clone()).unwrap()));
+        assert_eq!(vm.tower_shots.len(), 1);
+        assert_eq!(vm.tower_cmds.len(), 1);
+        let mut legacy = saved;
+        legacy.as_object_mut().unwrap().remove("tower_shots");
+        legacy.as_object_mut().unwrap().remove("tower_cmds");
+        assert!(vm.restore_state(serde_json::from_value(legacy).unwrap()));
+        assert!(vm.tower_shots.is_empty());
+        assert!(vm.tower_cmds.is_empty());
+    }
+}
+
 /// The scripts' runtime state in a save game.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct VmSave {
@@ -277,6 +304,11 @@ pub struct VmSave {
     /// physics joints the scripts destroyed
     #[serde(default)]
     joints_broken: Vec<String>,
+    /// Tower orders remain pending while the world is stopped.
+    #[serde(default)]
+    tower_shots: Vec<(String, Vec3)>,
+    #[serde(default)]
+    tower_cmds: Vec<(Vec<Val>, u8, Vec<Val>)>,
 }
 
 #[derive(Resource)]
@@ -3725,6 +3757,8 @@ impl Vm {
             music_box: self.music_box.clone(),
             spawn_props: self.spawn_props.clone(),
             joints_broken: self.joints_broken.iter().cloned().collect(),
+            tower_shots: self.tower_shots.clone(),
+            tower_cmds: self.tower_cmds.clone(),
         }
     }
 
@@ -3757,6 +3791,8 @@ impl Vm {
         self.music_box = s.music_box;
         self.spawn_props = s.spawn_props;
         self.joints_broken = s.joints_broken.into_iter().collect();
+        self.tower_shots = s.tower_shots;
+        self.tower_cmds = s.tower_cmds;
         if let Some(i) = s.inert {
             self.inert = i;
         }

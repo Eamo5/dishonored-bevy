@@ -987,6 +987,13 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- Pending scripted tower volleys and control orders now persist in Kismet saves,
+  including orders waiting for Bend Time to end. Loading replaces these queues;
+  older saves default to empty queues. All 99 tests pass
+  (`cache/parity_tower_orders_suite.log`). Live Streets2 testing queued op 336 while
+  stopped, preserved its exact target through save/load, then consumed it with one
+  logged scripted volley after time resumed (`cache/parity_tower_orders_runtime.log`).
+
 - Tower snapshots now preserve aim, sweep progress, alert/volley state, lost-target
   timer, warning state and tank discovery. Older saves may omit the snapshot.
   Stopped-time presentation refreshes restored heads and beams while AI decisions

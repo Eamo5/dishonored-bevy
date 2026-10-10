@@ -307,6 +307,9 @@ fn towers(
             _ => Vec::new(),
         };
         for at in ordered {
+            if std::env::var("DH_TOWER_LOG").is_ok() {
+                info!("watch tower {}: scripted volley at {at:.2}", d.actor);
+            }
             let speed = d.params.get("m_fProjectileSpeed").copied().unwrap_or(2250.0) * 0.01;
             let g = crate::traps::GRAVITY * d.params.get("gravity").copied().unwrap_or(1.0);
             for k in 0..d.params.get("m_VolleyShots").copied().unwrap_or(3.0) as u32 {
