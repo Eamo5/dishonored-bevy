@@ -1003,6 +1003,13 @@ fullscreen display, vertical sync and the crosshair.
   movement. A gameplay regression keeps a rat alive behind solid cover, then
   confirms the same strike kills it when that collider becomes a sensor; all 79
   tests pass (`cache/parity_rat_sensor_suite.log`).
+  Bend Time now also freezes swarm decisions and rat animation selection; the
+  per-rat movement pattern uses its saved world-time age instead of unscaled time.
+  A live stopped-time run saved all 18 swarms twice one second apart, including a
+  55-rat summoned swarm: the entire swarm snapshots matched exactly
+  (`cache/parity_rat_time_runtime.log`). Tests verify no target acquisition while
+  stopped and movement/animation resuming at half speed; all 80 tests pass
+  (`cache/parity_rat_time_suite.log`).
 
 - Full-body cinematic, carrying and swimming poses now suppress the powers/ranged
   overlay and held weapons. Normal equipment visibility returns afterward.

@@ -701,6 +701,13 @@ mod kill_tests {
         let before = app.world().resource::<RatBites>().0;
         tick(&mut app);
         assert_eq!(app.world().resource::<RatBites>().0, before, "cooked overrides use centimetres");
+        app.world_mut().resource_mut::<Data>().0.pawn.insert("m_fCrouchedRatSwarmAttackDistance".into(), 60.0);
+        app.world_mut().resource_mut::<TimeControl>().bend_remaining = 5.0;
+        app.world_mut().resource_mut::<TimeControl>().world_dilation = 0.0;
+        app.world_mut().get_mut::<Swarm>(swarm).unwrap().target = None;
+        tick(&mut app);
+        assert_eq!(app.world().resource::<RatBites>().0, before);
+        assert!(app.world().get::<Swarm>(swarm).unwrap().target.is_none(), "frozen swarms do not acquire new targets");
     }
 
     #[derive(Resource, Default)]
@@ -708,6 +715,35 @@ mod kill_tests {
 
     #[derive(Resource, Default)]
     struct MovementResult(Vec3);
+
+    #[test]
+    fn stopped_time_preserves_rat_state_and_resumes_on_world_time() {
+        let mut app = App::new();
+        app.init_resource::<Time>().insert_resource(TimeControl { bend_remaining: 10.0, world_dilation: 0.0, ..default() })
+            .add_systems(Update, move_rats);
+        let skeleton = dhcook::format::SkeletonDef::default();
+        let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![]));
+        let rat = app.world_mut().spawn((Rat { offset: Vec3::X * 3.0, speed: 2.0, yaw: 0.3, state: RatAnim::Idle, spawn_t: 2.0 },
+            Transform::from_rotation(Quat::from_rotation_y(0.3)), Animator::new(lib, &skeleton, vec![]))).id();
+        app.world_mut().spawn((Swarm { wild: None, spawner: None, left: 30.0, level: 1, target: None, eating: None,
+            delay: 0.0, bite_t: 0.0, rats: vec![rat], scattering: false }, Transform::default()));
+        for _ in 0..3 {
+            app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(100));
+            app.update();
+            let r = app.world().get::<Rat>(rat).unwrap();
+            assert!(matches!(r.state, RatAnim::Idle));
+            assert_eq!((r.spawn_t, r.yaw), (2.0, 0.3));
+            assert_eq!(app.world().get::<Transform>(rat).unwrap().translation, Vec3::ZERO);
+            assert_eq!(app.world().get::<Animator>(rat).unwrap().time_scale, 0.0);
+        }
+        app.world_mut().resource_mut::<TimeControl>().world_dilation = 0.5;
+        app.update();
+        let r = app.world().get::<Rat>(rat).unwrap();
+        assert!((r.spawn_t - 2.05).abs() < 1e-5);
+        assert!(matches!(r.state, RatAnim::Run));
+        assert!((app.world().get::<Transform>(rat).unwrap().translation.length() - 0.1).abs() < 1e-5);
+        assert_eq!(app.world().get::<Animator>(rat).unwrap().time_scale, 0.5);
+    }
 
     #[test]
     fn rat_movement_sweeps_thin_cover_but_ignores_floor_and_sensors() {
@@ -947,7 +983,7 @@ fn swarm_brain(
     (player, mut stats, mut bites): (Query<(&Transform, &crate::player::Player), (Without<Swarm>, Without<Npc>)>, ResMut<crate::gameplay::PlayerStats>, ResMut<RatBites>),
     level: Option<Res<LevelInfo>>,
 ) {
-    let dt = time.delta_secs() * tc.world_scale();
+    let dt = time.delta_secs() * tc.world_scale().max(0.0);
     let Ok(ctx) = rapier.single() else { return };
     let ground = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     let ppos = player.single().map(|(t, p)| (t.translation, player_bite_distance(&data, p.crouched))).ok();
@@ -956,6 +992,7 @@ fn swarm_brain(
             commands.entity(se).despawn();
             continue;
         }
+        if dt <= 0.0 { continue; }
         let spawner = level.as_ref().and_then(|l| s.spawner.and_then(|i| l.scene.rat_spawners.get(i as usize)));
         let can_eat = s.rats.len() >= feeding_required(&data, &s, spawner);
         if !can_eat { s.eating = None; }
@@ -1208,14 +1245,15 @@ fn move_rats(
     swarms: Query<(&Swarm, &Transform)>,
     mut rats: Query<(&mut Rat, &mut Transform, &mut Animator), (Without<Swarm>, Without<crate::possession::Possessed>)>,
 ) {
-    let dt = time.delta_secs() * tc.world_scale();
+    let dt = time.delta_secs() * tc.world_scale().max(0.0);
     let ctx = rapier.single().ok();
     let ground = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     for (s, st) in &swarms {
         let busy = s.target.is_some() || s.eating.is_some();
         for (k, &re) in s.rats.iter().enumerate() {
             let Ok((mut r, mut t, mut a)) = rats.get_mut(re) else { continue };
-            a.time_scale = tc.world_scale();
+            a.time_scale = tc.world_scale().max(0.0);
+            if dt <= 0.0 { continue; }
             let c = clips(&a);
             r.spawn_t += dt;
             if r.state == RatAnim::Spawn && r.spawn_t < 0.9 {
@@ -1226,7 +1264,7 @@ fn move_rats(
             let goal = if s.scattering {
                 t.translation + r.offset.normalize_or_zero() * 6.0
             } else {
-                let wobble = Vec3::new((time.elapsed_secs() * 1.3 + k as f32).sin(), 0.0, (time.elapsed_secs() * 1.1 + k as f32 * 0.7).cos()) * 0.15;
+                let wobble = Vec3::new((r.spawn_t * 1.3 + k as f32).sin(), 0.0, (r.spawn_t * 1.1 + k as f32 * 0.7).cos()) * 0.15;
                 st.translation + r.offset * ring + wobble
             };
             let to = (goal - t.translation).with_y(0.0);
