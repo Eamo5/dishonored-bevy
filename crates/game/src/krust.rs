@@ -245,6 +245,7 @@ mod cover_tests {
 /// A gob of acid in flight.
 #[derive(Component)]
 struct Spit {
+    source: Entity,
     vel: Vec3,
     gravity: f32,
     damage: f32,
@@ -818,7 +819,7 @@ fn krust_brain(
                                 Some(o) => (o, Vec3::ZERO),
                                 None => aim.unwrap_or((me + Vec3::Y, Vec3::ZERO)),
                             };
-                            fire(&mut commands, def, settings.difficulty, launch.translation(), at, vel);
+                            fire(&mut commands, def, settings.difficulty, launch.translation(), at, vel, k.collider);
                             if log_on {
                                 info!("krust {}: spits from {:.2} at {at:.2}", def.name, launch.translation());
                             }
@@ -880,7 +881,7 @@ fn possessed_krust(
             if !k.fired && t >= FIRE_AT {
                 k.fired = true;
                 if let (Some(launch), Some(at)) = (world(&joints, k.launch), k.order.take()) {
-                    fire(&mut commands, def, settings.difficulty, launch.translation(), at, Vec3::ZERO);
+                    fire(&mut commands, def, settings.difficulty, launch.translation(), at, Vec3::ZERO, k.collider);
                     if std::env::var("DH_KRUST_LOG").is_ok() {
                         info!("possessed krust {} spits at {at:.2}", def.name);
                     }
@@ -920,7 +921,7 @@ fn possessed_krust(
 
 /// Spit: led at a moving target, lifted against its slight gravity; now and then off the mark
 /// (`m_fChanceForAccurateProjectileAim`). Its speed grows with the distance.
-fn fire(commands: &mut Commands, def: &KrustDef, difficulty: u8, from: Vec3, at: Vec3, target_vel: Vec3) {
+fn fire(commands: &mut Commands, def: &KrustDef, difficulty: u8, from: Vec3, at: Vec3, target_vel: Vec3, source: Entity) {
     let d = from.distance(at);
     let [d0, d1] = def.speed_distance;
     let k = if d1 > d0 { ((d - d0) / (d1 - d0)).clamp(0.0, 1.0) } else { 0.5 };
@@ -939,7 +940,7 @@ fn fire(commands: &mut Commands, def: &KrustDef, difficulty: u8, from: Vec3, at:
     let vel = (aim - from).normalize_or(Vec3::NEG_Z) * speed;
     let damage = def.damage[difficulty.min(3) as usize];
     let e = commands
-        .spawn((Spit { vel, gravity: g, damage, life: 6.0 }, Transform::from_translation(from), Visibility::default(), DespawnOnExit(GameState::InGame)))
+        .spawn((Spit { source, vel, gravity: g, damage, life: 6.0 }, Transform::from_translation(from), Visibility::default(), DespawnOnExit(GameState::InGame)))
         .id();
     if let Some(trail) = def.trail {
         commands.write_message(SpawnEffect { follow: Some(e), secs: 6.0, system: Some(trail), ..SpawnEffect::at("", Vec3::ZERO) });
@@ -963,7 +964,7 @@ fn fly_spit(
 ) {
     let dt = time.delta_secs() * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
-    let walls = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+    let walls = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     let pp = player.single().ok().map(|t| t.translation);
     for (e, mut s, mut t) in &mut spits {
         s.life -= dt;
@@ -978,21 +979,21 @@ fn fly_spit(
             continue;
         }
         let a = t.translation;
-        // anyone in the way: the step against their capsule's axis (the original's spit damage)
-        if let Some((ne, _, nt)) = npcs.iter().find(|(_, n, nt)| {
-            !n.is_down() && segment_distance(a, a + step, nt.translation - Vec3::Y * crate::npc::NPC_HALF, nt.translation + Vec3::Y * crate::npc::NPC_HALF) < crate::npc::NPC_RADIUS + 0.1
-        }) {
-            hits.write(crate::gameplay::NpcHit { npc: ne, damage: s.damage, kind: crate::gameplay::HitKind::Bullet, from: a });
-            fx.write(SpawnEffect::at("krust_impact", a));
-            sfx.write(PostEvent::named("Imp_Bullet_on_Body", Some(nt.translation)));
-            commands.entity(e).despawn();
-            continue;
-        }
+        let direction = step / len;
+        let wall = ctx.cast_ray_and_get_normal(a, direction, len, true, walls.exclude_collider(s.source));
+        let limit = wall.as_ref().map(|(_, hit)| hit.time_of_impact).unwrap_or(len);
+        // Resolve all candidates along the swept segment, not by entity iteration
+        // order. A character behind the first solid impact cannot intercept it.
+        let npc = npcs.iter().filter(|(_, n, _)| !n.is_down()).filter_map(|(ne, _, nt)| {
+            spit_capsule_hit(a, direction, limit, nt.translation, crate::npc::NPC_HALF, crate::npc::NPC_RADIUS + 0.1)
+                .filter(|hit| wall.is_none() || *hit < limit).map(|hit| (ne, nt.translation, hit))
+        }).min_by(|a, b| a.2.total_cmp(&b.2));
         // Corvo (not while he's in a creature)
         if let Some(p) = pp.filter(|_| !stats.dead && possession.body.is_none()) {
-            let lo = p - Vec3::Y * (crate::player::STAND_HALF + 0.1);
-            let hi = p + Vec3::Y * (crate::player::STAND_HALF + 0.2);
-            if segment_distance(a, a + step, lo, hi) < crate::player::RADIUS + 0.12 {
+            let player_hit = spit_capsule_hit(a, direction, limit, p + Vec3::Y * 0.05,
+                crate::player::STAND_HALF + 0.15, crate::player::RADIUS + 0.12)
+                .filter(|hit| (wall.is_none() || *hit < limit) && npc.is_none_or(|n| *hit < n.2));
+            if let Some(hit) = player_hit {
                 stats.hit_from = Some(a);
                 crate::gameplay::hurt_player(&mut stats, &mut msgs, &mut sfx, s.damage);
                 if std::env::var("DH_KRUST_LOG").is_ok() {
@@ -1001,12 +1002,19 @@ fn fly_spit(
                 if let Ok(c) = cam.single() {
                     fx.write(SpawnEffect { follow: Some(c), secs: 2.0, ..SpawnEffect::at("krust_lens", Vec3::NEG_Z * 0.3) });
                 }
-                fx.write(SpawnEffect::at("krust_impact", a));
+                fx.write(SpawnEffect::at("krust_impact", a + direction * hit));
                 commands.entity(e).despawn();
                 continue;
             }
         }
-        if let Some((_, hit)) = ctx.cast_ray_and_get_normal(a, step / len, len, true, walls) {
+        if let Some((ne, at, hit)) = npc {
+            hits.write(crate::gameplay::NpcHit { npc: ne, damage: s.damage, kind: crate::gameplay::HitKind::Bullet, from: a });
+            fx.write(SpawnEffect::at("krust_impact", a + direction * hit));
+            sfx.write(PostEvent::named("Imp_Bullet_on_Body", Some(at)));
+            commands.entity(e).despawn();
+            continue;
+        }
+        if let Some((_, hit)) = wall {
             let at = a + step / len * hit.time_of_impact;
             if std::env::var("DH_KRUST_LOG").is_ok() {
                 info!("krust spit splashes at {at:.2}");
@@ -1017,6 +1025,10 @@ fn fly_spit(
         }
         t.translation = a + step;
     }
+}
+
+fn spit_capsule_hit(from: Vec3, direction: Vec3, distance: f32, center: Vec3, half: f32, radius: f32) -> Option<f32> {
+    Collider::capsule_y(half, radius).cast_ray(center, Quat::IDENTITY, from, direction, distance, true)
 }
 
 /// Shortest distance between segments `a0..a1` and `b0..b1`.
@@ -1056,6 +1068,52 @@ pub fn segment_distance(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fast_spit_hits_cover_before_player_and_ignores_its_source() {
+        for group in [GROUP_WORLD, GROUP_PROP] {
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+                .init_resource::<Assets<Mesh>>().init_resource::<TimeControl>().init_resource::<PlayerStats>()
+                .init_resource::<crate::gameplay::HudMessages>().init_resource::<crate::possession::Possession>()
+                .add_message::<crate::gameplay::NpcHit>().add_message::<PostEvent>().add_message::<SpawnEffect>()
+                .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
+                .add_systems(Last, fly_spit);
+            app.world_mut().spawn((Transform::from_xyz(3.0, 0.0, 0.0), Player {
+                velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
+                grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
+                air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
+                fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO,
+            }));
+            let source = app.world_mut().spawn((Collider::ball(0.4), Transform::default(), CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
+            let cover = app.world_mut().spawn((Collider::cuboid(0.01, 1.0, 1.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(group, Group::ALL))).id();
+            app.update();
+            let before = app.world().resource::<PlayerStats>().health;
+            let shot = |app: &mut App| {
+                app.world_mut().spawn((Spit { source, vel: Vec3::X * 50.0, gravity: 0.0, damage: 7.0, life: 6.0 }, Transform::default())).id()
+            };
+            let blocked = shot(&mut app);
+            app.update();
+            assert!(app.world().get::<Spit>(blocked).is_none());
+            assert_eq!(app.world().resource::<PlayerStats>().health, before, "cover must win before the farther capsule");
+            app.world_mut().entity_mut(cover).insert(Sensor);
+            let exposed = shot(&mut app);
+            app.update();
+            assert!(app.world().get::<Spit>(exposed).is_none());
+            assert_eq!(app.world().resource::<PlayerStats>().health, before - 7.0, "source shell and triggers must not intercept the shot");
+        }
+    }
+
+    #[test]
+    fn spit_capsule_query_reports_entry_distance_and_respects_cover_limit() {
+        let near = spit_capsule_hit(Vec3::ZERO, Vec3::X, 10.0, Vec3::X * 2.0, 0.6, 0.4).unwrap();
+        let far = spit_capsule_hit(Vec3::ZERO, Vec3::X, 10.0, Vec3::X * 4.0, 0.6, 0.4).unwrap();
+        // Convex ray casts use an iterative solver: require millimetre accuracy.
+        assert!((near - 1.6).abs() < 0.001, "entry {near}");
+        assert!((far - 3.6).abs() < 0.001, "entry {far}");
+        assert!(near < far);
+        assert!(spit_capsule_hit(Vec3::ZERO, Vec3::X, 1.0, Vec3::X * 2.0, 0.6, 0.4).is_none());
+    }
 
     #[test]
     fn segments() {

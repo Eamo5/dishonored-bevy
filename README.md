@@ -987,6 +987,13 @@ fullscreen display, vertical sync and the crosshair.
 
 ## Parity audit status
 
+- River-krust acid projectiles now resolve capsule entry distances against the
+  first world/prop impact instead of checking characters before cover. NPC hits
+  use nearest entry, and impact effects use the actual contact point. The source
+  shell and trigger sensors are excluded. High-speed physics regressions verify
+  cover wins over a farther player within one frame and an unobstructed shot still
+  deals damage. All 87 tests pass (`cache/parity_spit_cover_suite.log`).
+
 - Possessed river krusts now ignore paused menu input and reset their animation
   clock to Corvo's rate, clearing a stale frozen state from Bend Time. A gameplay
   regression verifies menu clicks do not queue firing, unpause alone does not fire,
