@@ -2890,25 +2890,27 @@ impl<'a> Cooker<'a> {
         else {
             return Ok(None);
         };
-        // first resolvable head mesh from m_RandomHeadMeshes
-        let mut head = None;
-        if let Some((hpkg, Value::Array { count, offset, size })) = ch.get_pkg("m_RandomHeadMeshes") {
-            let hpkg = hpkg.clone();
-            if let Ok(items) = parse_struct_array(&hpkg, *offset, *size, *count) {
-                'outer: for it in items {
-                    for p in &it.0 {
-                        if let Value::Object(o) = p.value {
-                            if let Some(m) = self.assets.resolve(&hpkg, o) {
-                                if m.class() == "SkeletalMesh" {
-                                    head = Some(m);
-                                    break 'outer;
-                                }
-                            }
-                        }
-                    }
-                }
+        // the heads it may have (`m_RandomHeadMeshes`): each mesh, its chance and its material
+        // variations; the first is this type's own
+        let mut heads: Vec<(Obj, f32, Vec<Vec<(u32, f32)>>)> = Vec::new();
+        if let Some((hpkg, Value::Array { count, offset, size })) = ch.get_pkg("m_RandomHeadMeshes").map(|(p, v)| (p.clone(), v.clone())) {
+            for it in parse_struct_array(&hpkg, offset, size, count).unwrap_or_default() {
+                let mesh = it.object("m_pMesh").filter(|o| *o != 0).and_then(|o| self.assets.resolve(&hpkg, o)).or_else(|| {
+                    it.0.iter().find_map(|p| if let Value::Object(o) = p.value { self.assets.resolve(&hpkg, o).filter(|m| m.class() == "SkeletalMesh") } else { None })
+                });
+                let Some(m) = mesh.filter(|m| m.class() == "SkeletalMesh") else { continue };
+                let var = match it.get("m_MaterialVariation") {
+                    Some(Value::Struct(_, s)) => self.variation_list(&hpkg, &Props(s.clone())),
+                    _ => Vec::new(),
+                };
+                heads.push((m, it.float("m_fRandomChance").unwrap_or(1.0), var));
             }
         }
+        let mut head = heads.first().map(|h| h.0.clone());
+        let body_variation = match ch.get_pkg("m_BodyVariationMaterials").map(|(p, v)| (p.clone(), v.clone())) {
+            Some((bpkg, Value::Struct(_, s))) => self.variation_list(&bpkg, &Props(s)),
+            _ => Vec::new(),
+        };
         // tallboys: no head, but stilts (a second mesh on the same skeleton) in its place
         if head.is_none() {
             head = ch.obj(self.assets, "m_pStiltsSkeletalMesh").filter(|m| m.class() == "SkeletalMesh");
@@ -2988,12 +2990,13 @@ impl<'a> Cooker<'a> {
         // its faction: hostile to Corvo when his faction is among its enemies
         let (faction, hostile) = ch.obj(self.assets, "m_pFactionTweak").map(|f| self.faction(&f)).unwrap_or_default();
         let id = self.scene.npc_types.len() as u32;
-        self.pending_anims.push(PendingAnims::new(id as usize, sets, &bdata));
+        self.pending_anims.push(PendingAnims::new(id as usize, sets.clone(), &bdata));
         let anim_sets = Vec::new();
         let possess = ch.obj(self.assets, "m_pPossessableTweaks").map(|t| self.possessable(&t));
         let sight = self.sight(tweak);
         let stats = Some(self.npc_stats(tweak));
-        let attachments = self.npc_attachments(&ch);
+        let mut attachments = self.npc_attachments(&ch);
+        attachments.extend(self.npc_accessories(&ch));
         let ragdoll = ch.obj(self.assets, "m_pPhysicsAsset").filter(|p| p.class() == "PhysicsAsset").and_then(|p| self.ragdoll(&p));
         let lineage = self.tweak_lineage(tweak).iter().map(|p| p.rsplit('.').next().unwrap_or(p).to_string()).collect();
         self.scene.npc_types.push(NpcType {
@@ -3019,8 +3022,53 @@ impl<'a> Cooker<'a> {
             out_of_bend: ch.bool("m_bAlwaysOutOfBendTime").unwrap_or(false),
             ragdoll,
             lineage,
+            variants: Vec::new(),
+            head_variation: heads.first().map(|h| h.2.clone()).unwrap_or_default(),
+            body_variation,
         });
+        // its other heads: types alike but for the head (its mesh, materials, face, variations)
+        if heads.len() > 1 {
+            let mut variants = vec![(id, heads[0].1)];
+            for (h, chance, var) in heads.iter().skip(1) {
+                let Ok(hd) = skeletal::read_skeletal_mesh(&h.pkg, h.idx) else { continue };
+                let Ok((hid, mats)) = self.cook_skinned(h, &hd, Some(&bdata)) else { continue };
+                let mut t = self.scene.npc_types[id as usize].clone();
+                t.head = Some(hid);
+                t.head_materials = mats;
+                t.head_slots = slots(self, h, &hd);
+                t.head_variation = var.clone();
+                if let Some(fx) = self.chain(h).obj(self.assets, "FaceFXAsset").and_then(|fx| self.facefx_actor(&fx)) {
+                    t.facefx = Some(fx);
+                }
+                let vid = self.scene.npc_types.len() as u32;
+                self.pending_anims.push(PendingAnims::new(vid as usize, sets.clone(), &bdata));
+                self.scene.npc_types.push(t);
+                variants.push((vid, *chance));
+            }
+            if variants.len() > 1 {
+                self.scene.npc_types[id as usize].variants = variants;
+            }
+        }
         Ok(Some(id))
+    }
+
+    /// A list of material variations (`DisMeshMaterialVariationList`): per material slot, the
+    /// materials it may take instead and their chances (a missing material: the slot's own).
+    fn variation_list(&mut self, pkg: &Arc<upk::Package>, list: &Props) -> Vec<Vec<(u32, f32)>> {
+        let Some(Value::Array { count, offset, size }) = list.get("m_VariationMaterialIndex").cloned() else { return Vec::new() };
+        let mut out = Vec::new();
+        for slot in parse_struct_array(pkg, offset, size, count).unwrap_or_default() {
+            let mut opts = Vec::new();
+            if let Some(Value::Array { count, offset, size }) = slot.get("m_MaterialVariation").cloned() {
+                for o in parse_struct_array(pkg, offset, size, count).unwrap_or_default() {
+                    let chance = o.float("m_fRandomChance").unwrap_or(0.0);
+                    let mat = o.object("m_pMaterial").filter(|m| *m != 0).and_then(|m| self.assets.resolve(pkg, m)).map(|m| self.material(&m)).unwrap_or(u32::MAX);
+                    opts.push((mat, chance));
+                }
+            }
+            out.push(opts);
+        }
+        out
     }
 
     /// A character's ragdoll (its physics asset), once per asset.
@@ -3150,7 +3198,86 @@ impl<'a> Cooker<'a> {
                 instant: types(&tc, "m_pInstantBreakDamageTypes"),
                 immune: types(&tc, "m_pImmuneToDamageTypes"),
                 breaks: self.last_break_step(&tc, "m_Steps"),
+                chance: 1.0,
+                group: 0,
+                weight: 1.0,
+                knock_off: Vec::new(),
             });
+        }
+        out
+    }
+
+    /// What a character may wear (the pawn's spawn rolls, as roshan's r614/blink research decoded
+    /// them): a hat (`m_HatMeshes`, worn at `m_RandomAccessoryInfo[0].m_fRandomChanceOfUse`), a
+    /// mask (`m_MaskMeshes`, `..[1]`), each picked by its `m_fRandomChance` and put on its
+    /// `m_SocketName`; and armour (`m_PotentialNPCArmor`: `m_fPercentChance` each), drawn as its
+    /// dropped item's mesh on `m_EquippedSocketName`, knocked off by its damage types.
+    fn npc_accessories(&mut self, ch: &Chain) -> Vec<NpcAttachment> {
+        let mut out = Vec::new();
+        let prop_of = |c: &mut Self, mesh: &Obj| -> Option<String> {
+            let prop = format!("acc:{}", mesh.path());
+            if !c.scene.props.iter().any(|p| p.name == prop) {
+                let Ok(Some((m, materials))) = c.cook_mesh(mesh) else { return None };
+                c.scene.props.push(PropDef { name: prop.clone(), mesh: m, materials, blade: None });
+            }
+            Some(prop)
+        };
+        for (gi, list) in ["m_HatMeshes", "m_MaskMeshes"].into_iter().enumerate() {
+            let chance = match ch.get_idx_pkg("m_RandomAccessoryInfo", gi as i32) {
+                Some((_, Value::Struct(_, s))) => Props(s.clone()).float("m_fRandomChanceOfUse").unwrap_or(0.0),
+                _ => 0.0,
+            };
+            let Some((pkg, Value::Array { count, offset, size })) = ch.get_pkg(list).map(|(p, v)| (p.clone(), v.clone())) else { continue };
+            if chance <= 0.0 {
+                continue;
+            }
+            for s in parse_struct_array(&pkg, offset, size, count).unwrap_or_default() {
+                let Some(mesh) = s.object("m_pMesh").filter(|o| *o != 0).and_then(|o| self.assets.resolve(&pkg, o)).filter(|m| m.class() == "StaticMesh") else { continue };
+                let Some(prop) = prop_of(self, &mesh) else { continue };
+                out.push(NpcAttachment {
+                    socket: s.name("m_SocketName").unwrap_or_default().to_string(),
+                    prop,
+                    health: 0.0,
+                    instant: Vec::new(),
+                    immune: Vec::new(),
+                    breaks: None,
+                    chance,
+                    group: gi as u8 + 1,
+                    weight: s.float("m_fRandomChance").unwrap_or(1.0),
+                    knock_off: Vec::new(),
+                });
+            }
+        }
+        if let Some((pkg, Value::Array { count, offset, size })) = ch.get_pkg("m_PotentialNPCArmor").map(|(p, v)| (p.clone(), v.clone())) {
+            for (k, s) in parse_struct_array(&pkg, offset, size, count).unwrap_or_default().into_iter().enumerate() {
+                let Some(armor) = s.object("m_pArmor").filter(|o| *o != 0).and_then(|o| self.assets.resolve(&pkg, o)) else { continue };
+                let ac = self.chain(&armor);
+                let Some(mesh) = ac.obj(self.assets, "m_pDoppedItemTweaks").and_then(|d| self.chain(&d).obj(self.assets, "m_pStaticMesh")).filter(|m| m.class() == "StaticMesh") else { continue };
+                let Some(prop) = prop_of(self, &mesh) else { continue };
+                let mut knock_off = Vec::new();
+                if let Some((apkg, Value::Array { count, offset, size })) = ac.get_pkg("m_DamageTypesThatKnockOff").map(|(p, v)| (p.clone(), v.clone())) {
+                    for d in parse_struct_array(&apkg, offset, size, count).unwrap_or_default() {
+                        let any = matches!(d.get("m_bDamagesAnyRegion"), Some(Value::Bool(true)));
+                        if let Some(Value::Struct(_, info)) = d.get("m_DamageInfo") {
+                            if let Some(t) = Props(info.clone()).object("m_pDamageType").filter(|o| *o != 0) {
+                                knock_off.push((apkg.obj_path(t).rsplit('.').next().unwrap_or("").to_string(), any));
+                            }
+                        }
+                    }
+                }
+                out.push(NpcAttachment {
+                    socket: ac.name("m_EquippedSocketName").unwrap_or("Helmet").to_string(),
+                    prop,
+                    health: 0.0,
+                    instant: Vec::new(),
+                    immune: Vec::new(),
+                    breaks: None,
+                    chance: s.float("m_fPercentChance").unwrap_or(1.0),
+                    group: 10 + k as u8,
+                    weight: 1.0,
+                    knock_off,
+                });
+            }
         }
         out
     }
@@ -4966,6 +5093,9 @@ impl<'a> Cooker<'a> {
             out_of_bend: false,
             ragdoll: None,
             lineage: Vec::new(),
+            variants: Vec::new(),
+            head_variation: Vec::new(),
+            body_variation: Vec::new(),
             name: body.path(),
             kind: "device".into(),
             skeleton: Some(skeleton),
@@ -6368,6 +6498,9 @@ impl<'a> Cooker<'a> {
                             out_of_bend: false,
                             ragdoll: None,
                             lineage: Vec::new(),
+                            variants: Vec::new(),
+                            head_variation: Vec::new(),
+                            body_variation: Vec::new(),
                             name: "player_arms".into(),
                             kind: "player".into(),
                             skeleton: Some(skeleton),
@@ -6428,6 +6561,9 @@ impl<'a> Cooker<'a> {
                                 out_of_bend: false,
                                 ragdoll: None,
                                 lineage: Vec::new(),
+                                variants: Vec::new(),
+                                head_variation: Vec::new(),
+                                body_variation: Vec::new(),
                                 name: "rat".into(),
                                 kind: "rat".into(),
                                 skeleton: Some(skeleton),

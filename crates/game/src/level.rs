@@ -1615,28 +1615,34 @@ fn spawn_level(
             },
         };
     }
-    // the materials the scripts put on characters (`DisSeqAct_NPCSetMaterials`)
+    // the materials the scripts put on characters (`DisSeqAct_NPCSetMaterials`), and those
+    // they may wear (`NpcType::body_variation`, `head_variation`)
+    let mut swap_ids: Vec<u32> = Vec::new();
     for op in scene.kismet.ops.iter().filter(|o| o.class == "DisSeqAct_NPCSetMaterials") {
         for key in ["body_mats", "head_mats"] {
             let Some(dhcook::format::KVal::List(l)) = op.props.get(key) else { continue };
             for e in l {
                 let dhcook::format::KVal::List(pair) = e else { continue };
-                let Some(dhcook::format::KVal::Int(id)) = pair.get(1) else { continue };
-                let id = *id as u32;
-                if game_assets.npc_mat_swaps.contains_key(&id) {
-                    continue;
-                }
-                let m = match mb.ue3_material(id, Policy::NoLightMap, &mut image_assets, &mut ue_assets, &mut ue_programs, &mut shader_assets) {
-                    Some(h) => Some(PartMat::Ue3(h)),
-                    None => match mb.material(id, &mut image_assets, &mut mat_assets, &mut sky_assets) {
-                        Some(MatHandle::Std(h)) => Some(PartMat::Std(h)),
-                        _ => None,
-                    },
-                };
-                if let Some(m) = m {
-                    game_assets.npc_mat_swaps.insert(id, m);
+                if let Some(dhcook::format::KVal::Int(id)) = pair.get(1) {
+                    swap_ids.push(*id as u32);
                 }
             }
+        }
+    }
+    swap_ids.extend(scene.npc_types.iter().flat_map(|t| t.body_variation.iter().chain(t.head_variation.iter())).flatten().map(|o| o.0).filter(|m| *m != u32::MAX));
+    for id in swap_ids {
+        if game_assets.npc_mat_swaps.contains_key(&id) {
+            continue;
+        }
+        let m = match mb.ue3_material(id, Policy::NoLightMap, &mut image_assets, &mut ue_assets, &mut ue_programs, &mut shader_assets) {
+            Some(h) => Some(PartMat::Ue3(h)),
+            None => match mb.material(id, &mut image_assets, &mut mat_assets, &mut sky_assets) {
+                Some(MatHandle::Std(h)) => Some(PartMat::Std(h)),
+                _ => None,
+            },
+        };
+        if let Some(m) = m {
+            game_assets.npc_mat_swaps.insert(id, m);
         }
     }
     lap("characters and props");

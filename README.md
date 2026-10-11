@@ -1260,6 +1260,18 @@ against the install's own data where it carries them, then implemented independe
     the pistol in 0.426 + 0.75 / `ReloadSpeed` + 0.302 s, the crossbow in 1.3 s.
   - `FastReload` replaces that with its own quick action: the pistol's second upgrade 1 s, the
     crossbow's 0.3 s.
+- **What characters wear.** Hats and masks are drawn on their sockets (`m_HatMeshes`,
+  `m_MaskMeshes`), worn at `m_RandomAccessoryInfo`'s chance, one picked by `m_fRandomChance`. So is
+  armour (`m_PotentialNPCArmor`: city and elite guards' helmets, caps), as its dropped item's mesh.
+  - Each character rolls once, the same for the same spawner. Most maps' guards now wear their
+    helmets.
+  - Characters pick one of their type's heads (`m_RandomHeadMeshes`, by `m_fRandomChance`; 43
+    types have more than one). Each head's slots, and the body's (`m_BodyVariationMaterials`),
+    may take another material: one roll per slot, the first option whose running sum of chances
+    passes it, chances not normalized (a lone 0.5 option, half the time). 251 types vary a
+    head material and 174 a body one.
+  - Armour comes off to its `m_DamageTypesThatKnockOff`: a bullet or bolt to the head, Wind Blast
+    or a flare anywhere. It falls away and stays off after a load.
 - **The slide.** Crouching while sprinting at 4 m/s or more slides. The speed eases to the
   sneaking speed over 1.1 s along the way it began. It ends early if that way turns more than 25°,
   or when let go after 0.55 s.

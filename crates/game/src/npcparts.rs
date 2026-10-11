@@ -14,7 +14,58 @@ pub struct NpcPartsPlugin;
 
 impl Plugin for NpcPartsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, part_hits.run_if(in_state(GameState::InGame)));
+        app.add_message::<KnockOff>().add_systems(Update, (part_hits, knock_off).run_if(in_state(GameState::InGame)));
+    }
+}
+
+/// A hit on a character that may knock its armour off: what kind, whether to the head, from
+/// where.
+#[derive(Message, Clone, Copy)]
+pub struct KnockOff {
+    pub npc: Entity,
+    pub kind: HitKind,
+    pub head: bool,
+    pub from: Vec3,
+}
+
+/// Armour knocked off (`DisTweaks_Armor`'s `m_DamageTypesThatKnockOff`: a bullet or a bolt to
+/// the head, Wind Blast and a flare anywhere): it falls from the character, popping up
+/// (`m_fPingUpSpeed`) and carried a little the blow's way (`m_fKnockoffVelocityPercent`).
+fn knock_off(
+    mut commands: Commands,
+    mut knocks: MessageReader<KnockOff>,
+    level: Option<Res<LevelInfo>>,
+    attrs: Res<crate::gamedata::Attrs>,
+    parts: Query<(Entity, &NpcAttached, &GlobalTransform)>,
+    mut npcs: Query<&mut crate::npc::Npc>,
+) {
+    let Some(level) = level else {
+        knocks.clear();
+        return;
+    };
+    for k in knocks.read() {
+        let kind = crate::worlddamage::hit_type(k.kind, 0.0, &attrs);
+        for (e, part, gt) in &parts {
+            if part.npc != k.npc {
+                continue;
+            }
+            let Some(def) = level.scene.npc_types.get(part.npc_type as usize).and_then(|t| t.attachments.get(part.index)) else { continue };
+            if !def.knock_off.iter().any(|(t, any)| (*any || k.head) && crate::worlddamage::is_a(kind, t)) {
+                continue;
+            }
+            let at = gt.compute_transform();
+            let away = (at.translation - k.from).with_y(0.0).normalize_or_zero();
+            if let Ok(mut n) = npcs.get_mut(part.npc) {
+                n.bare.push(part.index as u8);
+            }
+            commands.entity(e).remove::<(ChildOf, NpcAttached)>().insert((
+                at,
+                bevy_rapier3d::prelude::RigidBody::Dynamic,
+                bevy_rapier3d::prelude::Collider::ball(0.12),
+                bevy_rapier3d::prelude::CollisionGroups::new(crate::level::GROUP_PROP, crate::level::GROUP_WORLD | crate::level::GROUP_PROP),
+                bevy_rapier3d::prelude::Velocity { linear: away * 1.5 + Vec3::Y * 2.0, angular: Vec3::new(3.0, 1.0, 2.0) },
+            ));
+        }
     }
 }
 
@@ -62,6 +113,10 @@ fn part_hits(
     for (e, damage, kind) in blows {
         let Ok((_, mut part, gt)) = parts.get_mut(e) else { continue };
         let Some(def) = level.scene.npc_types.get(part.npc_type as usize).and_then(|t| t.attachments.get(part.index)) else { continue };
+        // (armour isn't worn down: it is knocked off)
+        if !def.knock_off.is_empty() {
+            continue;
+        }
         if def.immune.iter().any(|t| crate::worlddamage::is_a(kind, t)) {
             continue;
         }

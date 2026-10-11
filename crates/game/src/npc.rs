@@ -251,6 +251,8 @@ pub struct Npc {
     pub deaf: bool,
     /// the alarm bell it runs to ring (`security::alarms`)
     pub alarm_run: Option<Vec3>,
+    /// the attachments it lost (armour knocked off: their indices)
+    pub bare: Vec<u8>,
     pub numb: bool,
     /// the scripts keep it alive (`DisSeqAct_LimitPawnMinHealth`)
     pub min_health: f32,
@@ -691,6 +693,80 @@ fn kind_of(s: &str) -> Kind {
     }
 }
 
+/// A character's spawn roll `k` in [0, 1): the same for the same spawner, so a character keeps
+/// its look.
+fn spawn_roll(seed: u64, k: u64) -> f32 {
+    let mut x = seed.wrapping_add(1).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ k.wrapping_add(1).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 31;
+    x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^= x >> 29;
+    (x >> 40) as f32 / (1u64 << 24) as f32
+}
+
+/// The first of some options whose running sum of chances passes a roll (the original's pawn
+/// rolls: chances not normalized, so past them all, none).
+fn first_past<T: Copy>(opts: &[(T, f32)], r: f32) -> Option<T> {
+    let mut sum = 0.0;
+    opts.iter().find(|(_, c)| {
+        sum += c.max(0.0);
+        r < sum
+    }).map(|(t, _)| *t)
+}
+
+/// One of a type's heads (`NpcType::variants`), by their chances (as the original: a roll
+/// times their total).
+fn pick_variant(scene: &dhcook::format::Scene, tid: u32, seed: u64) -> u32 {
+    let Some(t) = scene.npc_types.get(tid as usize).filter(|t| t.variants.len() > 1) else { return tid };
+    let total: f32 = t.variants.iter().map(|v| v.1.max(0.0)).sum();
+    first_past(&t.variants, spawn_roll(seed, 9000) * total).unwrap_or(tid)
+}
+
+/// A character's materials varied: per slot of its body and head, one roll; the option it
+/// passes replaces the slot's material. Each (of the head?, the slot's material, its new one).
+fn material_swaps(scene: &dhcook::format::Scene, tid: u32, seed: u64) -> Vec<(bool, u32, u32)> {
+    let Some(t) = scene.npc_types.get(tid as usize) else { return Vec::new() };
+    let mut out = Vec::new();
+    for (head, var, slots, k0) in [(false, &t.body_variation, &t.body_slots, 9100), (true, &t.head_variation, &t.head_slots, 9300)] {
+        for (slot, opts) in var.iter().enumerate() {
+            let Some(m) = first_past(opts, spawn_roll(seed, k0 + slot as u64)).filter(|m| *m != u32::MAX) else { continue };
+            if let Some(&orig) = slots.get(slot) {
+                out.push((head, orig, m));
+            }
+        }
+    }
+    out
+}
+
+/// What a character wears of its type's attachments: those always worn, and of each group (a
+/// hat, a mask, a piece of armour) the group's chance, then one option by weight (the first
+/// whose running sum passes the roll, as the original's pawn rolls). The same rolls for the same
+/// spawner, so a character keeps its look.
+fn worn_attachments(atts: &[dhcook::format::NpcAttachment], seed: u64) -> Vec<bool> {
+    let roll = |k: u64| spawn_roll(seed, k);
+    let mut worn: Vec<bool> = atts.iter().map(|a| a.group == 0).collect();
+    let mut groups: Vec<u8> = atts.iter().map(|a| a.group).filter(|g| *g > 0).collect();
+    groups.sort_unstable();
+    groups.dedup();
+    for g in groups {
+        let idx: Vec<usize> = (0..atts.len()).filter(|&i| atts[i].group == g).collect();
+        if roll(g as u64 * 2) >= atts[idx[0]].chance {
+            continue;
+        }
+        let total: f32 = idx.iter().map(|&i| atts[i].weight.max(0.0)).sum();
+        let mut r = roll(g as u64 * 2 + 1) * total;
+        let pick = idx
+            .iter()
+            .copied()
+            .find(|&i| {
+                r -= atts[i].weight.max(0.0);
+                r < 0.0
+            })
+            .unwrap_or(idx[idx.len() - 1]);
+        worn[pick] = true;
+    }
+    worn
+}
+
 /// Shadow Kill: the body burns away (seconds since death); no corpse remains.
 #[derive(Component)]
 pub struct Ashes(pub f32);
@@ -1126,6 +1202,10 @@ pub fn spawn_npc(commands: &mut Commands, assets: &GameAssets, scene: &dhcook::f
 pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook::format::Scene, mut wl: Option<&mut WorldLighting>, si: usize, difficulty: u8, as_type: Option<u32>) -> Option<Entity> {
     let sp = scene.spawners.get(si)?;
     let tid = as_type.or(sp.npc_type)?;
+    // (one of its heads, and its materials varied: the same for the same spawner)
+    let tid = pick_variant(scene, tid, si as u64);
+    let swaps = material_swaps(scene, tid, si as u64);
+    let swapped = |pm: &(bool, u32)| swaps.iter().find(|s| s.0 == pm.0 && s.1 == pm.1).and_then(|s| assets.npc_mat_swaps.get(&s.2));
     let Some(Some(vis)) = assets.npc_types.get(tid as usize) else { return None };
     let kind = kind_of(&vis.kind);
     let pos = Vec3::from(sp.position) + Vec3::Y * (NPC_CENTER + 0.05);
@@ -1269,6 +1349,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         blind: false,
         deaf: false,
         alarm_run: None,
+        bare: Vec::new(),
         numb: false,
         min_health: 0.0,
         nav: Default::default(),
@@ -1334,7 +1415,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
             crate::fxlight::LitPart,
             NpcPart { index: pi as u32, npc_type: tid, lod: 0 },
         ));
-        mat.apply(&mut ec);
+        vis.parts.mats.get(pi).and_then(&swapped).unwrap_or(mat).apply(&mut ec);
         let m = ec.id();
         commands.entity(visual).add_child(m);
     }
@@ -1353,7 +1434,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 NpcPart { index: pi as u32, npc_type: tid, lod: li as u8 + 1 },
                 Visibility::Hidden,
             ));
-            mat.apply(&mut ec);
+            lp.mats.get(pi).and_then(&swapped).unwrap_or(mat).apply(&mut ec);
             let m = ec.id();
             commands.entity(visual).add_child(m);
         }
@@ -1388,7 +1469,15 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
     // what it carries on its sockets (a tallboy's whale oil tanks and shields); the breakable
     // ones can be struck (a tank, burst by a bullet or a bolt)
     let mut breakable_parts = Vec::new();
-    for (ai, a) in ty.map(|t| t.attachments.as_slice()).unwrap_or(&[]).iter().enumerate() {
+    let atts = ty.map(|t| t.attachments.as_slice()).unwrap_or(&[]);
+    let worn = worn_attachments(atts, si as u64);
+    for (ai, a) in atts.iter().enumerate() {
+        if std::env::var("DH_ACC_LOG").is_ok() && a.group > 0 {
+            info!("accessory of {}: {} on {} worn {} (socket {}, mesh {})", vis.name, a.prop, a.socket, worn[ai], socket(&a.socket, &[], Transform::IDENTITY).is_some(), assets.props.contains_key(&a.prop));
+        }
+        if !worn[ai] {
+            continue;
+        }
         let (Some((joint, at)), Some(parts)) = (socket(&a.socket, &[], Transform::IDENTITY), assets.props.get(&a.prop)) else { continue };
         let holder = commands.spawn((at, Visibility::default())).id();
         commands.entity(joint).add_child(holder);
@@ -1400,6 +1489,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         }
         if a.breaks.is_some() || !a.instant.is_empty() {
             commands.entity(holder).insert((Collider::ball(0.3), Sensor, CollisionGroups::new(GROUP_PROP, Group::ALL), crate::gameplay::Strikeable(holder)));
+            breakable_parts.push((holder, ai, a.health));
+        } else if !a.knock_off.is_empty() {
+            // (armour: knocked off by its damage types, `npcparts::knock_off`)
             breakable_parts.push((holder, ai, a.health));
         }
     }
@@ -1531,7 +1623,7 @@ fn npc_hits(
     mut stances: ResMut<crate::script_world::SpawnerOverrides>,
     (level, mut vm): (Option<Res<LevelInfo>>, Option<ResMut<crate::kismet::Vm>>),
     (mut takedowns, marks, tc): (MessageWriter<crate::gameplay::PlayerTakedown>, Query<(Option<&HeadHit>, Option<&DropHeight>)>, Res<crate::gameplay::TimeControl>),
-    data: Res<crate::gamedata::Data>,
+    (data, mut knocks): (Res<crate::gamedata::Data>, MessageWriter<crate::npcparts::KnockOff>),
 ) {
     // how much sooner a sleep dart takes hold (`SleepDelayReduction`: the Combat Sleep Darts
     // upgrade)
@@ -1567,6 +1659,8 @@ fn npc_hits(
         if std::env::var("DH_HIT_LOG").is_ok() {
             info!("hit {} ({}): {:?} {:.0} at health {:.0}", npc.name, npc.pawn, h.kind, h.damage, npc.health);
         }
+        // (its armour may come off: a shot or a bolt to the head, Wind Blast, a flare)
+        knocks.write(crate::npcparts::KnockOff { npc: e, kind: h.kind, head, from: h.from });
         // those who can fight turn on Corvo when he hurts them (the Tower's guards too)
         if !npc.enemy && npc.fighter() && !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats | HitKind::Assassinate | HitKind::Fatality | HitKind::Choke | HitKind::SleepDart | HitKind::WallOfLight | HitKind::StunMine) {
             npc.enemy = true;
@@ -3716,4 +3810,42 @@ fn npc_select_anim(
 fn ease(x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
     x * x * (3.0 - 2.0 * x)
+}
+
+#[cfg(test)]
+mod wear_tests {
+    use super::{first_past, worn_attachments};
+
+    #[test]
+    fn variations_not_normalized() {
+        // a lone 0.5 option applies to half the rolls; past every option, the slot's own
+        assert_eq!(first_past(&[(7u32, 0.5)], 0.3), Some(7));
+        assert_eq!(first_past(&[(7u32, 0.5)], 0.7), None);
+        // the first whose running sum passes the roll
+        assert_eq!(first_past(&[(1u32, 0.0), (2, 0.5), (3, 0.5)], 0.6), Some(3));
+        assert_eq!(first_past(&[(1u32, 0.0), (2, 0.5), (3, 0.5)], 0.0), Some(2));
+    }
+    use dhcook::format::NpcAttachment;
+
+    fn att(group: u8, chance: f32, weight: f32) -> NpcAttachment {
+        NpcAttachment { socket: "Helmet".into(), prop: String::new(), health: 0.0, instant: vec![], immune: vec![], breaks: None, chance, group, weight, knock_off: vec![] }
+    }
+
+    #[test]
+    fn worn_by_group_chance_and_weight() {
+        // a tank always; a sure hat of two; a helmet never
+        let atts = [att(0, 1.0, 1.0), att(1, 1.0, 1.0), att(1, 1.0, 3.0), att(10, 0.0, 1.0)];
+        for seed in 0..50 {
+            let w = worn_attachments(&atts, seed);
+            assert!(w[0]);
+            assert_eq!(w[1] as u8 + w[2] as u8, 1, "one hat of the group");
+            assert!(!w[3]);
+            // the same spawner, the same look
+            assert_eq!(w, worn_attachments(&atts, seed));
+        }
+        // a half chance: some wear it, some don't
+        let half = [att(10, 0.5, 1.0)];
+        let n = (0..200).filter(|s| worn_attachments(&half, *s)[0]).count();
+        assert!((60..140).contains(&n), "{n}");
+    }
 }

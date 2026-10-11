@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::Path;
 
 // 103: retain unmatched-rig timelines and zero-track animation sequences.
-pub const SCENE_VERSION: u32 = 112;
+pub const SCENE_VERSION: u32 = 114;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -872,6 +872,17 @@ pub struct NpcType {
     /// what the chaos deeds' victims are told by (`Pwn_Civ_Base`, `Pwn_Guard_Base`...)
     #[serde(default)]
     pub lineage: Vec<String>,
+    /// the heads it may have (`m_RandomHeadMeshes`), as types alike but for the head: each and
+    /// its chance, this type first; empty: just this one
+    #[serde(default)]
+    pub variants: Vec<(u32, f32)>,
+    /// per material slot of its head and of its body, the materials it may wear instead
+    /// (`m_MaterialVariation`, `m_BodyVariationMaterials`): each and its chance, not
+    /// normalized (the first whose running sum passes the roll; none: the slot's own)
+    #[serde(default)]
+    pub head_variation: Vec<Vec<(u32, f32)>>,
+    #[serde(default)]
+    pub body_variation: Vec<Vec<(u32, f32)>>,
 }
 
 /// A character's numbers and arms. Its attributes are those of its pawn's attribute tweak
@@ -985,6 +996,22 @@ pub struct NpcAttachment {
     pub instant: Vec<String>,
     pub immune: Vec<String>,
     pub breaks: Option<BreakStep>,
+    /// worn only sometimes (hats, masks, armour): the chance its group is worn at all, the group
+    /// (0: always worn; else at most one of the group, by weight)
+    #[serde(default = "one")]
+    pub chance: f32,
+    #[serde(default)]
+    pub group: u8,
+    #[serde(default = "one")]
+    pub weight: f32,
+    /// armour (`DisTweaks_Armor`): the damage types that knock it off, each anywhere on the
+    /// body or only on its region (`m_DamageTypesThatKnockOff`, `m_bDamagesAnyRegion`)
+    #[serde(default)]
+    pub knock_off: Vec<(String, bool)>,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 /// One of a character's weapons (a `DisTweaks_Wep*`): its item attribute tweak's damage by

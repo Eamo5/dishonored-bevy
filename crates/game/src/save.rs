@@ -141,6 +141,9 @@ pub struct NpcSave {
     consumed: bool,
     #[serde(default)]
     corpse_age: Option<f32>,
+    /// its attachments knocked off (armour)
+    #[serde(default)]
+    bare: Vec<u8>,
     /// Original passenger placement, before a cinematic vehicle's movement.
     #[serde(default)]
     ride_base: Option<[f32; 16]>,
@@ -574,6 +577,7 @@ fn save_game(
                 falling: falling.cloned(),
                 consumed,
                 corpse_age: Some(n.corpse_age),
+                bare: n.bare.clone(),
                 ride_base: matinee.saved_ride_base(entity),
                 ragdoll: ragdolls.get(entity).ok().map(|(rd, rig, g)| rd.pose(g, rig, &globals).into_iter().map(|(b, t)| (b as u16, t.translation.to_array(), t.rotation.to_array())).collect()),
             })
@@ -904,9 +908,16 @@ fn apply_pending(
     info!("save: restored {} ({} NPCs)", s.map, s.npcs.len());
 }
 
-pub(crate) fn restore_npcs(mut commands: Commands, mut q: Query<(Entity, &RestoreNpc, &mut Npc, &mut Transform)>, mut matinee: ResMut<crate::matinee::MatineeState>) {
+pub(crate) fn restore_npcs(mut commands: Commands, mut q: Query<(Entity, &RestoreNpc, &mut Npc, &mut Transform)>, mut matinee: ResMut<crate::matinee::MatineeState>, parts: Query<(Entity, &crate::npcparts::NpcAttached)>) {
     for (e, r, mut n, mut t) in &mut q {
         let s = &r.0;
+        // (the armour it had lost stays off)
+        n.bare = s.bare.clone();
+        for (pe, part) in &parts {
+            if part.npc == e && s.bare.contains(&(part.index as u8)) {
+                commands.entity(pe).try_despawn();
+            }
+        }
         t.translation = Vec3::from(s.position);
         // Falling bodies bypass NPC steering, which otherwise updates this rotation.
         t.rotation = Quat::from_rotation_y(s.yaw);
