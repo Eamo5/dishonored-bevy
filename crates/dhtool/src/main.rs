@@ -1,11 +1,14 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
-const COOKED: &str = r"S:\Games\SteamLibrary\steamapps\common\Dishonored\DishonoredGame\CookedPCConsole";
+/// The game's CookedPCConsole (`DISHONORED_DIR`, else the usual Steam folders).
+static COOKED: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
+    dhcook::find_cooked_dir().unwrap_or_else(|| PathBuf::from(dhcook::DEFAULT_GAME_DIR).join("DishonoredGame").join("CookedPCConsole"))
+});
 
 fn pkg_path(name: &str) -> PathBuf {
     let p = PathBuf::from(name);
-    if p.exists() { p } else { PathBuf::from(COOKED).join(format!("{name}.upk")) }
+    if p.exists() { p } else { COOKED.join(format!("{name}.upk")) }
 }
 
 fn main() -> Result<()> {
@@ -27,7 +30,7 @@ fn main() -> Result<()> {
             // dhtool obj <object path> [package to load first]: an object found among the
             // packages, its properties and its archetypes'
             init_classes();
-            let assets = dhcook::resolver::Assets::new(std::path::Path::new(COOKED))?;
+            let assets = dhcook::resolver::Assets::new(COOKED.as_path())?;
             assets.load_globals();
             if let Some(p) = args.get(3).and_then(|n| assets.package(n)) {
                 assets.add_search(p);
@@ -125,7 +128,7 @@ fn main() -> Result<()> {
         }
         Some("textures") => {
             let pkg = upk::Package::open(&pkg_path(&args[2]))?;
-            let tfc = upk::texture::TfcCache::new(std::path::Path::new(COOKED));
+            let tfc = upk::texture::TfcCache::new(COOKED.as_path());
             let (mut ok, mut bad) = (0, 0);
             let mut fmts = std::collections::BTreeMap::new();
             for i in pkg.exports_of_class("Texture2D").collect::<Vec<_>>() {
@@ -138,7 +141,7 @@ fn main() -> Result<()> {
         }
         Some("texpng") => {
             let pkg = upk::Package::open(&pkg_path(&args[2]))?;
-            let tfc = upk::texture::TfcCache::new(std::path::Path::new(COOKED));
+            let tfc = upk::texture::TfcCache::new(COOKED.as_path());
             let idx: i32 = match args[3].parse() { Ok(i) => i, Err(_) => pkg.find_export(&args[3]).expect("no such export") };
             let t = upk::texture::read_texture2d(&pkg, idx, &tfc, 4096)?;
             let m = &t.mips[0];
@@ -151,12 +154,12 @@ fn main() -> Result<()> {
             let mut opts = dhcook::CookOptions::default();
             if let Some(i) = args.iter().position(|a| a == "--max") { opts.max_texture_size = args[i + 1].parse()?; }
             let root = std::path::PathBuf::from("cache");
-            let maps = dhcook::list_maps(std::path::Path::new(COOKED));
+            let maps = dhcook::list_maps(COOKED.as_path());
             let total = std::time::Instant::now();
             let mut failed = Vec::new();
             for m in &maps {
                 // fresh asset set per map keeps memory bounded
-                let assets = dhcook::resolver::Assets::new(std::path::Path::new(COOKED))?;
+                let assets = dhcook::resolver::Assets::new(COOKED.as_path())?;
                 let t = std::time::Instant::now();
                 match dhcook::cook_map(&assets, m, &root, opts.clone(), &|_, _| {}) {
                     Ok(_) => println!("{m:40} ok in {:.1}s", t.elapsed().as_secs_f32()),
@@ -168,7 +171,7 @@ fn main() -> Result<()> {
             }
             println!("cooked {} maps in {:.1}s, {} failed {:?}", maps.len(), total.elapsed().as_secs_f32(), failed.len(), failed);
             // the movies (those not cooked yet; ffmpeg's Bink decoder)
-            let game = std::path::Path::new(COOKED).parent().unwrap().to_path_buf();
+            let game = COOKED.parent().unwrap().to_path_buf();
             match dhcook::movies::cook_movies(&game, &root, false) {
                 Ok(idx) => println!("movies: {} cooked", idx.movies.len()),
                 Err(e) => println!("movies: {e:#}"),
@@ -176,14 +179,14 @@ fn main() -> Result<()> {
         }
         Some("cook-movies") => {
             // dhtool cook-movies [--force]: the Bink movies through ffmpeg (cache/movies)
-            let game = std::path::Path::new(COOKED).parent().unwrap().to_path_buf();
+            let game = COOKED.parent().unwrap().to_path_buf();
             let t = std::time::Instant::now();
             let idx = dhcook::movies::cook_movies(&game, std::path::Path::new("cache"), args.iter().any(|a| a == "--force"))?;
             println!("cooked {} movies in {:.1}s ({} maps, {} subtitled)", idx.movies.len(), t.elapsed().as_secs_f32(), idx.maps.len(), idx.subtitles.len());
         }
         Some("cook") => {
             init_classes();
-            let assets = dhcook::resolver::Assets::new(std::path::Path::new(COOKED))?;
+            let assets = dhcook::resolver::Assets::new(COOKED.as_path())?;
             let mut opts = dhcook::CookOptions::default();
             if args.iter().any(|a| a == "--force") { opts.force = true; }
             if let Some(i) = args.iter().position(|a| a == "--max") { opts.max_texture_size = args[i + 1].parse()?; }
@@ -404,7 +407,7 @@ fn main() -> Result<()> {
             // dhtool ue3progs [map index] [out.wgsl]: assemble the base pass programs of every
             // shader map (local vertex factory, each light-map policy) in standalone form and
             // validate them; with an index, write that map's program
-            let assets = dhcook::resolver::Assets::new(std::path::Path::new(COOKED))?;
+            let assets = dhcook::resolver::Assets::new(COOKED.as_path())?;
             let lib = dhcook::shader_library(&assets).expect("no shader cache");
             let cooked = dhcook::shadercache::CookedLibrary::from_library(lib);
             let only: Option<usize> = args.get(2).map(|s| s.parse()).transpose()?;
@@ -503,19 +506,19 @@ fn main() -> Result<()> {
         Some("cook-audio") => {
             // dhtool cook-audio: every Wwise event and its media into cache/audio
             let t = std::time::Instant::now();
-            let idx = dhcook::audio::cook(std::path::Path::new(COOKED), std::path::Path::new("cache"), &|f, m| eprintln!("[{:3.0}%] {m}", f * 100.0))?;
+            let idx = dhcook::audio::cook(COOKED.as_path(), std::path::Path::new("cache"), &|f, m| eprintln!("[{:3.0}%] {m}", f * 100.0))?;
             println!("{} events, {} media in {:.1}s", idx.events.len(), idx.media.len(), t.elapsed().as_secs_f32());
         }
         Some("audioevent") => {
             // dhtool audioevent <name>: what an event plays
-            let w = dhcook::audio::Wwise::load(std::path::Path::new(COOKED))?;
+            let w = dhcook::audio::Wwise::load(COOKED.as_path())?;
             let id = args[2].parse::<u32>().unwrap_or_else(|_| dhcook::audio::fnv(&args[2]));
             println!("{:#x} {:?}", id, w.event(id));
         }
         Some("cook-ui") => {
             // dhtool cook-ui: fonts (and later the Scaleform art) into cache/ui
             let root = std::path::Path::new("cache");
-            for p in dhcook::cook_ui(std::path::Path::new(COOKED), root)? {
+            for p in dhcook::cook_ui(COOKED.as_path(), root)? {
                 println!("{}", p.display());
             }
         }
@@ -523,7 +526,7 @@ fn main() -> Result<()> {
             // dhtool cook-gamedata: powers, attributes, charms, upgrades, stores -> cache/game
             init_classes();
             let root = std::path::Path::new("cache");
-            dhcook::gamedata::cook(std::path::Path::new(COOKED), root)?;
+            dhcook::gamedata::cook(COOKED.as_path(), root)?;
         }
         Some("swfdump") => {
             // dhtool swfdump <pkg> <export> <out>: a SwfMovie's raw GFx data
@@ -538,7 +541,7 @@ fn main() -> Result<()> {
             // dhtool fnvnames <hex hash>...: names in any package whose Wwise id (FNV) is one of these
             let want: Vec<u32> = args[2..].iter().filter_map(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok()).collect();
             let mut seen = std::collections::HashSet::new();
-            for e in std::fs::read_dir(COOKED)?.flatten() {
+            for e in std::fs::read_dir(&*COOKED)?.flatten() {
                 let p = e.path();
                 if !p.extension().is_some_and(|x| x.eq_ignore_ascii_case("upk") || x.eq_ignore_ascii_case("u")) {
                     continue;
@@ -583,7 +586,7 @@ fn main() -> Result<()> {
         }
         Some("audionode") => {
             // dhtool audionode <id|name> [depth]: a Wwise object and what it references
-            let w = dhcook::audio::Wwise::load(std::path::Path::new(COOKED))?;
+            let w = dhcook::audio::Wwise::load(COOKED.as_path())?;
             let id = args[2].parse::<u32>().unwrap_or_else(|_| dhcook::audio::fnv(&args[2]));
             let depth: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(2);
             fn show(w: &dhcook::audio::Wwise, id: u32, d: usize, max: usize) {
@@ -607,7 +610,7 @@ fn main() -> Result<()> {
         Some("posdump") => {
             // dhtool posdump: sound objects' bytes from their positioning on, a sample of each
             // leading pattern, the failures first
-            let w = dhcook::audio::Wwise::load(std::path::Path::new(COOKED))?;
+            let w = dhcook::audio::Wwise::load(COOKED.as_path())?;
             let mut v = w.positioning_bytes();
             v.sort_by_key(|x| (x.2, x.3.get(..4).map(|b| b.to_vec())));
             let mut shown: std::collections::HashMap<(bool, Vec<u8>), usize> = Default::default();
@@ -627,7 +630,7 @@ fn main() -> Result<()> {
         }
         Some("rtpcrejects") => {
             // dhtool rtpcrejects <kind>: objects whose NodeBaseParams the RTPC reader rejects
-            let w = dhcook::audio::Wwise::load(std::path::Path::new(COOKED))?;
+            let w = dhcook::audio::Wwise::load(COOKED.as_path())?;
             let mut v = w.rtpc_rejects(args[2].parse()?);
             v.sort_by_key(|x| x.3.len());
             for (id, start, end, d) in v.iter().step_by((v.len() / 8).max(1)).take(8) {
@@ -639,7 +642,7 @@ fn main() -> Result<()> {
         }
         Some("rtpcs") => {
             // dhtool rtpcs [name]: the RTPC curves on the sound objects (of one game parameter)
-            let w = dhcook::audio::Wwise::load(std::path::Path::new(COOKED))?;
+            let w = dhcook::audio::Wwise::load(COOKED.as_path())?;
             for (kind, nine, eight, none) in w.rtpc_coverage() {
                 println!("NodeBaseParams kind {kind}: {nine} with 9-byte advanced settings, {eight} with 8, {none} unread");
             }
@@ -665,12 +668,12 @@ fn main() -> Result<()> {
         }
         Some("cook-shaders") => {
             // dhtool cook-shaders: rewrite cache/shaders.bin
-            let assets = dhcook::resolver::Assets::new(std::path::Path::new(COOKED))?;
+            let assets = dhcook::resolver::Assets::new(COOKED.as_path())?;
             dhcook::cook_shader_library(&assets, std::path::Path::new("cache"), true)?;
         }
         Some("gsdump") => {
             // dhtool gsdump [name]: list the global shader cache, or translate one shader
-            let d = std::fs::read(std::path::Path::new(COOKED).join("GlobalShaderCache-PC-D3D-SM3.bin"))?;
+            let d = std::fs::read(COOKED.join("GlobalShaderCache-PC-D3D-SM3.bin"))?;
             let shaders = dhcook::shadercache::global_shaders(&d)?;
             match args.get(2) {
                 None => {
@@ -853,7 +856,7 @@ fn main() -> Result<()> {
         Some("kismetstats") => {
             // dhtool kismetstats: sequence op / variable classes over every map's levels
             init_classes();
-            let cooked = std::path::PathBuf::from(COOKED);
+            let cooked = COOKED.clone();
             let mut counts: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
             for m in dhcook::list_maps(&cooked) {
                 let Ok(p) = upk::Package::open(&pkg_path(&m)) else { continue };
@@ -956,7 +959,7 @@ fn main() -> Result<()> {
         }
         Some("statics") => {
             // dhtool statics <pkgs> <material instance>: scan native data for static switch entries
-            let assets = dhcook::resolver::Assets::new(std::path::Path::new(COOKED))?;
+            let assets = dhcook::resolver::Assets::new(COOKED.as_path())?;
             assets.init_class_registry();
             assets.load_globals();
             for name in args[2].split(',') {
@@ -1037,7 +1040,7 @@ fn main() -> Result<()> {
         }
         Some("mat") => {
             // dhtool mat <map> <material path>: resolved parameters of a material
-            let assets = dhcook::resolver::Assets::new(std::path::Path::new(COOKED))?;
+            let assets = dhcook::resolver::Assets::new(COOKED.as_path())?;
             assets.init_class_registry();
             assets.load_globals();
             for name in args[2].split(',') {

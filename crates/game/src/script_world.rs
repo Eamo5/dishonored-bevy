@@ -282,8 +282,15 @@ fn scripted_shots(
 /// Is a DLC (`eDisDLC_05`) installed with the game?
 pub fn dlc_installed(kind: &str) -> bool {
     let Some(n) = kind.rsplit('_').next().filter(|n| n.chars().all(|c| c.is_ascii_digit())) else { return false };
-    let root = std::env::var("DH_GAME_DIR").unwrap_or_else(|_| "S:/Games/SteamLibrary/steamapps/common/Dishonored".into());
-    std::path::Path::new(&root).join("DishonoredGame/DLC/PCConsole").join(format!("DLC{n}")).is_dir()
+    // (`DH_GAME_DIR`, else the installation the cooker finds: `DISHONORED_DIR`, the usual Steam folders)
+    let game = match std::env::var("DH_GAME_DIR") {
+        Ok(root) => std::path::Path::new(&root).join("DishonoredGame"),
+        Err(_) => match dhcook::find_cooked_dir().and_then(|c| c.parent().map(|g| g.to_path_buf())) {
+            Some(g) => g,
+            None => return false,
+        },
+    };
+    game.join("DLC/PCConsole").join(format!("DLC{n}")).is_dir()
 }
 
 #[allow(clippy::too_many_arguments)]
