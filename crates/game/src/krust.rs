@@ -180,7 +180,7 @@ mod cover_tests {
                 velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
                 grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
                 air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
-                fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO,
+                fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0,
             }));
             let shell = app.world_mut().spawn((Collider::ball(0.4), Transform::default(), CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
             let cover = app.world_mut().spawn((Collider::cuboid(0.01, 2.0, 2.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(group, Group::ALL))).id();
@@ -1322,7 +1322,7 @@ mod tests {
                 velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
                 grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
                 air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
-                fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO,
+                fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0,
             })).id();
             let source = app.world_mut().spawn((Collider::ball(0.4), Transform::default(), CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
             let cover = app.world_mut().spawn((Collider::cuboid(0.01, 1.0, 1.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(group, Group::ALL))).id();

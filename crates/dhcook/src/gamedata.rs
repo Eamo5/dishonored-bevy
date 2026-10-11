@@ -1,7 +1,7 @@
 //! Campaign-wide game data from the original tweak objects: Corvo's powers (active and
 //! passive), his attributes per difficulty, bone charms, upgrades and the stores.
 
-use crate::format::{AchievementDef, ActivePowerDef, ChallengeDef, AttrMod, CharmDef, GameData, PassiveLevel, PassivePowerDef, StatInfoDef, StoreDef, StoreItem, UpgradeDef};
+use crate::format::{AchievementDef, ActivePowerDef, ChallengeDef, AttrMod, CharmDef, GalleryItemDef, GameData, PassiveLevel, PassivePowerDef, StatInfoDef, StoreDef, StoreItem, UpgradeDef};
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -76,6 +76,24 @@ fn challenges(game: &Package, d: &mut GameData) {
         });
     }
     log::info!("{} challenges", d.challenges.len());
+    if let Some((c, off, sz)) = p.array("m_Gallery") {
+        for s in upk::props::parse_struct_array(game, off, sz, c).unwrap_or_default() {
+            let flag = |n: &str| s.bool(n).unwrap_or(false);
+            d.gallery.push(GalleryItemDef {
+                id: match s.get("m_ID") {
+                    Some(Value::Str(t)) => t.clone(),
+                    _ => String::new(),
+                },
+                normal: flag("m_bUnlockedInNormal"),
+                expert: flag("m_bUnlockedInExpert"),
+                all_normal: flag("m_bUnlockedWhenNormalCompleted"),
+                all_expert: flag("m_bUnlockedWhenExpertCompleted"),
+                challenge: s.name("m_UnlockChallenge").unwrap_or_default().to_string(),
+                stars: s.int("m_UnlockMedal").unwrap_or(0),
+            });
+        }
+        log::info!("{} pieces of the trials' gallery", d.gallery.len());
+    }
 }
 
 fn player_stats(game: &Package, startup: &Package, d: &mut GameData) {

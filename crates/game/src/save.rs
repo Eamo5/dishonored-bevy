@@ -62,6 +62,9 @@ pub struct NpcSave {
     /// Original passenger placement, before a cinematic vehicle's movement.
     #[serde(default)]
     ride_base: Option<[f32; 16]>,
+    /// limp: its body bones where they lie (bone, position, rotation in its own frame)
+    #[serde(default)]
+    ragdoll: Option<Vec<(u16, [f32; 3], [f32; 4])>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -328,7 +331,7 @@ fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-fn ago(t: u64) -> String {
+pub(crate) fn ago(t: u64) -> String {
     let s = now().saturating_sub(t);
     match s {
         0..=59 => "just now".into(),
@@ -382,7 +385,7 @@ fn save_game(
         Res<crate::possession::Possession>, Res<crate::possession::PossessOverrides>,
         Query<(Entity, &crate::fish::Fish, &Transform, Option<&crate::anim::Animator>)>, Query<(Entity, &crate::krust::Krust, Option<&crate::anim::Animator>)>, Res<crate::fish::FishMeals>,
     ),
-    (cine, script_ui, mut campaign, powers, tc, carry, matinee, krust_spit, trap_parts, darts, tower_arrows, tower_state): (Res<crate::script_world::Cinematic>, Option<Res<crate::kismet::ScriptUi>>, ResMut<crate::gameplay::Campaign>, Res<crate::powers::Powers>, Res<crate::gameplay::TimeControl>, Res<crate::carry::Carry>, Res<crate::matinee::MatineeState>, Query<(&crate::krust::Spit, &Transform)>, Query<(&crate::traps::TrapPart, Option<&crate::anim::Animator>)>, Query<(&crate::traps::Dart, &Transform)>, Query<(&crate::watchtower::Arrow, &Transform)>, Query<&crate::watchtower::Tower>),
+    (cine, script_ui, mut campaign, powers, tc, carry, matinee, krust_spit, trap_parts, darts, tower_arrows, tower_state, ragdolls, globals): (Res<crate::script_world::Cinematic>, Option<Res<crate::kismet::ScriptUi>>, ResMut<crate::gameplay::Campaign>, Res<crate::powers::Powers>, Res<crate::gameplay::TimeControl>, Res<crate::carry::Carry>, Res<crate::matinee::MatineeState>, Query<(&crate::krust::Spit, &Transform)>, Query<(&crate::traps::TrapPart, Option<&crate::anim::Animator>)>, Query<(&crate::traps::Dart, &Transform)>, Query<(&crate::watchtower::Arrow, &Transform)>, Query<&crate::watchtower::Tower>, Query<(&crate::ragdoll::Ragdoll, &crate::npc::NpcRig, &GlobalTransform)>, Query<&GlobalTransform>),
     mut saving: MessageWriter<crate::globalui::ShowSaving>,
 ) {
     // the scripts keeping the map's state for a return (`DisSeqAct_SaveLevelState`; a partial
@@ -474,6 +477,7 @@ fn save_game(
                 consumed,
                 corpse_age: Some(n.corpse_age),
                 ride_base: matinee.saved_ride_base(entity),
+                ragdoll: ragdolls.get(entity).ok().map(|(rd, rig, g)| rd.pose(g, rig, &globals).into_iter().map(|(b, t)| (b as u16, t.translation.to_array(), t.rotation.to_array())).collect()),
             })
             .collect(),
         taken: (0..scene.pickups.len() as u32).filter(|i| !present.contains(i)).collect(),
@@ -833,7 +837,10 @@ pub(crate) fn restore_npcs(mut commands: Commands, mut q: Query<(Entity, &Restor
                 info!("carry: restored consumed NPC {} hidden", s.spawner);
             }
         }
-        if let Some(falling) = &s.falling {
+        if let Some(pose) = s.ragdoll.as_ref().filter(|p| !p.is_empty() && matches!(s.mode, Mode::Dead | Mode::Unconscious)) {
+            let rest = pose.iter().map(|(b, p, r)| (*b as usize, Transform::from_translation(Vec3::from(*p)).with_rotation(Quat::from_array(*r).normalize()))).collect();
+            commands.entity(e).insert(crate::ragdoll::Ragdoll::at_rest(rest));
+        } else if let Some(falling) = &s.falling {
             if std::env::var_os("DH_CARRY_LOG").is_some() {
                 info!("carry: restored flight for NPC {} at {:?}, rotation {:?}, yaw {}", s.spawner, t.translation, t.rotation, s.yaw);
             }

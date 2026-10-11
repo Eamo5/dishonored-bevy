@@ -39,7 +39,10 @@ mod reflections;
 mod flares;
 mod challenge;
 mod dlc05hud;
+mod dlc05brief;
+mod dlc05menu;
 mod dlc05results;
+mod dlc05score;
 mod kuwahara;
 mod lightshafts;
 mod breath;
@@ -68,6 +71,9 @@ mod level;
 mod lightmap;
 mod loading;
 mod particles;
+mod trails;
+mod ragdoll;
+mod feet;
 mod player;
 mod postfx;
 mod sky;
@@ -211,6 +217,8 @@ fn main() -> AppExit {
             postfx::PostFxPlugin,
             ue3mat::Ue3Plugin,
             particles::ParticlePlugin,
+            trails::TrailsPlugin,
+            (ragdoll::RagdollPlugin, feet::FeetPlugin),
             powers::PowersPlugin,
             hud::HudPlugin,
             script::ScriptPlugin,
@@ -226,7 +234,7 @@ fn main() -> AppExit {
             worlddamage::WorldDamagePlugin,
             breath::BreathPlugin))
         .add_plugins((audiorooms::AudioRoomsPlugin, npcparts::NpcPartsPlugin, achievements::AchievementsPlugin, reflections::ReflectionsPlugin))
-        .add_plugins((flares::FlaresPlugin, challenge::ChallengePlugin, dlc05hud::Dlc05HudPlugin, dlc05results::Dlc05ResultsPlugin))
+        .add_plugins((flares::FlaresPlugin, challenge::ChallengePlugin, dlc05hud::Dlc05HudPlugin, dlc05results::Dlc05ResultsPlugin, dlc05menu::Dlc05MenuPlugin, dlc05brief::Dlc05BriefPlugin, dlc05score::Dlc05ScorePlugin))
         .add_plugins((menu::MenuPlugin, save::SavePlugin, settings::SettingsPlugin, mission::MissionPlugin, ppgraph::PostGraphPlugin, watchtower::WatchTowerPlugin, highlight::HighlightPlugin, stealth::StealthPlugin, hudfx::HudFxPlugin, skip::SkipPlugin, pickuplog::PickupLogPlugin, targetcard::TargetCardPlugin, gauges::GaugesPlugin))
         .add_plugins((flash::FlashPlugin, awareness::AwarenessPlugin, location::LocationPlugin, crosshair::CrosshairPlugin, intwindow::IntWindowPlugin, hudtext::HudTextPlugin, objnotify::ObjNotifyPlugin, oxygen::OxygenPlugin, playerstate::PlayerStatePlugin, grenadeind::GrenadeIndPlugin, prompts::PromptsPlugin, tutwindow::TutWindowPlugin))
         .add_plugins((gamedata::GameDataPlugin, journal::JournalPlugin, possession::PossessionPlugin, store::StorePlugin, swarm::SwarmPlugin, gadgets::GadgetsPlugin, campaign::CampaignPlugin, heart::HeartPlugin, security::SecurityPlugin, wheel::WheelPlugin))

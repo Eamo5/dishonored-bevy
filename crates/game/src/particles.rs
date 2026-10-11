@@ -456,7 +456,7 @@ pub(crate) fn sample(d: &Dist, t: f32, r: [f32; 3], out: &mut [f32; 3]) -> usize
     }
 }
 
-fn f1(m: &ModuleDef, name: &str, t: f32, r: [f32; 3], default: f32) -> f32 {
+pub(crate) fn f1(m: &ModuleDef, name: &str, t: f32, r: [f32; 3], default: f32) -> f32 {
     let mut o = [default; 3];
     match m.dists.get(name) {
         Some(d) if sample(d, t, r, &mut o) > 0 => o[0],
@@ -464,7 +464,7 @@ fn f1(m: &ModuleDef, name: &str, t: f32, r: [f32; 3], default: f32) -> f32 {
     }
 }
 
-fn f3(m: &ModuleDef, name: &str, t: f32, r: [f32; 3], default: Vec3) -> Vec3 {
+pub(crate) fn f3(m: &ModuleDef, name: &str, t: f32, r: [f32; 3], default: Vec3) -> Vec3 {
     let mut o = default.to_array();
     match m.dists.get(name) {
         Some(d) => match sample(d, t, r, &mut o) {

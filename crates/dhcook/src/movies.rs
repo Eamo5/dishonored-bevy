@@ -217,11 +217,31 @@ fn wanted(index: &MovieIndex, available: &[String]) -> Vec<(String, u32, u32)> {
         }
         out.push((file.clone(), 1280, 5));
     }
-    // the credits (nine minutes of them) smaller
-    if let Some(c) = available.iter().find(|a| a.eq_ignore_ascii_case("Credits")) {
-        out.push((c.clone(), 960, 7));
+    // the credits (nine minutes of them; the trials' own) smaller
+    for n in ["Credits", "CreditsDLC05"] {
+        if let Some(c) = available.iter().find(|a| a.eq_ignore_ascii_case(n)) {
+            out.push((c.clone(), 960, 7));
+        }
     }
     out
+}
+
+/// The movie folders: the game's, and those of the DLC packs whose maps are all cooked
+/// (`DLC/PCConsole/DLCnn/Movies`: their loading movies, their credits).
+fn movie_dirs(game: &Path, cache: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![game.join("Movies")];
+    let Ok(rd) = std::fs::read_dir(game.join("DLC").join("PCConsole")) else { return dirs };
+    let mut packs: Vec<PathBuf> = rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join("Movies").is_dir()).collect();
+    packs.sort();
+    for pack in packs {
+        let maps: Vec<String> = std::fs::read_dir(&pack)
+            .map(|rd| rd.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_string_lossy().to_ascii_lowercase().strip_suffix("_p.upk").map(str::to_string)).collect())
+            .unwrap_or_default();
+        if !maps.is_empty() && maps.iter().all(|m| cache.join("maps").join(format!("{m}_p.json")).exists()) {
+            dirs.push(pack.join("Movies"));
+        }
+    }
+    dirs
 }
 
 /// Cook the game's movies into `cache/movies` (skipping those done; nothing without ffmpeg).
@@ -245,12 +265,21 @@ pub fn cook_movies(game: &Path, cache: &Path, force: bool) -> Result<MovieIndex>
     }
     // subtitles: `Movies/<name>.txt` cues (start ms, end ms, key) with the localized lines
     let subs = int_strings(&game.join("Localization").join("INT").join("Subtitles.int"));
-    let movies = game.join("Movies");
-    let available: Vec<String> = std::fs::read_dir(&movies)
-        .map(|rd| rd.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_str()?.strip_suffix(".bik").map(str::to_string)).collect())
-        .unwrap_or_default();
+    let mut found: Vec<(String, PathBuf)> = Vec::new();
+    for dir in movie_dirs(game, cache) {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.filter_map(|e| e.ok()) {
+            if let Some(n) = e.file_name().to_str().and_then(|n| n.strip_suffix(".bik")) {
+                if !found.iter().any(|(f, _)| f.eq_ignore_ascii_case(n)) {
+                    found.push((n.to_string(), dir.clone()));
+                }
+            }
+        }
+    }
+    let available: Vec<String> = found.iter().map(|(n, _)| n.clone()).collect();
+    let dir_of = |name: &str| found.iter().find(|(n, _)| n == name).map(|(_, d)| d.clone()).unwrap_or_else(|| game.join("Movies"));
     for name in &available {
-        let Ok(cues) = std::fs::read_to_string(movies.join(format!("{name}.txt"))) else { continue };
+        let Ok(cues) = std::fs::read_to_string(dir_of(name).join(format!("{name}.txt"))) else { continue };
         let list: Vec<(f32, f32, String)> = cues
             .lines()
             .filter_map(|l| {
@@ -284,7 +313,7 @@ pub fn cook_movies(game: &Path, cache: &Path, force: bool) -> Result<MovieIndex>
                     return None;
                 }
                 let t = std::time::Instant::now();
-                match cook_movie(&movies.join(format!("{name}.bik")), cache, name, *width, *q) {
+                match cook_movie(&dir_of(name).join(format!("{name}.bik")), cache, name, *width, *q) {
                     Ok(i) => {
                         log::info!("movie {name}: {:.1} s, {}x{}, audio {} in {:.1}s", i.seconds, i.width, i.height, i.audio, t.elapsed().as_secs_f32());
                         Some((key, i))

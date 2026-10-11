@@ -54,6 +54,7 @@ enum PartKind {
     Screen,
     Medal,
     Next,
+    Unlock,
 }
 
 impl Part {
@@ -103,18 +104,28 @@ struct Results {
     /// the next screen's choice
     sel: usize,
     hover: Option<usize>,
+    /// the unlock shown (`R_ResultsScreen_Unlocks`), by its place in the run's, and its part
+    unlock: usize,
+    unlock_part: Option<Entity>,
+    /// the parts' alphas while a leaderboard is over them
+    under_board: Vec<(PartKind, f32)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Stage {
     /// going black
     Fading,
+    /// what the run unlocked, one after another, before the results
+    Unlocks,
     /// the screen opening, then shown (input once open)
     Opening,
     Shown,
     /// closing for the next screen
     Closing,
     Next,
+    /// the leaderboard over it (`OnLeaderboardsClicked`), until it closes
+    /// (`BackFromLeaderboards`)
+    Board,
 }
 
 #[derive(Component)]
@@ -124,9 +135,8 @@ struct Veil;
 #[derive(Component)]
 struct NextButton(usize);
 
-/// The next screen's choices (`R_Next_Screen.SetNextMenu`, leaderboards aside: no online
-/// scores).
-const NEXT: [(&str, &str); 3] = [(R_TEXTS, "t_ReplayChallenge"), (B_TEXTS, "t_ExitChallenge"), (B_TEXTS, "t_ExitDLC05")];
+/// The next screen's choices (`R_Next_Screen.SetNextMenu`; the leaderboards the profile's own).
+const NEXT: [(&str, &str); 4] = [(R_TEXTS, "t_ReplayChallenge"), (B_TEXTS, "t_Leaderboards_X360"), (B_TEXTS, "t_ExitChallenge"), (B_TEXTS, "t_ExitDLC05")];
 
 /// The run is over: the veil comes down.
 fn open(mut commands: Commands, ch: Res<Challenge>, results: Option<Res<Results>>) {
@@ -135,7 +145,7 @@ fn open(mut commands: Commands, ch: Res<Challenge>, results: Option<Res<Results>
     }
     let root = commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }, GlobalZIndex(70), Pickable::IGNORE, DespawnOnExit(GameState::InGame))).id();
     let veil = commands.spawn((Veil, Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }, BackgroundColor(Color::BLACK.with_alpha(0.0)), ZIndex(10), Pickable::IGNORE, ChildOf(root))).id();
-    commands.insert_resource(Results { t: 0.0, stage: Stage::Fading, root, veil, rows: 0, scroll: 0, sel: 0, hover: None });
+    commands.insert_resource(Results { t: 0.0, stage: Stage::Fading, root, veil, rows: 0, scroll: 0, sel: 0, hover: None, unlock: 0, unlock_part: None, under_board: Vec::new() });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -149,10 +159,23 @@ fn run(
     mut veils: Query<&mut BackgroundColor, With<Veil>>,
     (mut timelines, data, time, window): (ResMut<MovieTimelines>, Res<crate::gamedata::Data>, Res<Time<Real>>, Query<&Window>),
     (mut ui, mut images): (ResMut<crate::ui_images::UiImages>, ResMut<Assets<Image>>),
-    mut paused: ResMut<crate::hud::Paused>,
+    (mut paused, menu): (ResMut<crate::hud::Paused>, Res<crate::menu::Menu>),
     mut sfx: MessageWriter<crate::audio::PostEvent>,
 ) {
     let Some(mut r) = results else { return };
+    // (the leaderboard closed: the next screen again)
+    if r.stage == Stage::Board {
+        if menu.open.is_none() {
+            let was = std::mem::take(&mut r.under_board);
+            for (p, mut fc) in &mut parts {
+                if let Some((_, a)) = was.iter().find(|(k, _)| *k == p.kind) {
+                    fc.alpha = *a;
+                }
+            }
+            r.stage = Stage::Next;
+        }
+        return;
+    }
     let dt = time.delta_secs();
     r.t += dt;
     // the parts' delayed animations
@@ -181,7 +204,34 @@ fn run(
             let Ok(w) = window.single() else { return };
             let (Some(tl), Some(mtl)) = (timelines.get(MOVIE), timelines.get(MEDAL_MOVIE)) else { return };
             sfx.write(crate::audio::PostEvent::named(if ch.ended == Some(false) { "UI_R_DLC05_Success" } else { "UI_R_DLC05_Fail" }, None));
-            let rows = spawn_screen(&mut commands, r.root, &tl, &mtl, w, &ch, &profile, level.as_deref(), &data, &mut ui, &mut images);
+            spawn_backdrop(&mut commands, r.root, &tl, w, &ch, &mut ui, &mut images);
+            // (`ShowUnlocks` first, if the run unlocked something)
+            if !ch.unlocks.is_empty() {
+                r.stage = Stage::Unlocks;
+                r.unlock = 0;
+                r.t = 0.0;
+                return;
+            }
+            let rows = spawn_screen(&mut commands, r.root, &tl, &mtl, w, &ch, &profile, level.as_deref(), &data);
+            r.rows = rows;
+            r.stage = Stage::Opening;
+            r.t = 0.0;
+        }
+        Stage::Unlocks => {
+            // (each closed with Enter: `input`; then the next; the last, the results)
+            veil.0 = Color::BLACK.with_alpha(1.0 - Ease::StrongOut.at(r.t / 0.2));
+            if r.unlock_part.is_some() {
+                return;
+            }
+            let Ok(w) = window.single() else { return };
+            let (Some(tl), Some(mtl)) = (timelines.get(MOVIE), timelines.get(MEDAL_MOVIE)) else { return };
+            if let Some(u) = ch.unlocks.get(r.unlock) {
+                let e = unlock_spawn(&mut commands, r.root, &tl, w, u, &data, &mut ui, &mut images);
+                r.unlock_part = e;
+                sfx.write(crate::audio::PostEvent::named("UI_R_OpenScreen", None));
+                return;
+            }
+            let rows = spawn_screen(&mut commands, r.root, &tl, &mtl, w, &ch, &profile, level.as_deref(), &data);
             r.rows = rows;
             r.stage = Stage::Opening;
             r.t = 0.0;
@@ -212,35 +262,64 @@ fn run(
                 next_highlight(&mut fc, sel, hover);
             }
         }
+        Stage::Board => {}
     }
 }
 
-/// `R_ResultsScreen.ShowResults`, `FadeFromBlack`, `Open`: the backdrop and the screen, its
-/// parts set and their opening queued. The stats' rows.
+/// `R_ResultsScreen_Unlocks.SetDisplay`, `Open`: what was unlocked (an artwork's title, or a
+/// challenge's), its words with its name in blue, its picture; in over the screen's middle.
 #[allow(clippy::too_many_arguments)]
-fn spawn_screen(
-    commands: &mut Commands,
-    root: Entity,
-    tl: &std::sync::Arc<dhcook::format::Timelines>,
-    mtl: &std::sync::Arc<dhcook::format::Timelines>,
-    w: &Window,
-    ch: &Challenge,
-    profile: &ChallengeProfile,
-    level: Option<&crate::level::LevelInfo>,
-    data: &crate::gamedata::Data,
-    ui: &mut crate::ui_images::UiImages,
-    images: &mut Assets<Image>,
-) -> usize {
+fn unlock_spawn(commands: &mut Commands, root: Entity, tl: &std::sync::Arc<dhcook::format::Timelines>, w: &Window, u: &crate::challenge::Unlock, data: &crate::gamedata::Data, ui: &mut crate::ui_images::UiImages, images: &mut Assets<Image>) -> Option<Entity> {
+    let Some(c) = Clip::export(tl, "R_ResultsScreen_Unlocks") else { return None };
+    let mut fc = FlashClip::new(MOVIE, tl.clone(), c).real().with_texts();
+    let s = (w.width() / 1280.0).min(w.height() / 720.0).max(0.01);
+    let off = (Vec2::new(w.width(), w.height()) - Vec2::new(1280.0, 720.0) * s) * 0.5;
+    fc.scale = s;
+    let (title, words) = if u.artwork { ("t_UnlockedArtworkTitle", "t_UnlockedArtworkTxt") } else { ("t_UnlockedChallengeTitle", "t_UnlockedChallengeTxt") };
+    fc.set_text("_title_mc.txt", data.text(R_TEXTS, title).to_uppercase());
+    let raw = data.0.texts.get(&format!("{R_TEXTS}.{words}")).cloned().unwrap_or_default();
+    fc.set_text("_txt_mc.txt", raw.replace("§NAME§", &format!("<font color=\"#6FA7CF\">{}</font>", u.name)));
+    let picture = ui.file(images, &u.picture.0, &u.picture.1);
+    fc.load_image("_img_mc.mc", picture);
+    let mut part = Part { kind: PartKind::Unlock, saved: HashMap::new(), later: Vec::new() };
+    // (`Open`: in from large and turned, its parts after)
+    fc.set("", to().alpha(0.0).scale(1.5).rotation(2.0));
+    fc.tween("", to().alpha(1.0).scale(1.0).rotation(0.0), 0.25, Ease::StrongOut);
+    for (p, from, delay) in [
+        ("_title_mc", to().alpha(0.0).xscale(2.0).yscale(3.0), 0.065),
+        ("_txt_mc", to().alpha(0.0).xscale(2.0).yscale(3.0), 0.083),
+        ("_circle_mc", to().alpha(0.0).xscale(2.0).yscale(3.0).rotation(5.0), 0.05),
+        ("_imgStroke_mc", to().alpha(0.0).xscale(3.0).yscale(3.5).rotation(80.0), 0.055),
+        ("_img_mc", to().alpha(0.0).xscale(2.0).yscale(3.0).rotation(80.0), 0.025),
+        ("_bkgd_mc", to().alpha(0.0).xscale(2.0).yscale(2.5).rotation(-15.0), 0.005),
+    ] {
+        let Some(sp) = fc.props(p) else { continue };
+        part.saved.insert(p.to_string(), sp);
+        fc.set(p, to().alpha(0.0));
+        let path = p.to_string();
+        part.later.push((
+            delay,
+            Box::new(move |fc: &mut FlashClip| {
+                fc.set(&path, from);
+                fc.tween(&path, sp.into(), 0.3, Ease::BackInOut);
+            }),
+        ));
+    }
+    let at = Node { position_type: PositionType::Absolute, left: Val::Px(off.x + 640.0 * s), top: Val::Px(off.y + 360.0 * s), ..default() };
+    Some(commands.spawn((part, fc, at, ZIndex(20), Pickable::IGNORE, ChildOf(root))).id())
+}
+
+/// `FadeFromBlack`: the challenge's backdrop (`ImgLoader` into `bkgd_mc.img_mc`, grown 2%)
+/// under the movie's blades, shards and black, before the unlocks and the screen.
+fn spawn_backdrop(commands: &mut Commands, root: Entity, tl: &std::sync::Arc<dhcook::format::Timelines>, w: &Window, ch: &Challenge, ui: &mut crate::ui_images::UiImages, images: &mut Assets<Image>) {
     let s = (w.width() / 1280.0).min(w.height() / 720.0).max(0.01);
     let off = (Vec2::new(w.width(), w.height()) - Vec2::new(1280.0, 720.0) * s) * 0.5;
     let def = ch.def.clone().unwrap_or_default();
-    let success = ch.ended == Some(false);
     let node = |x: f32, y: f32| Node { position_type: PositionType::Absolute, left: Val::Px(off.x + x * s), top: Val::Px(off.y + y * s), ..default() };
     let place = |fc: &mut FlashClip, x: f32, y: f32| {
         fc.scale = s;
         fc.m = [1.0, 0.0, 0.0, 1.0, x, y];
     };
-    // the challenge's backdrop (`ImgLoader` into `bkgd_mc.img_mc`, grown 2%)
     let art = match def.id.as_str() {
         "Countdown" => "ResultsBackground_CountDown".to_string(),
         id => format!("ResultsBackground_{id}"),
@@ -257,6 +336,31 @@ fn spawn_screen(
         fc.set_visible("img_mc", false);
         commands.spawn((Part { kind: PartKind::Backdrop, saved: HashMap::new(), later: Vec::new() }, fc, node(640.0, 360.0), Pickable::IGNORE, ChildOf(root)));
     }
+}
+
+/// `R_ResultsScreen.ShowResults`, `Open`: the screen, its
+/// parts set and their opening queued. The stats' rows.
+#[allow(clippy::too_many_arguments)]
+fn spawn_screen(
+    commands: &mut Commands,
+    root: Entity,
+    tl: &std::sync::Arc<dhcook::format::Timelines>,
+    mtl: &std::sync::Arc<dhcook::format::Timelines>,
+    w: &Window,
+    ch: &Challenge,
+    profile: &ChallengeProfile,
+    level: Option<&crate::level::LevelInfo>,
+    data: &crate::gamedata::Data,
+) -> usize {
+    let s = (w.width() / 1280.0).min(w.height() / 720.0).max(0.01);
+    let off = (Vec2::new(w.width(), w.height()) - Vec2::new(1280.0, 720.0) * s) * 0.5;
+    let def = ch.def.clone().unwrap_or_default();
+    let success = ch.ended == Some(false);
+    let node = |x: f32, y: f32| Node { position_type: PositionType::Absolute, left: Val::Px(off.x + x * s), top: Val::Px(off.y + y * s), ..default() };
+    let place = |fc: &mut FlashClip, x: f32, y: f32| {
+        fc.scale = s;
+        fc.m = [1.0, 0.0, 0.0, 1.0, x, y];
+    };
     // the screen (`R_ResultsScreen`, attached at the middle)
     let Some(clip) = Clip::export(tl, "R_ResultsScreen") else { return 0 };
     let mut fc = FlashClip::new(MOVIE, tl.clone(), clip).real().with_texts();
@@ -521,6 +625,10 @@ fn stats_rows(ch: &Challenge, level: Option<&crate::level::LevelInfo>) -> Vec<(S
             "DDSL_ScoringStorageCount" => ch.storage.get(name).copied().unwrap_or(0).to_string(),
             "DDSL_Custom_ThiefCoins" => ch.items.get("DDHI_CoinCount").map_or(0, |i| i.value).to_string(),
             "DDSL_Custom_BestNumberOfCheckpoints" => ch.items.get("DDHI_GateCount").map_or(0, |i| i.value).to_string(),
+            "DDSL_Custom_DisplayStatParameter" | "DDSL_Custom_ChronoBonus" => ch.stat_params.get(name).cloned().unwrap_or_else(|| "0".into()),
+            "DDSL_Custom_HighestJumpHeight" => format!("{:.0}m", ch.drop_heights.iter().copied().fold(0.0, f32::max)),
+            "DDSL_Custom_AverageJumpHeight" => format!("{:.0}m", if ch.drop_heights.is_empty() { 0.0 } else { ch.drop_heights.iter().sum::<f32>() / ch.drop_heights.len() as f32 }),
+            "DDSL_Custom_ChainKillBestChain" => ch.best_chain.to_string(),
             _ => "0".into(),
         };
         out.push((name.clone(), value));
@@ -633,6 +741,7 @@ fn input(
     (mut next, mut config, mut launch, mut stats, mut paused): (ResMut<NextState<GameState>>, ResMut<crate::Config>, ResMut<ChallengeLaunch>, ResMut<crate::gameplay::PlayerStats>, ResMut<crate::hud::Paused>),
     ch: Res<Challenge>,
     mut sfx: MessageWriter<crate::audio::PostEvent>,
+    (mut menu, data): (ResMut<crate::menu::Menu>, Res<crate::gamedata::Data>),
 ) {
     let Some(mut r) = results else { return };
     if r.stage == Stage::Fading {
@@ -645,6 +754,17 @@ fn input(
     }
     let ok = keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::KeyE);
     match r.stage {
+        // an unlock closed (`APressed`): the next
+        Stage::Unlocks => {
+            if (ok || mouse.just_pressed(MouseButton::Left)) && r.t > 0.4 {
+                if let Some(e) = r.unlock_part.take() {
+                    commands.entity(e).despawn();
+                    r.unlock += 1;
+                    r.t = 0.0;
+                    sfx.write(crate::audio::PostEvent::named("UI_R_validation", None));
+                }
+            }
+        }
         Stage::Shown => {
             // the list scrolled; the screen closed (`APressed`)
             let mut d: i32 = 0;
@@ -701,6 +821,21 @@ fn input(
                 r.sel = hover.unwrap_or(r.sel);
             }
             let Some(c) = chosen else { return };
+            // the leaderboard over the screen (`OnLeaderboardsClicked`: this challenge, this mode)
+            if c == 1 {
+                let at = ch.def.as_ref().and_then(|d| data.0.challenges.iter().position(|x| x.id == d.id)).unwrap_or(0);
+                sfx.write(crate::audio::PostEvent::named("UI_R_validation", None));
+                // (the screen out, its backdrop kept: `_title_mc.Close()`)
+                for (p, mut fc) in &mut parts {
+                    if p.kind != PartKind::Backdrop {
+                        r.under_board.push((p.kind, fc.alpha));
+                        fc.alpha = 0.0;
+                    }
+                }
+                menu.open_board(at, ch.expert);
+                r.stage = Stage::Board;
+                return;
+            }
             sfx.write(crate::audio::PostEvent::named("UI_R_DLC05_ResultsClose", None));
             commands.entity(r.root).despawn();
             commands.remove_resource::<Results>();
@@ -711,9 +846,10 @@ fn input(
                 // replay: the same challenge, the same mode
                 0 => launch.expert = ch.expert,
                 // the challenges, or the main menu
-                1 => {
-                    config.map = crate::menu::MENU_MAP.into();
+                2 => {
+                    config.map = crate::menu::TRIALS_MAP.into();
                     launch.back_to_challenges = true;
+                    launch.expert = ch.expert;
                 }
                 _ => config.map = crate::menu::MENU_MAP.into(),
             }

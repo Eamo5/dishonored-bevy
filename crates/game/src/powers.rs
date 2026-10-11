@@ -850,6 +850,7 @@ fn use_power(
                 return;
             }
             *ammo -= 1;
+            stats.shots_fired += 1;
             powers.cooldown = 0.9;
             sfx.write(PostEvent::named("Snd_Crossbow_P_Fire", None));
             // (the bolt strays within the aim's cone; the view kicks)
@@ -890,6 +891,7 @@ fn use_power(
                 return;
             }
             *ammo -= 1;
+            stats.shots_fired += 1;
             powers.cooldown = 1.2;
             let dir = aim.scatter(dir);
             aim.fire(&data, &stats, sel);
@@ -902,7 +904,11 @@ fn use_power(
                 }
                 if let Ok((_, nt, n)) = npcs.get(hit) {
                     // the shot's damage by range, to the head (a kill), on the unaware
-                    let damage = attrs.bullet.damage(toi, at.y - nt.translation.y > HEAD, n.alert != crate::npc::Alert::Combat);
+                    let head = at.y - nt.translation.y > HEAD;
+                    let damage = attrs.bullet.damage(toi, head, n.alert != crate::npc::Alert::Combat);
+                    if head {
+                        commands.entity(hit).try_insert(crate::npc::HeadHit);
+                    }
                     hits.write(NpcHit { npc: hit, damage, kind: HitKind::Bullet, from: pt.translation });
                     sfx.write(PostEvent::named("Imp_Bullet_on_Body", Some(at)));
                 } else if let Ok(s) = strikeables.get(hit) {

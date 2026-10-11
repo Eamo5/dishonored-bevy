@@ -672,7 +672,7 @@ mod kill_tests {
             velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: true, sprinting: false,
             grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
             air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
-            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO,
+            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0,
         })).id();
         let swarm = app.world_mut().spawn((Transform::default(), Swarm {
             wild: Some(Wild { home: Vec3::ZERO, roam: 0.0, detect: 10.0, escape: 1.0,

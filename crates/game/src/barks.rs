@@ -44,6 +44,14 @@ pub struct BarkState {
     victory: bool,
     /// the last bark asked for (its count)
     bark_seen: u32,
+    /// its clip when last seen, and how far in (the clip's cued lines between then and now)
+    clip: Option<(crate::anim::ClipId, f32)>,
+    /// down, its cry held for its clip to cue it (else said when this runs out), and once
+    /// it has cried
+    dying: Option<(f32, &'static [&'static str])>,
+    cried: bool,
+    /// seconds since it last spoke
+    since: f32,
 }
 
 /// Global pacing: one voice at a time near the player.
@@ -63,7 +71,7 @@ fn npc_barks(
     stats: Res<PlayerStats>,
     mut clock: ResMut<BarkClock>,
     player: Query<&Transform, With<Player>>,
-    mut npcs: Query<(Entity, &Npc, &Transform, Option<&mut BarkState>)>,
+    mut npcs: Query<(Entity, &Npc, &Transform, Option<&mut BarkState>, Option<&crate::anim::Animator>, Option<&crate::npc::NpcAnim>)>,
     mut out: MessageWriter<PostEvent>,
     mut subs: MessageWriter<Subtitle>,
     data: Res<crate::gamedata::Data>,
@@ -73,7 +81,7 @@ fn npc_barks(
     let dt = time.delta_secs();
     clock.busy = (clock.busy - dt).max(0.0);
     let log = std::env::var("DH_AUDIO_LOG").is_ok();
-    for (e, npc, t, state) in &mut npcs {
+    for (e, npc, t, state, anim, clips) in &mut npcs {
         let Some(mut st) = state else {
             commands.entity(e).try_insert(BarkState {
                 alert: npc.alert,
@@ -83,23 +91,69 @@ fn npc_barks(
                 next_chatter: 8.0 + rand::random::<f32>() * 20.0,
                 victory: false,
                 bark_seen: npc.bark_req.0,
+                clip: None,
+                dying: None,
+                cried: false,
+                since: 10.0,
             });
             continue;
         };
         let Some(voice) = npc.voice.and_then(|v| level.scene.barks.get(v as usize)) else { continue };
         st.quiet -= dt;
         st.next_chatter -= dt;
+        st.since += dt;
         let d = t.translation.distance(pt.translation);
+        // the line its clip cues as it passes it (`DishonoredNotify_FireDialogHook`)
+        let mut cued: Option<String> = None;
+        // (a cry its clip has still to cue)
+        let mut cry_coming = false;
+        let cry = |h: &str| h == "COMBAT_DYING" || h == "COMBAT_BACKSTABBED";
+        if let (Some(anim), Some(clips)) = (anim, clips) {
+            if let Some(p) = anim.current() {
+                let from = match st.clip {
+                    Some((c, t0)) if c == p.clip && t0 <= p.t => t0,
+                    _ => -1.0,
+                };
+                cued = clips.clip_hooks(p.clip).iter().find(|(at, _)| *at > from && *at <= p.t).map(|(_, h)| h.clone());
+                cry_coming = clips.clip_hooks(p.clip).iter().any(|(at, h)| *at > p.t && cry(h));
+                st.clip = Some((p.clip, p.t));
+            }
+        }
+        // (one cry a death)
+        if cued.as_deref().is_some_and(|h| cry(h) && st.cried) {
+            cued = None;
+        }
+        let one: [&str; 1];
         // (hooks to try in order, urgent: ignores pacing)
         let mut want: Option<(&[&str], bool)> = None;
         let down = npc.is_down();
+        if !down {
+            st.cried = false;
+        }
         if down && !st.down {
+            // (the clip may cue it: else said shortly)
             let stealth = st.health > 0.0 && st.alert != Alert::Combat;
             if npc.mode == Mode::Dead && !stealth {
-                want = Some((&["COMBAT_DYING"], true));
+                st.dying = Some((0.35, &["COMBAT_DYING"]));
             } else if npc.mode == Mode::Dead {
-                want = Some((&["COMBAT_BACKSTABBED"], true));
+                st.dying = Some((0.35, &["COMBAT_BACKSTABBED"]));
             }
+        }
+        if let Some(h) = cued.as_deref().filter(|h| st.dying.is_some() || !(h.starts_with("COMBAT_OUCH") && st.since < 1.5)) {
+            // its clip's own line, in time with it
+            st.cried |= cry(h) || st.dying.is_some();
+            st.dying = None;
+            one = [h];
+            want = Some((&one, true));
+        } else if let Some((left, hooks)) = st.dying {
+            if left - dt <= 0.0 && !cry_coming {
+                st.dying = None;
+                st.cried = true;
+                want = Some((hooks, true));
+            } else {
+                st.dying = Some((left - dt, hooks));
+            }
+        } else if down {
         } else if npc.bark_req.0 != st.bark_seen {
             // a bark asked for (a shove's "personal space")
             st.bark_seen = npc.bark_req.0;
@@ -152,6 +206,7 @@ fn npc_barks(
             subs.write(Subtitle { text: format!("{speaker}: {text}"), secs: len + 0.3, priority: false, ambient: true });
         }
         st.quiet = len + 3.0;
+        st.since = 0.0;
         clock.busy = len.min(2.5);
     }
 }

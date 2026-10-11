@@ -651,9 +651,11 @@ fn attenuate(
     listener: Query<&GlobalTransform, With<SpatialListener>>,
     voices: Query<(&Transform, &Emitter, &Voice)>,
     (time, mut log_t): (Res<Time>, Local<f32>),
-    rooms: Res<crate::audiorooms::AudioRooms>,
+    (rooms, movies): (Res<crate::audiorooms::AudioRooms>, Res<crate::movie::Movies>),
 ) {
     let Ok(l) = listener.single() else { return };
+    // (a movie's own soundtrack over the music: the trials' credits over their menu's)
+    let music_volume = if movies.soundtrack() { 0.0 } else { settings.music_volume };
     let ear = l.translation();
     // (DH_RTPC_LOG: the sounds the curves change, each second)
     *log_t += time.delta_secs();
@@ -673,7 +675,7 @@ fn attenuate(
     // (the ways through the doorways from where Corvo hears, once for all the sounds)
     let field = rooms.field(ear, false);
     for (t, em, voice) in &voices {
-        let cat = if em.music { settings.music_volume } else if em.voice { settings.voice_volume } else { settings.sfx_volume };
+        let cat = if em.music { music_volume } else if em.voice { settings.voice_volume } else { settings.sfx_volume };
         let (g, speed) = mods(em);
         if log && ((g - 1.0).abs() > 1e-3 || (speed - 1.0).abs() > 1e-3) {
             info!("rtpc: {} gain {g:.3} speed {speed:.3}", event_name(em.event));

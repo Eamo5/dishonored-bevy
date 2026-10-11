@@ -32,12 +32,25 @@ impl Plugin for PropsPlugin {
             .init_resource::<PropsTaken>()
             .init_resource::<PropKnocks>()
             .init_resource::<PropPhysicsStep>()
+            .init_resource::<TankEvents>()
             .add_systems(PostUpdate, scale_prop_physics.before(PhysicsSet::SyncBackend).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, unscale_prop_physics.after(PhysicsSet::Writeback).run_if(in_state(GameState::InGame)))
             .add_systems(OnEnter(GameState::InGame), ((|mut h: ResMut<Held>| *h = Held::default()), setup_props.after(crate::level::LevelSpawnSet)))
             .add_systems(Update, prop_focus.after(crate::interact::FocusSet).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (restore_props, restore_prop_states, restore_held_prop, hold_prop, prop_impacts, prop_hits, sync_props, burst_tanks, prop_events, script_physics).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (restore_props, restore_prop_states, restore_held_prop, hold_prop, make_tanks, prop_impacts, prop_hits, tank_misses, sync_props, burst_tanks, prop_events, script_physics).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
     }
+}
+
+/// Where a factory's tanks wait, unmade.
+const PARK: Vec3 = Vec3::new(0.0, -2000.0, 0.0);
+/// A factory's tank not shot down this long after it was made is missed (it has fallen past).
+const TANK_LIFE: f32 = 6.0;
+
+/// The factories' tanks (Oil Drop) burst (their pool, where) and missed, for the challenge.
+#[derive(Resource, Default)]
+pub struct TankEvents {
+    pub burst: Vec<(u32, Vec3)>,
+    pub missed: u32,
 }
 
 /// Kilograms by `m_WeightClass` (tiny, small, medium, large).
@@ -45,7 +58,7 @@ const MASS: [f32; 4] = [0.4, 2.0, 8.0, 25.0];
 /// The share of Corvo's throw (`ThrowStrength`) by weight class.
 const THROW: [f32; 4] = [1.0, 0.85, 0.6, 0.4];
 /// The groups a loose prop collides with.
-const LOOSE: Group = GROUP_WORLD.union(GROUP_PROP).union(GROUP_NPC).union(GROUP_PLAYER);
+const LOOSE: Group = GROUP_WORLD.union(GROUP_PROP).union(GROUP_NPC).union(GROUP_PLAYER).union(crate::ragdoll::GROUP_RAGDOLL);
 
 #[derive(Resource, Default)]
 struct PropPhysicsStep(Vec<(Entity, f32, Velocity, f32, Option<Damping>)>);
@@ -116,9 +129,16 @@ pub struct Prop {
     settling: bool,
     /// hanging by joints (`Movable::joints`) the scripts haven't destroyed
     hung: bool,
+    /// a factory's tank (`Movable::pool`): seconds since it was made, while out
+    live: Option<f32>,
 }
 
 impl Prop {
+    /// A factory's tank out (made, not yet burst or missed).
+    pub fn is_live(&self) -> bool {
+        self.live.is_some()
+    }
+
     /// Its physics body and where that sits from the prop's origin.
     pub fn body(&self) -> (Option<Entity>, Vec3) {
         (self.body, self.offset)
@@ -342,7 +362,7 @@ mod held_save_tests {
             Collider::ball(0.2), GravityScale(1.0), Velocity::linear(Vec3::X * 10.0))).id();
         let prop = app.world_mut().spawn(Prop { index: 0, health: 10.0, body: Some(body),
             last_vel: Vec3::X * 10.0, thrown: true, quiet: 0.0, released: 0.2, offset: Vec3::ZERO,
-            settling: false, hung: false }).id();
+            settling: false, hung: false, live: None }).id();
         for _ in 0..4 { app.update(); }
         assert_eq!(app.world().get::<Transform>(body).unwrap().translation, Vec3::new(0.0, 10.0, 0.0));
         assert_eq!(app.world().get::<Velocity>(body).unwrap().linear, Vec3::X * 10.0);
@@ -382,7 +402,7 @@ mod held_save_tests {
         let mut app = App::new();
         app.init_resource::<PropRestore>().add_systems(Update, restore_prop_states);
         let mut prop = Prop { index: 8, health: 3.0, body: None, last_vel: Vec3::X * 12.0,
-            thrown: true, quiet: 0.4, released: 0.2, offset: Vec3::ZERO, settling: false, hung: false };
+            thrown: true, quiet: 0.4, released: 0.2, offset: Vec3::ZERO, settling: false, hung: false, live: None };
         let velocity = Velocity { linear: Vec3::new(10.0, 2.0, 0.0), angular: Vec3::Y * 3.0 };
         let saved = prop.save_state(Some((&velocity, &GravityScale(1.0), &RigidBody::Dynamic)));
         let saved = serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
@@ -423,7 +443,7 @@ mod held_save_tests {
         let body = app.world_mut().spawn((GravityScale(1.0), CollisionGroups::new(GROUP_PROP, LOOSE), Velocity::linear(Vec3::X), RigidBody::Fixed)).id();
         let prop = app.world_mut().spawn(Prop {
             index: 7, health: 10.0, body: Some(body), last_vel: Vec3::ZERO,
-            thrown: true, quiet: 0.0, released: 0.5, offset: Vec3::ZERO, settling: false, hung: false,
+            thrown: true, quiet: 0.0, released: 0.5, offset: Vec3::ZERO, settling: false, hung: false, live: None,
         }).id();
         app.update();
         assert_eq!(app.world().resource::<Held>().0, Some(prop));
@@ -484,7 +504,7 @@ fn setup_props(
     for (i, m) in scene.movables.iter().enumerate() {
         let Some(&(e, t, col)) = by_index.get(&m.instance) else { continue };
         // (settling at the start makes no sound)
-        let mut prop = Prop { index: i, health: m.health.max(1.0), body: None, last_vel: Vec3::ZERO, thrown: false, quiet: 1.0, released: 0.0, offset: Vec3::ZERO, settling: true, hung: !m.joints.is_empty() };
+        let mut prop = Prop { index: i, health: m.health.max(1.0), body: None, last_vel: Vec3::ZERO, thrown: false, quiet: 1.0, released: 0.0, offset: Vec3::ZERO, settling: true, hung: !m.joints.is_empty(), live: None };
         if m.fixed {
             // a breakable in the way: weapons wear it down (its collider goes with it)
             // (the scripts may remove it as the level starts: `try_`)
@@ -502,7 +522,8 @@ fn setup_props(
             // controllers' pushing), the body at its centre
             let shape = Collider::cuboid(half.x, half.y, half.z);
             prop.offset = (min + max) * 0.5;
-            let at = Transform::from_translation(t.translation + t.rotation * prop.offset).with_rotation(t.rotation);
+            // (a factory's tank waits out of the way)
+            let at = if m.pool.is_some() { Transform::from_translation(PARK) } else { Transform::from_translation(t.translation + t.rotation * prop.offset).with_rotation(t.rotation) };
             let body = col.unwrap_or_else(|| commands.spawn(DespawnOnExit(GameState::InGame)).id());
             // the light ones stop no one (a thrown one striking someone is caught by
             // `prop_impacts`)
@@ -858,30 +879,33 @@ fn prop_hits(
     mut bodies: Query<&mut Velocity>,
     (mut sfx, mut noise, mut fx): (MessageWriter<PostEvent>, MessageWriter<Noise>, MessageWriter<SpawnEffect>),
     mut tank_blasts: ResMut<TankBlasts>,
-    vm: Option<ResMut<crate::kismet::Vm>>,
+    mut vm: Option<ResMut<crate::kismet::Vm>>,
+    mut tank_events: ResMut<TankEvents>,
+    attrs: Res<crate::gamedata::Attrs>,
 ) {
     let (Some(level), Some(assets)) = (level, assets) else {
         struck.clear();
         blasts.clear();
         return;
     };
-    let mut hits: Vec<(Entity, f32, Vec3)> = struck
+    // (each hit: what, how hard, from where, its kind)
+    let mut hits: Vec<(Entity, f32, Vec3, HitKind)> = struck
         .read()
         .map(|s| {
             let dmg = match s.kind {
                 HitKind::Explosion | HitKind::EnemyExplosion | HitKind::GrenadeThrowback | HitKind::StickyGrenade | HitKind::ExplosiveBullet | HitKind::Fire => 999.0,
                 _ => s.damage,
             };
-            (s.target, dmg, s.at)
+            (s.target, dmg, s.at, s.kind)
         })
         .collect();
     // the scripts' damage (`SeqAct_ModifyHealth`: a fallen PA speaker's), no knock with it
     let mut scripted: Vec<Entity> = Vec::new();
-    if let Some(mut vm) = vm {
+    if let Some(vm) = vm.as_mut() {
         for (insts, dmg) in std::mem::take(&mut vm.prop_damage) {
             for (e, p, t) in &props {
                 if level.scene.movables.get(p.index).is_some_and(|m| insts.contains(&m.instance)) {
-                    hits.push((e, dmg, t.translation));
+                    hits.push((e, dmg, t.translation, HitKind::ByOthers));
                     scripted.push(e);
                 }
             }
@@ -891,13 +915,21 @@ fn prop_hits(
         for (e, _, t) in &props {
             let d = t.translation.distance(b.at);
             if d < b.radius {
-                hits.push((e, b.damage * (1.0 - d / b.radius).max(0.2), b.at));
+                hits.push((e, b.damage * (1.0 - d / b.radius).max(0.2), b.at, b.kind));
             }
         }
     }
-    for (e, dmg, from) in hits {
+    for (e, dmg, from, kind) in hits {
         let Ok((_, mut prop, t)) = props.get_mut(e) else { continue };
         let Some(m) = level.scene.movables.get(prop.index) else { continue };
+        // a factory's tank in the air: the damage events the scripts bound to it
+        // (`SeqAct_AttachToEvent` on the factory's "Spawned"): Oil Drop's gifts, its combos' cues
+        if let (Some(vm), Some(name), true) = (vm.as_mut(), m.tank.as_deref(), prop.is_live()) {
+            if let Some(a) = vm.g.actors.iter().position(|a| a.name == name) {
+                let ty = crate::worlddamage::hit_type(kind, t.translation.distance(from), &attrs);
+                vm.take_damage(a as u32, ty, dmg, !matches!(kind, HitKind::ByOthers | HitKind::EnemyExplosion));
+            }
+        }
         // knocked
         if let Some(Ok(mut v)) = prop.body.filter(|_| !scripted.contains(&e)).map(|b| bodies.get_mut(b)) {
             let push = (t.translation - from).normalize_or(Vec3::Y);
@@ -911,7 +943,93 @@ fn prop_hits(
         prop.health -= dmg;
         if was > 0.0 && prop.health <= 0.0 {
             let t = *t;
+            if let Some(pool) = m.pool {
+                // a factory's tank: burst, and back to its pool
+                if prop.live.take().is_some() {
+                    if let Some(bl) = m.breaks.as_ref().and_then(|b| b.blast.clone()) {
+                        tank_blasts.0.push((t.translation, bl));
+                    }
+                    if let Some(b) = &m.breaks {
+                        break_pieces(&mut commands, &assets, b, &t, &mut sfx, &mut noise, &mut fx);
+                    }
+                    park(&mut commands, e, prop.body);
+                    tank_events.burst.push((pool, t.translation));
+                    if std::env::var("DH_PROP_LOG").is_ok() {
+                        info!("factory tank {} burst at {:.1}", m.tank.as_deref().unwrap_or("?"), t.translation);
+                    }
+                }
+                continue;
+            }
             break_prop(&mut commands, &assets, m, e, &t, prop.body, &mut sfx, &mut noise, &mut fx, &mut tank_blasts);
+        }
+    }
+}
+
+/// A factory's tank back in its pool: hidden, its body still and out of the way.
+fn park(commands: &mut Commands, e: Entity, body: Option<Entity>) {
+    commands.entity(e).try_insert(Visibility::Hidden);
+    if let Some(b) = body {
+        commands.entity(b).try_insert((RigidBody::Fixed, Transform::from_translation(PARK), Velocity::zero()));
+    }
+}
+
+/// The scripts' factories make their tanks (Oil Drop): each its pool's next, put at the
+/// spawn point and thrown (`WoTThrow`: the tripod launchers') to pass a few metres over where
+/// Corvo stands and fall on past him, turning.
+fn make_tanks(
+    mut commands: Commands,
+    vm: Option<ResMut<crate::kismet::Vm>>,
+    level: Option<Res<LevelInfo>>,
+    mut props: Query<(Entity, &mut Prop, &LevelInstance)>,
+    player: Query<&Transform, With<Player>>,
+) {
+    let (Some(mut vm), Some(level)) = (vm, level) else { return };
+    for (actor, pos, rot) in std::mem::take(&mut vm.tank_spawns) {
+        let Some(&inst) = vm.g.actors.get(actor as usize).and_then(|a| a.instances.first()) else { continue };
+        let Some((e, mut prop, _)) = props.iter_mut().find(|(_, _, li)| li.index == inst) else { continue };
+        let Some(m) = level.scene.movables.get(prop.index) else { continue };
+        if std::env::var("DH_PROP_LOG").is_ok() {
+            info!("factory tank {} made at {pos:.1}", m.tank.as_deref().unwrap_or("?"));
+        }
+        prop.health = m.health.max(1.0);
+        prop.live = Some(0.0);
+        prop.settling = false;
+        prop.thrown = false;
+        // (turned as the spawn point is: a UE rotator, pitch / yaw / roll)
+        let k = std::f32::consts::TAU / 65536.0;
+        let turn = Quat::from_euler(EulerRot::YXZ, -rot[1] as f32 * k, rot[0] as f32 * k, rot[2] as f32 * k);
+        commands.entity(e).try_insert(Visibility::Inherited);
+        // (over Corvo, somewhere about him, in a second and a half to two)
+        let r = |s: f32| (rand::random::<f32>() - 0.5) * s;
+        let over = player.iter().next().map_or(pos, |t| t.translation) + Vec3::new(r(8.0), 5.0 + rand::random::<f32>() * 3.0, r(8.0));
+        let secs = 1.6 + rand::random::<f32>() * 0.6;
+        let throw = (over - pos) / secs + Vec3::Y * 0.5 * 9.81 * secs;
+        if let Some(b) = prop.body {
+            let spin = Vec3::new(r(1.0), r(1.0), r(1.0)) * 2.0;
+            commands.entity(b).try_insert((
+                RigidBody::Dynamic,
+                Transform::from_translation(pos + turn * prop.offset).with_rotation(turn),
+                Velocity { linear: throw, angular: spin },
+                Sleeping::disabled(),
+                GravityScale(1.0),
+            ));
+        }
+    }
+}
+
+/// A factory's tank not shot down in time (it fell past, or into the water) is missed: back to
+/// its pool.
+fn tank_misses(mut commands: Commands, time: Res<Time>, mut props: Query<(Entity, &mut Prop)>, mut events: ResMut<TankEvents>) {
+    for (e, mut prop) in &mut props {
+        let Some(t) = prop.live.as_mut() else { continue };
+        *t += time.delta_secs();
+        if *t > TANK_LIFE {
+            prop.live = None;
+            park(&mut commands, e, prop.body);
+            events.missed += 1;
+            if std::env::var("DH_PROP_LOG").is_ok() {
+                info!("factory tank missed");
+            }
         }
     }
 }

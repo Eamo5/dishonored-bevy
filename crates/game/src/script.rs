@@ -1166,6 +1166,20 @@ fn run_script(
                 info!("script: aimpart at {at:.2}");
             });
         }
+        "aimtank" => {
+            // (tests) aim at the nearest factory tank in the air (Oil Drop)
+            commands.queue(move |w: &mut World| {
+                let Some((pe, eye)) = w.query_filtered::<(Entity, &Transform), With<crate::player::Player>>().iter(w).next().map(|(e, t)| (e, t.translation + Vec3::Y * 0.6)) else { return };
+                let bodies: Vec<Entity> = w.query::<&crate::props::Prop>().iter(w).filter(|p| p.is_live()).filter_map(|p| p.body().0).collect();
+                let Some(at) = bodies.iter().filter_map(|b| w.get::<Transform>(*b).map(|t| t.translation)).min_by(|a, b| a.distance(eye).total_cmp(&b.distance(eye))) else { return };
+                let to = at - eye;
+                if let Some(mut p) = w.get_mut::<crate::player::Player>(pe) {
+                    p.yaw = (-to.x).atan2(-to.z);
+                    p.pitch = (to.y / to.length().max(1e-3)).asin();
+                }
+                info!("script: aimtank at {at:.2}");
+            });
+        }
         "lookat" => {
             // aim the view at a world point (camera height above the player origin)
             let eye = t.translation + Vec3::Y * 0.6;
@@ -1426,6 +1440,10 @@ fn run_script(
                 }
                 if let Some(u) = u {
                     info!("script:   npc {} ({}) at {:.1}: {}", n.name, n.pawn, nt.translation, u.label);
+                }
+                // (those bent time passes by: where they are, what they do)
+                if n.out_of_bend {
+                    info!("script:   out of bent time {} ({}) at {:.1} {:?} {:?}", n.name, n.pawn, nt.translation, n.mode, n.alert);
                 }
                 if (nt.translation.y - n.home.y).abs() > 6.0 {
                     odd += 1;

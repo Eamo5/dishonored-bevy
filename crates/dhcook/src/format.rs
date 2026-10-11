@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::Path;
 
 // 103: retain unmatched-rig timelines and zero-track animation sequences.
-pub const SCENE_VERSION: u32 = 103;
+pub const SCENE_VERSION: u32 = 107;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -97,6 +97,9 @@ pub struct Scene {
     /// physics props and breakables (`DishonoredMovable`, `DishonoredBreakableNavBlock`)
     #[serde(default)]
     pub movables: Vec<Movable>,
+    /// the factories' whale oil tanks (`TankPool`)
+    #[serde(default)]
+    pub tank_pools: Vec<TankPool>,
     /// taps and fountains (`DisWaterSource`)
     #[serde(default)]
     pub water_sources: Vec<WaterSource>,
@@ -173,6 +176,13 @@ pub struct Scene {
     /// finishers)
     #[serde(default)]
     pub npc_severs: Vec<NpcSever>,
+    /// what the clips' notifies mark (the blade trailing, the blow's zone, when the attack may
+    /// be broken off), by anim set and clip
+    #[serde(default)]
+    pub clip_marks: Vec<ClipMarks>,
+    /// the characters' ragdolls (their pawns' `m_pPhysicsAsset`), by `NpcType::ragdoll`
+    #[serde(default)]
+    pub ragdolls: Vec<RagdollDef>,
     /// a severed limb's blood (`DisSeveredLimbInfo` `SLInfo_Default`)
     #[serde(default)]
     pub severed_limbs: Option<SeveredLimbs>,
@@ -687,6 +697,10 @@ pub struct PropDef {
     pub name: String,
     pub mesh: u32,
     pub materials: Vec<u32>,
+    /// a sword's blade, its ends in the mesh's frame (`BladeExtent_BL`, `BladeExtent_UR`: what
+    /// its swings' trails span)
+    #[serde(default)]
+    pub blade: Option<[[f32; 3]; 2]>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -696,6 +710,74 @@ pub struct SkeletonDef {
     /// The mesh's attachment sockets.
     #[serde(default)]
     pub sockets: Vec<SocketDef>,
+}
+
+/// What a clip's notifies mark, in seconds of the clip: the blade trailing (`DisNotify_Trails`:
+/// from, so long), the blow's zone (`DishonoredNotify_AttackZone`: from, so long) and when the
+/// attack may be broken off (`DishonoredNotify_AttackInterruptable`; 0 never), and when the
+/// weapon falls from the hand (`DisNotify_DropItem`: the deaths', the finishers').
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ClipMarks {
+    pub set: String,
+    pub clip: String,
+    pub trails: Vec<(f32, f32)>,
+    pub zone: Option<(f32, f32)>,
+    pub interruptible: f32,
+    #[serde(default)]
+    pub drops: Vec<f32>,
+    /// when the body goes limp (`DishonoredNotify_Ragdoll`: near the deaths' ends, a wind
+    /// blast's)
+    #[serde(default)]
+    pub ragdoll: Option<f32>,
+    /// the feet placed on the ground from then on, or not (`DisNotify_FootPlacement`:
+    /// `m_bEnableFootPlacement`; a kick's off as it starts, on as it ends: those at the
+    /// clip's start and length)
+    #[serde(default)]
+    pub feet: Vec<(f32, bool)>,
+    /// the lines the clip cues (`DishonoredNotify_FireDialogHook`: the dying's cry, the stealth
+    /// kill's gasp, a taunt with its gesture), as the voices' dialog hooks
+    #[serde(default)]
+    pub hooks: Vec<(f32, String)>,
+}
+
+/// A character's ragdoll (`PhysicsAsset`): its bodies on its bones, the joints between them.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct RagdollDef {
+    pub name: String,
+    pub bodies: Vec<RagBody>,
+    pub joints: Vec<RagJoint>,
+}
+
+/// A ragdoll body (`RB_BodySetup`): its bone and its shapes in the bone's frame (Bevy space,
+/// metres), its mass relative to its size (`MassScale`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct RagBody {
+    pub bone: String,
+    pub shapes: Vec<RagShape>,
+    pub mass_scale: f32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum RagShape {
+    Sphere { at: [f32; 3], r: f32 },
+    /// between the ends' centres
+    Capsule { a: [f32; 3], b: [f32; 3], r: f32 },
+    Box { at: [f32; 3], rot: [f32; 4], half: [f32; 3] },
+    Hull { points: Vec<[f32; 3]> },
+}
+
+/// A ragdoll joint (`RB_ConstraintSetup`): a ball joint between a body (`ConstraintBone1`)
+/// and the one it hangs from (`ConstraintBone2`), at a frame in each's bone (Bevy space: its
+/// X the twist axis), its limits in degrees (`None` free).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct RagJoint {
+    pub child: String,
+    pub parent: String,
+    pub child_frame: ([f32; 3], [f32; 4]),
+    pub parent_frame: ([f32; 3], [f32; 4]),
+    /// about the frame's Z (`Swing1LimitAngle`) and Y (`Swing2LimitAngle`)
+    pub swing: Option<[f32; 2]>,
+    pub twist: Option<f32>,
 }
 
 /// An attachment point relative to a bone (Bevy space).
@@ -763,6 +845,13 @@ pub struct NpcType {
     /// what it carries on its sockets (a tallboy's tanks)
     #[serde(default)]
     pub attachments: Vec<NpcAttachment>,
+    /// it goes on through bent time (`DisTweaks_Pawn.m_bAlwaysOutOfBendTime`: the trials'
+    /// Daud, whose duel stops the world)
+    #[serde(default)]
+    pub out_of_bend: bool,
+    /// its ragdoll (`m_pPhysicsAsset`), in `Scene::ragdolls`
+    #[serde(default)]
+    pub ragdoll: Option<u32>,
 }
 
 /// A character's numbers and arms. Its attributes are those of its pawn's attribute tweak
@@ -1968,6 +2057,22 @@ pub struct Movable {
     /// (`m_fExplosionChainTimer`)
     #[serde(default)]
     pub charges: Option<[f32; 5]>,
+    /// one of a pool the scripts' factories draw from (`scene.tank_pools`): hidden and still
+    /// until made, put back when burst or missed
+    #[serde(default)]
+    pub pool: Option<u32>,
+}
+
+/// The whale oil tanks the scripts' actor factories make (Dunwall City Trials' Oil Drop:
+/// `DisDLC05WhaleOilBattery` of a tank tweak): its tweak, its kind (`Normal`, `BendTime`,
+/// `Health`, `Smoke`, `DarkVision`), and the pooled tanks, as movables and as the scripts'
+/// actors.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct TankPool {
+    pub tweak: String,
+    pub kind: String,
+    pub movables: Vec<u32>,
+    pub actors: Vec<u32>,
 }
 
 /// One of the contact system's intersections (striker against struck): its sound (volume
@@ -2499,6 +2604,9 @@ pub struct GameData {
     /// the Dunwall City Trials' challenges (`DisDLC05GameInfo.m_Challenges`)
     #[serde(default)]
     pub challenges: Vec<ChallengeDef>,
+    /// and the pieces of its gallery (`m_Gallery`)
+    #[serde(default)]
+    pub gallery: Vec<GalleryItemDef>,
     /// the player statistics the achievements read (`DisTweaks_PlayerStats.m_StatInfos`), and the
     /// achievements (`m_Achievements`, by `EAchievement`)
     #[serde(default)]
@@ -3026,6 +3134,21 @@ pub struct ChallengeDef {
     pub can_end_early: bool,
 }
 
+/// A piece of the Dunwall City Trials' gallery (`DisDLC05GameInfo.m_Gallery`:
+/// `DisDLC05GalleryItem`): its picture (`UI_<id>_S`, `UI_<id>_L`) and what unlocks it: so many
+/// stars (`m_UnlockMedal`) in a challenge (by its leaderboard, `m_UnlockChallenge`) in normal or
+/// expert mode, or every other piece of a mode's (`m_bUnlockedWhen<Mode>Completed`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct GalleryItemDef {
+    pub id: String,
+    pub normal: bool,
+    pub expert: bool,
+    pub all_normal: bool,
+    pub all_expert: bool,
+    pub challenge: String,
+    pub stars: i32,
+}
+
 /// A Dunwall City Trials scoring rule set (`DisDLC05Tweaks_ChallengeScoringRuleset`): its
 /// rules and bonuses (`m_Rules`), its combo multipliers (`m_Multipliers`), and the statistics
 /// its results screen lists (`m_ResultsMenuStats`: lookup, name).
@@ -3049,4 +3172,28 @@ pub struct ScoreRuleDef {
     pub base_gain: i32,
     pub gains: Vec<(String, i32, String)>,
     pub params: std::collections::BTreeMap<String, f32>,
+    /// its kinds of a scoring's flair (`m_Modifiers`: `DisDLC05ScoringModifier_*`)
+    #[serde(default)]
+    pub modifiers: Vec<ScoreModifierDef>,
+    /// its enum-valued settings (`m_AssassinationType`...)
+    #[serde(default)]
+    pub kinds: std::collections::BTreeMap<String, String>,
+    /// its numbers set by index (`m_EggGains[1..5]`, `m_AttentionLevels`...): those not set
+    /// its class's
+    #[serde(default)]
+    pub lists: std::collections::BTreeMap<String, Vec<Option<f32>>>,
+}
+
+/// A scoring rule's modifier (`DisDLC05ScoringModifier_*`): its name, class, the entry it
+/// scores under, its extra gain and that of its first use (`m_iNoveltyExtraGain`), its other
+/// settings.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ScoreModifierDef {
+    pub name: String,
+    pub class: String,
+    pub entry: String,
+    pub extra: i32,
+    pub novelty: i32,
+    pub params: std::collections::BTreeMap<String, f32>,
+    pub kinds: std::collections::BTreeMap<String, String>,
 }

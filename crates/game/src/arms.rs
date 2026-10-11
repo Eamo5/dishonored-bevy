@@ -338,6 +338,10 @@ fn spawn_arms(
         let (bone, at) = socket("RightHandWpn", attach);
         commands.entity(s).insert(at);
         commands.entity(bone).add_child(s);
+        // (its swings trail, by the arms' clips)
+        if let Some(blade) = level.as_ref().and_then(|l| crate::trails::blade_of(&l.scene, "player_sword")) {
+            commands.entity(s).insert(crate::trails::BladeTrail::new(blade, root, true));
+        }
     }
 
     if let Some((lib, clips)) = animated {

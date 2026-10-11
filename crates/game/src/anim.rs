@@ -31,6 +31,8 @@ pub struct ClipId {
 /// The clips available to one skeleton, bound to its joints.
 pub struct CharAnims {
     sets: Vec<Arc<AnimFile>>,
+    /// the sets' names (their anim sets' paths), when known
+    set_names: Vec<String>,
     /// per set: file bone -> skeleton joint
     maps: Vec<Vec<Option<u16>>>,
     by_name: HashMap<String, ClipId>,
@@ -52,7 +54,26 @@ impl CharAnims {
                 by_name.insert(c.name.to_ascii_lowercase(), ClipId { set: si as u16, clip: ci as u16 });
             }
         }
-        CharAnims { sets, maps, by_name }
+        CharAnims { sets, set_names: Vec::new(), maps, by_name }
+    }
+
+    /// Its sets' names (their anim sets' paths, in its sets' order).
+    pub fn with_names(mut self, names: Vec<String>) -> CharAnims {
+        self.set_names = names;
+        self
+    }
+
+    /// What the cooker found the notifies mark on its clips (`scene.clip_marks`): those of the
+    /// set each clip plays from.
+    pub fn marks(&self, scene: &dhcook::format::Scene) -> HashMap<ClipId, dhcook::format::ClipMarks> {
+        let mut out = HashMap::new();
+        for m in &scene.clip_marks {
+            let Some(id) = self.find(&m.clip) else { continue };
+            if self.set_names.get(id.set as usize).is_some_and(|n| *n == m.set) {
+                out.insert(id, m.clone());
+            }
+        }
+        out
     }
 
     pub fn find(&self, name: &str) -> Option<ClipId> {

@@ -1520,6 +1520,13 @@ fn spawn_level(
         // one clip library per distinct (skeleton, anim sets)
         let sets: Vec<std::sync::Arc<dhcook::format::AnimFile>> =
             t.anim_sets.iter().filter_map(|&i| level.anims.get(i as usize).cloned().flatten()).collect();
+        // (their names, in the same order: what the clips' marks are kept by)
+        let set_names: Vec<String> = t
+            .anim_sets
+            .iter()
+            .filter(|&&i| level.anims.get(i as usize).is_some_and(|a| a.is_some()))
+            .map(|&i| scene.anim_sets.get(i as usize).map(|a| a.name.clone()).unwrap_or_default())
+            .collect();
         // (`DH_ANIM_CHECK`: how much of each set binds to the skeleton)
         if std::env::var("DH_ANIM_CHECK").is_ok() {
             let names: std::collections::HashSet<String> = skel.bones.iter().map(|b| b.name.to_ascii_lowercase()).collect();
@@ -1536,7 +1543,7 @@ fn spawn_level(
             Some(
                 anim_libs
                     .entry(key)
-                    .or_insert_with(|| std::sync::Arc::new(crate::anim::CharAnims::new(skel, sets)))
+                    .or_insert_with(|| std::sync::Arc::new(crate::anim::CharAnims::new(skel, sets).with_names(set_names)))
                     .clone(),
             )
         };

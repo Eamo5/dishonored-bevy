@@ -1,6 +1,6 @@
 //! Multi-package object resolution (imports -> exports across packages).
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

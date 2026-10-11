@@ -310,7 +310,7 @@ mod charm_tests {
         let player = app.world_mut().spawn((Player {
             velocity: Vec3::Y, yaw: 0.0, pitch: 0.0, crouched: true, sprinting: false, grounded: true, lean: 0.0, noclip: false,
             eye_height: 0.6, locked: false, air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0, fall_speed: 0.0,
-            power_jump: 0.0, pull: Vec3::ZERO,
+            power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0,
         }, Collider::capsule_y(STAND_HALF, RADIUS), KinematicCharacterController::default())).id();
         let arms = app.world_mut().spawn((crate::arms::ArmsRoot, Visibility::Inherited)).id();
         app.update();

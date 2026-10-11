@@ -113,6 +113,10 @@ impl Movies {
     pub fn playing(&self) -> Option<&str> {
         self.playing.as_ref().map(|p| p.name.as_str())
     }
+    /// A full-screen movie with its own soundtrack is on (the music hushed under it).
+    pub fn soundtrack(&self) -> bool {
+        self.playing.as_ref().is_some_and(|p| p.layer == MovieLayer::Fullscreen && p.audio.is_some())
+    }
 }
 
 fn decode(file: Arc<MovieFile>, i: usize) -> Option<Vec<u8>> {

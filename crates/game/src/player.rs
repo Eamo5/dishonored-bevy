@@ -64,6 +64,8 @@ pub struct Player {
     pub mantle: Option<(Vec3, Vec3, f32)>,
     pub step_timer: f32,
     pub fall_speed: f32,
+    /// the highest point since leaving the ground (a fall's height)
+    pub air_peak: f32,
     /// Agility: seconds the held jump keeps pushing up
     pub power_jump: f32,
     /// dragged along (an assassin's Attract Spell), m/s
@@ -136,7 +138,7 @@ pub fn spawn_player(mut commands: Commands, level: Option<Res<LevelInfo>>, confi
                 spawn: pos,
                 mantle: None,
                 step_timer: 0.0,
-                fall_speed: 0.0,
+                fall_speed: 0.0, air_peak: 0.0,
                 power_jump: 0.0,
                 pull: Vec3::ZERO,
             },
@@ -218,7 +220,7 @@ mod look_tests {
         let player = app.world_mut().spawn((Player {
             velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
             grounded: false, lean: 0.0, noclip: false, eye_height: STAND_EYE, locked: false,
-            air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0, fall_speed: 0.0,
+            air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0, fall_speed: 0.0, air_peak: 0.0,
             power_jump: 0.0, pull: Vec3::ZERO,
         }, Transform::IDENTITY)).id();
         for mode in 0..3 {
@@ -447,7 +449,7 @@ fn player_move(
             }
             // Agility raises the speeds a fall can be taken at
             let hurt = 13.0 * attrs.fall_damage;
-            if v > hurt {
+            if v > hurt && !stats.fall_damage_off {
                 let dmg = ((v - hurt) * 9.0).min(150.0);
                 stats.take_damage(dmg);
                 stats.damage_flash = 1.0;
@@ -552,6 +554,9 @@ fn player_move(
     kcc.translation = Some((p.velocity + p.pull) * dt);
     if !p.grounded {
         p.fall_speed = (-p.velocity.y).max(0.0);
+        p.air_peak = p.air_peak.max(t.translation.y);
+    } else {
+        p.air_peak = t.translation.y;
     }
 
     // footsteps the AI can hear

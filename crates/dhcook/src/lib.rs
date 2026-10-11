@@ -188,6 +188,7 @@ struct Cooker<'a> {
     lm_pair_ids: HashMap<String, u32>,
     sun_guids: Vec<[u32; 4]>,
     npc_type_ids: HashMap<String, Option<u32>>,
+    ragdoll_ids: HashMap<String, Option<u32>>,
     skeleton_ids: HashMap<String, u32>,
     anim_set_ids: HashMap<String, Option<u32>>,
     bark_ids: HashMap<String, Option<u32>>,
@@ -310,6 +311,7 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
         lm_pair_ids: HashMap::new(),
         sun_guids: Vec::new(),
         npc_type_ids: HashMap::new(),
+        ragdoll_ids: HashMap::new(),
         skeleton_ids: HashMap::new(),
         anim_set_ids: HashMap::new(),
         bark_ids: HashMap::new(),
@@ -491,6 +493,7 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
     c.npc_set_materials();
     c.movie_lengths();
     c.factory_pickups();
+    c.factory_tanks();
     for (r, ops) in c.scene.levels.iter_mut().zip(c.scene.kismet.level_ops.iter()) {
         r.ops = *ops;
     }
@@ -726,6 +729,43 @@ fn is_actor_like(cls: &str) -> bool {
 /// it came from: object references and array offsets are relative to that package.
 struct Chain(Vec<(Arc<upk::Package>, Arc<Props>)>);
 
+/// An object's properties with the plain values its archetypes give it besides (down to its
+/// class's defaults): its own first. Arrays and structs stay its own, since their bytes are
+/// their package's.
+fn merged_props(assets: &Assets, obj: &Obj) -> Option<upk::props::Props> {
+    let mut out = obj.props().ok()?;
+    let mut cur = Some(obj.clone());
+    for _ in 0..12 {
+        let Some(o) = cur.take() else { break };
+        if o.idx <= 0 || o.idx as usize > o.pkg.exports.len() {
+            break;
+        }
+        let arch = o.pkg.exports[o.idx as usize - 1].archetype;
+        // (none: its class's defaults, the game's script classes')
+        let a = if arch != 0 {
+            assets.resolve(&o.pkg, arch)
+        } else if !o.name().starts_with("Default__") {
+            let class = o.class();
+            ["DishonoredGame", "Engine", "GameFramework", "Core"].iter().find_map(|p| assets.find(&format!("{p}.Default__{class}")))
+        } else {
+            None
+        };
+        let Some(a) = a else { break };
+        if let Ok(p) = a.props() {
+            for q in p.0 {
+                if matches!(q.value, Value::Array { .. } | Value::Struct(..) | Value::Raw { .. }) {
+                    continue;
+                }
+                if !out.0.iter().any(|x| x.name.eq_ignore_ascii_case(&q.name) && x.index == q.index) {
+                    out.0.push(q);
+                }
+            }
+        }
+        cur = Some(a);
+    }
+    Some(out)
+}
+
 impl Chain {
     fn get(&self, name: &str) -> Option<&Value> {
         self.0.iter().find_map(|(_, p)| p.get(name))
@@ -817,6 +857,8 @@ impl<'a> Cooker<'a> {
     }
 
     /// A challenge's scoring rule set (`DisDLC05Tweaks_ChallengeScoringRuleset`) by its path.
+    /// (Its rules' and modifiers' settings with their classes' defaults: Power Combo's gain,
+    /// Payback's second.)
     fn ruleset(&mut self, name: &str) -> Option<RulesetDef> {
         let o = self.assets.find(name)?;
         let p = o.props().ok()?;
@@ -826,7 +868,7 @@ impl<'a> Cooker<'a> {
             let mut out = Vec::new();
             for s in upk::props::parse_struct_array(&pkg, off, sz, cnt).unwrap_or_default() {
                 let Some(ro) = s.object("m_Rule").filter(|r| *r != 0).and_then(|r| assets.resolve(&pkg, r)) else { continue };
-                let Ok(rp) = ro.props() else { continue };
+                let Some(rp) = merged_props(assets, &ro) else { continue };
                 let mut gains = Vec::new();
                 if let Some((gc, goff, gsz)) = rp.array("m_NpcBaseGains") {
                     for g in upk::props::parse_struct_array(&ro.pkg, goff, gsz, gc).unwrap_or_default() {
@@ -834,19 +876,66 @@ impl<'a> Cooker<'a> {
                         gains.push((group, g.int("m_iBaseGain").unwrap_or(0), g.name("m_EntryName").unwrap_or_default().to_string()));
                     }
                 }
-                let mut params = std::collections::BTreeMap::new();
-                for q in &rp.0 {
-                    match &q.value {
-                        Value::Float(f) => {
-                            params.insert(q.name.clone(), *f);
+                // (its numbers and its enums)
+                let settings = |props: &upk::props::Props, skip: &[&str]| {
+                    let mut params = std::collections::BTreeMap::new();
+                    let mut kinds = std::collections::BTreeMap::new();
+                    for q in &props.0 {
+                        if skip.contains(&q.name.as_str()) {
+                            continue;
                         }
-                        Value::Int(i) if q.name != "m_iBaseGain" => {
-                            params.insert(q.name.clone(), *i as f32);
+                        // (a static array's elements other than the first: the lists')
+                        if q.index > 0 {
+                            continue;
                         }
-                        Value::Bool(b) => {
-                            params.insert(q.name.clone(), *b as u8 as f32);
+                        match &q.value {
+                            Value::Float(f) => {
+                                params.insert(q.name.clone(), *f);
+                            }
+                            Value::Int(i) => {
+                                params.insert(q.name.clone(), *i as f32);
+                            }
+                            Value::Bool(b) => {
+                                params.insert(q.name.clone(), *b as u8 as f32);
+                            }
+                            Value::Enum(e) => {
+                                kinds.insert(q.name.clone(), e.clone());
+                            }
+                            _ => {}
                         }
-                        _ => {}
+                    }
+                    (params, kinds)
+                };
+                let (params, kinds) = settings(&rp, &["m_iBaseGain"]);
+                let mut lists: std::collections::BTreeMap<String, Vec<Option<f32>>> = std::collections::BTreeMap::new();
+                let indexed: std::collections::BTreeSet<&str> = rp.0.iter().filter(|q| q.index > 0).map(|q| q.name.as_str()).collect();
+                for q in rp.0.iter().filter(|q| indexed.contains(q.name.as_str())) {
+                    let v = match &q.value {
+                        Value::Float(f) => *f,
+                        Value::Int(i) => *i as f32,
+                        _ => continue,
+                    };
+                    let l = lists.entry(q.name.clone()).or_default();
+                    if l.len() <= q.index as usize {
+                        l.resize(q.index as usize + 1, None);
+                    }
+                    l[q.index as usize] = Some(v);
+                }
+                let mut modifiers = Vec::new();
+                if let Some((mc, moff, msz)) = rp.array("m_Modifiers") {
+                    for m in upk::props::parse_struct_array(&ro.pkg, moff, msz, mc).unwrap_or_default() {
+                        let Some(mo) = m.object("m_pModifier").filter(|r| *r != 0).and_then(|r| assets.resolve(&ro.pkg, r)) else { continue };
+                        let Some(mp) = merged_props(assets, &mo) else { continue };
+                        let (params, kinds) = settings(&mp, &["m_iExtraGain", "m_iNoveltyExtraGain"]);
+                        modifiers.push(ScoreModifierDef {
+                            name: m.name("m_ModifierName").unwrap_or_default().to_string(),
+                            class: mo.class(),
+                            entry: mp.name("m_EntryName").unwrap_or_default().to_string(),
+                            extra: mp.int("m_iExtraGain").unwrap_or(0),
+                            novelty: mp.int("m_iNoveltyExtraGain").unwrap_or(0),
+                            params,
+                            kinds,
+                        });
                     }
                 }
                 out.push(ScoreRuleDef {
@@ -856,6 +945,9 @@ impl<'a> Cooker<'a> {
                     base_gain: rp.int("m_iBaseGain").unwrap_or(0),
                     gains,
                     params,
+                    modifiers,
+                    kinds,
+                    lists,
                 });
             }
             out
@@ -2834,6 +2926,7 @@ impl<'a> Cooker<'a> {
         let sight = self.sight(tweak);
         let stats = Some(self.npc_stats(tweak));
         let attachments = self.npc_attachments(&ch);
+        let ragdoll = ch.obj(self.assets, "m_pPhysicsAsset").filter(|p| p.class() == "PhysicsAsset").and_then(|p| self.ragdoll(&p));
         self.scene.npc_types.push(NpcType {
             name,
             kind: kind.into(),
@@ -2854,8 +2947,105 @@ impl<'a> Cooker<'a> {
             sight,
             stats,
             attachments,
+            out_of_bend: ch.bool("m_bAlwaysOutOfBendTime").unwrap_or(false),
+            ragdoll,
         });
         Ok(Some(id))
+    }
+
+    /// A character's ragdoll (its physics asset), once per asset.
+    fn ragdoll(&mut self, pa: &Obj) -> Option<u32> {
+        let key = pa.key();
+        if let Some(v) = self.ragdoll_ids.get(&key) {
+            return *v;
+        }
+        let id = self.cook_ragdoll(pa).filter(|d| !d.bodies.is_empty()).map(|d| {
+            self.scene.ragdolls.push(d);
+            self.scene.ragdolls.len() as u32 - 1
+        });
+        self.ragdoll_ids.insert(key, id);
+        id
+    }
+
+    /// A physics asset's bodies (`BodySetup`: each's boxes, spheres, capsules and convex
+    /// pieces in its bone's frame) and joints (`ConstraintSetup`: the two bones' frames, the
+    /// swing and twist limits), in Bevy space.
+    fn cook_ragdoll(&mut self, pa: &Obj) -> Option<RagdollDef> {
+        let pp = pa.props().ok()?;
+        let mut def = RagdollDef { name: pa.path(), ..Default::default() };
+        // an element's frame (UE3 rows: X, Y, Z axes, origin; bone space, UE units)
+        let frame = |e: &Props| match e.get("TM") {
+            Some(Value::Matrix(m)) => Mat4::from_cols(
+                glam::Vec4::new(m[0], m[1], m[2], 0.0),
+                glam::Vec4::new(m[4], m[5], m[6], 0.0),
+                glam::Vec4::new(m[8], m[9], m[10], 0.0),
+                glam::Vec4::new(m[12], m[13], m[14], 1.0),
+            ),
+            _ => Mat4::IDENTITY,
+        };
+        let v3 = |v: glam::Vec4| Vec3::new(v.x, v.y, v.z);
+        for bi in object_array(&pa.pkg, &pp, "BodySetup") {
+            let Some(body) = self.assets.resolve(&pa.pkg, bi) else { continue };
+            let bch = self.chain(&body);
+            let Some(bone) = bch.name("BoneName").map(str::to_string) else { continue };
+            let Some((gpkg, Value::Struct(_, geom))) = bch.get_pkg("AggGeom") else { continue };
+            let (gpkg, geom) = (gpkg.clone(), Props(geom.clone()));
+            let elems = |name: &str| geom.array(name).and_then(|(c, off, sz)| parse_struct_array(&gpkg, off, sz, c).ok()).unwrap_or_default();
+            let mut shapes = Vec::new();
+            for e in elems("SphereElems") {
+                let m = frame(&e);
+                shapes.push(RagShape::Sphere { at: ue_point(v3(m.w_axis).to_array()), r: e.float("Radius").unwrap_or(0.0) * UNIT });
+            }
+            for e in elems("SphylElems") {
+                // (along its Z, `Length` between the ends' centres)
+                let m = frame(&e);
+                let c = Vec3::from(ue_point(v3(m.w_axis).to_array()));
+                let axis = Vec3::from(ue_dir(v3(m.z_axis).to_array())).normalize_or(Vec3::Y);
+                let half = e.float("Length").unwrap_or(0.0) * 0.5 * UNIT;
+                shapes.push(RagShape::Capsule { a: (c - axis * half).to_array(), b: (c + axis * half).to_array(), r: e.float("Radius").unwrap_or(0.0) * UNIT });
+            }
+            for e in elems("BoxElems") {
+                // (X, Y, Z: the full sizes; UE's Y and Z axes swap places in Bevy's)
+                let m = frame(&e);
+                let (x, y, z) = (Vec3::from(ue_dir(v3(m.x_axis).to_array())), Vec3::from(ue_dir(v3(m.y_axis).to_array())), Vec3::from(ue_dir(v3(m.z_axis).to_array())));
+                let rot = glam::Quat::from_mat3(&glam::Mat3::from_cols(x.normalize_or(Vec3::X), z.normalize_or(Vec3::Y), y.normalize_or(Vec3::Z))).normalize();
+                let half = [e.float("X").unwrap_or(0.0) * 0.5 * UNIT, e.float("Z").unwrap_or(0.0) * 0.5 * UNIT, e.float("Y").unwrap_or(0.0) * 0.5 * UNIT];
+                if half.iter().all(|h| *h > 0.0) {
+                    shapes.push(RagShape::Box { at: ue_point(v3(m.w_axis).to_array()), rot: rot.to_array(), half });
+                }
+            }
+            for e in elems("ConvexElems") {
+                if let Some((vc, voff, _)) = e.array("VertexData") {
+                    let mut r = Reader::at(&gpkg.data, voff);
+                    let points: Vec<[f32; 3]> = (0..vc).filter_map(|_| r.vec3().ok()).map(ue_point).collect();
+                    if points.len() >= 4 {
+                        shapes.push(RagShape::Hull { points });
+                    }
+                }
+            }
+            if !shapes.is_empty() {
+                def.bodies.push(RagBody { bone, shapes, mass_scale: bch.float("MassScale").unwrap_or(1.0) });
+            }
+        }
+        for ci in object_array(&pa.pkg, &pp, "ConstraintSetup") {
+            let Some(cs) = self.assets.resolve(&pa.pkg, ci) else { continue };
+            let cc = self.chain(&cs);
+            let (Some(child), Some(parent)) = (cc.name("ConstraintBone1").map(str::to_string), cc.name("ConstraintBone2").map(str::to_string)) else { continue };
+            // a bone's frame: its position (physics scale, 1/50 of UE's units), its X the
+            // primary axis, its Y the secondary (Bevy's frame right-handed: Z = X x Y)
+            let bone_frame = |n: &str| -> ([f32; 3], [f32; 4]) {
+                let p = Vec3::from(cc.vector(&format!("Pos{n}")).unwrap_or_default()) * 50.0;
+                let x = Vec3::from(ue_dir(cc.vector(&format!("PriAxis{n}")).unwrap_or([1.0, 0.0, 0.0]))).normalize_or(Vec3::X);
+                let y0 = Vec3::from(ue_dir(cc.vector(&format!("SecAxis{n}")).unwrap_or([0.0, 1.0, 0.0])));
+                let z = x.cross(y0).normalize_or(x.any_orthonormal_vector());
+                let y = z.cross(x);
+                (ue_point(p.to_array()), glam::Quat::from_mat3(&glam::Mat3::from_cols(x, y, z)).normalize().to_array())
+            };
+            let swing = cc.bool("bSwingLimited").unwrap_or(false).then(|| [cc.float("Swing1LimitAngle").unwrap_or(45.0), cc.float("Swing2LimitAngle").unwrap_or(45.0)]);
+            let twist = cc.bool("bTwistLimited").unwrap_or(false).then(|| cc.float("TwistLimitAngle").unwrap_or(45.0));
+            def.joints.push(RagJoint { child, parent, child_frame: bone_frame("1"), parent_frame: bone_frame("2"), swing, twist });
+        }
+        Some(def)
     }
 
     /// What a character carries on its sockets (`m_pAttachmentsTweaks`): each part's mesh (as a
@@ -2874,7 +3064,7 @@ impl<'a> Cooker<'a> {
             let prop = format!("att:{}", tw.path());
             if !self.scene.props.iter().any(|p| p.name == prop) {
                 let Ok(Some((mesh, materials))) = self.cook_mesh(&mesh_obj) else { continue };
-                self.scene.props.push(PropDef { name: prop.clone(), mesh, materials });
+                self.scene.props.push(PropDef { name: prop.clone(), mesh, materials, blade: None });
             }
             // (damage types: class names)
             let types = |c: &Chain, name: &str| -> Vec<String> {
@@ -3498,6 +3688,7 @@ impl<'a> Cooker<'a> {
             return *v;
         }
         self.npc_severs(set);
+        self.clip_marks(set);
         let file = format!("anims/{}.anim", sanitize(&key));
         let have = !self.opts.force && self.root.join(&file).exists();
         let r = if have { Ok(true) } else { cook_anim_set(set, &layout, &self.root.join(&file)) };
@@ -4676,6 +4867,8 @@ impl<'a> Cooker<'a> {
         self.pending_anims.push(PendingAnims::new(id as usize, sets, &bdata));
         self.scene.npc_types.push(NpcType {
             attachments: Vec::new(),
+            out_of_bend: false,
+            ragdoll: None,
             name: body.path(),
             kind: "device".into(),
             skeleton: Some(skeleton),
@@ -4941,6 +5134,70 @@ impl<'a> Cooker<'a> {
     }
 
     /// An NPC anim set's severing notifies (`DishonoredNotify_SeverLimb`) into the scene.
+    /// What a set's clips' notifies mark: the blade trailing (`DisNotify_Trails`), the blow's
+    /// zone (`DishonoredNotify_AttackZone`), when the attack may be broken off
+    /// (`DishonoredNotify_AttackInterruptable`).
+    fn clip_marks(&mut self, set: &Obj) {
+        let Ok(sp) = set.props() else { return };
+        let set_name = set.path();
+        if self.scene.clip_marks.iter().any(|m| m.set == set_name) {
+            return;
+        }
+        for q in object_array(&set.pkg, &sp, "Sequences") {
+            let Some(seq) = self.assets.resolve(&set.pkg, q) else { continue };
+            let Ok(qp) = seq.props() else { continue };
+            let clip = qp.name("SequenceName").unwrap_or_default().to_string();
+            let len = qp.float("SequenceLength").unwrap_or(0.0);
+            let mut m = ClipMarks { set: set_name.clone(), clip, ..Default::default() };
+            // (its timed notifies, and those it fires as it starts and as it ends:
+            // `m_NotifiesAtAnimStart`, `m_NotifiesAtAnimEnd`)
+            let mut all = Vec::new();
+            for (array, at) in [("Notifies", None), ("m_NotifiesAtAnimStart", Some(0.0)), ("m_NotifiesAtAnimEnd", Some(len))] {
+                let Some((c, o, sz)) = qp.array(array) else { continue };
+                all.extend(parse_struct_array(&seq.pkg, o, sz, c).unwrap_or_default().into_iter().map(|n| (n, at)));
+            }
+            for (n, at) in all {
+                let Some(no) = n.object("Notify").filter(|o| *o > 0) else { continue };
+                let (t, d) = (at.unwrap_or_else(|| n.float("Time").unwrap_or(0.0)), n.float("Duration").unwrap_or(0.0));
+                match seq.pkg.class_name(no).as_str() {
+                    "DisNotify_Trails" if d > 0.0 => m.trails.push((t, d)),
+                    "DishonoredNotify_AttackZone" if m.zone.is_none() => m.zone = Some((t, d)),
+                    "DishonoredNotify_AttackInterruptable" if m.interruptible == 0.0 => m.interruptible = t,
+                    "DisNotify_DropItem" => m.drops.push(t),
+                    "DishonoredNotify_Ragdoll" if m.ragdoll.is_none() => m.ragdoll = Some(t),
+                    "DishonoredNotify_FireDialogHook" => {
+                        // (`m_DialogHook`, `eDisDialogHookAnimNotify`: the dying's cry when unset)
+                        let h = upk::read_object(&seq.pkg, no).ok().and_then(|o| o.props.name("m_DialogHook").map(str::to_string)).unwrap_or_default();
+                        let hook = match h.trim_start_matches("eDisDialogHookAnimNotify_") {
+                            "" | "CombatDying" => "COMBAT_DYING",
+                            "CombatOuch_Small" => "COMBAT_OUCH_SMALL",
+                            "CombatOuch_Big" => "COMBAT_OUCH_BIG",
+                            "StealthKilled" => "COMBAT_BACKSTABBED",
+                            "CombatThreatVersus" => "COMBAT_THREAT_VERSUS",
+                            "PossessionConfused" => "COMBAT_CONFUSION",
+                            "TauntGesture" => "COMBAT_TAUNT_WITH_GESTURE",
+                            "WeeperMoan" => "WEEP_MOAN",
+                            _ => "",
+                        };
+                        if !hook.is_empty() {
+                            m.hooks.push((t, hook.to_string()));
+                        }
+                    }
+                    "DisNotify_FootPlacement" => {
+                        let on = upk::read_object(&seq.pkg, no).ok().and_then(|o| o.props.bool("m_bEnableFootPlacement")).unwrap_or(false);
+                        m.feet.push((t, on));
+                    }
+                    _ => {}
+                }
+            }
+            m.feet.sort_by(|a, b| a.0.total_cmp(&b.0));
+            m.hooks.sort_by(|a, b| a.0.total_cmp(&b.0));
+            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() {
+                self.scene.clip_marks.push(m);
+            }
+        }
+    }
+
     fn npc_severs(&mut self, set: &Obj) {
         let Ok(sp) = set.props() else { return };
         for q in object_array(&set.pkg, &sp, "Sequences") {
@@ -5092,7 +5349,16 @@ impl<'a> Cooker<'a> {
         let ch = self.chain(actor);
         let Some(tweak) = ch.obj(self.assets, "m_pMovableTweaks").or_else(|| ch.obj(self.assets, "m_pBreakableTweaks")).or_else(|| ch.obj(self.assets, "m_pWhaleOilTweaks")) else { return };
         let tank = (actor.class() == "DisWhaleOilBattery").then(|| actor.name().to_string());
-        let tc = self.chain(&tweak);
+        let fixed_default = actor.class() == "DishonoredBreakableNavBlock";
+        let m = self.movable_of(&tweak, instance, tank, fixed_default);
+        self.scene.movables.push(m);
+    }
+
+    /// A movable of its tweak (`DisTweaks_Movable`, `_StaticBreakable`, `_WhaleOilBattery`) on
+    /// an instance: a whale oil tank's when named one.
+    fn movable_of(&mut self, tweak: &Obj, instance: u32, tank: Option<String>, fixed_default: bool) -> Movable {
+        let is_tank = tank.is_some();
+        let tc = self.chain(tweak);
         let obj_name = |c: &Chain, n: &str| c.obj_path(n).map(|p| p.rsplit('.').next().unwrap_or(&p).to_string()).unwrap_or_default();
         let (weight, damage) = match tc.get("m_MovableParams") {
             Some(Value::Struct(_, s)) => {
@@ -5116,14 +5382,14 @@ impl<'a> Cooker<'a> {
         let breaks = self.last_break_step(&tc, "m_Steps");
         let striker = tc.obj_path("m_pContactTypeOverride").map(|p| p.rsplit('.').next().unwrap_or(&p).to_string()).unwrap_or_else(|| "DisContactType_Env_Wood".into());
         let impacts = self.impacts(&striker);
-        self.scene.movables.push(Movable {
+        Movable {
             impacts,
             instance,
             tank,
             name,
             // (a whale oil tank is always Corvo's to carry)
-            interactable: tc.bool("m_bInteractable").unwrap_or(false) || actor.class() == "DisWhaleOilBattery",
-            fixed: tc.bool("m_bFixed").unwrap_or(actor.class() == "DishonoredBreakableNavBlock"),
+            interactable: tc.bool("m_bInteractable").unwrap_or(false) || is_tank,
+            fixed: tc.bool("m_bFixed").unwrap_or(fixed_default),
             weight,
             damage,
             health: tc.float("m_Health").unwrap_or(0.0),
@@ -5134,11 +5400,104 @@ impl<'a> Cooker<'a> {
             surface,
             breaks,
             joints: Vec::new(),
-            charges: (actor.class() == "DisWhaleOilBattery").then(|| {
+            charges: is_tank.then(|| {
                 let f = |k: &str, d: f32| tc.float(k).unwrap_or(d);
                 [f("m_InitialNumberOfCharges", 50.0), f("m_PawnChargeCost", 4.0), f("m_AmbientAnimalChargeCost", 1.0), f("m_WatchtowerChargeCost", 1.0), f("m_fExplosionChainTimer", 0.33)]
             }),
-        });
+            pool: None,
+        }
+    }
+
+    /// Dunwall City Trials' falling whale oil tanks (Oil Drop): the scripts' actor factories
+    /// that make `DisDLC05WhaleOilBattery` of a tank tweak draw from a pool of each tweak,
+    /// hidden instances of its mesh in its colour (`m_MaterialOverrides`), each a movable of
+    /// the tweak's and an actor of the scripts' (the damage events they attach go to it); the
+    /// op lists its pool's actors (`factory_pool`, `factory_pool_actors`).
+    fn factory_tanks(&mut self) {
+        const POOL: usize = 8;
+        let mut pools: HashMap<String, u32> = HashMap::new();
+        for i in 0..self.scene.kismet.ops.len() {
+            if !matches!(self.scene.kismet.ops[i].class.as_str(), "SeqAct_ActorFactory" | "SeqAct_ActorFactoryEx") {
+                continue;
+            }
+            let Some(KVal::Str(path)) = self.scene.kismet.ops[i].props.get("Factory").cloned() else { continue };
+            let Some(fac) = self.assets.find(&path).filter(|f| f.class() == "DisActorFactoryTweakObj") else { continue };
+            let Some(tw) = self.chain(&fac).obj(self.assets, "m_pTweakObject") else { continue };
+            if !tw.class().contains("WhaleOilBattery") {
+                continue;
+            }
+            let key = tw.path();
+            let pool = match pools.get(&key) {
+                Some(&p) => p,
+                None => {
+                    let Some(made) = self.tank_pool(&tw, POOL) else { continue };
+                    let p = self.scene.tank_pools.len() as u32;
+                    self.scene.tank_pools.push(made);
+                    pools.insert(key, p);
+                    p
+                }
+            };
+            let actors = self.scene.tank_pools[pool as usize].actors.iter().map(|a| KVal::Int(*a as i32)).collect();
+            let props = &mut self.scene.kismet.ops[i].props;
+            props.insert("factory_pool".into(), KVal::Int(pool as i32));
+            props.insert("factory_pool_actors".into(), KVal::List(actors));
+        }
+        if !self.scene.tank_pools.is_empty() {
+            log::info!("{} pools of factory tanks", self.scene.tank_pools.len());
+        }
+    }
+
+    /// A tank tweak's pool: its mesh, coloured, `n` times over.
+    fn tank_pool(&mut self, tw: &Obj, n: usize) -> Option<TankPool> {
+        let tc = self.chain(tw);
+        let mesh_obj = tc.obj(self.assets, "m_pStaticMesh")?;
+        let (mesh, mut materials) = self.cook_mesh(&mesh_obj).ok()??;
+        // (its colour: the materials it puts on the mesh's, slot by slot)
+        if let Some((pkg, Value::Array { count, offset, .. })) = tc.get_pkg("m_MaterialOverrides") {
+            let (pkg, count, offset) = (pkg.clone(), *count, *offset);
+            for k in 0..count.min(materials.len()) {
+                let at = offset + 4 * k;
+                let Some(b) = pkg.data.get(at..at + 4) else { break };
+                let r = i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                if let Some(m) = (r != 0).then(|| self.assets.resolve(&pkg, r)).flatten() {
+                    materials[k] = self.material(&m);
+                }
+            }
+        }
+        let short = tw.path().rsplit('.').next().unwrap_or_default().to_string();
+        let kind = short.trim_start_matches("WhaleOilBattery_").trim_end_matches("_twk").to_string();
+        let pool_index = self.scene.tank_pools.len() as u32;
+        let mut pool = TankPool { tweak: short.clone(), kind, movables: Vec::new(), actors: Vec::new() };
+        for k in 0..n {
+            let name = format!("{short}_{k}");
+            let instance = self.scene.instances.len() as u32;
+            self.scene.instances.push(Instance {
+                mesh,
+                materials: materials.clone(),
+                transform: Mat4::IDENTITY.to_cols_array(),
+                visible: false,
+                collide: false,
+                cast_shadow: true,
+                dynamic: true,
+                actor: name.clone(),
+                class: "DisFactoryItem".into(),
+                lightmap: None,
+                sun: 2,
+                sun_shadow: None,
+                light_shadows: Vec::new(),
+                irrelevant_lights: Vec::new(),
+                reflect: 0,
+            });
+            let mut m = self.movable_of(tw, instance, Some(name.clone()), false);
+            m.pool = Some(pool_index);
+            // (shot down, never carried)
+            m.interactable = false;
+            pool.movables.push(self.scene.movables.len() as u32);
+            self.scene.movables.push(m);
+            pool.actors.push(self.scene.kismet.actors.len() as u32);
+            self.scene.kismet.actors.push(KActor { name, class: "DisDLC05WhaleOilBattery".into(), instances: vec![instance], ..Default::default() });
+        }
+        Some(pool)
     }
 
     /// A `DisFogComponent` as the fog pass uses it.
@@ -5563,6 +5922,8 @@ impl<'a> Cooker<'a> {
             ("grenade", "Vfx_Weapon.Effects.Grenade.ps_grenade"),
             ("grenade_water", "Vfx_Weapon.Effects.Grenade.Ps_Grenade_Surfwater_Expl"),
             ("grenade_trail", "Vfx_Weapon.Effects.Grenade.Ps_Grenade_Trail"),
+            // (a sword's swing: `DisMeleeExtentTweak.m_ParticleSystemComponent`, an AnimTrail)
+            ("sword_trail", "Vfx_Weapon.Effects.Trails.Sword_Trail"),
             ("explosive_bullet", "Vfx_Weapon.Effects.pistol.ps_pistol_explosive"),
             ("pistol_muzzle", "Vfx_Weapon.Effects.pistol.Ps_PlayerPistol_StdMuzzle_01"),
             ("npc_pistol_muzzle", "Vfx_Weapon.Effects.Ps_PistolMuzzle"),
@@ -5710,7 +6071,9 @@ impl<'a> Cooker<'a> {
             let materials = d.sections.iter().map(|s| *mats.get(s.material as usize).unwrap_or(&0)).collect();
             let mesh = self.scene.meshes.len() as u32;
             self.scene.meshes.push(MeshRef { name: obj.path(), file, min, max, simple: Vec::new(), ..Default::default() });
-            self.scene.props.push(PropDef { name: name.to_string(), mesh, materials });
+            // (a sword: its blade's ends, what its swings' trails span)
+            let blade = keyhole_socket(&obj, "BladeExtent_BL").zip(keyhole_socket(&obj, "BladeExtent_UR")).map(|(a, b)| [a.to_array(), b.to_array()]);
+            self.scene.props.push(PropDef { name: name.to_string(), mesh, materials, blade });
         }
         // a blade in flesh: its blood (the contact system's sword against a body)
         self.scene.blade_blood = self.blade_blood();
@@ -5845,6 +6208,8 @@ impl<'a> Cooker<'a> {
                             }
                             self.scene.npc_types.push(NpcType {
                             attachments: Vec::new(),
+                            out_of_bend: false,
+                            ragdoll: None,
                             name: "player_arms".into(),
                             kind: "player".into(),
                             skeleton: Some(skeleton),
@@ -5902,6 +6267,8 @@ impl<'a> Cooker<'a> {
                             self.scene.rat_type = Some(self.scene.npc_types.len() as u32);
                             self.scene.npc_types.push(NpcType {
                                 attachments: Vec::new(),
+                                out_of_bend: false,
+                                ragdoll: None,
                                 name: "rat".into(),
                                 kind: "rat".into(),
                                 skeleton: Some(skeleton),
@@ -6908,6 +7275,19 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         sources.push((format!("UI_ResBg_{c}_SF"), "dlc05", ""));
         sources.push((format!("UI_Brf_{c}_SF"), "dlc05", ""));
     }
+    // (and the mystery man's possible targets, in its script level: `DLC05_H_MMTarget`)
+    sources.push(("L_DLC05_MystMan_Script".into(), "dlc05", "UI_MysteryManTargets_DLC05."));
+    // ... and its gallery: the small pictures, and the large, a package each
+    // (`UI_G<mode>_<name>_L_SF`)
+    sources.push(("UI_GalleryImg_Small_NoSF".into(), "dlc05gallery", ""));
+    for d in crate::resolver::dlc_dirs(cooked) {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        let mut large: Vec<String> = rd.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_str().map(str::to_string)).filter(|n| (n.starts_with("UI_GE_") || n.starts_with("UI_GN_")) && n.ends_with("_L_SF.upk")).map(|n| n.trim_end_matches(".upk").to_string()).collect();
+        large.sort();
+        for n in large {
+            sources.push((n, "dlc05gallery", ""));
+        }
+    }
     for (pkg_name, dir_name, prefix) in sources {
         // (the game's packages, or a DLC's, with its texture caches)
         let Some(pdir) = std::iter::once(cooked.to_path_buf()).chain(crate::resolver::dlc_dirs(cooked)).find(|d| d.join(format!("{pkg_name}.upk")).exists()) else { continue };
@@ -6924,7 +7304,9 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
                 continue;
             }
             let stem = path.rsplit('.').next().unwrap_or(&path).to_string();
-            let Ok(t) = upk::texture::read_texture2d(&pkg, idx, &tfc, 4096) else { continue };
+            // (the gallery's large pieces, up to 4096 tall, seen no larger than the screen)
+            let cap = if dir_name == "dlc05gallery" { 2048 } else { 4096 };
+            let Ok(t) = upk::texture::read_texture2d(&pkg, idx, &tfc, cap) else { continue };
             let m = &t.mips[0];
             let Ok(rgba) = decode_rgba(t.format, m.width, m.height, &m.data) else { continue };
             image::save_buffer(dir.join(format!("{stem}.png")), &rgba, m.width, m.height, image::ExtendedColorType::Rgba8)?;

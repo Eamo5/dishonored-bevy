@@ -334,7 +334,14 @@ fullscreen display, vertical sync and the crosshair.
   Corvo's sword deals `Twk_Inv_SwordCorvo`'s 10; guards parry with `m_ParryChanceOfStarting`,
   then `..OfChaining` up to `m_ParryChainsAllowed` in a row, a parry breaking their guard at
   `m_BlockBreakRate_Min`..`Max`; a character off balance from Corvo's parry dies to the
-  counter (a fatality). His pistol's bullet (`Twk_Proj_BulletUpgraded`) deals 20, ×1.5
+  counter (a fatality). A character's blow keeps its clip's timing: the clip plays as
+  authored, the blow lands early in its attack zone (`DishonoredNotify_AttackZone`, its
+  `m_fDamageZoneMaxTime` 0.12 s) and the attack ends once it may be broken off
+  (`DishonoredNotify_AttackInterruptable`). A City Watch guard's short blow lands about 0.55 s
+  in, his long one about 0.85 s; a fast one about 0.2 s. Moves without a zone keep their fitted
+  timings. A character going down lets its sword fall at its clip's `DisNotify_DropItem` (the
+  deaths', the assassinations', the finishers'), else soon after falling. The sword becomes a
+  loose body that lands beside it. His pistol's bullet (`Twk_Proj_BulletUpgraded`) deals 20, ×1.5
   within 9 m, and kills with a head shot (`m_bKillOnHeadshot`); a crossbow bolt deals the
   crossbow's 20, doubled on someone unaware (`m_fDamageMultiplier_Stealth`). Characters'
   shots hit at their `m_MaxAccuracy` close, falling to `m_MinAccuracy` at the end of their
@@ -394,7 +401,13 @@ fullscreen display, vertical sync and the crosshair.
   way the original's ActionScript drives them (`gotoAndPlay("fillIn")` on `right_mc.mc1`).
   Bitmaps are drawn with their Flash colour transforms (multiply, then add, in the movie's
   gamma space; `flash.wgsl`), clipped to their shapes (repeating fills tile) and cut by the
-  masks over them (rectangular, where square to them: bars and reveals).
+  masks over them (rectangular: cut on the CPU where square to them, else in the shader as
+  drawn, turned or mirrored). Masks set from code (`setMask`, `FlashClip::set_mask`) cut
+  bitmaps the same way, and text fields to the mask's rectangle. A field turned in its mask
+  (the trials' welcome scroll) is laid out on a picture of its own by a camera of its own, then
+  drawn as a bitmap is, turned with its clip and cut by the mask in the shader: Bevy mangles
+  the letters of a turned text node it clips. The camera stops once it has drawn the picture,
+  and lays it out again when the text changes.
 - **Awareness markers** (`awareness.rs`, the HUD movie's `awarenessIndicator` and the HUD
   tweak's `m_AwarenessMarkerSettings`): two mirrored fans of three lightning bolts around the
   head of whoever notices Corvo, played from the movie's own timeline: a bolt lights for each
@@ -605,6 +618,39 @@ fullscreen display, vertical sync and the crosshair.
   still for his clip. The targets and nobles die their own dramatic deaths instead
   (`Sword_DramaticDeath_Front_Campbell_Master` / `DramaticDeath_Front_Campbell_Slave`, Havelock,
   Martin, the Pendletons, the Lord Regent, Daud; `..._Back_A` from behind).
+- **Swing trails** (`trails.rs`): the swings' clips mark when a blade trails (`DisNotify_Trails`:
+  from its time, so long, on the small, fast and dodging attacks of Corvo and of the
+  characters). The swords' melee extents give the trail (`Sword_Trail`, an AnimTrail emitter:
+  the Tracer material, additive, its lifetime and colour and alpha over life). It is drawn as a
+  strip between the blade's ends (each sword's `BladeExtent_BL` / `_UR` sockets) where they swept,
+  each sample fading over that life: in the first-person view for Corvo, on his own clock; in
+  the world for the characters, on theirs. `DH_TRAIL_LOG`; `DH_TRAIL_SHOT=<dir>` saves a
+  screenshot mid-swing (tests).
+- **Ragdolls** (`ragdoll.rs`): each pawn's physics asset (`m_pPhysicsAsset`: its
+  `RB_BodySetup` boxes, spheres, capsules and convex pieces on their bones; its
+  `RB_ConstraintSetup` ball joints, their frames in each bone (positions at physics scale, a
+  fiftieth of a unit) and swing / twist limits) is cooked into `scene.ragdolls`. A death or a
+  knock-out goes limp where its clip says (`DishonoredNotify_Ragdoll`, near the end of the deaths,
+  the assassinations, the wind blast's stagger; else at the clip's end), the bodies keeping the
+  clip's motion. The blown away go limp at once (Wind Blast's push, a blast away from its centre),
+  and so do bodies Corvo drops or throws from his shoulder (brought back to this side of a wall he
+  stands against). The bones follow the bodies, and the character's own place follows its hips.
+  Once still the bodies are put away and the bones kept where they lay, in saves too. Blasts and
+  Wind Blast push bodies already lying there. Picking one up gives it back to its clips; the
+  unconscious who land in water drown. The bodies meet the world and loose props, not Corvo or
+  the living. Pre-placed corpses drape over what is under them. `DH_RAGDOLL_LOG`.
+- **Feet on the ground** (`feet.rs`): characters within 30 m standing or walking on stairs and
+  slopes put each foot on what is under it (a ray down from the foot, from
+  `m_fMaxFootIKCastHeight` above). Their hips drop for the lower foot, each leg bends to its foot
+  (thigh and shin in the knee's plane) and the foot turns to the slope, all eased. The clips
+  say when (`DisNotify_FootPlacement`, including those fired as a clip starts and ends: a kick
+  turns it off as it starts and on as it ends, and that holds into the next clip).
+  `DH_FEET_LOG`; `DH_NO_FEET` turns it off for comparison.
+- **Lines cued by the clips** (`barks.rs`): the clips' `DishonoredNotify_FireDialogHook`s
+  (`eDisDialogHookAnimNotify`: the dying's cry, the stealth kill's gasp, a taunt with its
+  gesture, the confusion after possession, a weeper's moan, the hurt) speak the voice's matching
+  hook as the clip reaches them. A death waits for its clip's cry (else cries shortly after),
+  once.
 - **Finishers** (`DisTweaks_Fatality`): a sword blow that kills, the counter after a parry and
   the Blood Thirst strike play the original paired finishers (`Sword_Ready_Fatality_<Front |
   FastFront | SmallFront_<Side>>_*_Master` with `Generic_Fatality_..._Slave`, a target's
@@ -968,22 +1014,79 @@ fullscreen display, vertical sync and the crosshair.
   light.
 - **Dunwall City Trials (DLC05)**, cooked from the install's `DLC\PCConsole\DLC05` (the cook
   indexes the DLC's packages after the game's, reads their texture caches, and its banks join
-  the audio cook): the main menu's DOWNLOADABLE CONTENT lists the ten challenges
-  (`DisDLC05GameInfo.m_Challenges`: names, words, medal scores, maps) with the stars of their
-  best scores, to start normal or expert. A run (`challenge.rs`): once the level is up the
-  game plays its opening (the matinee nothing in the scripts starts) and raises
-  `DisSeqEvent_DLC05_Challenge` "Started"; the scripts' DLC05 actions run it - challenge events
-  (`ECE_Challenge_End` / `_Failed` / `_Backup` / `_Restore` / `_Pause` / `_Resume`), timers
-  that write their time, the HUD's counters (kills, enemies left...), wave titles, countdowns
-  and phase results, scoring rule sets (`DisDLC05Tweaks_ChallengeScoringRuleset`, cooked per
-  map: a kill scores its victim's gain by story group, custom rules theirs), expert mode,
-  resurrection, healing, infinite ammo, the clockwork dolls, the DLC's achievements, levels
-  streamed, waves' slowed entrances (`DisSeqAct_DLC05_NpcWave`). A death goes to the scripts
-  (`DisSeqEvent_DLC05_PlayerDeath`) rather than the game over menu; at the end the results:
-  the score against the medals, the best kept in `dlc05.json` (Enter retries, Escape leaves).
+  the audio cook).
+  - *Menus*: the main menu's DOWNLOADABLE CONTENT opens the trials' own movie
+    (`UI_ChallengesMenu_DLC05`): the home page, the normal and expert lists (tabs, the grid of
+    challenge pictures, their details and medals; expert unlocked at two stars), the briefing
+    (`UI_Brief_DLC05`: objectives, scoring, specials with their pictures), the pause menu's
+    retry / end with confirmations, and the results (`UI_Results_DLC05`: what the run unlocked
+    first - an artwork, a challenge's expert mode - then the score counted up against the
+    medals, the rule set's statistics, a new record, then retry / next / exit). The gallery
+    (`CM_Gallery_Screen`, `DisDLC05GameInfo.m_Gallery`): 44 pieces of artwork, each opened by
+    stars won in a challenge's normal or expert mode (or all of a mode's), in a grid of their
+    pictures (the new marked, the locked padlocked with the way to them), and seen large
+    (`UI_G<mode>_<name>_L`, the arrows stepping through the unlocked); seen ones kept in
+    `dlc05.json`. The home page has the original's five entries (challenges, leaderboards,
+    gallery, credits, back). The first visit opens the welcome (`CM_WelcomeDisclaimer_Screen`:
+    the challenge kinds, a medal, the stars and the gallery, scrolled within its mask by the
+    wheel or arrows; shown once). The credits play the trials' own movie (`CreditsDLC05`, the
+    music hushed under its soundtrack). Each challenge loads behind its own loading movie
+    (`LoadingDLC05<name>`).
+  - *Leaderboards*: the original's were online (Steam). These are local: the leaderboard
+    screen (`UI_Leaderboards_DLC05`: the challenge's picture and kind, the arrows to the others,
+    the normal and expert tabs, a page of nine rows) shows the profile's own best nine runs of
+    each challenge and mode (score, when), marking the last run. Runs that scored are kept in
+    `dlc05.json`. It opens from the home page, and from a run's results like the original
+    (`OnLeaderboardsClicked`): over the results, back to their menu.
+  - *A run* (`challenge.rs`): the briefing, then the game plays the opening (the matinee nothing
+    in the scripts starts) and raises `DisSeqEvent_DLC05_Challenge` "Started" when the scripts
+    first set the scoring (`DisSeqAct_DLC05_SetScoringRules`: Drop Attack's timer and Corvo's
+    release wait for its fly-through and countdown). The scripts' DLC05 actions run it:
+    challenge events (`ECE_Challenge_End` / `_Failed` / `_Backup` / `_Restore` / `_Pause` /
+    `_Resume` / `_BeginRound` / `_TimeMarker`), timers that write their time (the kill chain's
+    starting over at each kill), the HUD's counters, round titles, countdowns, round results that
+    hold the game until a way on is chosen, expert mode (its sublevels streamed from the first
+    frame), resurrection, healing, infinite ammo, Dark Vision, the clockwork dolls, the DLC's
+    achievements, the mystery man's target and clues, equipment unlocks, waves' slowed entrances.
+    A death goes to the scripts (`DisSeqEvent_DLC05_PlayerDeath`) rather than the game over menu.
+  - *HUD* (`dlc05hud.rs`): the elements of `UI_HUD_DLC05.HUD` as their classes run them (tweens,
+    delays, sounds of the HUD's theme, the movie's real time): score and multiplier, timer, kill /
+    tank / coin / egg / chance / gate counters, enemies left as skulls, round titles, the count to
+    a start, a countdown's hourglass, flair names, round results, a drop's height as Corvo
+    falls, a clockwork egg found, the kill chain's gauge and "Chain broken", the mystery man's
+    clues then his portrait, and what was unlocked (powers with their levels, upgrades, their
+    pictures).
+  - *Scoring* (`dlc05score.rs`, the rule sets cooked per map): kills by the victim's story
+    group with the modifiers' flair (assassination, drop kill, adrenaline, headshot, in flames,
+    dark kill, get back, severed limb, payback, perfect block, low blow, faction combo, power
+    combo, their first-use novelty), combo multipliers, round bonuses (expeditious, fencer,
+    ghost, invincible, sharpshooter, skinflint), bent-time massacres, chain kills, drops by
+    height, chrono and time bonuses, health and mana left, the thief's coins, eggs and stealth,
+    the mystery man's clues and target, accuracy, custom rules; vanishing once spotted
+    (`ScoringRule_Vanish`, from its settings: out of every enemy's sight for its 2 s with no
+    kill in the 2 s before, once a spotting, the first with its novelty); the best kept in
+    `dlc05.json`. The rules and modifiers are cooked with their classes' defaults where the
+    rule set leaves them unset (Power Combo's +200 within 3 s, Payback's second). Payback
+    counts a kill within its window of that enemy hurting Corvo. Power Combo, whose meaning
+    the data doesn't give, counts two different powers used within its window before the
+    kill. The combos follow their settings: Death Streak's gap between kills, Brutal Streak's
+    five by the blade, Multiple Shots' and Blast's windows for shot and blast kills, each
+    combo's multiplier gain.
+  - *Out of bent time*: characters whose pawn tweak sets `m_bAlwaysOutOfBendTime` go on
+    through bent or stopped time on Corvo's own clock. Back Alley Brawl's Daud fights through
+    the world stop his entrance sets off; the same goes for the campaign's Daud, the Outsider
+    and Tower Return's executioner. Characters frozen in a stopped world see nothing.
+  - *Oil Drop*: the factories' whale oil tanks (cooked as pools of hidden movables per tank
+    tweak, coloured by its material overrides) are thrown over Corvo from the tripods and burst
+    when shot. A shot reaches the damage events the scripts bind to each tank, so their
+    gifts are the scripts' own (`<kind>WoTShot`): gold bends time (the world at 0.3) for 2 s,
+    pink heals half of Corvo's health, green gives Dark Vision for 10 s, and purple's blast is
+    smoke. The scripts also play the combo and boiling-oil cues. Each tank scores, with combos
+    within a second, every twentieth, perfect waves and accuracy.
   Remote events pass their instigator on, spawners spawn what the scripts set on them
   (`m_pPawnTweaks`) and spawn again once their last is down - how the arena's waves come
-  (`DH_CHALLENGE_LOG`; test commands `killnpc`, `kop`).
+  (`DH_CHALLENGE_LOG`; test commands `killnpc`, `kop`, `aimtank`; `DH_PROP_LOG` for the tanks,
+  `DH_TEST_UNLOCK` for the results' unlocks).
 
 ## Parity audit status
 

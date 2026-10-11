@@ -9,6 +9,7 @@ impl Plugin for GameplayPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Noise>()
             .add_message::<NpcHit>()
+            .add_message::<PlayerTakedown>()
             .add_message::<Struck>()
             .add_message::<PlayerHit>()
             .add_message::<NpcStagger>()
@@ -81,6 +82,29 @@ pub enum HitKind {
     WallOfLight,
 }
 
+/// Corvo took someone down (killed, or knocked out): who, how, for the challenges' scoring
+/// rules (`DisDLC05ScoringRule_*`, their modifiers).
+#[derive(Message, Clone, Debug)]
+pub struct PlayerTakedown {
+    /// who (and of which faction)
+    pub npc: Entity,
+    pub faction: String,
+    pub pawn: String,
+    pub story_group: String,
+    pub kind: HitKind,
+    pub lethal: bool,
+    /// unaware of Corvo (not in combat)
+    pub unaware: bool,
+    /// a shot to the head
+    pub head: bool,
+    /// a drop assassination, from this high (m)
+    pub drop: Option<f32>,
+    /// while time was bent
+    pub bent: bool,
+    pub hostile: bool,
+    pub at: Vec3,
+}
+
 #[derive(Message, Clone, Copy)]
 pub struct NpcHit {
     pub npc: Entity,
@@ -148,6 +172,11 @@ pub struct NpcStagger {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct PlayerStats {
+    /// no falling damage (the challenges' scripts: `KismetMod_NoFallingDamage`)
+    #[serde(skip)]
+    pub fall_damage_off: bool,
+    /// the pistol's shots (a challenge's accuracy: Oil Drop's)
+    pub shots_fired: u32,
     pub health: f32,
     pub max_health: f32,
     pub mana: f32,
@@ -481,6 +510,8 @@ mod adrenaline_tests {
 impl Default for PlayerStats {
     fn default() -> Self {
         Self {
+            fall_damage_off: false,
+            shots_fired: 0,
             health: 100.0,
             max_health: 100.0,
             mana: 100.0,
@@ -603,6 +634,19 @@ impl TimeControl {
         let bent = if self.bend_remaining > 0.0 { self.world_dilation } else { 1.0 };
         let scripted = self.scripted.map(|s| s.0).unwrap_or(1.0);
         bent.min(scripted).min(self.finisher) * self.wheel
+    }
+    /// The time scale of what goes on through bent time (Corvo's own: a finisher's and the
+    /// wheel's slow motion only).
+    pub fn own_scale(&self) -> f32 {
+        self.finisher.min(1.0) * self.wheel
+    }
+    /// A character's time scale: the world's, or its own if bent time passes it by.
+    pub fn npc_scale(&self, out_of_bend: bool) -> f32 {
+        if out_of_bend {
+            self.own_scale()
+        } else {
+            self.world_scale()
+        }
     }
 }
 
@@ -749,5 +793,26 @@ fn tick_messages(time: Res<Time>, mut msgs: ResMut<HudMessages>) {
         if t.1 <= 0.0 {
             msgs.tutorial = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod time_tests {
+    use super::*;
+
+    #[test]
+    fn characters_out_of_bent_time_keep_corvos_time() {
+        // (the scripts stop the world, as the trials' Daud does for his duel)
+        let mut tc = TimeControl { scripted: Some((0.0, 0.0)), ..Default::default() };
+        assert_eq!(tc.world_scale(), 0.0);
+        assert_eq!(tc.npc_scale(false), 0.0);
+        assert_eq!(tc.npc_scale(true), 1.0);
+        // (Corvo's own slow motion still holds them: the wheel open)
+        tc.wheel = 0.1;
+        assert!((tc.npc_scale(true) - 0.1).abs() < 1e-6);
+        // (his Bend Time, slowing)
+        let tc = TimeControl { bend_remaining: 3.0, world_dilation: 0.2, ..Default::default() };
+        assert!((tc.npc_scale(false) - 0.2).abs() < 1e-6);
+        assert_eq!(tc.npc_scale(true), 1.0);
     }
 }

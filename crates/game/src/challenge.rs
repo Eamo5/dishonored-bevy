@@ -25,17 +25,24 @@ impl Plugin for ChallengePlugin {
             .init_resource::<ChallengeLaunch>()
             .insert_resource(ChallengeProfile::load())
             .add_systems(OnEnter(GameState::InGame), begin.after(crate::level::LevelSpawnSet))
-            .add_systems(Update, (start, apply, tick, deaths).chain().run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (start, apply, tick, deaths).chain().in_set(ChallengeSet).run_if(in_state(GameState::InGame)))
             .add_systems(Update, hud.run_if(in_state(GameState::InGame)));
     }
 }
+
+/// The run's systems (the briefing goes before).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ChallengeSet;
 
 /// How the challenge menu launched the run.
 #[derive(Resource, Default)]
 pub struct ChallengeLaunch {
     pub expert: bool,
-    /// back from a run to the challenges (the results' "Exit Challenge")
+    /// back from a run to the challenges (the results' "Exit Challenge"), the one run
     pub back_to_challenges: bool,
+    pub last: Option<usize>,
+    /// the pause menu's "End Challenge"
+    pub end_now: bool,
 }
 
 /// A challenge timer's settings (`DisSeqAct_DLC05_Timer`).
@@ -46,8 +53,18 @@ pub struct TimerParams {
     pub target: Option<f32>,
     pub increment: bool,
     pub reset_on_stop: bool,
+    /// back to its start at each kill (`m_bAutoResetOnKill`: the kill chain's)
+    pub reset_on_kill: bool,
     /// `DDHT_DefaultTimer`, `DDHT_CountdownTimer`, `DDHT_KillChainTimer`
     pub kind: String,
+}
+
+/// What the scripts gave before an unlock was shown (`DisSeqAct_DLC05_ShowEquipmentUnlock`
+/// lists them): a power at a level (`DisSeqAct_AddPower`), an upgrade (`DisSeqAct_GiveUpgrade`).
+#[derive(Clone, Debug)]
+pub enum Grant {
+    Power(String, u8),
+    Upgrade(String),
 }
 
 /// What the level scripts ask of the challenge.
@@ -62,8 +79,8 @@ pub enum ChallengeFx {
     HudItem { item: String, input: u32, initial: Option<i32>, max: Option<i32> },
     Wave { number: Option<i32>, text: Option<String> },
     Countdown { op: u32, go: bool },
-    PhaseResults { name: String, last: bool, possible: i32, required: i32, effective: i32 },
-    EquipmentUnlock,
+    PhaseResults { op: u32, name: String, last: bool, show_possible: bool, bonus_next: bool, possible: i32, required: i32, effective: i32 },
+    EquipmentUnlock(Vec<Grant>),
     Difficulty(String),
     Resurrect,
     Heal(f32),
@@ -72,6 +89,10 @@ pub enum ChallengeFx {
     WaveBendTime { op: u32, secs: f32 },
     Text(Option<String>),
     StopAllSounds,
+    /// Oil Rain's tank waves (`DisSeqAct_DLC05_WobWave`: begin, a tank, end)
+    WobWave(u32),
+    /// the mystery foe's portrait, and its side (`DisSeqAct_DLC05_SetMysteryFoe`)
+    MysteryFoe { portrait: String, blue: bool },
 }
 
 /// What the HUD is to show (`dlc05hud.rs`; the counters and timers it reads itself).
@@ -83,6 +104,14 @@ pub enum HudEvent {
     Wave { number: Option<i32>, text: Option<String> },
     /// the count before a start (3, 2, 1, and GO! or not)
     CountdownStart { go: bool },
+    /// a scoring's flair named (`DLC05_H_Tricks.UpdateTrick`)
+    Trick(String),
+    /// a clockwork egg found, of so many (`DLC05_H_EggDiscovery.Update`)
+    EggFound { found: i32, max: i32 },
+    /// what was unlocked (`DLC05_H_EquipmentUnlocked.ShowEquipmentUnlocked`)
+    EquipmentUnlock(Vec<Grant>),
+    /// a round's results (`DLC05_H_PhaseResultsScreen.Show`)
+    PhaseResults { name: String, success: bool, possible: Option<i32>, goal: i32, kills: i32, bonus: bool, last: bool },
 }
 
 struct RunTimer {
@@ -140,6 +169,34 @@ pub struct Challenge {
     /// the coins found and times seen when the run began (the counters the game keeps itself)
     base: (u32, u32),
     pub hud_events: Vec<HudEvent>,
+    /// the briefing read (`dlc05brief.rs`): the run may begin
+    pub briefed: bool,
+    /// a round's results waiting on the player (the op), and their choice: on (true), or
+    /// end the challenge
+    pub phase_op: Option<u32>,
+    pub phase_choice: Option<bool>,
+    /// the combos' multiplier in force, the drops' heights, the elixirs held (the scoring's)
+    pub multiplier: f32,
+    pub drop_heights: Vec<f32>,
+    pub elixirs_now: u32,
+    /// the mystery foe's portrait (`UI_MysteryManTargets_DLC05`)
+    pub foe: Option<String>,
+    /// the mystery foe's side (blue), and whether it's down
+    pub foe_blue: bool,
+    pub foe_down: bool,
+    /// the results' figures the rules leave (`DDSL_Custom_DisplayStatParameter`: accuracy,
+    /// health and mana left; `_ChronoBonus`: the speed reached), by stat name
+    pub stat_params: BTreeMap<String, String>,
+    /// the kill chain's kills, and its best (`DDSL_Custom_ChainKillBestChain`)
+    pub chain: u32,
+    pub best_chain: u32,
+    /// what the run unlocked (`R_ResultsScreen_Unlocks`): an artwork or a challenge's expert
+    /// mode, its name, its picture (folder, name)
+    pub unlocks: Vec<Unlock>,
+    /// "Started" waits on the scripts' setting the scoring (`DisSeqAct_DLC05_SetScoringRules`)
+    await_rules: bool,
+    /// the times seen when the thief's watch last looked
+    busted_seen: u32,
     /// the run's time (started, not over, not paused), the best score before it, the last
     /// title the scripts showed (a failure's words), what they stored
     /// (`EDisDLC05StatStorageEvent`)
@@ -160,7 +217,29 @@ impl Challenge {
         of().find(|t| t.running).or_else(|| of().next()).map(|t| t.value)
     }
 
-    fn score_entry(&mut self, entry: &str, points: i64) {
+    /// A kind of timer that starts somewhere (not a count from nothing): its time, its start,
+    /// whether it runs.
+    pub fn timer_state(&self, kind: &str) -> Option<(f32, f32, bool)> {
+        let of = || self.timers.values().filter(|t| t.params.kind == kind && t.params.initial > 0.0);
+        of().find(|t| t.running).or_else(|| of().next()).map(|t| (t.value, t.params.initial, t.running))
+    }
+
+    /// Under way (its opening played, "Started" raised).
+    pub fn started_run(&self) -> bool {
+        self.started
+    }
+
+    /// The times seen when the run began.
+    pub fn base_detected(&self) -> u32 {
+        self.base.1
+    }
+
+    /// A scoring's flair shown by name (a modifier, a bonus, a combo).
+    pub(crate) fn trick(&mut self, name: &str) {
+        self.hud_events.push(HudEvent::Trick(name.to_string()));
+    }
+
+    pub(crate) fn score_entry(&mut self, entry: &str, points: i64) {
         self.score += points;
         self.history.push((entry.to_string(), points));
         if points != 0 {
@@ -172,12 +251,46 @@ impl Challenge {
     }
 }
 
-/// The profile's challenge records: best scores (by challenge id), the dolls found (by map).
+/// Something a run unlocked: a piece of the gallery (else a challenge's expert mode), its
+/// name, its picture (a cooked folder's, by name).
+#[derive(Clone, Debug)]
+pub struct Unlock {
+    pub artwork: bool,
+    pub name: String,
+    pub picture: (String, String),
+}
+
+/// The profile's challenge records: best scores (by challenge id), the dolls found (by map),
+/// the gallery's pieces seen (by id: the others unlocked are new).
 #[derive(Resource, Default, serde::Serialize, serde::Deserialize)]
 pub struct ChallengeProfile {
     pub best: BTreeMap<String, i64>,
     pub dolls: BTreeSet<String>,
+    #[serde(default)]
+    pub gallery_seen: BTreeSet<String>,
+    /// the welcome shown once (`m_bShowingWelcomeDisclaimer`, `OnWelcomeDisclaimerClosed`)
+    #[serde(default)]
+    pub welcome_seen: bool,
+    /// each challenge's (and mode's) best runs, best first, and the last one's number: the
+    /// local leaderboards (the original's were online, `req_DLC05_*Leaderboards`)
+    #[serde(default)]
+    pub runs: BTreeMap<String, Vec<Run>>,
+    #[serde(default)]
+    pub last_run: BTreeMap<String, u64>,
 }
+
+/// A finished run kept on a challenge's local leaderboard: its score, when (Unix seconds),
+/// its number among the challenge's runs.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct Run {
+    pub score: i64,
+    pub at: u64,
+    #[serde(default)]
+    pub n: u64,
+}
+
+/// The runs a local leaderboard keeps (`InitList(listContent, 1, 9)`: a page of nine).
+pub const BOARD_RUNS: usize = 9;
 
 impl ChallengeProfile {
     fn path() -> std::path::PathBuf {
@@ -186,21 +299,66 @@ impl ChallengeProfile {
     fn load() -> Self {
         std::fs::read(Self::path()).ok().and_then(|d| serde_json::from_slice(&d).ok()).unwrap_or_default()
     }
-    fn save(&self) {
+    pub(crate) fn save(&self) {
         if let Ok(d) = serde_json::to_vec_pretty(self) {
             let _ = std::fs::write(Self::path(), d);
         }
     }
+
+    /// A finished run onto its challenge's local leaderboard (`best_key`): the best kept.
+    pub fn record_run(&mut self, key: &str, score: i64) {
+        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let n = self.last_run.get(key).copied().unwrap_or(0) + 1;
+        let v = self.runs.entry(key.to_string()).or_default();
+        v.push(Run { score, at, n });
+        v.sort_by(|a, b| b.score.cmp(&a.score).then(a.n.cmp(&b.n)));
+        v.truncate(BOARD_RUNS);
+        self.last_run.insert(key.to_string(), n);
+    }
+
+    /// A challenge's local leaderboard: its runs, best first (a best from before there were
+    /// boards, alone), and the last run's place on it.
+    pub fn board(&self, key: &str) -> (Vec<Run>, Option<usize>) {
+        let runs = match self.runs.get(key) {
+            Some(v) if !v.is_empty() => v.clone(),
+            _ => self.best.get(key).map(|b| vec![Run { score: *b, at: 0, n: 0 }]).unwrap_or_default(),
+        };
+        let last = self.last_run.get(key).and_then(|n| runs.iter().position(|r| r.n == *n && *n > 0));
+        (runs, last)
+    }
+
+    /// A challenge's stars won, in a mode.
+    pub fn stars(&self, c: &ChallengeDef, expert: bool) -> i32 {
+        let medals = if expert { c.expert_medals } else { c.medals };
+        let best = self.best.get(&best_key(&c.id, expert)).copied().unwrap_or(0);
+        medals.iter().filter(|m| **m > 0 && best >= **m as i64).count() as i32
+    }
+
+    /// Whether the gallery's piece is unlocked (`DisDLC05GalleryItem`): its stars won in its
+    /// challenge, in a mode it opens in; or every other piece of its mode's.
+    pub fn gallery_unlocked(&self, data: &dhcook::format::GameData, i: usize) -> bool {
+        let (gallery, challenges) = (&data.gallery, &data.challenges);
+        let Some(g) = gallery.get(i) else { return false };
+        if g.all_normal || g.all_expert {
+            let expert = g.all_expert;
+            return gallery.iter().enumerate().filter(|(j, o)| *j != i && !o.all_normal && !o.all_expert && if expert { o.expert } else { o.normal }).all(|(j, _)| self.gallery_unlocked(data, j));
+        }
+        let Some(c) = challenges.iter().find(|c| c.leaderboard == g.challenge) else { return false };
+        (g.normal && self.stars(c, false) >= g.stars) || (g.expert && self.stars(c, true) >= g.stars)
+    }
 }
 
 /// The map that came up: a challenge's, or not.
-fn begin(mut ch: ResMut<Challenge>, level: Option<Res<crate::level::LevelInfo>>, data: Res<crate::gamedata::Data>, launch: Res<ChallengeLaunch>, profile: Res<ChallengeProfile>) {
+fn begin(mut ch: ResMut<Challenge>, level: Option<Res<crate::level::LevelInfo>>, data: Res<crate::gamedata::Data>, mut launch: ResMut<ChallengeLaunch>, profile: Res<ChallengeProfile>, mut scoring: ResMut<crate::dlc05score::Scoring>) {
+    scoring.reset();
     let map = level.map(|l| l.scene.name.clone()).unwrap_or_default();
-    let def = data.0.challenges.iter().find(|c| c.map.eq_ignore_ascii_case(&map)).cloned();
+    let found = data.0.challenges.iter().position(|c| c.map.eq_ignore_ascii_case(&map));
+    let def = found.map(|i| data.0.challenges[i].clone());
     *ch = Challenge::default();
     if let Some(d) = def {
         info!("challenge: {} ({}){}", d.name, d.id, if launch.expert { ", expert" } else { "" });
-        ch.best = profile.best.get(&d.id).copied().unwrap_or(0);
+        launch.last = found;
+        ch.best = profile.best.get(&best_key(&d.id, launch.expert)).copied().unwrap_or(0);
         ch.prev_best = ch.best;
         ch.def = Some(d);
         ch.map = map;
@@ -210,7 +368,7 @@ fn begin(mut ch: ResMut<Challenge>, level: Option<Res<crate::level::LevelInfo>>,
 
 /// Once the level is up: the opening, and "Started".
 fn start(mut ch: ResMut<Challenge>, vm: Option<ResMut<crate::kismet::Vm>>, warm: Option<Res<crate::warmup::Warmup>>, time: Res<Time>, profile: Res<ChallengeProfile>, stats: Res<PlayerStats>) {
-    if !ch.active() || ch.started {
+    if !ch.active() || ch.started || !ch.briefed {
         return;
     }
     let Some(mut vm) = vm else { return };
@@ -225,7 +383,12 @@ fn start(mut ch: ResMut<Challenge>, vm: Option<ResMut<crate::kismet::Vm>>, warm:
     ch.base = (stats.coins_found, stats.times_detected);
     vm.expert = ch.expert;
     vm.doll_found = profile.dolls.contains(&ch.map.to_ascii_lowercase());
-    vm.challenge_event(0);
+    // "Started": when the scripts set its scoring (the run begins: after Drop Attack's fly-through
+    // and countdown, its timer started and Corvo let go), now if they did already or never will
+    ch.await_rules = ch.rules.is_none() && vm.has_op_class("DisSeqAct_DLC05_SetScoringRules");
+    if !ch.await_rules {
+        vm.challenge_event(0);
+    }
     let n = vm.challenge_intro();
     info!("challenge: started ({n} opening matinees)");
 }
@@ -238,6 +401,8 @@ fn apply(
     mut stats: ResMut<PlayerStats>,
     mut profile: ResMut<ChallengeProfile>,
     level: Option<Res<crate::level::LevelInfo>>,
+    mut scoring: ResMut<crate::dlc05score::Scoring>,
+    data: Res<crate::gamedata::Data>,
 ) {
     let rules_of: &[dhcook::format::RulesetDef] = level.as_ref().map(|l| l.scene.challenge_rules.as_slice()).unwrap_or(&[]);
     let Some(mut vm) = vm else { return };
@@ -256,19 +421,74 @@ fn apply(
                         continue;
                     }
                     let failed = e == "ECE_Challenge_Failed";
+                    // (the run's last scorings: time, what's left, the loot)
+                    if !failed {
+                        let set = crate::dlc05score::set_of(&ch, level.as_deref()).cloned();
+                        let coins = stats.coins_found.saturating_sub(ch.base.0);
+                        let eggs = stats.items.keys().filter(|k| k.contains("Egg_AII")).count() as u32;
+                        let clues = stats.items.keys().filter(|k| k.contains("Clue")).count() as u32;
+                        crate::dlc05score::finish(&mut ch, &mut scoring, set.as_ref(), &stats, coins, eggs, clues);
+                    }
                     ch.ended = Some(failed);
                     let def = ch.def.clone().unwrap_or_default();
                     let medals = if ch.expert && def.expert_medals.iter().any(|m| *m > 0) { def.expert_medals } else { def.medals };
                     ch.medal = if failed { 0 } else { medals.iter().filter(|m| **m > 0 && ch.score >= **m as i64).count() };
-                    if !failed && ch.score > ch.best {
-                        ch.best = ch.score;
-                        profile.best.insert(def.id.clone(), ch.score);
+                    // (the run onto the local leaderboard: one that scored)
+                    if !failed && ch.score > 0 && !def.id.is_empty() {
+                        profile.record_run(&best_key(&def.id, ch.expert), ch.score);
                         profile.save();
+                    }
+                    if !failed && ch.score > ch.best {
+                        // (what was locked before: the gallery's pieces, the expert mode)
+                        let gallery_before: Vec<bool> = (0..data.0.gallery.len()).map(|i| profile.gallery_unlocked(&data.0, i)).collect();
+                        let expert_before = profile.stars(&def, false) >= 2;
+                        ch.best = ch.score;
+                        profile.best.insert(best_key(&def.id, ch.expert), ch.score);
+                        profile.save();
+                        if !ch.expert && !expert_before && profile.stars(&def, false) >= 2 && def.expert_medals.iter().any(|m| *m > 0) {
+                            ch.unlocks.push(Unlock { artwork: false, name: def.name.clone(), picture: ("dlc05".into(), format!("ChallengeImg_{}_Small", def.id)) });
+                        }
+                        for (i, was) in gallery_before.into_iter().enumerate() {
+                            if was || !profile.gallery_unlocked(&data.0, i) {
+                                continue;
+                            }
+                            let g = &data.0.gallery[i];
+                            // (its name: its challenge's, the Outsider's for a mode's last)
+                            let name = data.0.challenges.iter().find(|c| c.leaderboard == g.challenge).map_or_else(|| "The Outsider".to_string(), |c| c.name.clone());
+                            ch.unlocks.push(Unlock { artwork: true, name, picture: ("dlc05gallery".into(), format!("UI_{}_S", g.id)) });
+                        }
+                    }
+                    // (tests: `DH_TEST_UNLOCK` shows the first piece of the gallery as unlocked)
+                    if !failed && ch.unlocks.is_empty() && std::env::var("DH_TEST_UNLOCK").is_ok() {
+                        if let Some(g) = data.0.gallery.first() {
+                            ch.unlocks.push(Unlock { artwork: true, name: def.name.clone(), picture: ("dlc05gallery".into(), format!("UI_{}_S", g.id)) });
+                        }
+                        ch.unlocks.push(Unlock { artwork: false, name: def.name.clone(), picture: ("dlc05".into(), format!("ChallengeImg_{}_Small", def.id)) });
                     }
                     info!("challenge: {} with {} points (medal {})", if failed { "failed" } else { "over" }, ch.score, ch.medal);
                     vm.challenge_event(if failed { 2 } else { 1 });
                 }
                 "ECE_Challenge_Pause" => ch.paused = true,
+                // the rounds (their bonuses), the time markers (`ScoringRule_ChronoBonus`), the
+                // mystery foe down
+                "ECE_Challenge_BeginRound" => {
+                    let set = crate::dlc05score::set_of(&ch, level.as_deref()).cloned();
+                    crate::dlc05score::round_begins(&mut ch, &mut scoring, set.as_ref(), &stats);
+                }
+                "ECE_Challenge_EndRound" => {
+                    let set = crate::dlc05score::set_of(&ch, level.as_deref()).cloned();
+                    crate::dlc05score::round_ends(&mut ch, &mut scoring, set.as_ref());
+                }
+                "ECE_Challenge_TimeMarker" => {
+                    let set = crate::dlc05score::set_of(&ch, level.as_deref()).cloned();
+                    crate::dlc05score::time_marker(&mut ch, &mut scoring, set.as_ref());
+                }
+                "ECE_MysteryMan_TargetKilled" => {
+                    ch.foe_down = true;
+                    let set = crate::dlc05score::set_of(&ch, level.as_deref()).cloned();
+                    let clues = stats.items.keys().filter(|k| k.contains("Clue")).count() as u32;
+                    crate::dlc05score::foe_killed(&mut ch, &mut scoring, set.as_ref(), &stats, clues);
+                }
                 "ECE_Challenge_Resume" => ch.paused = false,
                 "ECE_Challenge_Backup" => {
                     ch.backup = Some(Backup { score: ch.score, kills: ch.kills, items: ch.items.clone() });
@@ -283,7 +503,12 @@ fn apply(
                 }
                 _ => {}
             },
-            ChallengeFx::Rules(t) => ch.rules = Some(t),
+            ChallengeFx::Rules(t) => {
+                ch.rules = Some(t);
+                if std::mem::take(&mut ch.await_rules) {
+                    vm.challenge_event(0);
+                }
+            }
             ChallengeFx::CustomRule(r) => {
                 let points = rule_points(rules_of, ch.rules.as_deref(), &r).unwrap_or(0);
                 ch.score_entry(&r, points);
@@ -307,6 +532,14 @@ fn apply(
                     _ => t.running = true,
                 }
             }
+            // (a clockwork egg found: the HUD's one-shot, gone on its own; the scripts hide it
+            // as soon as shown)
+            ChallengeFx::HudItem { item, input, max, .. } if item == "DDHI_EggDiscovery" => {
+                if input == 0 {
+                    let found = stats.items.keys().filter(|k| k.contains("Egg_AII")).count() as i32;
+                    ch.hud_events.push(HudEvent::EggFound { found, max: max.unwrap_or(found) });
+                }
+            }
             ChallengeFx::HudItem { item, input, initial, max } => {
                 let it = ch.items.entry(item).or_default();
                 match input {
@@ -325,17 +558,23 @@ fn apply(
                 if text.is_some() {
                     ch.last_title = text.clone();
                 }
+                // (a numbered round's title: a round begins, the last judged)
+                if number.is_some() && text.is_none() {
+                    let set = crate::dlc05score::set_of(&ch, level.as_deref()).cloned();
+                    crate::dlc05score::round_begins(&mut ch, &mut scoring, set.as_ref(), &stats);
+                }
                 ch.hud_events.push(HudEvent::Wave { number, text });
             }
             ChallengeFx::Countdown { op, go } => {
                 ch.countdown = Some((op, 3.0 + if go { 0.8 } else { 0.0 }, go));
                 ch.hud_events.push(HudEvent::CountdownStart { go });
             }
-            ChallengeFx::PhaseResults { name, last, required, effective, .. } => {
-                let t = if required > 0 { format!("{name}: {effective} / {required}") } else { name };
-                ch.banner = Some((if last { format!("{t} (final)") } else { t }, 4.0));
+            ChallengeFx::PhaseResults { op, name, last, show_possible, bonus_next, possible, required, effective } => {
+                ch.phase_op = Some(op);
+                ch.phase_choice = None;
+                ch.hud_events.push(HudEvent::PhaseResults { name, success: effective >= required, possible: show_possible.then_some(possible), goal: required, kills: effective, bonus: bonus_next, last });
             }
-            ChallengeFx::EquipmentUnlock => ch.banner = Some(("New equipment".into(), 2.5)),
+            ChallengeFx::EquipmentUnlock(list) => ch.hud_events.push(HudEvent::EquipmentUnlock(list)),
             ChallengeFx::Difficulty(_) => {}
             ChallengeFx::Resurrect => {
                 stats.dead = false;
@@ -353,7 +592,24 @@ fn apply(
             ChallengeFx::WaveBendTime { op, secs } => ch.bend.push((op, secs)),
             ChallengeFx::Text(t) => ch.text = t,
             ChallengeFx::StopAllSounds => {}
+            ChallengeFx::WobWave(i) => {
+                let set = crate::dlc05score::set_of(&ch, level.as_deref()).cloned();
+                crate::dlc05score::wob_wave(&mut ch, &mut scoring, set.as_ref(), i);
+            }
+            ChallengeFx::MysteryFoe { portrait, blue } => {
+                ch.foe = Some(portrait);
+                ch.foe_blue = blue;
+            }
         }
+    }
+}
+
+/// Where a challenge's best score is kept: by its id, its expert mode's apart.
+pub fn best_key(id: &str, expert: bool) -> String {
+    if expert {
+        format!("{id}_Expert")
+    } else {
+        id.to_string()
     }
 }
 
@@ -365,11 +621,36 @@ fn rule_points(sets: &[dhcook::format::RulesetDef], rules: Option<&str>, entry: 
 
 /// Timers, the countdown, titles; kills scored.
 #[allow(clippy::too_many_arguments)]
-fn tick(mut ch: ResMut<Challenge>, vm: Option<ResMut<crate::kismet::Vm>>, time: Res<Time>, mut stats: ResMut<PlayerStats>, level: Option<Res<crate::level::LevelInfo>>, npcs: Query<&crate::npc::Npc>) {
+fn tick(mut ch: ResMut<Challenge>, vm: Option<ResMut<crate::kismet::Vm>>, time: Res<Time>, mut stats: ResMut<PlayerStats>, mut launch: ResMut<ChallengeLaunch>, attrs: Res<crate::gamedata::Attrs>) {
     if !ch.active() {
         return;
     }
     let Some(mut vm) = vm else { return };
+    // the ammunition for the scripts (`DisSeqAct_DLC05_GetAmmoInfo`)
+    for ty in 0..8u8 {
+        vm.ammo[ty as usize] = (crate::gadgets::ammo_count(&stats, ty), attrs.ammo_capacity.get(ty as usize).copied().unwrap_or(0));
+    }
+    // the thief seen: "Busted" (`DisSeqAct_DLC05_PlayerBusted`)
+    if stats.times_detected > ch.busted_seen {
+        if let Some(op) = vm.busted {
+            vm.signal(op, 2);
+        }
+    }
+    ch.busted_seen = stats.times_detected;
+    // (ended from the pause menu: as the scripts end it)
+    if std::mem::take(&mut launch.end_now) && ch.ended.is_none() {
+        vm.challenge_fx.push(ChallengeFx::Event("ECE_Challenge_End".into()));
+    }
+    // a round's results chosen: on (the op goes out), or the end
+    if let Some(go_on) = ch.phase_choice.take() {
+        if let Some(op) = ch.phase_op.take() {
+            if go_on {
+                vm.signal(op, 0);
+            } else {
+                vm.challenge_fx.push(ChallengeFx::Event("ECE_Challenge_End".into()));
+            }
+        }
+    }
     let dt = time.delta_secs();
     if !ch.paused && ch.ended.is_none() {
         if ch.started {
@@ -421,15 +702,19 @@ fn tick(mut ch: ResMut<Challenge>, vm: Option<ResMut<crate::kismet::Vm>>, time: 
         stats.bullets = stats.bullets.max(u);
         stats.sleep_darts = stats.sleep_darts.max(s);
     }
-    // the kills Corvo makes score (the wave kill rule's gain for the victim's kind)
+    ch.elixirs_now = stats.health_elixirs + stats.mana_elixirs;
+    // the kills Corvo makes count (their scoring: `dlc05score`)
     if stats.kills > ch.last_kills && ch.ended.is_none() {
         let n = stats.kills - ch.last_kills;
-        let dead: Vec<String> = npcs.iter().filter(|n| n.is_down()).map(|n| n.story_group.clone()).collect();
-        for k in 0..n {
-            let group = dead.get(dead.len().saturating_sub((n - k) as usize)).cloned().unwrap_or_default();
-            let points = kill_points(level.as_ref().map(|l| l.scene.challenge_rules.as_slice()).unwrap_or(&[]), ch.rules.as_deref(), &group);
+        // (the kill chain's timer begins again, its chain one longer)
+        let chained = ch.timers.values().any(|t| t.running && t.params.reset_on_kill);
+        ch.chain = if chained { ch.chain + n } else { n };
+        ch.best_chain = ch.best_chain.max(ch.chain);
+        for t in ch.timers.values_mut().filter(|t| t.running && t.params.reset_on_kill) {
+            t.value = t.params.initial;
+        }
+        for _ in 0..n {
             ch.kills += 1;
-            ch.score_entry("Kill", points);
             if let Some(it) = ch.items.get_mut("DDHI_Kills") {
                 it.value += 1;
             }
@@ -448,19 +733,6 @@ fn tick(mut ch: ResMut<Challenge>, vm: Option<ResMut<crate::kismet::Vm>>, time: 
             it.value = v;
         }
     }
-}
-
-/// A kill's points: the wave kill rule's gain for the victim's story group, else a default.
-fn kill_points(sets: &[dhcook::format::RulesetDef], rules: Option<&str>, group: &str) -> i64 {
-    let Some(set) = sets.iter().find(|r| Some(r.name.as_str()) == rules) else { return 100 };
-    let tail = |s: &str| s.rsplit('.').next().unwrap_or(s).to_ascii_lowercase();
-    set.rules
-        .iter()
-        .flat_map(|r| r.gains.iter())
-        .find(|(g, _, _)| !group.is_empty() && tail(g) == tail(group))
-        .map(|(_, p, _)| *p as i64)
-        .or_else(|| set.rules.iter().find(|r| r.class.ends_with("WaveKill") || r.class.ends_with("_Kill")).map(|r| r.base_gain as i64).filter(|p| *p > 0))
-        .unwrap_or(100)
 }
 
 /// A death goes to the scripts; with none listening, the run is over.
@@ -549,5 +821,30 @@ fn item_label(item: &str) -> &str {
         "DDHI_EggDiscovery" => "Eggs found",
         "DDHI_BustedCount" => "Spotted",
         other => other.trim_start_matches("DDHI_"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_board_keeps_best_runs_and_marks_the_last() {
+        let mut p = ChallengeProfile::default();
+        // (a best from before there were boards: alone, unmarked)
+        p.best.insert("Race".into(), 500);
+        assert_eq!(p.board("Race"), (vec![Run { score: 500, at: 0, n: 0 }], None));
+        for s in [300, 900, 100, 700, 200, 800, 400, 600, 1000, 50] {
+            p.record_run("Race", s);
+        }
+        let (runs, last) = p.board("Race");
+        assert_eq!(runs.len(), BOARD_RUNS);
+        assert_eq!(runs.iter().map(|r| r.score).collect::<Vec<_>>(), vec![1000, 900, 800, 700, 600, 400, 300, 200, 100]);
+        // (the last run, 50, fell off the board: nothing marked)
+        assert_eq!(last, None);
+        p.record_run("Race", 850);
+        let (runs, last) = p.board("Race");
+        assert_eq!(last.map(|i| runs[i].score), Some(850));
+        assert_eq!(p.board("Thief"), (vec![], None));
     }
 }

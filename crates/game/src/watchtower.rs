@@ -2,12 +2,14 @@
 //! about the tower (between `m_fStateLightHighestRotDeg` and `m_fStateLightLowestRotDeg` from
 //! the vertical, turning at up to `m_fStateMaxTowerRotSpeedDeg`), its beam the original
 //! `Regent_Light_Cone` stretched from the lamp (`BeamOrigin_Socket`) to where it falls
-//! (`m_fDesiredLightRadius` wide there). Corvo caught in it alerts the tower (its chirp, the
-//! scripts' `DisSeqEvent_WatchTower` "Activated"); the beam follows him, the attack warning
+//! (`m_fDesiredLightRadius` wide there). Corvo caught in it alerts the tower (its chirp); the
+//! beam follows him, the attack warning
 //! sounds `m_fSoundAttackWarningTime` before the first volley (`m_fStateAttackInitialDelay`),
 //! and it fires `m_VolleyShots` explosive arrows (`m_pProjectileTweak`) from `Arrow_Socket`
 //! every `m_fDelayBetweenVolleys` while it sees him, giving up after `m_fStateAttackTimeout`.
-//! Its whale oil tank taken, it goes dark. Looking into the beam up close blinds
+//! Its whale oil tank taken, it goes dark. The scripts hear of it (`DisSeqEvent_WatchTower`): put
+//! out of action or back ("Deactivated", "Activated"), rewired ("Hacked"), a body in its beam
+//! ("Ally Corpse Seen" for its owners', else "Neutral Corpse Seen"). Looking into the beam up close blinds
 //! (`m_fBlindnessDistance`, `m_fBlindnessRadius`, `m_fBlindnessAngle`: the post-process
 //! graph's Blinded node).
 
@@ -74,6 +76,9 @@ pub(crate) struct Tower {
     pivot: Vec3,
     yaw0: f32,
     head: Vec<(Entity, Transform)>,
+    /// as last told the scripts: lit (powered), rewired; the bodies it has seen
+    was: Option<(bool, bool)>,
+    corpses: std::collections::HashSet<Entity>,
 }
 
 #[derive(Resource, Default)]
@@ -235,7 +240,7 @@ fn setup_towers(
             }
         }
         commands.spawn((
-            Tower { index: i, origin, arrow, tank, receptacle: at, tank_found, yaw, pitch, sweep: 0.0, state: State::Explore, lost: 0.0, warned: false, cone, cone_size, pivot, yaw0: yaw, head },
+            Tower { index: i, origin, arrow, tank, receptacle: at, tank_found, yaw, pitch, sweep: 0.0, state: State::Explore, lost: 0.0, warned: false, cone, cone_size, pivot, yaw0: yaw, head, was: None, corpses: Default::default() },
             Transform::from_translation(origin),
             DespawnOnExit(GameState::InGame),
         ));
@@ -247,6 +252,15 @@ fn setup_towers(
 }
 
 /// Turn `from` towards `to` by at most `step` (radians, the short way).
+/// A tower's event to the scripts (`DisSeqEvent_WatchTower`'s output of that name).
+fn tower_event(vm: &mut Option<ResMut<crate::kismet::Vm>>, actor: &str, out: &'static str) {
+    if let Some(vm) = vm.as_mut() {
+        if let Some(a) = vm.g.actors.iter().position(|a| a.name == actor) {
+            vm.actor_event(a as u32, &["DisSeqEvent_WatchTower"], crate::kismet::OutSel::Desc(out), Some(crate::kismet::Val::Player));
+        }
+    }
+}
+
 fn turn(from: f32, to: f32, step: f32) -> f32 {
     let d = (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
     from + d.clamp(-step, step)
@@ -272,7 +286,7 @@ fn towers(
     props: Query<(Entity, &crate::props::Prop, &Transform), (Without<Player>, Without<Tower>)>,
     (stats, mut blinding, mut sfx, mut fx): (Res<PlayerStats>, ResMut<Blinding>, MessageWriter<PostEvent>, MessageWriter<SpawnEffect>),
     mut vm: Option<ResMut<crate::kismet::Vm>>,
-    (mut devices, npcs): (ResMut<crate::security::Devices>, Query<(&crate::npc::Npc, &Transform), (Without<Player>, Without<crate::props::Prop>, Without<Tower>)>),
+    (mut devices, npcs): (ResMut<crate::security::Devices>, Query<(Entity, &crate::npc::Npc, &Transform), (Without<Player>, Without<crate::props::Prop>, Without<Tower>)>),
 ) {
     let Some(level) = level else { return };
     let Ok(ctx) = rapier.single() else { return };
@@ -368,6 +382,18 @@ fn towers(
                 *v = want;
             }
         }
+        // the scripts told (`DisSeqEvent_WatchTower`): put out of action or back (its tank out,
+        // the scripts' switch: "Deactivated", "Activated"), rewired ("Hacked")
+        if dt > 0.0 {
+            if let Some((was_on, was_hacked)) = t.was.replace((powered, hacked)) {
+                if was_on != powered {
+                    tower_event(&mut vm, &d.actor, if powered { "Activated" } else { "Deactivated" });
+                }
+                if hacked && !was_hacked {
+                    tower_event(&mut vm, &d.actor, "Hacked");
+                }
+            }
+        }
         if !powered {
             if dt > 0.0 { t.state = State::Explore; }
             continue;
@@ -386,8 +412,8 @@ fn towers(
         let chest = if hacked {
             match npcs
                 .iter()
-                .filter(|(n, _)| !n.is_down() && d.friendly.iter().any(|f| *f == n.faction))
-                .map(|(_, nt)| nt.translation)
+                .filter(|(_, n, _)| !n.is_down() && d.friendly.iter().any(|f| *f == n.faction))
+                .map(|(_, _, nt)| nt.translation)
                 .min_by(|a, b| a.distance(lamp + dir * hit).total_cmp(&b.distance(lamp + dir * hit)))
             {
                 Some(at) => at,
@@ -402,6 +428,25 @@ fn towers(
         let in_beam = (hacked || !stats.dead) && along > 0.0 && along < hit + 2.0 && perp < along / hit * spot + 0.6;
         let clear = in_beam && ctx.cast_ray(lamp + v.normalize_or_zero() * OUT, v.normalize_or_zero(), v.length() - 0.5 - OUT, true, walls).is_none();
         let sees = in_beam && clear;
+        // a body in its beam, once each: its owners' ("Ally Corpse Seen"), else another's
+        if dt > 0.0 {
+            for (e, n, nt) in &npcs {
+                if n.mode != crate::npc::Mode::Dead || t.corpses.contains(&e) {
+                    continue;
+                }
+                let v = nt.translation + Vec3::Y * 0.2 - lamp;
+                let along = v.dot(dir);
+                if along <= 0.0 || along > hit + 2.0 || (v - dir * along).length() > along / hit * spot + 0.6 {
+                    continue;
+                }
+                if ctx.cast_ray(lamp + v.normalize_or_zero() * OUT, v.normalize_or_zero(), v.length() - 0.5 - OUT, true, walls).is_some() {
+                    continue;
+                }
+                t.corpses.insert(e);
+                let ally = d.friendly.iter().any(|f| *f == n.faction);
+                tower_event(&mut vm, &d.actor, if ally { "Ally Corpse Seen" } else { "Neutral Corpse Seen" });
+            }
+        }
         if std::env::var("DH_TOWER_LOG").is_ok() && (t.sweep * 0.5).fract() < dt * 0.5 {
             info!("watch tower {}: {:?} lamp {lamp:.2} beam falls at {:.1} ({hit:.1} m), Corvo along {along:.1} off {perp:.1} clear {clear} blinding {:.2}", d.actor, t.state, lamp + dir * hit, blinding.0);
         }
@@ -416,13 +461,6 @@ fn towers(
                 }
             }
         }
-        let event = |vm: &mut Option<ResMut<crate::kismet::Vm>>, out: &'static str| {
-            if let Some(vm) = vm.as_mut() {
-                if let Some(a) = vm.g.actors.iter().position(|a| a.name == d.actor) {
-                    vm.actor_event(a as u32, &["DisSeqEvent_WatchTower"], crate::kismet::OutSel::Desc(out), Some(crate::kismet::Val::Player));
-                }
-            }
-        };
         let sound = |sfx: &mut MessageWriter<PostEvent>, k: &str, at: Vec3| {
             if let Some(s) = d.sounds.get(k) {
                 sfx.write(PostEvent::named(s, Some(at)));
@@ -444,7 +482,6 @@ fn towers(
                     t.lost = 0.0;
                     t.warned = false;
                     sound(&mut sfx, "m_pSoundChirp", lamp);
-                    event(&mut vm, "Activated");
                 }
             }
             State::Alert(s) | State::Attack(s, _) => {
@@ -462,7 +499,6 @@ fn towers(
                     }
                     t.state = State::Explore;
                     sound(&mut sfx, "m_pSoundTargetLost", lamp);
-                    event(&mut vm, "Deactivated");
                     continue;
                 }
                 if let State::Alert(s) = t.state {
@@ -599,13 +635,14 @@ mod projectile_tests {
             velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
             grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
             air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
-            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO,
+            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0,
         }));
         let tower = app.world_mut().spawn(Tower {
             index: 0, origin: Vec3::new(0.0, 10.0, 0.0), arrow: Vec3::new(0.0, 9.0, 0.0),
             tank: None, receptacle: None, tank_found: true, yaw: 0.0, pitch: 0.0,
             sweep: 0.0, state: State::Attack(0.0, 3), lost: 0.0, warned: false,
             cone: None, cone_size: Vec3::ONE, pivot: Vec3::ZERO, yaw0: 0.0, head: vec![],
+            was: None, corpses: Default::default(),
         }).id();
         app.world_mut().resource_mut::<crate::gameplay::TimeControl>().bend_remaining = 10.0;
         let original = serde_json::to_string(&vec![TowerSave::capture(app.world().get::<Tower>(tower).unwrap())]).unwrap();
@@ -684,7 +721,7 @@ mod projectile_tests {
             velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
             grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
             air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
-            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO,
+            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0,
         })).id();
         let cover = app.world_mut().spawn((Collider::cuboid(0.01, 2.0, 2.0), Transform::from_xyz(4.0, 0.0, 0.0), CollisionGroups::new(GROUP_WORLD, Group::ALL))).id();
         app.update();

@@ -554,7 +554,7 @@ fn sword_input(
                 3
             };
             hits.write(NpcHit { npc: e, damage: 999.0, kind: HitKind::Assassinate, from: pt.translation });
-            commands.entity(e).try_insert(crate::npc::DropKilled(dir));
+            commands.entity(e).try_insert((crate::npc::DropKilled(dir), crate::npc::DropHeight((p.air_peak - pt.translation.y).max(0.0))));
             sfx.write(crate::audio::PostEvent::named("Snd_Imp_Sword_on_Body_cue_ak", Some(nt.translation + Vec3::Y)));
             sword.drop_seq += 1;
             sword.drop_dir = dir;
@@ -703,7 +703,7 @@ mod pause_tests {
             velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
             grounded: true, lean: 0.0, noclip: false, eye_height: crate::player::STAND_EYE,
             locked: true, air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
-            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO,
+            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0,
         }, Transform::IDENTITY, Choking { npc: target, t: 0.5, duration: 3.0 })).id();
         app.update();
         assert_eq!(app.world().get::<Choking>(player).map(|ch| ch.t), Some(0.5));

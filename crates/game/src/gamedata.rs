@@ -458,14 +458,17 @@ pub fn readable(s: &str) -> String {
 ").replace("<br>", "
 ").replace("\r", "
 ");
-    // colour markup (§C_BLUE§ ... §C§)
-    while let Some(a) = out.find('§') {
-        let Some(b) = out[a + '§'.len_utf8()..].find('§') else { break };
-        let tag = &out[a + '§'.len_utf8()..a + '§'.len_utf8() + b];
-        if tag.starts_with('C') {
-            out.replace_range(a..a + 2 * '§'.len_utf8() + b, "");
+    // colour markup (§C_BLUE§ ... §C§); other tags (§COUNT§, §MAX§) are their screens' to fill
+    let s = '§'.len_utf8();
+    let mut from = 0;
+    while let Some(a) = out[from..].find('§').map(|i| from + i) {
+        let Some(b) = out[a + s..].find('§') else { break };
+        let tag = &out[a + s..a + s + b];
+        if tag == "C" || tag.starts_with("C_") {
+            out.replace_range(a..a + 2 * s + b, "");
+            from = a;
         } else {
-            break;
+            from = a + s + b;
         }
     }
     out

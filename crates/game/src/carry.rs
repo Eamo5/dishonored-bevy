@@ -248,9 +248,15 @@ fn carry_input(
                 if std::env::var_os("DH_CARRY_LOG").is_some() {
                     info!("carry: sampled release hips {hips:?} before throw pose");
                 }
-                commands.entity(b).try_insert(Falling { vel: dir * 6.0 + Vec3::Y * 1.5, placed: false, release_hips: hips });
-                if let Ok(mut a) = anims.get_mut(b) {
-                    lay_down(&mut a);
+                // (limp from the shoulder, where it has a ragdoll)
+                if npc_anims.get(b).is_ok_and(|a| a.ragdoll) {
+                    let eye = cam.single().map(|c| c.translation()).ok();
+                    commands.entity(b).try_insert(crate::ragdoll::GoLimp::now(dir * 6.0 + Vec3::Y * 1.5, eye));
+                } else {
+                    commands.entity(b).try_insert(Falling { vel: dir * 6.0 + Vec3::Y * 1.5, placed: false, release_hips: hips });
+                    if let Ok(mut a) = anims.get_mut(b) {
+                        lay_down(&mut a);
+                    }
                 }
                 let spawner = carry.spawner;
                 release(&mut commands, &mut carry, &mut vis, None);
@@ -271,9 +277,14 @@ fn carry_input(
                 release(&mut commands, &mut carry, &mut vis, None);
                 // it settles on whatever is below
                 if let Some(b) = b {
-                    commands.entity(b).try_insert(Falling { vel: Vec3::ZERO, placed: false, release_hips: release_hips(b) });
-                    if let Ok(mut a) = anims.get_mut(b) {
-                        lay_down(&mut a);
+                    if npc_anims.get(b).is_ok_and(|a| a.ragdoll) {
+                        let eye = cam.single().map(|c| c.translation()).ok();
+                        commands.entity(b).try_insert(crate::ragdoll::GoLimp::now(p.velocity.with_y(0.0) * 0.5, eye));
+                    } else {
+                        commands.entity(b).try_insert(Falling { vel: Vec3::ZERO, placed: false, release_hips: release_hips(b) });
+                        if let Ok(mut a) = anims.get_mut(b) {
+                            lay_down(&mut a);
+                        }
                     }
                 }
                 if let Some(s) = spawner {

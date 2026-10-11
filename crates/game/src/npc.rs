@@ -60,6 +60,7 @@ impl Plugin for NpcPlugin {
                     npc_move.run_if(|| !skip("move")),
                     npc_select_anim.run_if(|| !skip("animate")),
                     npc_animate.run_if(|| !skip("animate")),
+                    drop_swords,
                     log_npc_clips.run_if(|| std::env::var("DH_NPC_CLIP_LOG").is_ok()),
                 )
                     .chain()
@@ -264,6 +265,8 @@ pub struct Npc {
     pub brain_flags: u8,
     /// dead, its body turns to ash (`DisSeqAct_BodyShadowKill`: Daud's Whalers)
     pub ash_on_death: bool,
+    /// bent time passes it by (its pawn's `m_bAlwaysOutOfBendTime`: the trials' Daud)
+    pub out_of_bend: bool,
 }
 
 /// `EDisAIBrainFlags`: don't attack at all, no melee, no ranged attacks, (panicking: never
@@ -493,6 +496,14 @@ pub struct ConsumedBody;
 /// Killed by a drop assassination: from which side (0 front, 1 back, 2 left, 3 right).
 #[derive(Component, Clone, Copy)]
 pub struct DropKilled(pub u8);
+
+/// The shot that just struck was to the head (the challenges' Headshot).
+#[derive(Component, Clone, Copy)]
+pub struct HeadHit;
+
+/// A drop assassination's fall, m (the challenges' fall height scoring).
+#[derive(Component, Clone, Copy)]
+pub struct DropHeight(pub f32);
 
 /// One NPC's paired move on another (`DisNPCAnimDefinitions`' attacker / victim chains): the
 /// fatality (`DisTweaks_NPCFatality`, `DisNPCAnim_NPCFatality`: the frontal impale,
@@ -1260,6 +1271,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         heard_player: 0,
         brain_flags: 0,
         ash_on_death: false,
+        out_of_bend: ty.is_some_and(|t| t.out_of_bend),
     };
 
     // skeleton joints
@@ -1337,8 +1349,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
             commands.entity(visual).add_child(m);
         }
     }
-    // weapon in the right hand
+    // weapon in the right hand (its blade, what its swings trail)
     let mut swords = Vec::new();
+    let mut blade = None;
     if has_sword {
         let prop = if assassin {
             "assassin_sword"
@@ -1351,7 +1364,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         } else {
             "city_sword"
         };
-        if let (Some((hand, at)), Some(parts)) = (hand_r, assets.props.get(prop).or(assets.props.get("city_sword"))) {
+        let prop = if assets.props.contains_key(prop) { prop } else { "city_sword" };
+        blade = crate::trails::blade_of(scene, prop);
+        if let (Some((hand, at)), Some(parts)) = (hand_r, assets.props.get(prop)) {
             for (mesh, mat) in &parts.parts {
                 let mut ec = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), at));
                 mat.apply(&mut ec);
@@ -1418,6 +1433,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
             DespawnOnExit(GameState::InGame),
         ))
         .id();
+    if let (Some(&s0), Some(blade)) = (swords.first(), blade) {
+        commands.entity(s0).insert(crate::trails::BladeTrail::new(blade, e, false));
+    }
     for (holder, index, health) in breakable_parts {
         commands.entity(holder).insert(crate::npcparts::NpcAttached { npc: e, npc_type: tid, index, health: health.max(1.0) });
     }
@@ -1448,6 +1466,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 holster,
                 grab_seen: None,
                 act_seen: 0,
+                marks: std::sync::Arc::new(lib.marks(scene)),
+                blade,
+                ragdoll: ty.and_then(|t| t.ragdoll).and_then(|r| scene.ragdolls.get(r as usize)).is_some_and(|r| r.bodies.iter().filter(|b| bones.iter().any(|x| x.name.eq_ignore_ascii_case(&b.bone))).count() >= 2),
             },
         ));
     }
@@ -1500,8 +1521,13 @@ fn npc_hits(
     mut fx: MessageWriter<crate::particles::SpawnEffect>,
     mut stances: ResMut<crate::script_world::SpawnerOverrides>,
     (level, mut vm): (Option<Res<LevelInfo>>, Option<ResMut<crate::kismet::Vm>>),
+    (mut takedowns, marks, tc): (MessageWriter<crate::gameplay::PlayerTakedown>, Query<(Option<&HeadHit>, Option<&DropHeight>)>, Res<crate::gameplay::TimeControl>),
 ) {
     for h in hits.read() {
+        let (head, drop) = marks.get(h.npc).map(|(h, d)| (h.is_some(), d.map(|d| d.0))).unwrap_or((false, None));
+        if head {
+            commands.entity(h.npc).try_remove::<HeadHit>();
+        }
         let Ok((e, mut npc, t)) = npcs.get_mut(h.npc) else { continue };
         if npc.is_down() {
             continue;
@@ -1619,6 +1645,40 @@ fn npc_hits(
                     noise.write(Noise { pos, radius: 16.0, combat: true });
                 }
             }
+        }
+        // blown off their feet (Wind Blast's push, an explosion's): the body flies limp
+        if npc.is_down() {
+            let blast = matches!(h.kind, HitKind::Explosion | HitKind::EnemyExplosion | HitKind::GrenadeThrowback | HitKind::StickyGrenade | HitKind::ExplosiveBullet);
+            let vel = if h.kind == HitKind::Windblast {
+                npc.velocity
+            } else if blast {
+                let away = pos - h.from;
+                let d = away.length();
+                away.with_y(0.0).normalize_or_zero() * (7.0 - d).clamp(1.5, 4.5) + Vec3::Y * (4.0 - d * 0.5).clamp(1.0, 3.0)
+            } else {
+                Vec3::ZERO
+            };
+            if vel.length() > 2.0 {
+                commands.entity(e).try_insert(crate::ragdoll::GoLimp::now(vel, None));
+            }
+        }
+        // (Corvo's own takedowns, for the challenges' scoring)
+        let ko = matches!(h.kind, HitKind::Choke | HitKind::SleepDart) && npc.mode == Mode::Unconscious;
+        if (stats.kills > kills0 || ko) && !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats) {
+            takedowns.write(crate::gameplay::PlayerTakedown {
+                npc: h.npc,
+                faction: npc.faction.clone(),
+                pawn: npc.pawn.clone(),
+                story_group: npc.story_group.clone(),
+                kind: h.kind,
+                lethal: stats.kills > kills0,
+                unaware,
+                head,
+                drop: if h.kind == HitKind::Assassinate { drop } else { None },
+                bent: tc.bend_remaining > 0.0 || tc.scripted.is_some(),
+                hostile: npc.hostile(),
+                at: pos,
+            });
         }
         if stats.kills > kills0 {
             if h.kind == HitKind::GrenadeThrowback {
@@ -1804,11 +1864,12 @@ pub(crate) fn npc_perception(
     (froms, mut events): (Query<&FromSpawner>, MessageWriter<crate::interact::Interaction>),
     (level, pvis, settings): (Option<Res<LevelInfo>>, Res<crate::stealth::PlayerVisibility>, Res<crate::settings::Settings>),
 ) {
-    let dt = time.delta_secs() * tc.world_scale();
+    let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
     // inside a host, Corvo is the host
     // (`DH_NOTARGET`: unseen, for watching the characters in tests)
     let hidden = possession.host.is_some() || std::env::var("DH_NOTARGET").is_ok();
-    if dt <= 0.0 {
+    // (no time at all: paused)
+    if dt_world <= 0.0 && dt_own <= 0.0 {
         return;
     }
     let Ok(ctx) = rapier.single() else { return };
@@ -1830,6 +1891,12 @@ pub(crate) fn npc_perception(
     let mut newly_detected = false;
     for (e, mut npc, t) in &mut npcs {
         if npc.is_down() || npc.kind == Kind::Story || npc.mode == Mode::Choked || stats.dead || hidden || Some(e) == possession.host || npc.blind {
+            npc.sees_player = false;
+            continue;
+        }
+        // (the world stopped: those in it see nothing; those bent time passes by go on)
+        let dt = if npc.out_of_bend { dt_own } else { dt_world };
+        if dt <= 0.0 {
             npc.sees_player = false;
             continue;
         }
@@ -2029,8 +2096,8 @@ pub(crate) fn npc_brain(
     mut grenades: MessageWriter<crate::gadgets::NpcGrenade>,
     (finishing, mut finishers): (Query<(), With<FinisherClip>>, MessageWriter<NpcFinisher>),
 ) {
-    let dt = time.delta_secs() * tc.world_scale();
-    if dt <= 0.0 {
+    let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
+    if dt_world <= 0.0 && (dt_own <= 0.0 || !npcs.iter().any(|(_, n, _)| n.out_of_bend)) {
         return;
     }
     let Ok((pe, pt, psword)) = player.single() else { return };
@@ -2049,6 +2116,11 @@ pub(crate) fn npc_brain(
     let grab_active = npcs.iter().any(|(_, n, _)| n.grab.is_some());
     for (e, mut npc, t) in &mut npcs {
         let pos = t.translation;
+        // (its time: the world's, stopped, or its own)
+        let dt = if npc.out_of_bend { dt_own } else { dt_world };
+        if dt <= 0.0 {
+            continue;
+        }
         // (playing a finisher on a foe: held to it)
         if finishing.contains(e) {
             npc.target = None;
@@ -2621,13 +2693,16 @@ fn npc_move(
         (Without<Player>, Without<ScriptedAnim>, Without<crate::possession::Possessed>, Without<crate::carry::Falling>),
     >,
     mut steps: MessageWriter<crate::footsteps::Footfall>,
-    (grid, mut budget): (Option<Res<crate::navmesh::NavGrid>>, ResMut<crate::navmesh::PathBudget>),
+    (grid, mut budget, level): (Option<Res<crate::navmesh::NavGrid>>, ResMut<crate::navmesh::PathBudget>, Option<Res<LevelInfo>>),
 ) {
-    let dt = time.delta_secs().min(0.05) * tc.world_scale();
+    let (dt_world, dt_own) = (time.delta_secs().min(0.05) * tc.world_scale(), time.delta_secs().min(0.05) * tc.own_scale());
+    // (fallen out of the world: below the level's kill height, `WorldInfo.KillZ`)
+    let kill_y = level.as_ref().map(|l| l.scene.kill_y).unwrap_or(-200.0);
     let ppos = player.single().map(|t| t.translation).ok();
     let ctx = rapier.single().ok();
     let ground_filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, crate::level::GROUP_WORLD));
     for (mut npc, mut t, kcc, out) in &mut npcs {
+        let dt = if npc.out_of_bend { dt_own } else { dt_world };
         // falling over (bodies lose their controller, so this comes first)
         if npc.is_down() {
             npc.down_t = (npc.down_t + dt * 1.6).min(1.0);
@@ -2786,7 +2861,7 @@ fn npc_move(
             let gait = if npc.anim_speed > 3.0 { Gait::Sprint } else { Gait::Walk };
             steps.write(Footfall { pos: t.translation, gait, who });
         }
-        if t.translation.y < -200.0 {
+        if t.translation.y < kill_y {
             npc.set_mode(Mode::Dead);
         }
     }
@@ -2802,8 +2877,8 @@ fn npc_animate(
     mut visuals: Query<&mut Transform, (With<NpcVisual>, Without<Npc>)>,
     mut joints: Query<&mut Transform, (Without<NpcVisual>, Without<Npc>)>,
 ) {
-    let t_now = time.elapsed_secs() * if tc.world_scale() > 0.0 { 1.0 } else { 0.0 };
     for (npc, rig, children) in &npcs {
+        let t_now = time.elapsed_secs() * if tc.npc_scale(npc.out_of_bend) > 0.0 { 1.0 } else { 0.0 };
         // body orientation (falling down)
         for c in children.iter() {
             if let Ok(mut vt) = visuals.get_mut(c) {
@@ -3090,12 +3165,77 @@ pub struct NpcAnim {
     grab_seen: Option<GrabPhase>,
     /// the gesture last played (its count)
     act_seen: u32,
+    /// what its clips' notifies mark (the blows' zones, when an attack may be broken off, when
+    /// the sword falls from the hand)
+    marks: std::sync::Arc<std::collections::HashMap<ClipId, dhcook::format::ClipMarks>>,
+    /// its sword's blade, its ends in the sword's frame
+    blade: Option<[Vec3; 2]>,
+    /// it has a ragdoll (its pawn's physics asset)
+    pub(crate) ragdoll: bool,
+}
+
+/// A character's sword fallen from its hand as it went down (its clip's `DisNotify_DropItem`):
+/// loose in the world.
+#[derive(Component)]
+pub struct DroppedSword;
+
+/// A downed character lets its sword fall at its clip's drop (`DisNotify_DropItem`), else
+/// soon after it falls: the sword's parts on a loose body (a box along its blade).
+fn drop_swords(mut commands: Commands, mut npcs: Query<(&Npc, &mut NpcAnim, &Animator)>, parts: Query<&GlobalTransform>) {
+    for (npc, mut st, anim) in &mut npcs {
+        if !npc.is_down() || st.sword.is_empty() || !st.drawn {
+            continue;
+        }
+        let due = match anim.current().and_then(|p| st.marks.get(&p.clip).and_then(|m| m.drops.first().copied()).map(|t| (p.t, t))) {
+            Some((at, t)) => at >= t,
+            None => npc.down_t >= 0.3,
+        };
+        if !due {
+            continue;
+        }
+        let Some(g) = st.sword.first().and_then(|&p| parts.get(p).ok()) else { continue };
+        let (_, rot, pos) = g.to_scale_rotation_translation();
+        if std::env::var("DH_MELEE_LOG").is_ok() {
+            info!("melee: {} lets its sword fall at {pos:.1}", npc.name);
+        }
+        let [a, b] = st.blade.unwrap_or([Vec3::new(-0.15, 0.0, 0.0), Vec3::new(0.85, 0.0, 0.0)]);
+        let along = b - a;
+        let shape = Collider::compound(vec![((a + b) * 0.5, Quat::from_rotation_arc(Vec3::X, along.normalize_or(Vec3::X)), Collider::cuboid(along.length() * 0.5, 0.012, 0.035))]);
+        let root = commands
+            .spawn((
+                DroppedSword,
+                Transform::from_translation(pos).with_rotation(rot),
+                Visibility::default(),
+                RigidBody::Dynamic,
+                shape,
+                CollisionGroups::new(GROUP_PROP, GROUP_WORLD.union(GROUP_PROP)),
+                ColliderMassProperties::Mass(1.2),
+                Damping { linear_damping: 0.3, angular_damping: 0.8 },
+                DespawnOnExit(GameState::InGame),
+            ))
+            .id();
+        for &p in &st.sword {
+            commands.entity(p).try_insert((Transform::IDENTITY, ChildOf(root)));
+        }
+        st.sword.clear();
+    }
 }
 
 impl NpcAnim {
     /// The weapon meshes in the character's hand or holster.
     pub fn swords(&self) -> &[Entity] {
         &self.sword
+    }
+
+    /// The lines a clip cues (`DishonoredNotify_FireDialogHook`): when, which dialog hook.
+    pub fn clip_hooks(&self, clip: ClipId) -> &[(f32, String)] {
+        self.marks.get(&clip).map(|m| m.hooks.as_slice()).unwrap_or(&[])
+    }
+
+    /// A clip's `DisNotify_FootPlacement`s (as it starts, in its time, as it ends): when, and
+    /// whether the feet are placed from then on.
+    pub fn feet_marks(&self, clip: ClipId) -> &[(f32, bool)] {
+        self.marks.get(&clip).map(|m| m.feet.as_slice()).unwrap_or(&[])
     }
 }
 
@@ -3165,13 +3305,14 @@ fn npc_select_anim(
     tc: Res<TimeControl>,
     mut commands: Commands,
     player: Query<&Transform, With<Player>>,
-    mut npcs: Query<(Entity, &Npc, &mut NpcAnim, &mut Animator, &Transform, &Children, Option<&DropKilled>, Option<&AssassinClip>, Option<&mut FinisherClip>, Option<&crate::carry::Falling>), Without<ScriptedAnim>>,
+    mut npcs: Query<(Entity, &mut Npc, &mut NpcAnim, &mut Animator, &Transform, &Children, Option<&DropKilled>, Option<&AssassinClip>, Option<&mut FinisherClip>, Option<&crate::carry::Falling>, (Has<crate::ragdoll::Ragdoll>, Has<crate::ragdoll::GoLimp>)), Without<ScriptedAnim>>,
     mut visuals: Query<&mut Transform, (With<NpcVisual>, Without<Npc>, Without<Player>)>,
 ) {
-    let dt = time.delta_secs() * tc.world_scale().max(0.0);
     let ppos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
-    for (e, npc, mut st, mut anim, t, children, dropped, assassin, finisher, falling) in &mut npcs {
-        anim.time_scale = tc.world_scale().max(0.0);
+    for (e, mut npc, mut st, mut anim, t, children, dropped, assassin, finisher, falling, (limp, going_limp)) in &mut npcs {
+        let scale = tc.npc_scale(npc.out_of_bend).max(0.0);
+        let dt = time.delta_secs() * scale;
+        anim.time_scale = scale;
         // the clips carry the whole body motion (falls included)
         for c in children.iter() {
             if let Ok(mut vt) = visuals.get_mut(c) {
@@ -3222,6 +3363,15 @@ fn npc_select_anim(
         }
 
         if npc.is_down() {
+            // limp (or about to be): its bodies pose its bones, the clip under them the rest
+            if limp || going_limp {
+                st.down = true;
+                st.settle = None;
+                anim.frozen = limp && far;
+                st.last_mode = npc.mode;
+                st.last_alert = npc.alert;
+                continue;
+            }
             if falling.is_some() {
                 if !st.down {
                     crate::carry::lay_down(&mut anim);
@@ -3264,6 +3414,17 @@ fn npc_select_anim(
                     if npc.corpse {
                         anim.seek(lib.duration(c));
                     }
+                }
+            }
+            // its clip goes limp where it says (`DishonoredNotify_Ragdoll`), else at its end
+            if st.ragdoll && !far {
+                let due = anim.finished() || anim.current().and_then(|p| st.marks.get(&p.clip).and_then(|m| m.ragdoll).map(|r| p.t >= r)).unwrap_or(true);
+                if due {
+                    commands.entity(e).try_insert(crate::ragdoll::GoLimp::soon());
+                    anim.frozen = false;
+                    st.last_mode = npc.mode;
+                    st.last_alert = npc.alert;
+                    continue;
                 }
             }
             if anim.finished() {
@@ -3337,7 +3498,25 @@ fn npc_select_anim(
                     MoveKind::Right180 => pick(&clips.attack_turn[3]),
                 };
                 if let Some(c) = own.or_else(|| pick(&clips.attack)) {
-                    anim.restart(c, false, lib.duration(c) / len, 0.08);
+                    // a blow with its zone (`DishonoredNotify_AttackZone`): its clip as authored,
+                    // the blow landing early in the zone (where the damage may come:
+                    // `m_fDamageZoneMaxTime` 0.12 s), the attack over once it may be broken off
+                    // (`DishonoredNotify_AttackInterruptable`); a lunge kept to its distance
+                    let zone = st.marks.get(&c).and_then(|m| m.zone.map(|z| (z, m.interruptible))).filter(|((z, _), _)| *z > 0.05 && !matches!(kind, MoveKind::Bash | MoveKind::Jump));
+                    let who = npc.name.clone();
+                    match (zone, npc.swing.as_mut()) {
+                        (Some(((z, d), intr)), Some(s)) => {
+                            let hit = z + d.min(0.12) * 0.5;
+                            if std::env::var("DH_MELEE_LOG").is_ok() {
+                                info!("melee: {who} {:?} by its clip: hit {:.2} -> {hit:.2}, len {:.2} -> {:.2}", s.kind, s.hit, s.len, if intr > hit { intr } else { lib.duration(c) }.max(hit + 0.1));
+                            }
+                            s.lunge *= s.hit / hit.max(0.05);
+                            s.hit = hit;
+                            s.len = if intr > hit { intr } else { lib.duration(c) }.max(hit + 0.1);
+                            anim.restart(c, false, 1.0, 0.08);
+                        }
+                        _ => anim.restart(c, false, lib.duration(c) / len, 0.08),
+                    }
                 }
             }
             st.last_mode = npc.mode;

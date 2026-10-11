@@ -17,6 +17,8 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
 
 pub const MENU_MAP: &str = "Dishonored_MainMenu";
+/// Dunwall City Trials' own menu map (`DisDLC05GameInfo`'s front end)
+pub const TRIALS_MAP: &str = "L_DLC05_MainMenu_P";
 /// The first mission (the prologue at the Tower).
 pub const FIRST_MAP: &str = "L_Tower_P";
 
@@ -51,11 +53,20 @@ enum Page {
     Controls,
     Load,
     Save,
-    /// the downloadable content (`t_DownloadableContent_Caps`), the Dunwall City Trials'
-    /// challenges, one challenge's modes
+    /// the downloadable content (`t_DownloadableContent_Caps`); Dunwall City Trials' home
+    /// (`CM_Home_Screen`) and its challenges, normal and expert (`CM_ChallengesList_Screen`'s
+    /// tabs)
     Dlc,
+    Trials,
     Challenges,
-    Challenge(usize),
+    ExpertChallenges,
+    /// the trials' gallery (`CM_Gallery_Screen`)
+    Gallery,
+    /// the trials' welcome, shown the first time (`CM_WelcomeDisclaimer_Screen`)
+    Welcome,
+    /// the trials' leaderboards, normal and expert (`Leaderboards_Screen`'s tabs): local
+    Leaderboards,
+    ExpertLeaderboards,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -118,9 +129,30 @@ enum Action {
     Resume,
     QuitToMenu,
     QuitGame,
-    /// a challenge (`DisDLC05GameInfo.m_Challenges`), in expert mode or not
+    /// a challenge (`DisDLC05GameInfo.m_Challenges`), in expert mode or not; one locked
     StartChallenge(usize, bool),
+    LockedChallenge(usize),
+    /// a piece of the trials' gallery, to see large; one locked
+    GalleryView(usize),
+    LockedGallery(usize),
+    /// into Dunwall City Trials (its menu map), and out
+    Trials,
+    LeaveTrials,
+    /// the trials' welcome read (`APressed`: `OnWelcomeDisclaimerClosed`), their credits
+    /// (`DLC05_Credits`: `CreditsDLC05`)
+    WelcomeDone,
+    TrialsCredits,
+    /// a challenge's leaderboard in a mode
+    Board(usize, bool),
+    /// a challenge's pause menu (`UI_PauseMenu_DLC05`): again, over now, back to the
+    /// challenges
+    RestartChallenge,
+    EndChallenge,
+    ExitChallenge,
 }
+
+/// The trials' gallery's grid's columns (`FillGalleryList`: `InitList(list, 7, 3)`).
+pub const GALLERY_COLS: usize = 7;
 
 #[derive(Resource)]
 pub struct Menu {
@@ -141,6 +173,14 @@ pub struct Menu {
     confirm: Option<(String, Action, usize)>,
     /// a button of the question clicked
     pub confirm_click: Option<usize>,
+    /// the challenge to choose once the list is built (a tab changed)
+    pending_challenge: Option<usize>,
+    /// the gallery's piece seen large (`CM_Gallery_ViewPort_Screen`), by item
+    pub gallery_view: Option<usize>,
+    /// a leaderboard's row chosen (else its last run's)
+    pub board_row: Option<usize>,
+    /// a leaderboard opened over a run's results, closed back to them
+    board_over_results: bool,
 }
 
 /// How an option row shows its value (`OptionsStepperB_widget`, `OptionsStepper_widget`,
@@ -167,7 +207,7 @@ pub const OPT_CATEGORIES: [(&str, &[&str]); 4] = [
 
 impl Default for Menu {
     fn default() -> Self {
-        Menu { open: None, page: Page::Main, stack: Vec::new(), sel: 0, dirty: true, items: Vec::new(), started: false, capture: None, opt_cat: 0, opt_sub: 0, confirm: None, confirm_click: None }
+        Menu { open: None, page: Page::Main, stack: Vec::new(), sel: 0, dirty: true, items: Vec::new(), started: false, capture: None, opt_cat: 0, opt_sub: 0, confirm: None, confirm_click: None, pending_challenge: None, gallery_view: None, board_row: None, board_over_results: false }
     }
 }
 
@@ -187,7 +227,117 @@ impl Menu {
             (Some(_), Page::Save) => Some((6, labels())),
             // (the options: `optscreen`)
             (Some(_), Page::Options) => Some((7, labels())),
+            // (Dunwall City Trials': `dlc05menu`)
+            (Some(MenuKind::Main), Page::Trials) => Some((8, labels())),
+            (Some(MenuKind::Main), Page::Challenges) => Some((9, labels())),
+            (Some(MenuKind::Main), Page::ExpertChallenges) => Some((10, labels())),
+            (Some(MenuKind::Main), Page::Gallery) => Some((11, labels())),
+            (Some(MenuKind::Main), Page::Welcome) => Some((12, labels())),
+            (Some(MenuKind::Main), Page::Leaderboards) => Some((13, labels())),
+            (Some(MenuKind::Main), Page::ExpertLeaderboards) => Some((14, labels())),
             _ => None,
+        }
+    }
+    /// A challenge list's item: the challenge, in expert mode or not, locked or not.
+    pub fn item_challenge(&self, i: usize) -> Option<(usize, bool, bool)> {
+        match self.items.get(i)?.1 {
+            Action::StartChallenge(c, expert) => Some((c, expert, false)),
+            Action::LockedChallenge(c) => Some((c, true, true)),
+            _ => None,
+        }
+    }
+    /// A gallery's item: the piece, locked or not.
+    pub fn item_gallery(&self, i: usize) -> Option<(usize, bool)> {
+        match self.items.get(i)?.1 {
+            Action::GalleryView(g) => Some((g, false)),
+            Action::LockedGallery(g) => Some((g, true)),
+            _ => None,
+        }
+    }
+
+    /// The piece seen large steps to the next unlocked one along (`GetNextImageAvailable`,
+    /// `GetPreviousImageAvailable`: round the list); whether it moved.
+    pub fn gallery_step(&mut self, dir: i32) -> bool {
+        let Some(at) = self.gallery_view else { return false };
+        let n = self.items.len() as i32;
+        if n == 0 {
+            return false;
+        }
+        let mut i = at as i32;
+        for _ in 0..n {
+            i = (i + dir).rem_euclid(n);
+            if self.item_gallery(i as usize).is_some_and(|g| !g.1) {
+                break;
+            }
+        }
+        if i as usize == at {
+            return false;
+        }
+        self.gallery_view = Some(i as usize);
+        self.sel = i as usize;
+        self.dirty = true;
+        true
+    }
+
+    /// Choose an item (the pointer over it).
+    pub fn select(&mut self, i: usize) {
+        if i < self.items.len() && self.sel != i {
+            self.sel = i;
+            self.dirty = true;
+        }
+    }
+    /// The challenges' (or leaderboards') other tab (normal, expert), the same challenge
+    /// chosen where it is.
+    pub fn switch_trials_tab(&mut self, expert: bool) {
+        let boards = matches!(self.page, Page::Leaderboards | Page::ExpertLeaderboards);
+        let want = match (boards, expert) {
+            (false, false) => Page::Challenges,
+            (false, true) => Page::ExpertChallenges,
+            (true, false) => Page::Leaderboards,
+            (true, true) => Page::ExpertLeaderboards,
+        };
+        if !matches!(self.page, Page::Challenges | Page::ExpertChallenges | Page::Leaderboards | Page::ExpertLeaderboards) || self.page == want {
+            return;
+        }
+        let chosen = self.item_trial(self.sel);
+        self.page = want;
+        self.pending_challenge = chosen;
+        self.board_row = None;
+        self.dirty = true;
+    }
+    /// A leaderboard's item: the challenge, in expert mode or not.
+    pub fn item_board(&self, i: usize) -> Option<(usize, bool)> {
+        match self.items.get(i)?.1 {
+            Action::Board(c, expert) => Some((c, expert)),
+            _ => None,
+        }
+    }
+    /// The challenge of a challenges' or leaderboards' item.
+    fn item_trial(&self, i: usize) -> Option<usize> {
+        self.item_challenge(i).map(|c| c.0).or(self.item_board(i).map(|b| b.0))
+    }
+    /// A challenge's leaderboard over its run's results (`R_Next_Screen.OnLeaderboardsClicked`).
+    pub fn open_board(&mut self, challenge: usize, expert: bool) {
+        self.open = Some(MenuKind::Main);
+        self.page = if expert { Page::ExpertLeaderboards } else { Page::Leaderboards };
+        self.stack.clear();
+        self.sel = 0;
+        self.pending_challenge = Some(challenge);
+        self.board_row = None;
+        self.board_over_results = true;
+        self.dirty = true;
+    }
+    /// A leaderboard open over a run's results (drawn over them).
+    pub fn over_results(&self) -> bool {
+        self.board_over_results && self.open.is_some()
+    }
+    /// A leaderboard's other challenge along (`LeftPressed`, `RightPressed`: round the list).
+    pub fn board_step(&mut self, dir: i32) {
+        let n = self.items.len() as i32;
+        if n > 0 && matches!(self.page, Page::Leaderboards | Page::ExpertLeaderboards) {
+            self.sel = (self.sel as i32 + dir).rem_euclid(n) as usize;
+            self.board_row = None;
+            self.dirty = true;
         }
     }
     /// The item chosen with the keys.
@@ -349,11 +499,13 @@ impl Menu {
     fn go(&mut self, page: Page) {
         self.stack.push(self.page);
         self.page = page;
+        self.board_row = None;
         // (the new game opens on Normal: `NewGameMenu._curSelectionIdx`)
         self.sel = if page == Page::Difficulty { 1 } else { 0 };
         self.dirty = true;
     }
     fn back(&mut self) -> bool {
+        self.gallery_view = None;
         match self.stack.pop() {
             Some(p) => {
                 self.page = p;
@@ -372,18 +524,27 @@ struct MenuRoot;
 #[derive(Component)]
 pub struct MenuItem(pub usize);
 
-fn enter_level(level: Option<Res<LevelInfo>>, mut menu: ResMut<Menu>, vm: Option<ResMut<Vm>>, mut launch: ResMut<crate::challenge::ChallengeLaunch>) {
+fn enter_level(level: Option<Res<LevelInfo>>, mut menu: ResMut<Menu>, vm: Option<ResMut<Vm>>, mut launch: ResMut<crate::challenge::ChallengeLaunch>, profile: Res<crate::challenge::ChallengeProfile>) {
     let main = level.as_ref().is_some_and(|l| l.scene.name.eq_ignore_ascii_case(MENU_MAP));
+    let trials = level.as_ref().is_some_and(|l| l.scene.name.eq_ignore_ascii_case(TRIALS_MAP));
     *menu = Menu::default();
+    if trials {
+        // Dunwall City Trials' home (or, back from a challenge's results, its challenges)
+        menu.open = Some(MenuKind::Main);
+        menu.page = Page::Trials;
+        menu.started = true;
+        if std::mem::take(&mut launch.back_to_challenges) {
+            menu.page = if launch.expert { Page::ExpertChallenges } else { Page::Challenges };
+            menu.stack = vec![Page::Trials];
+            menu.pending_challenge = launch.last;
+        } else if !profile.welcome_seen {
+            // (the first time: the welcome, then the home)
+            menu.page = Page::Welcome;
+        }
+    }
     if main {
         menu.open = Some(MenuKind::Main);
         menu.page = Page::Title;
-        // (back from a challenge's results to the challenges)
-        if std::mem::take(&mut launch.back_to_challenges) {
-            menu.page = Page::Challenges;
-            menu.stack = vec![Page::Main, Page::Dlc];
-            menu.started = true;
-        }
         if let Some(mut vm) = vm {
             vm.remote_event("StartCam_Play");
         }
@@ -426,7 +587,8 @@ fn open_pause(
     if journal.open || store.open.is_some() || journal.is_changed() || store.is_changed() || note.open.is_some() || note.is_changed() {
         return;
     }
-    if menu.open.is_none() && keys.just_pressed(KeyCode::Escape) && !stats.dead {
+    // (a challenge over: its results take the keys)
+    if menu.open.is_none() && keys.just_pressed(KeyCode::Escape) && !stats.dead && challenge.ended.is_none() {
         menu.open = Some(MenuKind::Pause);
         menu.page = Page::Main;
         menu.stack.clear();
@@ -579,7 +741,12 @@ mod modal_tests {
     }
 }
 
-fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::gamedata::Data, profile: &crate::challenge::ChallengeProfile) -> Vec<(String, Action)> {
+/// A challenge run, for its pause menu: whether it may be ended early.
+pub struct TrialRun {
+    pub can_end_early: bool,
+}
+
+fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::gamedata::Data, profile: &crate::challenge::ChallengeProfile, trial: Option<TrialRun>) -> Vec<(String, Action)> {
     let has_saves = slots.any();
     match (menu.open, menu.page) {
         (_, Page::Title) => vec![("Press any key".into(), Action::Page(Page::Main))],
@@ -602,28 +769,46 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
             v.push(("Quit Game".into(), Action::QuitGame));
             v
         }
-        (_, Page::Dlc) => vec![(data.text("DisDLC05MoviePlayerChallengeMenu_Texts", "t_DLC05_Name"), Action::Page(Page::Challenges)), ("Back".into(), Action::Back)],
-        (_, Page::Challenges) => {
-            // each challenge with its stars (its medals reached by the best score)
-            let mut v: Vec<(String, Action)> = data
-                .0
-                .challenges
-                .iter()
-                .enumerate()
-                .map(|(i, c)| {
-                    let best = profile.best.get(&c.id).copied().unwrap_or(0);
-                    let stars = c.medals.iter().filter(|m| **m > 0 && best >= **m as i64).count();
-                    (format!("{}   {}", c.name, "*".repeat(stars)), Action::Page(Page::Challenge(i)))
-                })
-                .collect();
-            v.push(("Back".into(), Action::Back));
+        (_, Page::Dlc) => vec![(data.text("DisDLC05MoviePlayerChallengeMenu_Texts", "t_DLC05_Name"), Action::Trials), ("Back".into(), Action::Back)],
+        // (`CM_Home_Screen.SetHomeMenu`: the challenges, the way out; leaderboards, gallery and
+        // credits aside)
+        (_, Page::Trials) => {
+            let mut v = vec![(data.text("DisGFxMoviePlayerBase_Texts", "t_ChallengesList"), Action::Page(Page::Challenges))];
+            if !data.0.gallery.is_empty() {
+                v.push((data.text("DisDLC05MoviePlayerChallengeMenu_Texts", "t_Gallery"), Action::Page(Page::Gallery)));
+            }
+            v.insert(1, (data.text("DisGFxMoviePlayerBase_Texts", "t_Leaderboards_X360"), Action::Page(Page::Leaderboards)));
+            v.push((data.text("DisDLC05MoviePlayerChallengeMenu_Texts", "t_Credits"), Action::TrialsCredits));
+            v.push((data.text("DisDLC05MoviePlayerChallengeMenu_Texts", "t_BackToMainMenu"), Action::LeaveTrials));
             v
         }
-        (_, Page::Challenge(i)) => {
-            let base = "DisDLC05MoviePlayerChallengeMenu_Texts";
-            let start = data.text(base, "t_StartChallenge");
-            vec![(start.clone(), Action::StartChallenge(i, false)), (format!("{}{start}", data.text(base, "t_ExpertModeTitle")), Action::StartChallenge(i, true)), ("Back".into(), Action::Back)]
-        }
+        (_, Page::Welcome) => vec![(data.text("DisGFxMoviePlayerBase_Texts", "t_ContinueGame"), Action::WelcomeDone)],
+        // every challenge's board in normal mode; in expert those with one
+        (_, Page::Leaderboards) => data.0.challenges.iter().enumerate().map(|(i, c)| (c.name.clone(), Action::Board(i, false))).collect(),
+        (_, Page::ExpertLeaderboards) => data.0.challenges.iter().enumerate().filter(|(_, c)| c.expert_medals.iter().any(|m| *m > 0)).map(|(i, c)| (c.name.clone(), Action::Board(i, true))).collect(),
+        // the gallery's pieces, each open once its stars are won (`DisDLC05GalleryItem`)
+        (_, Page::Gallery) => data
+            .0
+            .gallery
+            .iter()
+            .enumerate()
+            .map(|(i, g)| (g.id.clone(), if profile.gallery_unlocked(&data.0, i) { Action::GalleryView(i) } else { Action::LockedGallery(i) }))
+            .collect(),
+        // every challenge in normal mode; in expert those with one, open once two stars are
+        // won in normal (`t_ChallengeUnlockCondition`, `t_Welcome_txt2`)
+        (_, Page::Challenges) => data.0.challenges.iter().enumerate().map(|(i, c)| (c.name.clone(), Action::StartChallenge(i, false))).collect(),
+        (_, Page::ExpertChallenges) => data
+            .0
+            .challenges
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.expert_medals.iter().any(|m| *m > 0))
+            .map(|(i, c)| {
+                let best = profile.best.get(&c.id).copied().unwrap_or(0);
+                let open = c.medals[1] > 0 && best >= c.medals[1] as i64;
+                (c.name.clone(), if open { Action::StartChallenge(i, true) } else { Action::LockedChallenge(i) })
+            })
+            .collect(),
         // (`SetGameOverMenu`: `t_ContinueFromLastSave`, `t_LoadASpecificSave`,
         // `t_BackToMainMenu`, `t_BackToWindows`)
         (Some(MenuKind::GameOver), Page::Main) => vec![
@@ -634,6 +819,19 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
         ],
         // (the original's: `t_ResumeGame`, `t_SaveGame`, `t_LoadGamePauseMenu`, `t_Options`,
         // `t_BackToMainMenu`, `t_BackToWindows`)
+        // (a challenge's: `t_ResumeGame`, `t_RestartChallenge`, `t_EndChallenge` where it may end
+        // early, `t_Options`, `t_ExitChallenge`, `t_ExitDLC05`)
+        (Some(MenuKind::Pause), Page::Main) if trial.is_some() => {
+            let b = "DisGFxMoviePlayerBase_Texts";
+            let mut v = vec![("Resume".into(), Action::Resume), (data.text(b, "t_RestartChallenge"), Action::RestartChallenge)];
+            if trial.as_ref().is_some_and(|t| t.can_end_early) {
+                v.push((data.text(b, "t_EndChallenge"), Action::EndChallenge));
+            }
+            v.push(("Options".into(), Action::Page(Page::Options)));
+            v.push((data.text(b, "t_ExitChallenge"), Action::ExitChallenge));
+            v.push((data.text(b, "t_ExitDLC05"), Action::LeaveTrials));
+            v
+        }
         (_, Page::Main) => vec![
             ("Resume".into(), Action::Resume),
             ("Save Game".into(), Action::Page(Page::Save)),
@@ -751,8 +949,13 @@ fn menu_input(
     hovered: Query<(&Interaction, &MenuItem), Changed<Interaction>>,
     (vm, mut campaign, scripted, mut intro): (Option<ResMut<Vm>>, ResMut<crate::gameplay::Campaign>, Option<Res<crate::script::Scripted>>, ResMut<crate::movie::IntroPending>),
     (data, mut launch): (Res<crate::gamedata::Data>, ResMut<crate::challenge::ChallengeLaunch>),
+    (mut profile, movies, mut play): (ResMut<crate::challenge::ChallengeProfile>, Res<crate::movie::Movies>, MessageWriter<crate::movie::PlayMovie>),
 ) {
     let Some(kind) = menu.open else { return };
+    // (a movie over the menu, the trials' credits: its keys are its own)
+    if movies.holding() {
+        return;
+    }
     // binding a key: the next one pressed (Escape cancels)
     if let Some(a) = menu.capture {
         if keys.just_pressed(KeyCode::Escape) {
@@ -848,6 +1051,104 @@ fn menu_input(
         }
         return;
     }
+    // the gallery: a piece seen large (`CM_Gallery_ViewPort_Screen`): the arrows (or the
+    // shoulders) to the next unlocked, Escape back to the list
+    if menu.page == Page::Gallery && menu.gallery_view.is_some() {
+        if keys.just_pressed(KeyCode::Escape) || mouse.just_pressed(MouseButton::Right) {
+            menu.gallery_view = None;
+            menu.dirty = true;
+        } else if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) || keys.just_pressed(KeyCode::PageDown) {
+            menu.gallery_step(1);
+        } else if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) || keys.just_pressed(KeyCode::PageUp) {
+            menu.gallery_step(-1);
+        }
+        return;
+    }
+    // the gallery's grid (`CM_Gallery_List`: 7 across)
+    if menu.page == Page::Gallery && answered.is_none() {
+        let step: i32 = if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) {
+            1
+        } else if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) {
+            -1
+        } else if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS) {
+            GALLERY_COLS as i32
+        } else if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) {
+            -(GALLERY_COLS as i32)
+        } else {
+            0
+        };
+        if step != 0 {
+            let to = menu.sel as i32 + step;
+            if (0..n as i32).contains(&to) {
+                menu.sel = to as usize;
+                menu.dirty = true;
+            }
+            return;
+        }
+    }
+    // a leaderboard (`Leaderboards_Screen`): Left / Right the challenge, Up / Down its rows,
+    // Tab (or Page Up / Down) the mode's tab
+    if matches!(menu.page, Page::Leaderboards | Page::ExpertLeaderboards) && answered.is_none() {
+        if keys.just_pressed(KeyCode::Tab) || keys.just_pressed(KeyCode::PageUp) || keys.just_pressed(KeyCode::PageDown) {
+            let expert = menu.page == Page::Leaderboards;
+            menu.switch_trials_tab(expert);
+            return;
+        }
+        if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) {
+            menu.board_step(1);
+            return;
+        }
+        if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) {
+            menu.board_step(-1);
+            return;
+        }
+        let dy: i32 = if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS) {
+            1
+        } else if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) {
+            -1
+        } else {
+            0
+        };
+        if dy != 0 {
+            if let Some((c, expert)) = menu.item_board(menu.sel) {
+                let key = data.0.challenges.get(c).map(|d| crate::challenge::best_key(&d.id, expert)).unwrap_or_default();
+                let (rows, last) = profile.board(&key);
+                if !rows.is_empty() {
+                    let cur = menu.board_row.or(last).unwrap_or(0) as i32;
+                    menu.board_row = Some((cur + dy).clamp(0, rows.len() as i32 - 1) as usize);
+                }
+            }
+            return;
+        }
+    }
+    // the challenges' grid (`CM_ChallengesList_List`: 5 across): the arrows move about it,
+    // Tab (or Page Up / Down) changes the mode's tab
+    if matches!(menu.page, Page::Challenges | Page::ExpertChallenges) && answered.is_none() {
+        if keys.just_pressed(KeyCode::Tab) || keys.just_pressed(KeyCode::PageUp) || keys.just_pressed(KeyCode::PageDown) {
+            let expert = menu.page == Page::Challenges;
+            menu.switch_trials_tab(expert);
+            return;
+        }
+        let step: i32 = if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) {
+            1
+        } else if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) {
+            -1
+        } else if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS) {
+            5
+        } else if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) {
+            -5
+        } else {
+            0
+        };
+        if step != 0 {
+            let to = menu.sel as i32 + step;
+            if (0..n as i32).contains(&to) {
+                menu.sel = to as usize;
+                menu.dirty = true;
+            }
+            return;
+        }
+    }
     let mut activate = None;
     let mut dir = 0.0;
     // (a scripted run ignores the real pointer)
@@ -898,8 +1199,9 @@ fn menu_input(
         }
     }
     if keys.just_pressed(KeyCode::Escape) && activate.is_none() {
-        if !menu.back() && kind == MenuKind::Pause {
+        if !menu.back() && (kind == MenuKind::Pause || menu.board_over_results) {
             menu.open = None;
+            menu.board_over_results = false;
             menu.dirty = true;
         }
         return;
@@ -918,6 +1220,11 @@ fn menu_input(
                 Action::QuitToMenu => Some(data.text(base, "t_Q_BackToMainMenu")),
                 Action::QuitGame => Some(data.text(base, if kind == MenuKind::Main { "t_Q_QuitGame" } else { "t_Q_BackToWindows" })),
                 Action::Difficulty(_) if slots.any() => Some(data.text("DisGFxMoviePlayerMainMenu_Texts", "t_Q_NewGame")),
+                Action::LeaveTrials if kind == MenuKind::Pause => Some(data.text("DisGFxMoviePlayerBase_Texts", "t_Q_ExitDLC05_IG")),
+                Action::LeaveTrials => Some(data.text("DisDLC05MoviePlayerChallengeMenu_Texts", "t_Q_DLC05_BackToMain")),
+                Action::RestartChallenge => Some(data.text("DisGFxMoviePlayerBase_Texts", "t_Q_RestartChallenge")),
+                Action::EndChallenge => Some(data.text("DisGFxMoviePlayerBase_Texts", "t_Q_EndChallenge")),
+                Action::ExitChallenge => Some(data.text("DisGFxMoviePlayerBase_Texts", "t_Q_BackToChallenges_IG")),
                 _ => None,
             };
             if let Some(q) = question.filter(|q| !q.is_empty()) {
@@ -1003,6 +1310,47 @@ fn menu_input(
                 next.set(GameState::Loading);
             }
         }
+        Action::LockedChallenge(_) | Action::LockedGallery(_) => {}
+        Action::GalleryView(_) => {
+            menu.gallery_view = Some(menu.sel);
+            menu.dirty = true;
+        }
+        Action::RestartChallenge => {
+            // (the same map, the same mode)
+            config.spawn_index = None;
+            menu.open = None;
+            next.set(GameState::Loading);
+        }
+        Action::EndChallenge => {
+            launch.end_now = true;
+            menu.open = None;
+            menu.dirty = true;
+        }
+        Action::ExitChallenge => {
+            config.map = TRIALS_MAP.into();
+            config.spawn_index = None;
+            launch.back_to_challenges = true;
+            menu.open = None;
+            next.set(GameState::Loading);
+        }
+        Action::WelcomeDone => {
+            profile.welcome_seen = true;
+            profile.save();
+            menu.page = Page::Trials;
+            menu.stack.clear();
+            menu.sel = 0;
+            menu.dirty = true;
+        }
+        Action::Board(..) => {}
+        Action::TrialsCredits => {
+            play.write(crate::movie::PlayMovie { name: "CreditsDLC05".into(), looping: false, skippable: true, layer: crate::movie::MovieLayer::Fullscreen });
+        }
+        Action::Trials | Action::LeaveTrials => {
+            config.map = if matches!(action, Action::Trials) { TRIALS_MAP.into() } else { MENU_MAP.into() };
+            config.spawn_index = None;
+            menu.open = None;
+            next.set(GameState::Loading);
+        }
     }
 }
 
@@ -1016,7 +1364,7 @@ fn menu_build(
     mut ui: ResMut<UiImages>,
     mut images: ResMut<Assets<Image>>,
     roots: Query<Entity, With<MenuRoot>>,
-    (data, profile): (Res<crate::gamedata::Data>, Res<crate::challenge::ChallengeProfile>),
+    (data, profile, challenge): (Res<crate::gamedata::Data>, Res<crate::challenge::ChallengeProfile>, Res<crate::challenge::Challenge>),
 ) {
     if !menu.dirty && !(settings.is_changed() && menu.page == Page::Options) {
         return;
@@ -1026,7 +1374,13 @@ fn menu_build(
         commands.entity(e).despawn();
     }
     let Some(kind) = menu.open else { return };
-    menu.items = items(&menu, &settings, &slots, &data, &profile);
+    let trial = challenge.def.as_ref().map(|d| TrialRun { can_end_early: d.can_end_early });
+    menu.items = items(&menu, &settings, &slots, &data, &profile, trial);
+    if let Some(c) = menu.pending_challenge.take() {
+        if let Some(i) = (0..menu.items.len()).find(|&i| menu.item_trial(i) == Some(c)) {
+            menu.sel = i;
+        }
+    }
     if menu.sel >= menu.items.len() {
         menu.sel = 0;
     }

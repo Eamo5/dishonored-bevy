@@ -82,6 +82,12 @@ pub fn task_points(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: imp
 /// guard's belt), and whether they are an optional objective's.
 pub fn task_targets(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: impl Fn(u32) -> Option<Vec3>) -> Vec<(Vec3, Option<u32>, u32, bool)> {
     let mut points: Vec<(Vec3, Option<u32>, u32, bool)> = Vec::new();
+    // (the challenges' marks: `DisSeqAct_DLC05_MarkerControl`)
+    for &a in &vm.dlc_markers {
+        let Some(ka) = vm.g.actors.get(a as usize) else { continue };
+        let at = ka.spawner.and_then(&npc_at).map(|p| p + Vec3::Y * 1.1).unwrap_or(Vec3::from(ka.position) + Vec3::Y * 0.5);
+        points.push((at, ka.pickup, a, false));
+    }
     for path in &vm.objectives {
         let Some(o) = vm.g.objectives.iter().find(|o| o.path == *path) else { continue };
         if o.no_markers {

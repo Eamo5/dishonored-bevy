@@ -83,7 +83,7 @@ fn whaler_powers(
     mut was_pulling: Local<bool>,
     mut teleports: MessageWriter<Teleported>,
 ) {
-    let dt = time.delta_secs() * tc.world_scale();
+    let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
     let Ok((pt, mut p)) = player.single_mut() else { return };
     let ctx = rapier.single().ok();
     let walls = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
@@ -96,6 +96,7 @@ fn whaler_powers(
     let mut pull = Vec3::ZERO;
     let mut any_pulling = false;
     for (mut w, mut npc, mut t) in &mut whalers {
+        let dt = if npc.out_of_bend { dt_own } else { dt_world };
         w.teleport_cd -= dt;
         w.pull_cd -= dt;
         let me = t.translation;

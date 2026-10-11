@@ -176,6 +176,15 @@ pub enum Effect {
     Fade { to: f32, time: f32 },
     GoTo(Val, Vec3),
     Travel(String),
+    /// the dead taken away (`DisSeqAct_CleanupBodies`)
+    CleanupBodies,
+    /// a character's kind changed (`DisSeqAct_DLC05_SetStoryGroup`)
+    StoryGroup(Val, String),
+    /// a player attribute's modifier set or gone (`DisSeqAct_AddAttributeModifier`): the
+    /// attribute, its value
+    AttrMod(String, Option<f32>),
+    /// Dark Vision on for so long, or off (`DisSeqAct_DLC05_DarkVision`)
+    DarkVision(Option<f32>),
     /// subtitle line and how long it shows
     Subtitle(String, f32),
     /// a streamed sublevel came in (true) or went out
@@ -577,6 +586,18 @@ pub struct Vm {
     pub challenge_fx: Vec<crate::challenge::ChallengeFx>,
     pub expert: bool,
     pub doll_found: bool,
+    /// what was given since an unlock was last shown
+    grants: Vec<crate::challenge::Grant>,
+    /// the factories' whale oil tanks made (Oil Drop): the tank's actor, where, its turn (a
+    /// UE rotator); each pool's next (by its first actor)
+    pub tank_spawns: Vec<(u32, Vec3, [i32; 3])>,
+    pool_next: HashMap<u32, usize>,
+    /// the thief's watch for being seen (`DisSeqAct_DLC05_PlayerBusted`: its op, while on);
+    /// the actors the challenge marks (`DisSeqAct_DLC05_MarkerControl`); the ammunition by
+    /// `eDisAmmoType` (count, capacity: `DisSeqAct_DLC05_GetAmmoInfo`)
+    pub busted: Option<u32>,
+    pub dlc_markers: std::collections::BTreeSet<u32>,
+    pub ammo: [(u32, u32); 8],
     /// the damage type of the last death the challenge saw (`DisSeqAct_DLC05_GetDeathInfo`)
     pub last_death: Option<String>,
     /// movers' navigation meshes the scripts join to the rest (true) or part from it
@@ -744,6 +765,12 @@ impl Vm {
             challenge_fx: Vec::new(),
             expert: false,
             doll_found: false,
+            grants: Vec::new(),
+            tank_spawns: Vec::new(),
+            pool_next: HashMap::new(),
+            busted: None,
+            dlc_markers: Default::default(),
+            ammo: [(0, 0); 8],
             last_death: None,
             pylon_links: Vec::new(),
             impulses: Vec::new(),
@@ -945,6 +972,14 @@ impl Vm {
     fn read(&self, op: u32, desc: &str) -> Vec<Val> {
         self.link_vars(op, desc).into_iter().flat_map(|v| self.value(v).items()).collect()
     }
+    /// Something given, for the next unlock shown (the last few kept).
+    fn grant(&mut self, g: crate::challenge::Grant) {
+        if self.grants.len() >= 16 {
+            self.grants.remove(0);
+        }
+        self.grants.push(g);
+    }
+
     fn read_f(&self, op: u32, desc: &str, prop: &str, default: f32) -> f32 {
         self.read(op, desc).iter().find_map(|v| v.as_f32()).or_else(|| self.pf(op, prop)).unwrap_or(default)
     }
@@ -1521,13 +1556,17 @@ impl Vm {
                 self.fire(op, if all { 0 } else { 1 });
             }
             "SeqCond_CompareInt" | "SeqCond_CompareFloat" | "SeqCond_Increment" | "SeqCond_IncrementFloat" => {
-                let mut a = self.read_f(op, if class.contains("Increment") { "Counter" } else { "A" }, "ValueA", 0.0);
-                if class.contains("Increment") {
+                // (an increment's counter and comparison: linked as "A" and "B" in this game's
+                // scripts, "Counter" and "Comparison" in the engine's)
+                let inc = class.contains("Increment");
+                let (la, lb) = if inc && opd.vars.iter().any(|l| l.desc == "Counter") { ("Counter", "Comparison") } else { ("A", "B") };
+                let mut a = self.read_f(op, la, "ValueA", 0.0);
+                if inc {
                     a += self.pf(op, "IncrementAmount").unwrap_or(1.0);
                     let wv = if class.ends_with("Float") { Val::Float(a) } else { Val::Int(a as i32) };
-                    self.write(op, "Counter", wv);
+                    self.write(op, la, wv);
                 }
-                let b = self.read_f(op, if class.contains("Increment") { "Comparison" } else { "B" }, "ValueB", 0.0);
+                let b = self.read_f(op, lb, "ValueB", 0.0);
                 for (i, o) in opd.outputs.iter().enumerate() {
                     let d = o.desc.replace(' ', "");
                     let hit = match d.as_str() {
@@ -1664,6 +1703,33 @@ impl Vm {
                 let hide_player = f("bHidePlayer");
                 self.ai_fx.push(crate::script_world::AiFx::Cinematic { on, hide_hud, hold, hide_player });
                 self.fire(op, 0);
+            }
+            "SeqAct_ActorFactory" | "SeqAct_ActorFactoryEx" if self.prop(op, "factory_pool_actors").is_some() => {
+                // a whale oil tank (Oil Drop): its pool's next, made at the spawn point; the
+                // scripts' later actions on "Spawned" are on it
+                if input == 0 {
+                    let pool: Vec<u32> = match self.prop(op, "factory_pool_actors") {
+                        Some(KVal::List(l)) => l.iter().filter_map(|v| if let KVal::Int(a) = v { Some(*a as u32) } else { None }).collect(),
+                        _ => Vec::new(),
+                    };
+                    let at = self.read(op, "Spawn Point").into_iter().find_map(|v| if let Val::Actor(a) = v { g.actors.get(a as usize).map(|ka| (Vec3::from(ka.position), ka.rotation)) } else { None });
+                    if let (Some(&first), Some((pos, rot))) = (pool.first(), at) {
+                        let n = self.pool_next.entry(first).or_default();
+                        let tank = pool[*n % pool.len()];
+                        *n += 1;
+                        self.tank_spawns.push((tank, pos, rot));
+                        self.write(op, "Spawned", Val::Actor(tank));
+                        self.write(op, "Spawned 1", Val::Actor(tank));
+                    }
+                    if class == "SeqAct_ActorFactoryEx" {
+                        if let Some(i) = self.output_index(op, "Spawned 1") {
+                            self.fire(op, i);
+                        }
+                    }
+                }
+                if input == 0 || class == "SeqAct_ActorFactory" {
+                    self.fire(op, 0);
+                }
             }
             "SeqAct_ActorFactory" | "SeqAct_ActorFactoryEx" => {
                 // what it makes stands at its spawn point: the scripts' later actions on
@@ -1824,7 +1890,9 @@ impl Vm {
             }
             "DisSeqAct_GiveUpgrade" => {
                 if let Some(u) = self.ps(op, "m_pUpgrade") {
-                    self.upgrades.push(u.rsplit('.').next().unwrap_or(&u).to_string());
+                    let id = u.rsplit('.').next().unwrap_or(&u).to_string();
+                    self.grant(crate::challenge::Grant::Upgrade(id.clone()));
+                    self.upgrades.push(id);
                 }
                 self.fire(op, 0);
             }
@@ -2085,13 +2153,10 @@ impl Vm {
                 }
                 self.fire(op, out);
             }
-            c if c.starts_with("DisSeqCond") || c.starts_with("SeqCond") => {
-                // unknown condition: take the negative branch when there is one
-                self.fire(op, if opd.outputs.len() > 1 { 1 } else { 0 });
-            }
             "DisSeqAct_AddPower" => {
                 let name = self.ps(op, "m_PowerName").unwrap_or_default();
                 let level = self.pi(op, "m_PowerLevel").unwrap_or(1).clamp(1, 2) as u8;
+                self.grant(crate::challenge::Grant::Power(name.clone(), level));
                 self.effects.push(Effect::Power(name, level));
                 self.fire(op, 0);
             }
@@ -2457,10 +2522,12 @@ impl Vm {
                 // Start, Stop, Add Modifier, Pause, Resume -> Started, Stopped, (Completed), Paused, Resumed
                 let modifier = self.read(op, "Modifier").iter().find_map(|v| v.as_f32()).unwrap_or(0.0);
                 let p = crate::challenge::TimerParams {
-                    initial: self.pf(op, "m_fInitialTime").unwrap_or(0.0),
+                    // (its start linked, or set: Chain Kill's `fCountdownTime`)
+                    initial: self.read_f(op, "m_fInitialTime", "m_fInitialTime", 0.0),
                     target: self.pb(op, "m_bUseTargetTime").unwrap_or(false).then(|| self.pf(op, "m_fTargetTime").unwrap_or(0.0)),
                     increment: self.pb(op, "m_bIncrement").unwrap_or(true),
                     reset_on_stop: self.pb(op, "m_bResetOnStop").unwrap_or(false),
+                    reset_on_kill: self.pb(op, "m_bAutoResetOnKill").unwrap_or(false),
                     kind: self.ps(op, "m_TimerType").unwrap_or_else(|| "DDHT_DefaultTimer".into()),
                 };
                 self.challenge_fx.push(crate::challenge::ChallengeFx::Timer { op, input, params: p, modifier });
@@ -2505,19 +2572,23 @@ impl Vm {
                 self.fire(op, 0);
             }
             "DisSeqAct_DLC05_ShowPhaseResults" => {
+                // (latent: "Out" once the player goes on, `DLC05_GoToNextPhase`)
                 let n = |s: &Self, d: &str| s.read(op, d).iter().find_map(|v| v.as_f32()).unwrap_or(0.0) as i32;
                 let fx = crate::challenge::ChallengeFx::PhaseResults {
+                    op,
                     name: self.ps(op, "m_PhaseName").unwrap_or_default(),
                     last: self.pb(op, "m_bWasLastPhase").unwrap_or(false),
+                    show_possible: self.pb(op, "m_bShowPossibleKills").unwrap_or(true),
+                    bonus_next: self.read(op, "Bonus Phase Next").iter().any(|v| matches!(v, Val::Bool(true)) || matches!(v, Val::Int(i) if *i != 0)),
                     possible: n(self, "Possible Kills"),
                     required: n(self, "Required Kills"),
                     effective: n(self, "Effective Kills"),
                 };
                 self.challenge_fx.push(fx);
-                self.fire(op, 0);
             }
             "DisSeqAct_DLC05_ShowEquipmentUnlock" => {
-                self.challenge_fx.push(crate::challenge::ChallengeFx::EquipmentUnlock);
+                let list = std::mem::take(&mut self.grants);
+                self.challenge_fx.push(crate::challenge::ChallengeFx::EquipmentUnlock(list));
                 self.fire(op, 0);
             }
             "DisSeqAct_DLC05_SetDifficulty" => {
@@ -2899,6 +2970,99 @@ impl Vm {
             }
 
             // ---------------------------------------------------- timed
+            // ------------------------------------------------ Dunwall City Trials' world actions
+            "DisSeqAct_CleanupBodies" => {
+                self.effects.push(Effect::CleanupBodies);
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_SetStoryGroup" => {
+                if let Some(group) = self.ps(op, "m_pStoryGroup") {
+                    for t in self.read(op, "Target") {
+                        self.effects.push(Effect::StoryGroup(t, group.clone()));
+                    }
+                }
+                self.fire(op, 0);
+            }
+            "DisSeqAct_AddAttributeModifier" | "DisSeqAct_RemoveAttributeModifier" => {
+                if let Some(attr) = self.ps(op, "m_AttributeName") {
+                    let v = (class == "DisSeqAct_AddAttributeModifier").then(|| self.pf(op, "m_fModifierValue").unwrap_or(0.0));
+                    self.effects.push(Effect::AttrMod(attr, v));
+                }
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_DarkVision" => {
+                // Enable, Disable -> Enabled, Disabled
+                let on = input == 0;
+                self.effects.push(Effect::DarkVision(on.then(|| self.pf(op, "m_fDuration").unwrap_or(10.0))));
+                self.fire(op, if on { 0 } else { 1 });
+            }
+            "DisSeqAct_DLC05_PlayerBusted" => {
+                // Start, Stop -> Started, Stopped; "Busted" each time Corvo is seen
+                if input == 0 {
+                    self.busted = Some(op);
+                    self.fire(op, 0);
+                } else {
+                    self.busted = None;
+                    self.fire(op, 1);
+                }
+            }
+            "DisSeqAct_DLC05_MarkerControl" => {
+                // Set, Clear, Toggle -> OnSet, OnClear, OnToggle
+                for t in self.read(op, "Target") {
+                    if let Val::Actor(a) = t {
+                        match input {
+                            0 => {
+                                self.dlc_markers.insert(a);
+                            }
+                            1 => {
+                                self.dlc_markers.remove(&a);
+                            }
+                            _ => {
+                                if !self.dlc_markers.remove(&a) {
+                                    self.dlc_markers.insert(a);
+                                }
+                            }
+                        }
+                    }
+                }
+                self.fire(op, (input as usize).min(2));
+            }
+            "DisSeqAct_DLC05_GetAmmoInfo" => {
+                let ty = match self.ps(op, "m_AmmoType").as_deref() {
+                    Some("eDisAmmoType_Bullet") => 0,
+                    Some("eDisAmmoType_ExplosiveBullet") => 1,
+                    Some("eDisAmmoType_Bolt") => 2,
+                    Some("eDisAmmoType_SleepDart") => 3,
+                    Some("eDisAmmoType_IncendiaryBolt") => 4,
+                    Some("eDisAmmoType_SpringRazor") => 5,
+                    Some("eDisAmmoType_Grenade") => 6,
+                    _ => 7,
+                };
+                let (n, cap) = self.ammo[ty];
+                self.write_var(op, "Count", Val::Int(n as i32));
+                self.write_var(op, "Capacity", Val::Int(cap as i32));
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_WobWave" => {
+                // Begin Wave, Add WOB, End Wave -> their outputs
+                self.challenge_fx.push(crate::challenge::ChallengeFx::WobWave(input));
+                self.fire(op, (input as usize).min(2));
+            }
+            "DisSeqAct_DLC05_SetMysteryFoe" => {
+                let portrait = self.ps(op, "m_pPortrait").unwrap_or_default();
+                self.challenge_fx.push(crate::challenge::ChallengeFx::MysteryFoe { portrait, blue: self.pb(op, "m_bIsBlue").unwrap_or(false) });
+                self.fire(op, 0);
+            }
+            // (no more than what they let go on: the wheel's shortcuts are Corvo's own, the
+            // arrows stay, the kill cam is the player's choice, the fall's camera effect and the
+            // bent time's desaturation are the post-process's)
+            "DisSeqAct_DLC05_SetPowerWheelShortcuts" | "DisSeqAct_DLC05_RemoveArrows" | "DisSeqAct_DLC05_ForceKillCam" | "DisSeqAct_DLC05_SetBendTimeDesaturation" | "SeqAct_SetBlockRigidBody" | "SeqAct_ForceGarbageCollection" | "SeqAct_GetProperty" => {
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_FallSpeedFX" => {
+                // Start, Stop -> Started, Stopped
+                self.fire(op, if input == 0 { 0 } else { 1 });
+            }
             "SeqAct_Interp" | "DisSeqAct_DLC05_Interp" => {
                 // inputs: Play, Reverse, Stop, Pause, Change Dir
                 let existing = self.latent.iter().position(|l| matches!(l, Latent::Interp { op: o, .. } if *o == op));
@@ -3120,7 +3284,7 @@ impl Vm {
                 }
                 self.fire(op, 0);
             }
-            "DisSeqAct_AIGoToActor" => {
+            "DisSeqAct_AIGoToActor" | "DisSeqAct_DLC05_AIGoToActor" => {
                 if input == 0 {
                     let dest = self.read(op, "Destination").into_iter().find_map(|v| if let Val::Actor(a) = v { g.actors.get(a as usize) } else { None });
                     if let Some(d) = dest {
@@ -3176,7 +3340,7 @@ impl Vm {
                 }
                 self.fire(op, 0);
             }
-            "DisSeqAct_DialogScriptedChoice" => {
+            "DisSeqAct_DialogScriptedChoice" | "DisSeqAct_DLC05_DialogScriptedChoice" => {
                 // the player answers (choice.rs), down the output chosen
                 let options: Vec<(usize, String)> = opd.outputs.iter().enumerate().filter(|(_, o)| !o.desc.eq_ignore_ascii_case("Player Busy")).map(|(i, o)| (i, o.desc.clone())).collect();
                 if options.is_empty() {
@@ -3437,6 +3601,10 @@ impl Vm {
                 }
             }
 
+            // unknown condition (after every known one): take the negative branch when there is one
+            c if c.starts_with("DisSeqCond") || c.starts_with("SeqCond") => {
+                self.fire(op, if opd.outputs.len() > 1 { 1 } else { 0 });
+            }
             // events only fire from the world
             c if c.starts_with("SeqEvent") || c.starts_with("DisSeqEvent") || c.starts_with("SeqEvt") || c.starts_with("DisSeqEvt") => {}
             // everything else passes through
@@ -3868,6 +4036,11 @@ impl Vm {
     /// Activates an op's input (testing: `kop OP [INPUT]`).
     /// Raise the challenge's events (`DisSeqEvent_DLC05_Challenge`: Started 0, Ended 1,
     /// Failed 2, Reset 3).
+    /// Whether the scripts have an op of a class.
+    pub fn has_op_class(&self, class: &str) -> bool {
+        self.g.ops.iter().any(|o| o.class == class)
+    }
+
     pub fn challenge_event(&mut self, out: usize) {
         for i in 0..self.g.ops.len() {
             if self.g.ops[i].class == "DisSeqEvent_DLC05_Challenge" {
@@ -4235,6 +4408,7 @@ fn setup(
     data: Res<crate::gamedata::Data>,
     script: Res<crate::campaign::CampaignScript>,
     stats: Res<PlayerStats>,
+    (launch, trials): (Res<crate::challenge::ChallengeLaunch>, Res<crate::challenge::ChallengeProfile>),
 ) {
     let Some(level) = level else { return };
     // the campaign's scripts (the persistent level's) run alongside the map's
@@ -4243,6 +4417,10 @@ fn setup(
     let g = Arc::new(graph);
     let mut vm = Vm::new(g.clone(), &level.scene.volumes);
     vm.campaign = merged;
+    // a trial's mode and its doll found before, asked of from the first frame (its sublevels
+    // chosen, its doll placed at load)
+    vm.expert = launch.expert;
+    vm.doll_found = trials.dolls.contains(&level.scene.name.to_ascii_lowercase());
     // the doors left open
     for (i, a) in g.actors.iter().enumerate() {
         if let Some(cw) = a.instances.first().and_then(|&inst| level.scene.door(&a.name, inst)).and_then(|d| d.open_start).filter(|_| a.class == "DisDoor") {
@@ -5719,6 +5897,34 @@ pub fn apply_effects(
                     },
                 }
             }
+            Effect::CleanupBodies => {
+                // (the dead, not one carried)
+                for (e, npc, _, _) in &npcs {
+                    if npc.mode == Mode::Dead {
+                        commands.entity(e).try_despawn();
+                    }
+                }
+            }
+            Effect::StoryGroup(v, group) => {
+                let Some(s) = actor(&v).and_then(|a| a.spawner) else { continue };
+                for (_, mut npc, from, _) in &mut npcs {
+                    if from.0 == s {
+                        npc.story_group = group.clone();
+                    }
+                }
+            }
+            Effect::AttrMod(attr, v) => {
+                // (no falling damage: `Attribute_FallingDamageModPercent` at -100)
+                if attr == "Attribute_FallingDamageModPercent" {
+                    stats.fall_damage_off = v.is_some_and(|v| v <= -100.0);
+                }
+            }
+            Effect::DarkVision(secs) => commands.queue(move |w: &mut World| {
+                if let Some(mut p) = w.get_resource_mut::<crate::powers::Powers>() {
+                    p.dark_vision = secs.is_some();
+                    p.dark_vision_left = secs.unwrap_or(0.0);
+                }
+            }),
         }
     }
 }
