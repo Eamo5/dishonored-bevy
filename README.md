@@ -15,6 +15,8 @@ locally from your own installation.
 - An installed copy of Dishonored (Steam). The game folder is found automatically on common
   Steam library paths; otherwise set `DISHONORED_DIR` to the folder containing `DishonoredGame`.
 - Rust (stable) and a GPU with BC texture compression support (any desktop GPU).
+  Builds are tuned to the building machine's CPU (`target-cpu=native` in `.cargo/config.toml`);
+  remove it to make binaries for other machines.
 - Optional: ffmpeg on the path (or `DH_FFMPEG`) to convert the Bink movies (the intro, the
   loading screens' loops, the title card, the credits); without it they are left out.
 - **A modded install.** Mods installed with TFC Installer keep each file they replace in
