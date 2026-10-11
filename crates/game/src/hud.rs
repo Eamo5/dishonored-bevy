@@ -64,7 +64,7 @@ fn hud_parts(
     seen.2 += time.delta_secs();
     let gauges = match settings.hud_gauges {
         0 => false,
-        1 => seen.2 < 4.0 || h < crate::gauges::LOW_HEALTH || m < crate::gauges::LOW_MANA,
+        1 => seen.2 < 8.0 || h < crate::gauges::LOW_HEALTH || m < crate::gauges::LOW_MANA,
         _ => true,
     };
     for (p, mut v) in &mut parts {

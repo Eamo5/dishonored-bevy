@@ -31,7 +31,7 @@ impl Plugin for PowersPlugin {
             .add_systems(Update, bolt_focus.after(crate::interact::FocusSet).before(crate::gadgets::grenade_focus).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
             .add_systems(
                 Update,
-                (select_power, use_power, windblast_gusts, transversal_freeze, cook_grenade, blink_travel, update_projectiles, regenerate, dark_vision_post, crate::darkvision::update_dark_vision, crate::darkvision::dark_vision_sounds)
+                (select_power, use_power, windblast_gusts, ignite, transversal_freeze, cook_grenade, blink_travel, update_projectiles, regenerate, dark_vision_post, crate::darkvision::update_dark_vision, crate::darkvision::dark_vision_sounds)
                     .chain()
                     .after(crate::gadgets::grenade_focus)
                     .run_if(in_state(GameState::InGame)),
@@ -305,6 +305,9 @@ pub struct Powers {
     pub reload_anim: (u32, &'static str),
     /// Wind Blasts under way
     pub gusts: Vec<Gust>,
+    /// Corvo's velocity as a Blink begins, his again as it ends; whether it ends crouched
+    pub blink_vel: Vec3,
+    pub blink_crouch: bool,
 }
 
 /// A Wind Blast under way: since the cast (s), from where and which way, its level; who it
@@ -344,6 +347,8 @@ impl Default for Powers {
             reload: [0.0; 2],
             reload_anim: (0, ""),
             gusts: Vec::new(),
+            blink_vel: Vec3::ZERO,
+            blink_crouch: false,
         }
     }
 }
@@ -460,6 +465,22 @@ fn tick_reload(powers: &mut Powers, data: &Data, stats: &PlayerStats, dt: f32) -
 
 #[derive(Component)]
 struct BlinkMarker;
+
+/// A character an incendiary bolt struck: seconds before it burns.
+#[derive(Component)]
+pub struct Ignite(pub f32);
+
+/// The flames take those incendiary bolts struck.
+fn ignite(mut commands: Commands, time: Res<Time>, tc: Res<TimeControl>, mut q: Query<(Entity, &mut Ignite, &Transform)>, mut hits: MessageWriter<NpcHit>) {
+    let dt = time.delta_secs() * tc.world_scale();
+    for (e, mut i, t) in &mut q {
+        i.0 -= dt;
+        if i.0 <= 0.0 {
+            hits.write(NpcHit { npc: e, damage: 999.0, kind: HitKind::Fire, from: t.translation });
+            commands.entity(e).try_remove::<Ignite>();
+        }
+    }
+}
 
 /// A hit this high above a character's middle is to its head.
 const HEAD: f32 = 0.58;
@@ -754,7 +775,7 @@ fn select_power(
 }
 
 /// Compute where Blink would put the player (capsule centre), including ledge grabs.
-fn blink_destination(ctx: &RapierContext, player: Entity, eye: Vec3, dir: Vec3, range: f32, vert: f32) -> Option<Vec3> {
+fn blink_destination(ctx: &RapierContext, player: Entity, eye: Vec3, dir: Vec3, range: f32, vert: f32) -> Option<(Vec3, bool)> {
     let filter = QueryFilter::default().exclude_collider(player).groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP | GROUP_NPC));
     // upward blinks reach less far (the original's vertical limit)
     let range = if dir.y > 0.0 { range.min(vert / dir.y.max(1e-3)) } else { range };
@@ -805,11 +826,20 @@ fn blink_destination(ctx: &RapierContext, player: Entity, eye: Vec3, dir: Vec3, 
             false
         });
         if b2 {
-            return None;
+            // (where only a crouch fits, he arrives crouched: the original asks only room for
+            // its crawl height, as roshan's r614/blink research found)
+            let low = dest - Vec3::Y * (STAND_HALF - crate::player::CROUCH_HALF);
+            let crouch = Collider::capsule_y(crate::player::CROUCH_HALF, RADIUS * 0.95);
+            let mut b3 = false;
+            ctx.intersect_shape(low, Quat::IDENTITY, &*crouch.raw, filter, |_| {
+                b3 = true;
+                false
+            });
+            return (!b3).then_some((low, true));
         }
         dest = up;
     }
-    Some(dest)
+    Some((dest, false))
 }
 
 /// Unreal units to metres.
@@ -897,7 +927,9 @@ fn use_power(
     let blink_ready = stats.mana >= Power::Blink.mana(&data) && powers.blink_lock <= 0.0;
     if sel == Power::Blink && can_act && mouse.pressed(MouseButton::Right) && (blink_ready || powers.aiming) {
         powers.aiming = true;
-        powers.blink_target = blink_destination(&ctx, pe, eye, dir, blink_range, blink_vert);
+        let dest = blink_destination(&ctx, pe, eye, dir, blink_range, blink_vert);
+        powers.blink_target = dest.map(|d| d.0);
+        powers.blink_crouch = dest.is_some_and(|d| d.1);
     } else if sel == Power::Blink && can_act && mouse.just_pressed(MouseButton::Right) && stats.mana < Power::Blink.mana(&data) {
         out_of_mana(&mut powers, &mut sfx, &mut msgs);
     }
@@ -928,6 +960,7 @@ fn use_power(
                 powers.cast_power = Power::Blink;
                 used.write(PowerUsed(Power::Blink));
                 p.locked = true;
+                powers.blink_vel = p.velocity;
                 p.velocity = Vec3::ZERO;
                 powers.fov_kick = 1.0;
             } else {
@@ -1175,7 +1208,7 @@ fn use_power(
                     crate::combat::kill_cam(settings.kill_cam, last)
                 });
             let mut e = commands.spawn((
-                Projectile { vel: dir * Projectile::physics(&data, kind).0, kind, life: 6.0, stuck: false, recoverable: kind == HitKind::Bolt && data.pawn("arrow.m_bCanRecoverAmmoInAir", 1.0) > 0.0, attachment: None },
+                Projectile { vel: dir * Projectile::physics(&data, kind).0 * crate::aim::upgrade_sum(&data, &stats, crate::aim::Weapon::Crossbow, "Range").max(1.0), kind, life: 6.0, stuck: false, recoverable: kind == HitKind::Bolt && data.pawn("arrow.m_bCanRecoverAmmoInAir", 1.0) > 0.0, attachment: None },
                 Transform::from_translation(eye + dir * 0.4).looking_to(dir, Vec3::Y),
                 Visibility::default(),
                 DespawnOnExit(GameState::InGame),
@@ -1274,6 +1307,7 @@ fn windblast_gusts(
     rapier: ReadRapierContext,
     (mut hits, mut stag, mut noise): (MessageWriter<NpcHit>, MessageWriter<NpcStagger>, MessageWriter<Noise>),
     (mut world_hits, mut door_blast, mut props): (MessageWriter<WorldDamage>, MessageWriter<crate::interact::DoorBlast>, MessageWriter<crate::props::PropGust>),
+    (mut grenades, held): (Query<(Entity, &mut crate::gadgets::Grenade, &Transform)>, Res<crate::props::Held>),
 ) {
     if powers.gusts.is_empty() {
         return;
@@ -1319,6 +1353,12 @@ fn windblast_gusts(
             world_hits.write(WorldDamage::player(Reach::Cone { at: eye, dir, len: reach, half: half_angle }, damage, "DisDamageType_WindBlast"));
             door_blast.write(crate::interact::DoorBlast { from: g.from, dir, reach, half_angle, damage });
             props.write(crate::props::PropGust { eye, dir, reach, half_angle, force, up });
+            // (the grenades in flight it sends back)
+            for (ge, mut gr, gt) in &mut grenades {
+                if held.0 != Some(ge) && factor(gt.translation).is_some() {
+                    gr.blown(dir);
+                }
+            }
             noise.write(Noise { pos: g.from, radius: 15.0, kind: NoiseKind::Danger });
         }
         let front = (g.t - WINDBLAST_NOTIFY) * speed;
@@ -1396,21 +1436,27 @@ fn blink_travel(
     data: Res<Data>,
     stats: Res<PlayerStats>,
     mut powers: ResMut<Powers>,
-    mut player: Query<(&mut Transform, &mut Player)>,
+    mut player: Query<(&mut Transform, &mut Player, &mut Collider)>,
     mut sfx: MessageWriter<PostEvent>,
 ) {
     let Some((from, to, t)) = powers.blink else { return };
-    let Ok((mut pt, mut p)) = player.single_mut() else { return };
-    let dur = (from.distance(to) / 55.0).clamp(0.08, 0.2);
+    let Ok((mut pt, mut p, mut col)) = player.single_mut() else { return };
+    // 100 uu a tick (60 m/s), his velocity his again at the end: a falling Blink keeps its fall
+    // (as roshan's r614/blink research measured)
+    let dur = (from.distance(to) / 60.0).max(0.05);
     let nt = (t + time.delta_secs() / dur).min(1.0);
-    pt.translation = from.lerp(to, nt * nt * (3.0 - 2.0 * nt));
+    pt.translation = from.lerp(to, nt);
     if nt >= 1.0 {
         let level = stats.power("Blink");
         sfx.write(PostEvent::named(data.power_sound("Blink", level, "m_pBlinkSoundEvent").unwrap_or("Snd_Power_P_Blink_Stop"), None));
         powers.blink = None;
         p.locked = false;
-        p.velocity = Vec3::ZERO;
+        p.velocity = powers.blink_vel;
         p.grounded = false;
+        if powers.blink_crouch && !p.crouched {
+            p.crouched = true;
+            *col = Collider::capsule_y(crate::player::CROUCH_HALF, RADIUS);
+        }
     } else {
         powers.blink = Some((from, to, nt));
     }
@@ -1521,13 +1567,33 @@ fn update_projectiles(
             if let Ok((npc, nt, rig)) = npcs.get(hit) {
                 // (a bolt or fire kills one lying knocked out too)
                 if !npc.is_down() || (npc.mode == crate::npc::Mode::Unconscious && matches!(pr.kind, HitKind::Bolt | HitKind::Fire)) {
-                    // a bolt: doubled on the unaware (`m_fDamageMultiplier_Stealth`), more to the head
-                    let damage = match pr.kind {
-                        HitKind::Bolt => attrs.bolt.damage(0.0, t.translation.y - nt.translation.y > HEAD, npc.alert != crate::npc::Alert::Combat),
-                        HitKind::Fire => 999.0,
-                        _ => 0.0,
-                    };
-                    hits.write(NpcHit { npc: hit, damage, kind: pr.kind, from: t.translation });
+                    // the region struck: the head, the torso, else a limb (below the hips, or out
+                    // to the side of its chest)
+                    let local = t.translation - nt.translation;
+                    let f = npc.forward();
+                    let side = local.with_y(0.0).dot(Vec3::new(-f.z, 0.0, f.x)).abs();
+                    let head = local.y > HEAD;
+                    let limb = !head && (local.y < -0.35 || side > 0.22);
+                    // a bolt: more to the head, doubled (`m_fDamageMultiplier_Stealth`) on the head
+                    // or torso of one not fighting him, a limb's at most 15; an incendiary one 50,
+                    // never killing outright, and the flames 0.5 s on (as roshan's r614/blink
+                    // research decoded them)
+                    let stealthy = npc.alert != crate::npc::Alert::Combat || npc.mode == crate::npc::Mode::Flee;
+                    match pr.kind {
+                        HitKind::Bolt => {
+                            let damage = attrs.bolt.damage(0.0, head, stealthy && !limb);
+                            hits.write(NpcHit { npc: hit, damage: if limb { damage.min(15.0) } else { damage }, kind: pr.kind, from: t.translation });
+                        }
+                        HitKind::Fire => {
+                            if !npc.is_down() {
+                                hits.write(NpcHit { npc: hit, damage: 50.0f32.min(npc.health - 1.0).max(0.0), kind: HitKind::Bolt, from: t.translation });
+                            }
+                            commands.entity(hit).try_insert(Ignite(0.5));
+                        }
+                        _ => {
+                            hits.write(NpcHit { npc: hit, damage: 0.0, kind: pr.kind, from: t.translation });
+                        }
+                    }
                 }
                 let explosive = pr.kind == HitKind::ExplosiveBolt;
                 if explosive || pr.kind == HitKind::Bolt && data.pawn("arrow.m_bCanRecoverAmmoInBodies", 1.0) > 0.0

@@ -266,7 +266,8 @@ fn restore_traps(mut log: ResMut<TrapLog>, level: Option<Res<LevelInfo>>, mut tr
     }
 }
 
-/// Corvo walking into a wire snaps it.
+/// Someone walking into a wire snaps it: Corvo, or any living character (the original's any
+/// live actor but a rat, guards too, as roshan's r614/blink research found).
 #[allow(clippy::too_many_arguments)]
 fn trip_wires(
     level: Option<Res<LevelInfo>>,
@@ -275,27 +276,30 @@ fn trip_wires(
     (possession, stats): (Res<crate::possession::Possession>, Res<PlayerStats>),
     mut log: ResMut<TrapLog>,
     mut used: MessageWriter<Interaction>,
+    npcs: Query<(&Transform, &crate::npc::Npc), Without<crate::possession::Possessed>>,
 ) {
     let Some(level) = level else { return };
-    let Ok((pt, p)) = player.single() else { return };
-    if p.noclip || stats.dead {
-        return;
+    // the bodies about: (foot, head, radius)
+    let mut bodies: Vec<(Vec3, Vec3, f32)> = npcs
+        .iter()
+        .filter(|(_, n)| !n.is_down())
+        .map(|(t, _)| (t.translation - Vec3::Y * crate::npc::NPC_HALF, t.translation + Vec3::Y * crate::npc::NPC_HALF, crate::npc::NPC_RADIUS))
+        .collect();
+    if let Some((pt, p)) = player.single().ok().filter(|(_, p)| !p.noclip && !stats.dead) {
+        // his body: a creature's, else his own
+        let (half, radius) = match possession.body.as_ref() {
+            Some(b) => (b.half, b.radius),
+            None => (if p.crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF }, crate::player::RADIUS),
+        };
+        bodies.push((pt.translation - Vec3::Y * half, pt.translation + Vec3::Y * half, radius));
     }
-    // his body: a creature's, else his own
-    let (half, radius) = match possession.body.as_ref() {
-        Some(b) => (b.half, b.radius),
-        None => (if p.crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF }, crate::player::RADIUS),
-    };
-    let lo = pt.translation - Vec3::Y * half;
-    let hi = pt.translation + Vec3::Y * half;
     for (mut t, a) in &mut traps {
         let Some(def) = level.scene.traps.get(t.index as usize) else { continue };
         if def.launcher || t.sprung || t.disarmed {
             continue;
         }
-        if crate::krust::segment_distance(t.wire.0, t.wire.1, lo, hi) > radius {
-            continue;
-        }
+        let Some(&(lo, _, _)) = bodies.iter().find(|(lo, hi, r)| crate::krust::segment_distance(t.wire.0, t.wire.1, *lo, *hi) <= *r) else { continue };
+        let pt = Transform::from_translation(lo);
         t.sprung = true;
         log.state.insert(t.index, 1);
         if std::env::var("DH_TRAP_LOG").is_ok() {
@@ -323,7 +327,6 @@ fn launch(
     vm: Option<ResMut<crate::kismet::Vm>>,
     mut traps: Query<(&mut TrapPart, &Transform, Option<&mut Animator>)>,
     globals: Query<&GlobalTransform>,
-    player: Query<&Transform, With<Player>>,
     mut log: ResMut<TrapLog>,
     (mut sfx, mut fx): (MessageWriter<PostEvent>, MessageWriter<SpawnEffect>),
 ) {
@@ -352,18 +355,20 @@ fn launch(
         if dt <= 0.0 { continue; }
         let secs = secs + dt;
         t.firing = Some((secs, shot));
-        if shot || secs < def.fire_at {
+        // (it fires at once: the original's launcher doesn't wait for its animation)
+        if shot {
             if secs > 3.0 {
                 t.firing = None;
             }
             continue;
         }
         t.firing = Some((secs, true));
-        // the shot, from its socket, at its target (else at Corvo, else straight ahead)
+        // the shot, from its socket, straight at its target (else straight ahead), falling as it
+        // goes (the original's, as roshan's r614/blink research decoded it)
         let from = t.socket(&def.socket, &globals).or_else(|| t.socket("Disarm_Socket", &globals)).map(|g| g.translation()).unwrap_or(tf.translation + Vec3::Y * 0.5);
-        let to = def.target.map(Vec3::from).or_else(|| player.single().ok().map(|p| p.translation).filter(|p| p.distance(from) < 30.0)).unwrap_or(from + tf.rotation * Vec3::NEG_Z * 10.0);
+        let to = def.target.map(Vec3::from).unwrap_or(from + tf.rotation * Vec3::NEG_Z * 10.0);
         let g = GRAVITY * def.gravity;
-        let vel = aim(from, to, def.speed.max(1.0), g);
+        let vel = (to - from).normalize_or(tf.rotation * Vec3::NEG_Z) * def.speed.max(1.0);
         if log_on {
             info!("launcher {} shoots from {from:.2} at {to:.2}", def.name);
         }

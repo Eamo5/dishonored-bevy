@@ -1038,6 +1038,7 @@ fn swarm_brain(
                         if count > 0 {
                             stats.take_damage(w.bite_damage(n) * count as f32);
                             stats.damage_flash = stats.damage_flash.max(0.4);
+                            stats.slowed = 1.0;
                             if stats.health <= 0.0 {
                                 stats.dead = true;
                             }

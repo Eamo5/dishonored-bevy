@@ -71,13 +71,13 @@ fn cut_limbs(rig: &NpcRig, cuts: &[usize]) -> Vec<bool> {
 fn swap_to_gore(
     mut commands: Commands,
     assets: Option<Res<GameAssets>>,
-    npcs: Query<(Entity, &NpcRig, &Severed, &Children), Without<GoreSwapped>>,
+    npcs: Query<(Entity, &NpcRig, &Severed, &Children, Option<&crate::npc::NpcLook>), Without<GoreSwapped>>,
     children: Query<&Children>,
     parts: Query<(&NpcPart, &MeshTag)>,
     joints_of: Query<&bevy::mesh::skinning::SkinnedMesh>,
 ) {
     let Some(assets) = assets else { return };
-    for (e, rig, sev, kids) in &npcs {
+    for (e, rig, sev, kids, look) in &npcs {
         // the visual holding its parts, and a part to learn the type and the skin from
         let mut found = None;
         for v in kids.iter() {
@@ -116,7 +116,8 @@ fn swap_to_gore(
                 NpcPart { index: pi as u32, npc_type: tid, lod: crate::npc::GORE_LOD },
                 ChildOf(visual),
             ));
-            mat.apply(&mut ec);
+            // (in the materials it was given)
+            look.and_then(|l| l.mat(&assets, gp.mats.get(pi))).unwrap_or(mat).apply(&mut ec);
         }
         commands.entity(e).try_insert(GoreSwapped);
     }
@@ -149,7 +150,7 @@ fn sever(
     mut commands: Commands,
     mut msgs: MessageReader<SeverLimb>,
     (assets, level): (Option<Res<GameAssets>>, Option<Res<LevelInfo>>),
-    mut npcs: Query<(&NpcRig, Option<&mut Severed>, &Children)>,
+    mut npcs: Query<(&NpcRig, Option<&mut Severed>, &Children, Option<&crate::npc::NpcLook>)>,
     children: Query<&Children>,
     parts: Query<(&NpcPart, &MeshTag)>,
     joints: Query<(&Transform, &GlobalTransform)>,
@@ -159,7 +160,8 @@ fn sever(
 ) {
     for m in msgs.read() {
         let (Some(assets), Some(level)) = (assets.as_ref(), level.as_ref()) else { continue };
-        let Ok((rig, severed, kids)) = npcs.get_mut(m.npc) else { continue };
+        let Ok((rig, severed, kids, look)) = npcs.get_mut(m.npc) else { continue };
+        let look = look.cloned();
         let Some(b) = rig.index(&m.bone) else { continue };
         if severed.as_ref().is_some_and(|s| s.0.contains(&b)) {
             continue;
@@ -223,11 +225,19 @@ fn sever(
         let far = (0..n).filter(|i| limb[*i]).filter_map(|i| rig.joint_at(i).and_then(|j| joints.get(j).ok())).map(|(_, g)| g.translation()).fold(cut_at, |a, p| if p.distance(cut_at) > a.distance(cut_at) { p } else { a });
         commands.entity(root).insert(Collider::compound(vec![(cut_rot.inverse() * (far - cut_at) * 0.5, Quat::IDENTITY, Collider::ball(0.1))]));
         let cut_names: Vec<String> = severed.as_ref().map(|s| s.0.clone()).unwrap_or_default().into_iter().chain([b]).filter_map(|i| rig.name_of(i).map(|s| s.to_string())).collect();
-        let piece: Vec<&(Handle<Mesh>, crate::level::PartMat)> = match vis.gore.as_ref() {
-            Some((gp, info)) => gp.parts.iter().zip(info.iter()).filter(|(_, part)| rig.index(&part.0).is_some_and(|o| limb[o]) && gore_part_shown(part, &cut_names)).map(|(p, _)| p).collect(),
-            None => vis.parts.parts.iter().collect(),
+        let piece: Vec<(&(Handle<Mesh>, crate::level::PartMat), Option<&(bool, u32)>)> = match vis.gore.as_ref() {
+            Some((gp, info)) => gp
+                .parts
+                .iter()
+                .zip(info.iter())
+                .enumerate()
+                .filter(|(_, (_, part))| rig.index(&part.0).is_some_and(|o| limb[o]) && gore_part_shown(part, &cut_names))
+                .map(|(i, (p, _))| (p, gp.mats.get(i)))
+                .collect(),
+            None => vis.parts.parts.iter().enumerate().map(|(i, p)| (p, vis.parts.mats.get(i))).collect(),
         };
-        for (mesh, mat) in piece {
+        for ((mesh, mat), pm) in piece {
+            let mat = look.as_ref().and_then(|l| l.mat(assets, pm)).unwrap_or(mat);
             let mut ec = commands.spawn((
                 Mesh3d(mesh.clone()),
                 MeshTag(slot),

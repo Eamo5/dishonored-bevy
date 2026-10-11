@@ -202,6 +202,8 @@ pub struct Npc {
     pub ranged: u8,
     /// seconds before the next shot (`m_ContextCooldown`)
     pub shoot_cd: f32,
+    /// its pistol being aimed: seconds to the shot, seconds Corvo has been out of its sight
+    pub aim: Option<(f32, f32)>,
     /// an NPC of an enemy faction it is fighting (`DisTweaks_Faction.m_EnemyFactions`), and
     /// when it next looks for one
     pub foe: Option<Entity>,
@@ -253,6 +255,11 @@ pub struct Npc {
     pub alarm_run: Option<Vec3>,
     /// the attachments it lost (armour knocked off: their indices)
     pub bare: Vec<u8>,
+    /// its fight's pacing (`DisAISubProcessManageAttacks`): its aggression (0..1, rolled as it
+    /// starts: below 0 not yet), the blows left of its flurry and the time before the next
+    pub aggression: f32,
+    pub flurry: i32,
+    pub stamina: f32,
     pub numb: bool,
     /// the scripts keep it alive (`DisSeqAct_LimitPawnMinHealth`)
     pub min_health: f32,
@@ -486,6 +493,10 @@ impl Npc {
         Quat::from_rotation_y(self.yaw) * Vec3::NEG_Z
     }
     pub fn set_mode(&mut self, m: Mode) {
+        // (a fight's pacing is rolled afresh for the next one)
+        if self.mode == Mode::Combat && m != Mode::Combat {
+            self.aggression = -1.0;
+        }
         if self.mode != m {
             self.mode = m;
             self.mode_timer = 0.0;
@@ -693,6 +704,20 @@ fn kind_of(s: &str) -> Kind {
     }
 }
 
+/// The materials a character was given in place of its type's (`material_swaps`): (of the
+/// head?, the slot's material, its new one). Kept for the pieces it may lose and for the
+/// scripts' undressing.
+#[derive(Component, Clone, Default)]
+pub struct NpcLook(pub Vec<(bool, u32, u32)>);
+
+impl NpcLook {
+    /// What a part with this material (of the head?, material) wears instead, if anything.
+    pub fn mat<'a>(&self, assets: &'a GameAssets, pm: Option<&(bool, u32)>) -> Option<&'a crate::level::PartMat> {
+        let pm = pm?;
+        self.0.iter().find(|s| s.0 == pm.0 && s.1 == pm.1).and_then(|s| assets.npc_mat_swaps.get(&s.2))
+    }
+}
+
 /// A character's spawn roll `k` in [0, 1): the same for the same spawner, so a character keeps
 /// its look.
 fn spawn_roll(seed: u64, k: u64) -> f32 {
@@ -735,6 +760,39 @@ fn material_swaps(scene: &dhcook::format::Scene, tid: u32, seed: u64) -> Vec<(bo
         }
     }
     out
+}
+
+/// A fight's pacing (the elite guard's `DisAISubProcessManageAttacks`, as roshan's r614/blink
+/// research decoded it): flurries of 2-3 blows (`m_FlurryAttacks`), then 4-5 s to recover
+/// (`m_StaminaRecovery`); aggression rolled in [0, 1) as the fight starts, regained at
+/// `m_fAggressionRegenRate` 0.1 a second, `m_fAggressionDeltaPerDamage` -0.5 when struck,
+/// stretching its moves' cooldowns by `(1 - aggression) x m_fCooldownFactorAtMinAggression` (1).
+const FLURRY: [i32; 2] = [2, 3];
+const STAMINA_RECOVERY: [f32; 2] = [4.0, 5.0];
+const AGGRESSION_REGEN: f32 = 0.1;
+const AGGRESSION_PER_DAMAGE: f32 = -0.5;
+const COOLDOWN_FACTOR: f32 = 1.0;
+
+/// A fighter's pacing goes on: its aggression and flurry rolled as the fight starts, its
+/// aggression regained; between flurries, its stamina recovering.
+fn pace_tick(npc: &mut Npc, dt: f32) {
+    if npc.aggression < 0.0 {
+        npc.aggression = rand::random::<f32>();
+        npc.flurry = rand::random_range(FLURRY[0]..=FLURRY[1]);
+        npc.stamina = 0.0;
+    }
+    npc.aggression = (npc.aggression + AGGRESSION_REGEN * dt).min(1.0);
+    if npc.flurry < 1 {
+        npc.stamina -= dt;
+        if npc.stamina < 0.0 {
+            npc.flurry = rand::random_range(FLURRY[0]..=FLURRY[1]);
+        }
+    }
+}
+
+/// Whether a fighter has a blow of its flurry left.
+fn pace_ready(npc: &Npc) -> bool {
+    npc.aggression < 0.0 || npc.flurry >= 1
 }
 
 /// What a character wears of its type's attachments: those always worn, and of each group (a
@@ -1322,6 +1380,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         has_sword,
         ranged,
         shoot_cd: 2.0,
+        aim: None,
         foe: None,
         feud_scan: rand::random::<f32>(),
         grab: None,
@@ -1350,6 +1409,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         deaf: false,
         alarm_run: None,
         bare: Vec::new(),
+        aggression: -1.0,
+        flurry: 0,
+        stamina: 0.0,
         numb: false,
         min_health: 0.0,
         nav: Default::default(),
@@ -1539,6 +1601,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
     }
     for (holder, index, health) in breakable_parts {
         commands.entity(holder).insert(crate::npcparts::NpcAttached { npc: e, npc_type: tid, index, health: health.max(1.0) });
+    }
+    if !swaps.is_empty() {
+        commands.entity(e).insert(NpcLook(swaps.clone()));
     }
     if let Some((lib, clips)) = clips {
         let lib: std::sync::Arc<CharAnims> = lib;
@@ -1769,6 +1834,9 @@ fn npc_hits(
                 npc.hit_react = 0.35;
                 npc.attack_t = None;
                 npc.stagger = npc.stagger.max(0.25);
+                if npc.aggression >= 0.0 && h.damage > 0.0 {
+                    npc.aggression = (npc.aggression + AGGRESSION_PER_DAMAGE).clamp(0.0, 1.0);
+                }
                 if npc.mode != Mode::Combat && npc.hostile() {
                     npc.alert = Alert::Combat;
                     npc.awareness = 1.0;
@@ -1892,8 +1960,9 @@ fn npc_hearing(
                 npc.heard_player += 1;
             }
             if !npc.hostile() {
-                // a scary noise sets them running; the armed stand their ground
-                if n.panics() && !npc.fighter() && npc.may_panic() {
+                // a scary noise (to them) sets them running; the armed stand their ground
+                let scary = level.as_ref().and_then(|l| npc.npc_type.and_then(|t| l.scene.npc_types.get(t as usize))).and_then(|t| t.sight.as_ref()).and_then(|s| s.scary.clone());
+                if n.panics(scary.as_deref()) && !npc.fighter() && npc.may_panic() {
                     if npc.can_flee {
                         npc.set_mode(Mode::Flee);
                     }
@@ -2530,6 +2599,7 @@ pub(crate) fn npc_brain(
                 }
             }
             Mode::Combat => {
+                pace_tick(&mut npc, dt);
                 if stats.dead {
                     npc.set_mode(Mode::Return);
                     npc.alert = Alert::Suspicious;
@@ -2660,7 +2730,37 @@ pub(crate) fn npc_brain(
                     let to = ppos - pos;
                     let unreachable = (ppos.y - pos.y).abs() > 1.6 || d > 6.0;
                     let facing = to.with_y(0.0).normalize_or_zero().dot(npc.forward()) > 25f32.to_radians().cos();
-                    if npc.shoot_cd <= 0.0 && npc.sees_player && npc.attack_t.is_none() && d > 2.5 && d < 30.0 && facing && npc.stagger <= 0.0 {
+                    // a pistol is aimed before it fires (`DisAISubStateFirePistol`: the first shot
+                    // 0.75-1.25 s after it starts aiming, given up once Corvo is lost for a moment)
+                    // and, Corvo within its blade's reach, only from a standstill (as roshan's
+                    // r614/blink research decoded it)
+                    let mut aimed = false;
+                    if npc.ranged == 1 {
+                        if let Some((left, unseen)) = npc.aim {
+                            let unseen = if npc.sees_player { 0.0 } else { unseen + dt };
+                            if unseen > 0.65 || d > 30.0 || npc.stagger > 0.0 || npc.attack_t.is_some() {
+                                npc.aim = None;
+                                npc.shoot_cd = npc.shoot_cd.max(1.0);
+                            } else if left > dt {
+                                npc.aim = Some((left - dt, unseen));
+                                npc.target = None;
+                                if to.with_y(0.0).length() > 0.1 {
+                                    npc.yaw = (-to.x).atan2(-to.z);
+                                }
+                                continue;
+                            } else {
+                                npc.aim = None;
+                                aimed = true;
+                            }
+                        }
+                    }
+                    let ready = npc.shoot_cd <= 0.0 && npc.sees_player && npc.attack_t.is_none() && d > 2.5 && d < 30.0 && npc.stagger <= 0.0;
+                    if npc.ranged == 1 && ready && !aimed && (unreachable || npc.velocity.with_y(0.0).length() < 0.3) {
+                        npc.aim = Some((0.75 + rand::random::<f32>() * 0.5, 0.0));
+                        npc.target = None;
+                        continue;
+                    }
+                    if ready && (aimed || (npc.ranged != 1 && facing)) {
                         npc.shoot_cd = if npc.ranged == 3 {
                             // the wrist bow (`DisTweaks_NPCFireBow` cooldowns 3-6 s, 2-5 s out of reach)
                             if unreachable { 2.0 + rand::random::<f32>() * 3.0 } else { 3.0 + rand::random::<f32>() * 3.0 }
@@ -2774,7 +2874,7 @@ pub(crate) fn npc_brain(
                         if npc.attack_t.is_none() {
                             npc.swing = None;
                         }
-                    } else if npc.attack_cd <= 0.0 && npc.stagger <= 0.0 && npc.sees_player && attackers < max_attackers && npc.may_melee() {
+                    } else if npc.attack_cd <= 0.0 && npc.stagger <= 0.0 && npc.sees_player && attackers < max_attackers && npc.may_melee() && pace_ready(&npc) {
                         // the move for the distance and its facing (its blade's
                         // `DisTweaks_NPCAttackShort` / `Medium` / `Long`), a block answered with a
                         // kick (`DisTweaks_NPCBash`); without them, a blow at arm's length
@@ -2827,8 +2927,14 @@ pub(crate) fn npc_brain(
                                 None => Swing { kind: MoveKind::Short, big: false, len: 0.95, hit: 0.55, reach: 2.3, lunge: 0.0, no_versus: false },
                             });
                             if let Some(i) = i {
+                                // (the less aggressive, the longer: x1 at full aggression, x2 at none)
                                 let cd = moves[i].cooldown;
-                                npc.melee_cd[i] = cd[0] + rand::random::<f32>() * (cd[1] - cd[0]).max(0.0);
+                                npc.melee_cd[i] = (cd[0] + rand::random::<f32>() * (cd[1] - cd[0]).max(0.0)) * ((1.0 - npc.aggression.clamp(0.0, 1.0)) * COOLDOWN_FACTOR + 1.0);
+                            }
+                            // a blow of its flurry; spent, it recovers its stamina
+                            npc.flurry -= 1;
+                            if npc.flurry < 1 {
+                                npc.stamina = STAMINA_RECOVERY[0] + rand::random::<f32>() * (STAMINA_RECOVERY[1] - STAMINA_RECOVERY[0]);
                             }
                             if std::env::var("DH_MELEE_LOG").is_ok() {
                                 info!("melee: {} {:?} at {d:.1} m (blocking {blocking})", npc.name, npc.swing);

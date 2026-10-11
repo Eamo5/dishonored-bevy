@@ -281,6 +281,16 @@ pub struct Grenade {
 }
 
 impl Grenade {
+    /// Caught in a Wind Blast (the original redirects the projectiles in its cone, as roshan's
+    /// r614/blink research found): sent on along the blast at least as fast, the thrower's no
+    /// more; one stuck to someone stays.
+    pub fn blown(&mut self, dir: Vec3) {
+        if self.stuck.is_some() {
+            return;
+        }
+        self.take();
+        self.vel = dir * (self.vel.length() * 1.2).max(12.0) + Vec3::Y * 2.0;
+    }
     fn take(&mut self) {
         self.throwback |= self.owner.take().is_some();
         if self.kind == HitKind::EnemyExplosion {
@@ -673,7 +683,7 @@ fn fly_grenades(
     mut sfx: MessageWriter<PostEvent>,
     mut held: ResMut<crate::props::Held>,
     cam: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
-    mut clouds: MessageWriter<ChokeDust>,
+    (mut clouds, mut hits): (MessageWriter<ChokeDust>, MessageWriter<NpcHit>),
 ) {
     let dt = time.delta_secs() * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
@@ -697,6 +707,10 @@ fn fly_grenades(
                 clouds.write(ChokeDust { at: t.translation, radius: b[0], secs: b[4] });
             } else {
                 blasts.write(Explosion { at: t.translation, radius: b[0], full: b[1], damage: b[4], effect: "grenade", player: Some([b[2], b[3]]), kind: g.kind });
+                // (stuck to someone: `m_fAttachedDamage` 75 more to them)
+                if let Some((who, _)) = g.stuck.filter(|(w, _)| npcs.get(*w).is_ok()) {
+                    hits.write(NpcHit { npc: who, damage: 75.0, kind: g.kind, from: t.translation });
+                }
             }
             if in_hand {
                 held.0 = None;
@@ -735,13 +749,19 @@ fn fly_grenades(
                     g.vel = Vec3::ZERO;
                 }
             } else {
-                // someone hit: it goes off soon (`m_fMinDetonationDelayAfterHit`)
-                if npcs.get(hit).is_ok() || Some(hit) == pe {
-                    g.fuse = g.fuse.min(g.after_hit);
+                // the bounce (as roshan's r614/blink research decoded it): v' = (v - (1 + e)(v.n)n) d,
+                // e and d a floor's (0.65, 0.4) and a wall's (0.3, 0.1) blended by the normal's
+                // height, a body's 0.1 and 0.05; it rests once it falls slower than 1.5 m/s x n.z.
+                // The fuse runs on whatever it hits.
+                let body = npcs.get(hit).is_ok() || Some(hit) == pe;
+                let up = h.normal.y.clamp(0.0, 1.0);
+                let (e, d) = if body { (0.1, 0.05) } else { (0.3 + 0.35 * up, 0.1 + 0.3 * up) };
+                let speed = g.vel.length();
+                g.vel = (g.vel - (1.0 + e) * g.vel.dot(h.normal) * h.normal) * d;
+                if -g.vel.y < 1.5 * up && up > 0.5 && g.vel.length() < 1.5 {
+                    g.vel = Vec3::ZERO;
                 }
-                // bounce, losing most of its speed
-                g.vel = (g.vel - 2.0 * g.vel.dot(h.normal) * h.normal) * 0.35;
-                if g.vel.length() > 1.0 {
+                if speed > 1.0 {
                     sfx.write(PostEvent::named("Snd_Phys_Metal_Grenade", Some(t.translation)));
                 }
             }
@@ -762,15 +782,31 @@ fn razors(
     mut sfx: MessageWriter<PostEvent>,
     mut noise: MessageWriter<Noise>,
     mut fx: MessageWriter<SpawnEffect>,
+    (data, mut stats, player): (Res<crate::gamedata::Data>, ResMut<PlayerStats>, Query<&Transform, (With<Player>, Without<Razor>)>),
 ) {
     let dt = time.delta_secs() * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
     let walls = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+    // its cylinders (the original's, as roshan's r614/blink research decoded them): 250 x 250 uu
+    // along the surface's normal, the blast's widened by the Spring Razor upgrade
+    // (`SpringRazorRadiusBonus`)
+    let bonus = data.0.upgrades.iter().filter(|u| stats.upgrades.contains(&u.id)).flat_map(|u| &u.attributes).filter(|(n, _)| n == "SpringRazorRadiusBonus").map(|(_, v)| *v).fold(1.0f32, f32::max);
     for (e, mut r, t) in &mut q {
         if r.mine.is_some() {
             continue;
         }
         let p = t.translation;
+        let axis = (t.rotation * Vec3::Y).normalize_or(Vec3::Y);
+        let inside = |at: Vec3, radius: f32| {
+            let to = at - p;
+            let along = to.dot(axis);
+            (-0.3..=2.5).contains(&along) && (to - axis * along).length() < radius
+        };
+        let seen = |at: Vec3| {
+            let to = at - p;
+            let d = to.length();
+            ctx.cast_ray(p + axis * 0.1, to / d.max(1e-3), d, true, walls).is_none()
+        };
         if r.armed < 0.5 {
             r.armed += dt;
             if r.armed >= 0.5 {
@@ -780,23 +816,32 @@ fn razors(
         }
         match r.triggered {
             None => {
-                // someone steps into the 2.5 m cylinder
-                if npcs.iter().any(|(_, n, nt)| !n.is_down() && (nt.translation - p).with_y(0.0).length() < 2.5 && (nt.translation.y - p.y).abs() < 2.5) {
+                // a character steps into its cylinder, in its sight
+                if npcs.iter().any(|(_, n, nt)| !n.is_down() && inside(nt.translation, 2.5) && seen(nt.translation)) {
                     r.triggered = Some(0.0);
                 }
             }
             Some(tt) if tt + dt >= 0.35 => {
-                // the shrapnel: everyone in sight within 9 m
+                // the shrapnel (`m_fDamageActorDelayTime` 0.35 s on): every character in its
+                // cylinder and sight dies; Corvo there takes `m_NonNPCDamage`
                 sfx.write(PostEvent::named("Snd_Spring_Razor_Shot", Some(p)));
                 fx.write(SpawnEffect { rot: t.rotation, ..SpawnEffect::at("springrazor", p) });
                 noise.write(Noise { pos: p, radius: 15.0, kind: NoiseKind::Threatening });
+                if let Ok(pt) = player.single() {
+                    if inside(pt.translation, 2.5 * bonus) && seen(pt.translation) && !stats.dead {
+                        stats.take_damage(5.0);
+                        stats.damage_flash = 1.0;
+                        stats.hit_from = Some(p);
+                        if stats.health <= 0.0 {
+                            stats.dead = true;
+                        }
+                    }
+                }
                 for (ne, n, nt) in &npcs {
-                    let to = nt.translation - p;
-                    let d = to.length();
-                    if n.is_down() || d > 9.0 || ctx.cast_ray(p + Vec3::Y * 0.1, to / d.max(1e-3), d, true, walls).is_some() {
+                    if n.is_down() || !inside(nt.translation, 2.5 * bonus) || !seen(nt.translation) {
                         continue;
                     }
-                    let damage = if d < 4.0 { 999.0 } else { 999.0 * (1.0 - (d - 4.0) / 5.0) };
+                    let damage = 999.0;
                     hits.write(NpcHit { npc: ne, damage, kind: HitKind::SpringRazor, from: p });
                     sfx.write(PostEvent::named("Imp_SpringRazor_on_Body", Some(nt.translation)));
                     fx.write(SpawnEffect { follow: Some(ne), secs: 2.0, ..SpawnEffect::at("springrazor_blood", Vec3::Y * 0.3) });
@@ -823,7 +868,7 @@ fn explode(
     mut fx: MessageWriter<SpawnEffect>,
     mut rats: MessageWriter<crate::swarm::KillRats>,
     (rapier, attrs): (bevy_rapier3d::prelude::ReadRapierContext, Res<crate::gamedata::Attrs>),
-) {
+    mut razors: Query<(&mut Razor, &Transform), Without<Npc>>,) {
     // a blast reaches what it can see (the original's `VisibleCollidingActors`)
     let ctx = rapier.single().ok();
     let walls = bevy_rapier3d::prelude::QueryFilter::default().groups(bevy_rapier3d::prelude::CollisionGroups::new(bevy_rapier3d::prelude::Group::ALL, crate::level::GROUP_WORLD));
@@ -839,6 +884,12 @@ fn explode(
         fx.write(SpawnEffect::at(b.effect, b.at));
         noise.write(Noise { pos: b.at, radius: 25.0, kind: NoiseKind::Threatening });
         let scale = |d: f32| if d <= b.full { 1.0 } else { (1.0 - (d - b.full) / (b.radius - b.full).max(0.1)).max(0.0) };
+        // a blast sets off the Spring Razors it reaches (`m_fDamageReactionTime` 0.75 s)
+        for (mut r, rt) in &mut razors {
+            if r.mine.is_none() && r.triggered.is_none() && r.armed >= 0.5 && rt.translation.distance(b.at) < b.radius {
+                r.triggered = Some(-0.75);
+            }
+        }
         for (e, n, t) in &npcs {
             let d = t.translation.distance(b.at);
             if (!n.is_down() || n.mode == crate::npc::Mode::Unconscious) && d < b.radius && seen(b.at + Vec3::Y * 0.3, t.translation) {

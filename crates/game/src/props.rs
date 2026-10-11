@@ -105,8 +105,6 @@ pub struct TankEvents {
 
 /// Kilograms by `m_WeightClass` (tiny, small, medium, large).
 const MASS: [f32; 4] = [0.4, 2.0, 8.0, 25.0];
-/// The share of Corvo's throw (`ThrowStrength`) by weight class.
-const THROW: [f32; 4] = [1.0, 0.85, 0.6, 0.4];
 /// The groups a loose prop collides with.
 const LOOSE: Group = GROUP_WORLD.union(GROUP_PROP).union(GROUP_NPC).union(GROUP_PLAYER).union(crate::ragdoll::GROUP_RAGDOLL);
 
@@ -653,7 +651,9 @@ pub(crate) fn prop_focus(
                 g.0 = 1.0;
                 if throw {
                     let m = &level.scene.movables[prop.index];
-                    v.linear = c.forward().as_vec3() * attrs.throw.max(5.0) * THROW[m.weight.min(3) as usize] + Vec3::new(p.velocity.x, 0.0, p.velocity.z);
+                    // (all at `ThrowStrength`, 2000 uu/s, whatever they weigh: roshan's r614/blink
+                    // research)
+                    v.linear = c.forward().as_vec3() * attrs.throw.max(5.0);
                     v.angular = Vec3::new(rand::random::<f32>() - 0.5, rand::random::<f32>() - 0.5, rand::random::<f32>() - 0.5) * 6.0;
                     if std::env::var("DH_PROP_LOG").is_ok() {
                         info!("throw {} at {:.1} m/s (strength {:.1}, weight {})", m.name, v.linear.length(), attrs.throw, m.weight);

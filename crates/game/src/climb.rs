@@ -46,7 +46,13 @@ pub struct Climb {
     cooldown: f32,
 }
 
-const CLIMB_SPEED: f32 = 2.2;
+/// The original's climbing (as roshan's r614/blink research measured it): 163.8 uu/s up and
+/// down; looking down past 5.5 degrees, forward climbs down; let go, a moment (0.5 s) before
+/// grabbing again; a jump off throws him 525 uu/s the way he looks, with the jump's own lift.
+const CLIMB_SPEED: f32 = 1.638;
+const LOOK_DOWN: f32 = 0.096;
+const REGRAB: f32 = 0.5;
+const JUMP_OFF: f32 = 5.25;
 const REACH: f32 = 0.9;
 
 fn build_climbables(mut commands: Commands, level: Option<Res<LevelInfo>>, mut climb: ResMut<Climb>) {
@@ -134,7 +140,7 @@ pub fn climb_move(
     let hold = c.axis + away * 0.35;
     let mut v = Vec3::new((hold.x - pos.x) * 8.0, 0.0, (hold.y - pos.y) * 8.0);
     // (`PSI_Gameplay_CameraRelativeClimbing`: looking down, forward climbs down)
-    let way = if relative && p.pitch < -0.35 { -1.0 } else { 1.0 };
+    let way = if relative && p.pitch < -LOOK_DOWN { -1.0 } else { 1.0 };
     if want_fwd {
         v.y += CLIMB_SPEED * way;
     }
@@ -151,8 +157,8 @@ pub fn climb_move(
     // jump lets go (pushing off); use or crouch drops (`DUI_Context_ClimbableDrop`)
     if jump || keys.just_pressed(bind.key(Act::Use)) || keys.just_pressed(bind.key(Act::Crouch)) || off_bottom {
         climb.on = None;
-        climb.cooldown = 0.6;
-        p.velocity = if jump { -fwd * 2.5 + Vec3::Y * 3.5 } else { Vec3::ZERO };
+        climb.cooldown = REGRAB;
+        p.velocity = if jump { fwd.with_y(0.0).normalize_or_zero() * JUMP_OFF + Vec3::Y * crate::player::JUMP_SPEED } else { Vec3::ZERO };
         return false;
     }
     if v.y.abs() > 0.1 {

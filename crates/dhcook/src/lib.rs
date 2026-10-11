@@ -3629,7 +3629,38 @@ impl<'a> Cooker<'a> {
         let suspecting = attention(self, "m_pAttentionTweaks_Enemy_Suspecting");
         let neutral = attention(self, "m_pAttentionTweaks_Neutral");
         let protect_neutrals = matches!(self.tweak_prop(&brain, "m_bProtectNeutrals", 0, 0), Some((_, Value::Bool(true))));
-        Some(Sight { inner, outer, unsuspecting, suspecting, neutral, aware_level, protect_neutrals })
+        let scary = self.scary_noises(&brain);
+        Some(Sight { inner, outer, unsuspecting, suspecting, neutral, aware_level, protect_neutrals, scary })
+    }
+
+    /// The noises that panic a brain's character: its panic behaviour (`m_BehaviorTweak`'s
+    /// normal difficulty one of class `DisTweaks_AIBehavior_Panic`), its `m_HearNoise` rule's
+    /// `m_ScaryNoises` (noise contexts by name: the Boyle party's guests fear only alarm bells,
+    /// cries for help and death rattles, the default also danger and threats, as roshan's
+    /// r614/blink research found).
+    fn scary_noises(&mut self, brain: &Obj) -> Option<Vec<String>> {
+        let Some((pkg, Value::Array { count, offset, size })) = self.tweak_prop(brain, "m_BehaviorTweak", 0, 0) else { return None };
+        let panic = parse_struct_array(&pkg, offset, size, count)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|b| match b.get_idx("m_Difficulty", 1) {
+                Some(Value::Object(o)) if *o != 0 => self.assets.resolve(&pkg, *o),
+                _ => None,
+            })
+            .find(|o| o.class() == "DisTweaks_AIBehavior_Panic")?;
+        let Some((ppkg, Value::Struct(_, rule))) = self.tweak_prop(&panic, "m_HearNoise", 0, 0) else { return Some(Vec::new()) };
+        let rule = Props(rule);
+        if matches!(rule.get("m_bIsActive"), Some(Value::Bool(false))) {
+            return Some(Vec::new());
+        }
+        let Some(Value::Array { count, offset, .. }) = rule.get("m_ScaryNoises") else { return Some(Vec::new()) };
+        let mut r = Reader::at(&ppkg.data, *offset);
+        let mut out = Vec::new();
+        for _ in 0..*count {
+            let Ok(n) = ppkg.read_name(&mut r) else { break };
+            out.push(n.trim_start_matches("EAINoiseContext_").to_string());
+        }
+        Some(out)
     }
 
     /// A `DisTweaks_PawnAttention`.

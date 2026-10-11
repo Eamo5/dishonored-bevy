@@ -1232,7 +1232,9 @@ against the install's own data where it carries them, then implemented independe
     (danger); a grenade 25 m; a death rattle 3 m. The crossbow makes no noise firing.
   - A guard's attention rises by the context's own amount (anomaly, threat, danger, death rattle,
     help, alarm), never to busted: hearing alone can't find Corvo.
-  - Civilians panic at anything but an anomaly.
+  - Civilians panic only at the noises their brain's panic behaviour lists (`m_HearNoise`'s
+    `m_ScaryNoises`, cooked per character). Every shipped civilian brain lists alarm bells, cries for
+    help and death rattles, so gunfire and sword fights alone don't set them running.
 - **The alarm bell.** A guard who has found Corvo, within `m_fNPCGoToAlarmCloseness` of a bell,
   runs to it (the nearest of them; not with Corvo on him) and rings it after `m_fWaitTimeBeforeRing`.
   - Its noise (60 m, an alarm) goes out after `m_fAlarmRingDelayBeforeAINoise` (2.5 s).
@@ -1243,6 +1245,10 @@ against the install's own data where it carries them, then implemented independe
   (a dozen seconds unsuspecting, half a minute and more suspecting), not a fixed time.
 - **Attackers.** At most `m_InnerSkirmishCaps` blades come at Corvo at once: 1 on easy, 2 on
   normal, 3 on hard and very hard.
+  - Each fighter strikes in flurries of 2-3 blows, then recovers its stamina for 4-5 s
+    (`DisAISubProcessManageAttacks`).
+  - Its aggression is rolled anew each fight, regained at 0.1 a second and drops 0.5 when it is
+    hurt. Low aggression stretches its moves' cooldowns, up to twice as long.
 - **Assassinations.**
   - An assassination reaches 2.75 m and comes from any side. The target's awareness must be one the
     table allows (unaware, surprised, suspicious, begging): not fighting him, fleeing or choked, and
@@ -1272,6 +1278,47 @@ against the install's own data where it carries them, then implemented independe
     head material and 174 a body one.
   - Armour comes off to its `m_DamageTypesThatKnockOff`: a bullet or bolt to the head, Wind Blast
     or a flare anywhere. It falls away and stays off after a load.
+  - Severed limbs and dismemberment pieces keep the materials the character was given, as does a
+    character the scripts undress.
+- **Movement.**
+  - Agility's power jump is one push of `JumpZ_PowerJump` (13 m/s) at the top of a jump, when Jump
+    has been held for more than 0.05 s of the rise. It used to be a steady push from unused
+    prototype attributes.
+  - Mantling: ledges from 0.55 m (1.55 m when falling faster than 10 m/s, none past 20 m/s) to
+    2.3 m.
+    - Up to 1.2 m is an instant step-up; above that a 0.7 s climb to 1.7 m, then 1.033 s.
+    - Where only a crouch fits, he mantles into a crouch.
+    - In the air, Jump alone mantles.
+  - Leaning swings the head about a pivot 3.5 m below (2.6 m crouched), up to 20 degrees: about
+    1.2 m sideways.
+  - Climbing chains at 1.638 m/s. A jump off goes 5.25 m/s the way he looks, with a jump's lift.
+    He can grab again after 0.5 s.
+  - Blink moves 60 m/s and gives back his velocity at the end: a falling Blink keeps its fall. It
+    accepts destinations where only a crouch fits, arriving crouched.
+- **Weapons.**
+  - The crossbow's Range upgrade doubles its bolts' speed.
+  - Bolts double on the head or torso of someone not fighting Corvo, and do at most 15 to a limb.
+  - An incendiary bolt does 50, never killing outright, and sets its target alight 0.5 s later.
+  - Grenades bounce the original's way: floors and walls lose different amounts, bodies almost all.
+    The fuse runs out whatever they hit, and a sticky grenade does 75 more to whoever it is stuck
+    to.
+  - The Spring Razor kills everyone in a 2.5 m cylinder along its surface's normal and in its
+    sight; the Spring Razor upgrade doubles the radius. Corvo caught in it takes 5. A blast sets it
+    off 0.75 s later.
+  - The blade reaches 2.1 m, growing to 2.835 m at a full sprint.
+  - Thrown props fly at `ThrowStrength` whatever their weight, without his own speed.
+- **Powers.**
+  - Wind Blast sends the grenades in its cone back.
+  - Possession takes 1.1 s (`m_IntroDuration`) before he has control. During Bend Time,
+    possessing at level 2 extends it by 4 s.
+  - A rat's bite slows him 40 % for a second.
+- **Guards with pistols** aim before they shoot: the shot comes 0.75-1.25 s after they start, and
+  they give up once he is out of sight for a moment. Within reach of their blades they only start
+  from a standstill.
+- **Tripwires** are snapped by anyone walking into them, guards too. Launchers fire at once,
+  straight at their target.
+- **The interface.** The health and mana gauges show for 8 s after a change; a keyhole needs Use
+  held 0.3 s.
 - **The slide.** Crouching while sprinting at 4 m/s or more slides. The speed eases to the
   sneaking speed over 1.1 s along the way it began. It ends early if that way turns more than 25°,
   or when let go after 0.55 s.

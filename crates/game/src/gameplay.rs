@@ -86,6 +86,17 @@ impl NoiseKind {
     pub fn slot(self) -> usize {
         self as usize
     }
+    /// Its `EAINoiseContext` name.
+    pub fn context(self) -> &'static str {
+        match self {
+            NoiseKind::Anomaly => "Anomaly",
+            NoiseKind::Threatening => "Threatening",
+            NoiseKind::Danger => "Danger",
+            NoiseKind::DeathRattle => "DeathRattle",
+            NoiseKind::Help => "Help",
+            NoiseKind::Alarm => "AlarmBell",
+        }
+    }
 }
 
 impl Noise {
@@ -94,10 +105,14 @@ impl Noise {
     pub fn combat(&self) -> bool {
         matches!(self.kind, NoiseKind::Threatening | NoiseKind::Danger | NoiseKind::Help | NoiseKind::Alarm)
     }
-    /// What sets civilians running (the panic behaviour's `m_ScaryNoises`: danger, threats,
-    /// an alarm bell, a cry for help, a death rattle; anything but an anomaly).
-    pub fn panics(&self) -> bool {
-        self.kind != NoiseKind::Anomaly
+    /// What sets civilians running (the default panic behaviour's `m_ScaryNoises`: danger,
+    /// threats, an alarm bell, a cry for help, a death rattle; anything but an anomaly), or
+    /// those of their own panic behaviour (`Sight::scary`: contexts by name).
+    pub fn panics(&self, scary: Option<&[String]>) -> bool {
+        match scary {
+            Some(list) => list.iter().any(|c| c.eq_ignore_ascii_case(self.kind.context())),
+            None => self.kind != NoiseKind::Anomaly,
+        }
     }
 }
 
@@ -327,6 +342,9 @@ pub struct PlayerStats {
     /// the statistics grown this frame that the deeds count: which, and the victim's pawn
     #[serde(skip)]
     pub deeds_pending: Vec<(&'static str, String)>,
+    /// seconds left slowed by a rat's bite (40 % off his speeds, `Devouring Swarm`'s bite)
+    #[serde(skip)]
+    pub slowed: f32,
     /// this mission: people met, alarms rung, bodies found by the guards
     pub npcs_met: u32,
     pub alarms_rung: u32,
@@ -638,6 +656,7 @@ impl Default for PlayerStats {
             chaos_score: 0,
             deed_counters: Vec::new(),
             deeds_pending: Vec::new(),
+            slowed: 0.0,
             npcs_met: 0,
             alarms_rung: 0,
             bodies_found: 0,

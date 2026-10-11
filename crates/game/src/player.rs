@@ -548,7 +548,10 @@ fn player_move(
     let backwards = !strafing && ahead < 0.0 && off_back < 40.0;
     // the original's ground speeds (Agility 2 sprints faster; `GroundSpeedCarryingCorpse`),
     // sideways and backwards at their multipliers; a creature's (`m_fGroundSpeedWhilePossessed`)
-    let speed = if let Some(b) = host {
+    // (bitten by rats: 40 % slower for a second)
+    stats.slowed = (stats.slowed - dt).max(0.0);
+    let bitten = if stats.slowed > 0.0 { 0.6 } else { 1.0 };
+    let speed = bitten * (if let Some(b) = host {
         b.ground
     } else if carry.carrying() {
         attrs.carry.min(if p.crouched { attrs.crouch } else { attrs.walk })
@@ -558,7 +561,7 @@ fn player_move(
         attrs.sprint * if strafing { attrs.strafe[1] } else if backwards { attrs.backward[1] } else { 1.0 }
     } else {
         attrs.walk * if strafing { attrs.strafe[0] } else if backwards { attrs.backward[0] } else { 1.0 }
-    };
+    });
     let weapon_factor = if host.is_none() && !stats.unarmed && !stats.sheathed { attrs.weapon_speed } else { 1.0 };
     // (a slowing blends in at `m_fSpeedBlendDownSpeed`, a quickening at once)
     let cap = speed * weapon_factor;
@@ -586,16 +589,27 @@ fn player_move(
             } else {
                 p.velocity.y = if carry.carrying() { attrs.jump_carrying } else { attrs.jump };
                 p.grounded = false;
-                p.power_jump = attrs.power_jump_time;
+                // (the jump button's time held while rising, for Agility's push)
+                p.power_jump = 0.0;
             }
         }
     } else {
-        // Agility: holding jump carries Corvo higher
-        if p.power_jump > 0.0 && attrs.power_jump_accel > 0.0 && keys.pressed(bind.key(crate::bindings::Act::Jump)) && p.velocity.y > 0.0 {
-            p.power_jump -= dt;
-            p.velocity.y = (p.velocity.y + attrs.power_jump_accel * dt).min(attrs.power_jump_max.max(attrs.jump));
-        } else {
-            p.power_jump = 0.0;
+        // Agility: Jump held through the rise (more than 0.05 s) gives, at the top, one push up of
+        // `JumpZ_PowerJump` (`FixedNormalJump_FixedPowerJump`, as roshan's r614/blink research
+        // decoded it); `power_jump` the time held, below 0 spent
+        if p.power_jump >= 0.0 {
+            let held = keys.pressed(bind.key(crate::bindings::Act::Jump));
+            if !held {
+                p.power_jump = 0.0;
+            } else if p.velocity.y > 1e-4 {
+                p.power_jump += dt;
+            }
+            if p.velocity.y <= 1e-4 {
+                if held && p.power_jump > 0.05 && attrs.power_jump_max > 1e-4 {
+                    p.velocity.y = attrs.power_jump_max;
+                }
+                p.power_jump = -1.0;
+            }
         }
         p.velocity.y -= GRAVITY * dt;
         p.velocity.y = p.velocity.y.max(-40.0);
@@ -658,8 +672,26 @@ fn player_move(
 #[derive(Resource, Default)]
 pub struct MantleSpot(pub bool);
 
-/// Where a mantle from `t` facing `yaw` would put Corvo, and the ledge's height above his feet.
-fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, t: &Transform, yaw: f32) -> Option<(Vec3, f32)> {
+/// The original's mantles (`DishonoredMantleEdgeFinderComponent` and `StatePlayerMasterMantle`, as
+/// roshan's r614/blink research decoded them): edges up to `m_MantleMaxEdgeHeight` 230 uu, at least
+/// 55 (155 falling faster than 1000 uu/s, none faster than 2000); up to 120 an instant step-up,
+/// to 170 a 0.700 s climb, higher 1.033 s (0.633 for a low one into a crouch).
+const MANTLE_MAX: f32 = 2.3;
+const MANTLE_STEP_UP: f32 = 1.2;
+
+fn mantle_time(h: f32, crouch: bool) -> f32 {
+    if h <= MANTLE_STEP_UP {
+        if crouch { 0.633 } else { 0.0 }
+    } else if h <= 1.7 {
+        0.700
+    } else {
+        1.033
+    }
+}
+
+/// Where a mantle from `t` facing `yaw` would put Corvo, the ledge's height above his feet, and
+/// whether only a crouch fits there.
+fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, t: &Transform, yaw: f32, fall: f32) -> Option<(Vec3, f32, bool)> {
     let fwd = Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
     let feet = t.translation - Vec3::Y * (STAND_HALF + RADIUS);
     let filter = QueryFilter::default().exclude_collider(e).groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
@@ -668,19 +700,30 @@ fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, t: &Trans
     if wall.normal.y.abs() > 0.5 {
         return None;
     }
-    // ledge top within reach
+    // ledge top within reach (a top no steeper than 45 degrees)
     let probe = wall.point + fwd * 0.35;
-    let probe = Vec3::new(probe.x, feet.y + 2.3, probe.z);
-    let (_, top) = ctx.cast_ray_and_get_normal(probe, Vec3::NEG_Y, 2.3, true, filter)?;
+    let probe = Vec3::new(probe.x, feet.y + MANTLE_MAX, probe.z);
+    let (_, top) = ctx.cast_ray_and_get_normal(probe, Vec3::NEG_Y, MANTLE_MAX, true, filter)?;
     let h = top.point.y - feet.y;
-    if top.normal.y < 0.7 || !(0.45..=2.05).contains(&h) {
+    let least = if fall > 20.0 {
+        return None;
+    } else if fall > 10.0 {
+        1.55
+    } else {
+        0.55
+    };
+    if top.normal.y < 0.7 || !(least..=MANTLE_MAX).contains(&h) {
         return None;
     }
-    // headroom at the destination
-    if ctx.cast_ray(top.point + Vec3::Y * 0.05, Vec3::Y, 1.8, true, filter).is_some() {
-        return None;
+    // headroom at the destination: standing, else crouched
+    let up = top.point + Vec3::Y * 0.05;
+    if ctx.cast_ray(up, Vec3::Y, 1.8, true, filter).is_none() {
+        return Some((top.point + Vec3::Y * (STAND_HALF + RADIUS + 0.05) + fwd * 0.2, h, false));
     }
-    Some((top.point + Vec3::Y * (STAND_HALF + RADIUS + 0.05) + fwd * 0.2, h))
+    if ctx.cast_ray(up, Vec3::Y, (CROUCH_HALF + RADIUS) * 2.0 + 0.05, true, filter).is_none() {
+        return Some((top.point + Vec3::Y * (CROUCH_HALF + RADIUS + 0.05) + fwd * 0.2, h, true));
+    }
+    None
 }
 
 fn mantle(
@@ -690,16 +733,17 @@ fn mantle(
     rapier: ReadRapierContext,
     stats: Res<PlayerStats>,
     attrs: Res<crate::gamedata::Attrs>,
-    mut q: Query<(Entity, &mut Player, &mut Transform), Without<PlayerCamera>>,
+    mut q: Query<(Entity, &mut Player, &mut Transform, &mut Collider), Without<PlayerCamera>>,
     mut spot: ResMut<MantleSpot>,
 ) {
     spot.0 = false;
     if paused.0 { return; }
-    let Ok((e, mut p, mut t)) = q.single_mut() else { return };
+    let Ok((e, mut p, mut t, mut col)) = q.single_mut() else { return };
     if let Some((from, to, k)) = p.mantle {
         // Acrobat modifies MantleAnimRate; the head's additive mantle clip uses
         // this same progress, keeping its motion in step with the faster climb.
-        let nk = (k + time.delta_secs() * attrs.mantle_rate.max(0.01) / 0.42).min(1.0);
+        let dur = mantle_time(to.y - from.y + if p.crouched { STAND_HALF - CROUCH_HALF } else { 0.0 }, p.crouched).max(0.3);
+        let nk = (k + time.delta_secs() * attrs.mantle_rate.max(0.01) / dur).min(1.0);
         // up first, then forward
         let up = (nk / 0.6).min(1.0);
         let fwd = ((nk - 0.45) / 0.55).clamp(0.0, 1.0);
@@ -718,13 +762,26 @@ fn mantle(
         return;
     }
     let Ok(ctx) = rapier.single() else { return };
-    let found = mantle_dest(&ctx, e, &t, p.yaw);
-    spot.0 = found.is_some_and(|(_, h)| h > 0.9);
-    let wants = keys.just_pressed(bind.key(crate::bindings::Act::Jump)) || (!p.grounded && keys.pressed(bind.key(crate::bindings::Act::Forward)) && keys.pressed(bind.key(crate::bindings::Act::Jump)));
+    let fall = if p.grounded { 0.0 } else { (-p.velocity.y).max(0.0) };
+    let found = mantle_dest(&ctx, e, &t, p.yaw, fall);
+    spot.0 = found.is_some_and(|(_, h, _)| h > 0.9);
+    // (the Jump press, or Jump held while falling: no forward needed)
+    let wants = keys.just_pressed(bind.key(crate::bindings::Act::Jump)) || (!p.grounded && keys.pressed(bind.key(crate::bindings::Act::Jump)));
     if !wants {
         return;
     }
-    let Some((dest, _)) = found else { return };
+    let Some((dest, h, crouch)) = found else { return };
+    if crouch {
+        p.crouched = true;
+        *col = Collider::capsule_y(CROUCH_HALF, RADIUS);
+    }
+    if mantle_time(h, crouch) <= 0.0 {
+        // a low edge: stepped onto at once
+        t.translation = dest;
+        p.velocity = Vec3::ZERO;
+        p.grounded = true;
+        return;
+    }
     p.mantle = Some((t.translation, dest, 0.0));
     p.locked = true;
     p.velocity = Vec3::ZERO;
@@ -759,17 +816,21 @@ fn update_camera_offset(
         STAND_EYE
     };
     p.eye_height += (target_eye - p.eye_height) * (12.0 * dt).min(1.0);
-    // lean offset with collision check
+    // the lean: the head swung about a pivot below it (`m_fLeanHeightPct` 2 x the cylinder's
+    // height: 350 uu standing), to `m_fMaxLeanAngle` 15 degrees and its soften 5 (as roshan's
+    // r614/blink research decoded `DishonoredCamera_Lean`), as far as the walls let it
+    let pivot = if p.crouched { 2.6 } else { 3.5 };
     let mut lean_off = 0.0;
     if p.lean.abs() > 0.01 {
         let dir = t.rotation * Vec3::X * p.lean.signum();
         let eye = t.translation + Vec3::Y * p.eye_height;
-        let max = 0.55 * p.lean.abs();
+        let max = pivot * (20f32.to_radians() * p.lean.abs()).sin();
         let hit = rapier.single().ok().and_then(|ctx| {
             ctx.cast_ray(eye, dir, max + 0.15, true, QueryFilter::default().exclude_collider(entity).groups(player_groups()))
         });
         let allowed = hit.map(|(_, toi)| (toi - 0.15).max(0.0)).unwrap_or(max);
         lean_off = allowed.min(max) * p.lean.signum();
     }
-    ct.translation = Vec3::new(lean_off, p.eye_height - (lean_off.abs() * 0.1), 0.0);
+    let swing = (lean_off.abs() / pivot).clamp(0.0, 1.0).asin();
+    ct.translation = Vec3::new(lean_off, p.eye_height - pivot * (1.0 - swing.cos()), 0.0);
 }

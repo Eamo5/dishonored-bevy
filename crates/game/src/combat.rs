@@ -613,7 +613,12 @@ fn sword_input(
         if !sword.hit_done && sword.swing > PLAYER_HIT {
             sword.hit_done = true;
             rats.write(crate::swarm::KillRats { at: eye + fwd * 1.5, radius: 0.9, by_player: true, source: eye });
-            if let Some((e, _)) = nearest_target(eye, fwd, 2.4, 0.55, npcs.iter()) {
+            // the blade's reach: 210 uu, growing with his forward speed to 283.5 at a sprint (as
+            // roshan's r614/blink research measured), from the eye to their middle
+            let ahead = p.velocity.with_y(0.0).dot(fwd.with_y(0.0).normalize_or_zero()).max(0.0);
+            let reach = 2.1 * (1.0 + 0.35 * (ahead / attrs.sprint.max(0.1)).clamp(0.0, 1.0));
+            let reach = (reach * reach + 0.25).sqrt();
+            if let Some((e, _)) = nearest_target(eye, fwd, reach, 0.55, npcs.iter()) {
                 let (_, mut npc, nt) = npcs.get_mut(e).unwrap();
                 let to_player = (pt.translation - nt.translation).with_y(0.0).normalize_or_zero();
                 let behind = npc.forward().dot(to_player) < -0.2;

@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::Path;
 
 // 103: retain unmatched-rig timelines and zero-track animation sequences.
-pub const SCENE_VERSION: u32 = 114;
+pub const SCENE_VERSION: u32 = 115;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -1038,6 +1038,11 @@ pub struct Sight {
     /// it takes Corvo striking the neutral for an enemy's act (`DisTweaks_AIBrain.m_bProtectNeutrals`)
     #[serde(default)]
     pub protect_neutrals: bool,
+    /// the noises that set it running (its panic behaviour's `m_HearNoise.m_ScaryNoises`: noise
+    /// contexts, `Danger`, `AlarmBell`...; empty when the rule is off); none: no panic behaviour
+    /// known
+    #[serde(default)]
+    pub scary: Option<Vec<String>>,
     /// focused vision: full horizontal angle (degrees), range (m), vertical scales up and down
     /// (of the half angle)
     pub inner: [f32; 4],

@@ -1049,7 +1049,7 @@ fn npc_materials(
     assets: Option<Res<crate::level::GameAssets>>,
     parts: Query<(Entity, &crate::npc::NpcPart, &ChildOf)>,
     parents: Query<&ChildOf>,
-    npcs: Query<&FromSpawner, With<Npc>>,
+    npcs: Query<(&FromSpawner, Option<&crate::npc::NpcLook>), With<Npc>>,
 ) {
     let (Some(mut vm), Some(assets)) = (vm, assets) else { return };
     if vm.npc_materials.is_empty() {
@@ -1079,7 +1079,7 @@ fn npc_materials(
         for (pe, part, child) in parts.iter().filter(|(_, p, _)| p.lod == 0) {
             // the part's character: its visual's parent
             let Ok(root) = parents.get(child.parent()) else { continue };
-            let Ok(from) = npcs.get(root.parent()) else { continue };
+            let Ok((from, look)) = npcs.get(root.parent()) else { continue };
             if !spawners.contains(&from.0) {
                 continue;
             }
@@ -1087,7 +1087,12 @@ fn npc_materials(
             let Some(&(is_head, orig)) = vis.parts.mats.get(part.index as usize) else { continue };
             let (slots, news) = if is_head { (&vis.head_slots, &head) } else { (&vis.body_slots, &body) };
             let Some(&(_, new_id)) = news.iter().find(|(slot, _)| slots.get(*slot) == Some(&orig)) else { continue };
-            let m = if set { assets.npc_mat_swaps.get(&new_id).cloned() } else { vis.parts.parts.get(part.index as usize).map(|p| p.1.clone()) };
+            // (undressed: back to what it wore, its own or the one it was given)
+            let m = if set {
+                assets.npc_mat_swaps.get(&new_id).cloned()
+            } else {
+                look.and_then(|l| l.mat(&assets, vis.parts.mats.get(part.index as usize))).or_else(|| vis.parts.parts.get(part.index as usize).map(|p| &p.1)).cloned()
+            };
             if let Some(m) = m {
                 let mut ec = commands.entity(pe);
                 ec.try_remove::<(MeshMaterial3d<crate::ue3mat::Ue3Material>, MeshMaterial3d<crate::lightmap::WorldMaterial>)>();

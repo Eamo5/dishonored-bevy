@@ -25,7 +25,7 @@ impl Plugin for KeyholePlugin {
 }
 
 /// How long [Use] is held for the keyhole (a shorter press opens the door).
-const HOLD: f32 = 0.4;
+const HOLD: f32 = 0.3;
 /// How far the eye can turn from straight through (yaw, pitch).
 const LOOK: (f32, f32) = (0.45, 0.3);
 /// The HUD movie's keyhole shape.

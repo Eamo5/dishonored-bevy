@@ -46,6 +46,8 @@ pub struct Possession {
     pub body: Option<HostBody>,
     /// where Corvo comes out (the scripts' exit point), else beside the host
     exit: Option<Vec3>,
+    /// the way in still to go (`m_IntroDuration`: control passes once it ends)
+    pub intro: f32,
 }
 
 /// The level scripts' possession settings for characters (`DisSeqAct_OverridePossess`, by
@@ -227,7 +229,7 @@ fn restore_possession(mut commands: Commands, mut pending: ResMut<PossessionRest
         commands.entity(host).insert(Visibility::Hidden);
     }
     for mut v in &mut arms { *v = Visibility::Hidden; }
-    *pos = Possession { host: Some(host), left: saved.left, level: saved.level, exit_requested: saved.exit_requested, warned: saved.warned, body: saved.body, exit: saved.exit };
+    *pos = Possession { host: Some(host), left: saved.left, level: saved.level, exit_requested: saved.exit_requested, warned: saved.warned, body: saved.body, exit: saved.exit, intro: 0.0 };
 }
 
 /// The best host in front of the player: the original weighs distance against how far off
@@ -369,7 +371,7 @@ fn start(
     overrides: Res<PossessOverrides>,
     white_rats: Query<(), With<crate::swarm::WhiteRat>>,
     stats: Res<crate::gameplay::PlayerStats>,
-    settings: Res<crate::settings::Settings>,
+    (settings, mut tc): (Res<crate::settings::Settings>, ResMut<crate::gameplay::TimeControl>),
 ) {
     let Some(r) = requests.read().last().copied() else { return };
     if pos.host.is_some() {
@@ -406,7 +408,8 @@ fn start(
         }
         sfx.write(PostEvent::named(data.power_sound("Possess", r.level, "m_pIntroSoundEvent").unwrap_or("Snd_Power_Possession_In_Lvl1"), None));
         msgs.push(if host.fish { "Possessing a fish" } else if host.rooted { "Possessing a river krust" } else { "Possessing a rat" });
-        *pos = Possession { host: Some(r.host), left: secs, level: r.level, exit_requested: false, warned: false, body: Some(body), exit: None };
+        *pos = Possession { host: Some(r.host), left: secs, level: r.level, exit_requested: false, warned: false, body: Some(body), exit: None, intro: data.power_f("Possess", r.level, "m_IntroDuration", 1.1) };
+        extend_bend(&data, &mut tc, r.level);
         return;
     }
     let Ok((ht, npc)) = npcs.get(r.host) else { return };
@@ -444,7 +447,16 @@ fn start(
     }
     sfx.write(PostEvent::named(data.power_sound("Possess", r.level, "m_pIntroSoundEvent").unwrap_or("Snd_Power_Possession_In_Lvl1"), None));
     msgs.push(format!("Possessing {}", npc.name));
-    *pos = Possession { host: Some(r.host), left, level: r.level, exit_requested: false, warned: false, body, exit: ov.and_then(|o| o.exit) };
+    *pos = Possession { host: Some(r.host), left, level: r.level, exit_requested: false, warned: false, body, exit: ov.and_then(|o| o.exit), intro: data.power_f("Possess", r.level, "m_IntroDuration", 1.1) };
+    extend_bend(&data, &mut tc, r.level);
+}
+
+/// Possessing in bent time draws it out (`m_fBendTimeExtension`: 4 s at level 2, as roshan's
+/// r614/blink research found).
+fn extend_bend(data: &Data, tc: &mut crate::gameplay::TimeControl, level: u8) {
+    if tc.bend_remaining > 0.0 {
+        tc.bend_remaining += data.power_f("Possess", level, "m_fBendTimeExtension", if level >= 2 { 4.0 } else { 0.0 });
+    }
 }
 
 /// The character controller's steps and skin for a body (Corvo's own when `None`).
@@ -511,6 +523,14 @@ fn ride(
     let Some(host) = pos.host else { return };
     let Ok((pe, mut pt, mut p, mut col, mut kcc)) = player.single_mut() else { return };
     let dt = time.delta_secs();
+    // the way in (`m_IntroDuration`): held until it is done, the time inside not yet running
+    if pos.intro > 0.0 {
+        pos.intro -= dt;
+        p.locked = pos.intro > 0.0;
+        if p.locked {
+            return;
+        }
+    }
     pos.left -= dt;
     // inside a creature that isn't a character
     if let Some(body) = pos.body.filter(|_| !npcs.contains(host)) {
