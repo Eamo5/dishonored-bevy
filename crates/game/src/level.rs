@@ -233,8 +233,14 @@ pub fn make_image(tf: &TexFile, srgb: bool) -> Image {
     );
     img.texture_descriptor.mip_level_count = tf.mips.len() as u32;
     img.data = Some(data);
-    let addr = if tf.clamp { ImageAddressMode::ClampToEdge } else { ImageAddressMode::Repeat };
-    img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+    img.sampler = texture_sampler(tf.clamp);
+    img
+}
+
+/// A level texture's sampler: trilinear, anisotropic, repeating or clamped.
+fn texture_sampler(clamp: bool) -> ImageSampler {
+    let addr = if clamp { ImageAddressMode::ClampToEdge } else { ImageAddressMode::Repeat };
+    ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: addr,
         address_mode_v: addr,
         address_mode_w: addr,
@@ -243,7 +249,19 @@ pub fn make_image(tf: &TexFile, srgb: bool) -> Image {
         mipmap_filter: ImageFilterMode::Linear,
         anisotropy_clamp: 16,
         ..default()
-    });
+    })
+}
+
+/// A 1x1 image carrying a level texture sampler (`Ue3Material`'s shared slot samplers).
+fn sampler_carrier(clamp: bool) -> Image {
+    let mut img = Image::new_fill(
+        Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        &[255, 255, 255, 255],
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    img.sampler = texture_sampler(clamp);
     img
 }
 
@@ -582,9 +600,15 @@ impl MatBuilder<'_> {
                 m.set_texture(i, m.black.clone());
                 continue;
             }
-            let srgb = t.and_then(|t| self.textures.get(t as usize)).and_then(|t| t.as_ref()).map(|t| t.srgb).unwrap_or(true);
+            let tf = t.and_then(|t| self.textures.get(t as usize)).and_then(|t| t.as_ref());
+            let srgb = tf.map(|t| t.srgb).unwrap_or(true);
+            // (render targets, as `image` prefers them, take the default sampler: clamped)
+            let clamp = t.is_some_and(|t| self.render_targets.contains_key(&t)) || tf.is_some_and(|t| t.clamp);
             if let Some(h) = self.image(*t, srgb, images) {
                 m.set_texture(i, h);
+                if clamp && i < dhcook::ue3prog::MAX_TEXTURES {
+                    m.params.clamp_mask |= 1 << i;
+                }
             }
         }
         if let Some(Some(c)) = ue.cube_textures.first() {
@@ -1001,6 +1025,8 @@ fn spawn_level(
             black: black.clone(),
             refl: black_cube.clone(),
             black_cube,
+            wrap: image_assets.add(sampler_carrier(false)),
+            clamp: image_assets.add(sampler_carrier(true)),
             key: Ue3Key::new(0, Blend::Opaque, false),
             map: 0,
             mat_id: u32::MAX,

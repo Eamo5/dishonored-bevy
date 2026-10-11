@@ -162,11 +162,13 @@ impl Ue3Key {
 #[derive(ShaderType, Debug, Clone, Copy)]
 pub struct Ue3Params {
     pub p: [Vec4; MAX_PARAMS],
+    /// the 2D slots whose textures clamp (bit k: `tk`), for the shared samplers
+    pub clamp_mask: u32,
 }
 
 impl Default for Ue3Params {
     fn default() -> Self {
-        Ue3Params { p: [Vec4::ZERO; MAX_PARAMS] }
+        Ue3Params { p: [Vec4::ZERO; MAX_PARAMS], clamp_mask: 0 }
     }
 }
 
@@ -176,40 +178,28 @@ pub struct Ue3Material {
     #[uniform(0)]
     pub params: Ue3Params,
     #[texture(1)]
-    #[sampler(2)]
     pub t0: Handle<Image>,
     #[texture(3)]
-    #[sampler(4)]
     pub t1: Handle<Image>,
     #[texture(5)]
-    #[sampler(6)]
     pub t2: Handle<Image>,
     #[texture(7)]
-    #[sampler(8)]
     pub t3: Handle<Image>,
     #[texture(9)]
-    #[sampler(10)]
     pub t4: Handle<Image>,
     #[texture(11)]
-    #[sampler(12)]
     pub t5: Handle<Image>,
     #[texture(13)]
-    #[sampler(14)]
     pub t6: Handle<Image>,
     #[texture(15)]
-    #[sampler(16)]
     pub t7: Handle<Image>,
     #[texture(17)]
-    #[sampler(18)]
     pub t8: Handle<Image>,
     #[texture(19)]
-    #[sampler(20)]
     pub t9: Handle<Image>,
     #[texture(21)]
-    #[sampler(22)]
     pub t10: Handle<Image>,
     #[texture(23)]
-    #[sampler(24)]
     pub t11: Handle<Image>,
     #[texture(25, dimension = "cube")]
     #[sampler(26)]
@@ -234,6 +224,14 @@ pub struct Ue3Material {
     /// the level's reflection cube (`SceneReflectionTexture`)
     #[texture(37, dimension = "cube")]
     pub refl: Handle<Image>,
+    /// the 2D slots' shared samplers, repeating and clamped (Metal binds at most 16 samplers
+    /// per stage), carried by two 1x1 images
+    #[texture(38)]
+    #[sampler(2)]
+    pub wrap: Handle<Image>,
+    #[texture(39)]
+    #[sampler(4)]
+    pub clamp: Handle<Image>,
     pub key: Ue3Key,
     /// its shader map, and whether it takes dynamic light passes (lit, opaque or masked)
     pub map: u32,

@@ -391,6 +391,29 @@ fn helpers(st: &StageT, prefix: &str) -> String {
     m
 }
 
+/// A material's 2D slots share two samplers (Metal binds at most 16 per stage): each slot's
+/// helpers sample with the clamped one (`ue_sc`) where the material's `clamp_mask` says its
+/// texture clamps, else the repeating one (`ue_sw`).
+fn shared_samplers(helpers: &str) -> String {
+    let mut m = String::with_capacity(helpers.len() * 2);
+    for line in helpers.lines() {
+        let slot = (0..MAX_TEXTURES).find(|k| line.contains(&format!(", ue_s{k}, ")));
+        match (slot, line.split_once("{ return ")) {
+            (Some(k), Some((head, rest))) => {
+                let expr = rest.trim_end_matches(" }");
+                let s = format!(", ue_s{k}, ");
+                let (clamped, repeating) = (expr.replace(&s, ", ue_sc, "), expr.replace(&s, ", ue_sw, "));
+                let _ = writeln!(m, "{head}{{ if ue_clamped({k}u) {{ return {clamped} }} return {repeating} }}");
+            }
+            _ => {
+                m.push_str(line);
+                m.push('\n');
+            }
+        }
+    }
+    m
+}
+
 /// Vertex input value (UE3 local vertex factory layout) for a declared input semantic.
 fn local_vf_input(usage: u32, index: u32) -> &'static str {
     match (usage, index) {
@@ -517,32 +540,24 @@ fn ue_light_attenuation(x: vec4<f32>) -> vec4<f32> { return x; }
 "#;
 
 const COMMON: &str = r#"
-struct UeMaterial { p: array<vec4<f32>, 64> };
+// `clamp_mask`: the 2D slots whose textures clamp (bit k: `ue_t{k}`)
+struct UeMaterial { p: array<vec4<f32>, 64>, clamp_mask: u32 };
 @group(MATGROUP) @binding(0) var<uniform> ue_mat: UeMaterial;
 @group(MATGROUP) @binding(1) var ue_t0: texture_2d<f32>;
-@group(MATGROUP) @binding(2) var ue_s0: sampler;
+// the slots share two samplers (Metal binds at most 16 per stage): repeating, clamped
+@group(MATGROUP) @binding(2) var ue_sw: sampler;
 @group(MATGROUP) @binding(3) var ue_t1: texture_2d<f32>;
-@group(MATGROUP) @binding(4) var ue_s1: sampler;
+@group(MATGROUP) @binding(4) var ue_sc: sampler;
 @group(MATGROUP) @binding(5) var ue_t2: texture_2d<f32>;
-@group(MATGROUP) @binding(6) var ue_s2: sampler;
 @group(MATGROUP) @binding(7) var ue_t3: texture_2d<f32>;
-@group(MATGROUP) @binding(8) var ue_s3: sampler;
 @group(MATGROUP) @binding(9) var ue_t4: texture_2d<f32>;
-@group(MATGROUP) @binding(10) var ue_s4: sampler;
 @group(MATGROUP) @binding(11) var ue_t5: texture_2d<f32>;
-@group(MATGROUP) @binding(12) var ue_s5: sampler;
 @group(MATGROUP) @binding(13) var ue_t6: texture_2d<f32>;
-@group(MATGROUP) @binding(14) var ue_s6: sampler;
 @group(MATGROUP) @binding(15) var ue_t7: texture_2d<f32>;
-@group(MATGROUP) @binding(16) var ue_s7: sampler;
 @group(MATGROUP) @binding(17) var ue_t8: texture_2d<f32>;
-@group(MATGROUP) @binding(18) var ue_s8: sampler;
 @group(MATGROUP) @binding(19) var ue_t9: texture_2d<f32>;
-@group(MATGROUP) @binding(20) var ue_s9: sampler;
 @group(MATGROUP) @binding(21) var ue_t10: texture_2d<f32>;
-@group(MATGROUP) @binding(22) var ue_s10: sampler;
 @group(MATGROUP) @binding(23) var ue_t11: texture_2d<f32>;
-@group(MATGROUP) @binding(24) var ue_s11: sampler;
 @group(MATGROUP) @binding(25) var ue_cube0: texture_cube<f32>;
 @group(MATGROUP) @binding(26) var ue_cube_s0: sampler;
 @group(MATGROUP) @binding(27) var<storage, read> ue_inst: array<vec4<f32>>;
@@ -577,6 +592,7 @@ const UE_SWAP = mat4x4<f32>(vec4<f32>(1.0, 0.0, 0.0, 0.0), vec4<f32>(0.0, 0.0, 1
 fn ue_scale(s: f32) -> mat4x4<f32> {
     return mat4x4<f32>(vec4<f32>(s, 0.0, 0.0, 0.0), vec4<f32>(0.0, s, 0.0, 0.0), vec4<f32>(0.0, 0.0, s, 0.0), vec4<f32>(0.0, 0.0, 0.0, 1.0));
 }
+fn ue_clamped(k: u32) -> bool { return (ue_mat.clamp_mask & (1u << k)) != 0u; }
 fn ue_fmod(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> { return a - b * trunc(a / b); }
 fn ue_div(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> { return select(a / b, vec4<f32>(0.0), b == vec4<f32>(0.0)); }
 fn ue_append(a: vec4<f32>, b: vec4<f32>, n: u32) -> vec4<f32> {
@@ -654,7 +670,7 @@ pub fn build(map: &CookedMap, vs_code: &[u8], ps_code: &[u8], light: Option<(&[u
         stages.push((lps, "lps_"));
     }
     for (st, prefix) in &stages {
-        m.push_str(&helpers(st, prefix));
+        m.push_str(&shared_samplers(&helpers(st, prefix)));
         m.push_str(&sm3::stage_decls(&st.sh, &st.iface, prefix));
         m.push_str(&st.body);
     }
