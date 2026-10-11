@@ -194,7 +194,7 @@ fn reticle(p: Power) -> Option<&'static str> {
         Power::Grenade => "crosshair_grenade",
         Power::StickyGrenade => "crosshair_stickyGrenade",
         Power::SpringRazor => "crosshair_springRazor",
-        Power::Blink | Power::Windblast | Power::Possess | Power::DevouringSwarm | Power::BendTime | Power::DarkVision => "crosshair_power",
+        Power::Blink | Power::Windblast | Power::Possess | Power::DevouringSwarm | Power::BendTime | Power::DarkVision | Power::SummonAssassin => "crosshair_power",
         Power::Empty | Power::Heart => return None,
     })
 }

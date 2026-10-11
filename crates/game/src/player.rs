@@ -307,7 +307,7 @@ fn player_move(
     (mut msgs, attrs): (ResMut<HudMessages>, Res<crate::gamedata::Attrs>),
     (swim, waters, carry, possession): (Res<crate::swim::Swim>, Option<Res<crate::swim::Waters>>, Res<crate::carry::Carry>, Res<crate::possession::Possession>),
     (mut climb, climbables, mut sfx): (ResMut<crate::climb::Climb>, Option<Res<crate::climb::Climbables>>, MessageWriter<crate::audio::PostEvent>),
-    (cine, settings, paused): (Res<crate::script_world::Cinematic>, Res<crate::settings::Settings>, Res<Paused>),
+    (cine, settings, paused, tc): (Res<crate::script_world::Cinematic>, Res<crate::settings::Settings>, Res<Paused>, Res<crate::gameplay::TimeControl>),
     mut q: Query<(
         Entity,
         &mut Player,
@@ -347,6 +347,8 @@ fn player_move(
     let held = cine.holds_movement();
     let wish = if held { Vec3::ZERO } else { wish.normalize_or_zero() };
     let jump_pressed = !held && (keys.just_pressed(bind.key(crate::bindings::Act::Jump)) || std::mem::take(&mut vinput.jump));
+    // (held in the air with the world while Daud's Blink is aimed)
+    let dt = if wish == Vec3::ZERO && !jump_pressed { dt * tc.aim_freeze.clamp(0.0, 1.0) } else { dt };
 
     if p.noclip {
         let look = Quat::from_rotation_y(p.yaw) * Quat::from_rotation_x(p.pitch) * Vec3::NEG_Z;

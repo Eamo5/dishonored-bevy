@@ -1087,6 +1087,35 @@ fullscreen display, vertical sync and the crosshair.
   (`m_pPawnTweaks`) and spawn again once their last is down - how the arena's waves come
   (`DH_CHALLENGE_LOG`; test commands `killnpc`, `kop`, `aimtank`; `DH_PROP_LOG` for the tanks,
   `DH_TEST_UNLOCK` for the results' unlocks).
+- **The Knife of Dunwall (DLC06): Daud.** On the DLC's maps the player is Daud
+  (`DisDLC06GameInfo.m_CampaignPawnTweak`: `DLC06_Twk_Player_Daud_Release`), a profile
+  `cook-gamedata` makes from the DLC's packages and the game swaps in by the map's name:
+  - *Powers*: his tweaks over Corvo's, under the names they play as. Transversal is Blink: his
+    reach (11 m, then 16 m), and time stops for the world and for him while he aims standing
+    still, even mid-jump (`m_fBendTimeDownTime` at once, back over `m_fBendTimeUpTime`).
+    Void Gaze is Dark Vision: level 1 shows only the runes and bone charms, level 2 the beings
+    through walls, their sight, the items, the security and the sounds made. Bend Time is his
+    own. Summon Assassin (`DLC06_Pwr_Assassummon`) sends one of his assassins (the level's
+    `m_pAssassinTweaks`: novice, then master), cooked as spawners of the DLC's maps. Aimed at an
+    enemy in sight, the assassin appears 3.5 m before it on Daud's side and fights it.
+    Otherwise he appears on the floor aimed at, or below a wall, or at the end of the reach.
+    Only walkable places are allowed ("You cannot summon there."). He makes a threatening noise
+    and goes after 5 s out of a fight; one at a time; with Arcane Bond II he moves through bent
+    time. His passives (Shadow Kill, Celerity, Vitality, Blood Thirsty, Arcane Bond), his
+    attributes and his pawn's numbers are his own.
+  - *Arms*: his own first-person mesh (`DLC06_Skm_Player_Daud`) with his clips over Corvo's
+    (summoning, Void Gaze, the wristbow raised and fired), his sword, and the wristbow on his
+    forearm (`Wristbow` socket) with its bolts.
+  - *Loadouts, factions, texts*: maps started directly begin with the DLC's loadouts
+    (the campaign's for the Slaughterhouse, the fuller default after), now with their
+    ammunition and elixirs (`m_Ammo`, `m_ElixirCounts`; Corvo's missions too). The Overseers
+    and witches whose enemies include Daud's faction are hostile. The HUD's own strings are used
+    ("End Void Gaze").
+  - *Shaders*: the DLCs' shader caches (`DLC\PCConsole\DLCnn\RefShaderCache-PC-D3D-SM3.upk`)
+    join the base game's in the shader library (802 more material shader maps), so the DLCs'
+    own materials draw with their original shaders.
+  The rest of DLC06 (its other maps, gadgets, store and campaign flow) waits for the DLC's
+  maps to be cooked. `DH_SUMMON_LOG`.
 
 ## Parity audit status
 

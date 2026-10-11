@@ -74,6 +74,7 @@ mod particles;
 mod trails;
 mod ragdoll;
 mod feet;
+mod summon;
 mod player;
 mod postfx;
 mod sky;
@@ -218,7 +219,7 @@ fn main() -> AppExit {
             ue3mat::Ue3Plugin,
             particles::ParticlePlugin,
             trails::TrailsPlugin,
-            (ragdoll::RagdollPlugin, feet::FeetPlugin),
+            (ragdoll::RagdollPlugin, feet::FeetPlugin, summon::SummonPlugin),
             powers::PowersPlugin,
             hud::HudPlugin,
             script::ScriptPlugin,

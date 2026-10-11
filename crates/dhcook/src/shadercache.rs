@@ -328,6 +328,37 @@ impl ShaderLibrary {
         self.records.get(guid).map(|r| &self.data[r.code.clone()])
     }
 
+    /// Another cache's shaders and material shader maps added (a DLC's own: its materials'),
+    /// what this one has already kept. How many maps were new.
+    pub fn merge(&mut self, other: ShaderLibrary) -> usize {
+        let off = self.data.len();
+        self.data.extend_from_slice(&other.data);
+        for (g, mut r) in other.records {
+            if self.records.contains_key(&g) {
+                continue;
+            }
+            r.code = r.code.start + off..r.code.end + off;
+            r.end += off;
+            self.records.insert(g, r);
+        }
+        let mut added = 0;
+        for m in other.maps {
+            let known = self.by_material.get(&m.material_id).is_some_and(|l| l.iter().any(|&i| {
+                let p = &self.maps[i].params;
+                p.base_id == m.params.base_id && p.switches == m.params.switches && p.masks == m.params.masks
+            }));
+            if known {
+                continue;
+            }
+            let i = self.maps.len();
+            self.by_material.entry(m.material_id).or_default().push(i);
+            self.by_base.entry(m.params.base_id).or_default().push(i);
+            self.maps.push(m);
+            added += 1;
+        }
+        added
+    }
+
     /// Index of the shader map of a material: a static permutation (base material id +
     /// switch / mask values) when `switches` or `masks` are given, else the base material's
     /// own map.

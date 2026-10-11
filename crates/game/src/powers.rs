@@ -31,7 +31,7 @@ impl Plugin for PowersPlugin {
             .add_systems(Update, bolt_focus.after(crate::interact::FocusSet).before(crate::gadgets::grenade_focus).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
             .add_systems(
                 Update,
-                (select_power, use_power, cook_grenade, blink_travel, update_projectiles, regenerate, dark_vision_post, crate::darkvision::update_dark_vision, crate::darkvision::dark_vision_sounds)
+                (select_power, use_power, transversal_freeze, cook_grenade, blink_travel, update_projectiles, regenerate, dark_vision_post, crate::darkvision::update_dark_vision, crate::darkvision::dark_vision_sounds)
                     .chain()
                     .after(crate::gadgets::grenade_focus)
                     .run_if(in_state(GameState::InGame)),
@@ -58,11 +58,13 @@ pub enum Power {
     SpringRazor,
     IncendiaryBolt,
     ExplosiveBullet,
+    /// Daud's (The Knife of Dunwall)
+    SummonAssassin,
 }
 
 /// The original keyboard shortcut order (`m_AutoAssign_KeyboardItemOrder`): the first ten
 /// items owned go on keys 1-0.
-pub const SHORTCUT_ORDER: [Power; 15] = [
+pub const SHORTCUT_ORDER: [Power; 16] = [
     Power::Pistol,
     Power::Crossbow,
     Power::Grenade,
@@ -78,6 +80,7 @@ pub const SHORTCUT_ORDER: [Power; 15] = [
     Power::IncendiaryBolt,
     Power::StickyGrenade,
     Power::ExplosiveBullet,
+    Power::SummonAssassin,
 ];
 
 impl Power {
@@ -99,6 +102,7 @@ impl Power {
             Power::SpringRazor => "Springrazor",
             Power::IncendiaryBolt => "Incendiary Bolts",
             Power::ExplosiveBullet => "Explosive Bullets",
+            Power::SummonAssassin => "Summon Assassin",
         }
     }
     /// The power's name in the cooked game data (`None` for weapons).
@@ -110,6 +114,7 @@ impl Power {
             Power::Windblast => "Windblast",
             Power::Possess => "Possess",
             Power::DevouringSwarm => "DevouringSwarm",
+            Power::SummonAssassin => "SummonAssassin",
             _ => return None,
         })
     }
@@ -135,6 +140,7 @@ impl Power {
             Power::SpringRazor => "ic_item_springRazor",
             Power::IncendiaryBolt => "ic_item_flareBolt",
             Power::ExplosiveBullet => "ic_item_explosiveBullet",
+            Power::SummonAssassin => "ic_pow_summonAssassin",
         }
     }
     /// Fired from the pistol or crossbow.
@@ -603,7 +609,7 @@ fn use_power(
         Res<crate::possession::PossessOverrides>,
     ),
     (mut swarm, mut gadget, mut blast, mut door_blast, mut kill_cams): (MessageWriter<crate::swarm::SummonSwarm>, MessageWriter<crate::gadgets::UseGadget>, MessageWriter<crate::gadgets::Explosion>, MessageWriter<crate::interact::DoorBlast>, MessageWriter<crate::killcam::StartKillCam>),
-    (mut aim, held, paused): (ResMut<crate::aim::Aim>, Res<crate::props::Held>, Res<crate::hud::Paused>),
+    (mut aim, held, paused, mut summon, nav): (ResMut<crate::aim::Aim>, Res<crate::props::Held>, Res<crate::hud::Paused>, MessageWriter<crate::summon::Summon>, Option<Res<crate::navmesh::NavGrid>>),
 ) {
     if paused.0 {
         // Menu mouse releases must not spend mana or queue a Blink on resume.
@@ -721,6 +727,71 @@ fn use_power(
     let mut cast = true;
     match sel {
         Power::Empty | Power::Blink | Power::Heart => {}
+        Power::SummonAssassin => {
+            // where (`m_fTargetingRange`): an enemy aimed at (within `m_fMaxAngleToTargetNPC_Deg`,
+            // in sight) is gone for from `m_fDistFromTarget` before it; else the ground aimed at
+            // (`m_fTargetingPullback` short of it), or the floor below where a wall stops the aim
+            let param = |k: &str, d: f32| data.active("SummonAssassin").and_then(|a| a.params.get(k)).copied().unwrap_or(d);
+            let range = param("m_fTargetingRange", 2000.0) * UU;
+            let cone = param("m_fMaxAngleToTargetNPC_Deg", 10.0).to_radians();
+            let walls = QueryFilter::default().exclude_collider(pe).exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+            let ground = |q: Vec3| ctx.cast_ray(q + Vec3::Y * 1.0, Vec3::NEG_Y, 30.0, true, walls).map(|(_, toi)| q + Vec3::Y * (1.0 - toi));
+            let target = npcs
+                .iter()
+                .filter(|(_, _, n)| !n.is_down() && n.hostile())
+                .filter_map(|(e, nt, _)| {
+                    // (aimed at anywhere from its feet to its head)
+                    let base = nt.translation - Vec3::Y * crate::npc::NPC_CENTER;
+                    let along = (base - eye).dot(dir).max(0.0);
+                    let near = (eye + dir * along).y.clamp(base.y, base.y + 1.8);
+                    let to = base.with_y(near) - eye;
+                    let d = to.length();
+                    (d < range && to.normalize_or_zero().angle_between(dir) < cone && ctx.cast_ray(eye, to / d.max(1e-3), (d - 0.4).max(0.0), true, walls).is_none()).then_some((e, nt.translation, d))
+                })
+                .min_by(|a, b| a.2.total_cmp(&b.2));
+            // (only where one can walk: `m_TargetOffNavMeshMessage`)
+            let walkable = |p: &Vec3| nav.as_ref().is_none_or(|g| g.on_mesh(*p));
+            let at = match target {
+                // (before the enemy, Daud's side of it; nearer it where that is no floor)
+                Some((_, tpos, _)) => {
+                    let back = (pt.translation - tpos).with_y(0.0).normalize_or(Vec3::Z);
+                    let far = param("m_fDistFromTarget", 350.0) * UU;
+                    [1.0, 0.75, 0.5, 0.3].iter().find_map(|k| ground(tpos.with_y(tpos.y - crate::npc::NPC_CENTER + 0.5) + back * far * k).filter(walkable))
+                }
+                // (the ground aimed at; a wall's foot; aimed at nothing in reach, the ground
+                // below the end of it: `m_fTargetingGroundCheckDistance`)
+                None => match ctx.cast_ray_and_get_normal(eye, dir, range, true, walls) {
+                    Some((_, h)) => {
+                        let q = h.point - dir * param("m_fTargetingPullback", 80.0) * UU;
+                        if h.normal.y > 0.5 { Some(q) } else { ground(q) }
+                    }
+                    None => {
+                        let q = eye + dir * range;
+                        let down = (param("m_fTargetingGroundCheckDistance", 50000.0) * UU).min(80.0);
+                        ctx.cast_ray(q, Vec3::NEG_Y, down, true, walls).map(|(_, toi)| q - Vec3::Y * toi)
+                    }
+                }
+                .filter(walkable),
+            };
+            if std::env::var_os("DH_SUMMON_LOG").is_some() {
+                let feet = pt.translation - Vec3::Y * crate::npc::NPC_CENTER;
+                let hit = ctx.cast_ray_and_get_normal(eye, dir, range, true, walls).map(|(_, h)| (h.point, h.normal));
+                info!("summon: aimed {:?}, at {:?}; Daud's feet {feet:.1} on the mesh {}, the aim hits {hit:?} (ground {:?}); {} enemies about", target.map(|t| t.1), at, walkable(&feet), hit.and_then(|h| ground(h.0 - dir * 0.8)).map(|g| (g, walkable(&g))), npcs.iter().filter(|(_, _, n)| !n.is_down() && n.hostile()).count());
+            }
+            match at {
+                Some(at) => {
+                    stats.spend_mana(cost, &attrs);
+                    summon.write(crate::summon::Summon { at, target: target.map(|t| t.0), level });
+                    sfx.write(PostEvent::named(data.power_sound("SummonAssassin", level, "m_pTargetingSuccessSoundEvent").unwrap_or("Snd_Pwr_Summon_Out"), None));
+                    powers.cooldown = 1.0;
+                }
+                None => {
+                    msgs.push("You cannot summon there.");
+                    sfx.write(PostEvent::named(data.power_sound("SummonAssassin", level, "m_pTargetingFailSoundEvent").unwrap_or("Snd_Pwr_Summon_Fail"), None));
+                    cast = false;
+                }
+            }
+        }
         Power::DarkVision => {
             stats.spend_mana(cost, &attrs);
             powers.dark_vision = true;
@@ -939,6 +1010,34 @@ fn out_of_mana(powers: &mut Powers, sfx: &mut MessageWriter<PostEvent>, msgs: &m
     powers.cooldown = 0.4;
 }
 
+/// Daud's Blink (Transversal): aimed while he stands still (no step, no jump), even
+/// mid-jump, time stops for the world and for him (`m_fBendTimeDownTime`: at once), and
+/// comes back as he moves or lets go (`m_fBendTimeUpTime`).
+fn transversal_freeze(
+    time: Res<Time>,
+    data: Res<Data>,
+    stats: Res<PlayerStats>,
+    powers: Res<Powers>,
+    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
+    mut tc: ResMut<TimeControl>,
+) {
+    let transversal = data.active("Blink").is_some_and(|a| a.params.get("Transversal").is_some_and(|v| *v > 0.5));
+    if !transversal && tc.aim_freeze >= 1.0 {
+        return;
+    }
+    let dt = time.delta_secs().min(0.1);
+    let lvl = stats.power("Blink").max(1);
+    let moving = [crate::bindings::Act::Forward, crate::bindings::Act::Back, crate::bindings::Act::Left, crate::bindings::Act::Right, crate::bindings::Act::Jump].iter().any(|a| keys.pressed(bind.key(*a)));
+    let held = transversal && powers.aiming && powers.selected == Power::Blink && powers.blink.is_none() && !moving;
+    if held {
+        let down = data.power_f("Blink", lvl, "m_fBendTimeDownTime", 0.0);
+        tc.aim_freeze = if down <= 0.01 { 0.0 } else { (tc.aim_freeze - dt / down).max(0.0) };
+    } else {
+        let up = data.power_f("Blink", lvl, "m_fBendTimeUpTime", 0.5).max(0.01);
+        tc.aim_freeze = (tc.aim_freeze + dt / up).min(1.0);
+    }
+}
+
 fn blink_travel(
     time: Res<Time>,
     data: Res<Data>,
@@ -1094,7 +1193,7 @@ mod projectile_tests {
     fn loading_preserves_active_powers_and_resets_transient_menu_slowdown() {
         let powers = Powers { selected: Power::Crossbow, dark_vision: true, dark_vision_left: 6.5,
             cooldown: 0.4, cooking: Some((Power::Grenade, 1.2)), blink: Some((Vec3::X, Vec3::Z, 0.05)), ..default() };
-        let tc = TimeControl { bend_remaining: 4.5, world_dilation: 0.0, wheel: 0.1, finisher: 0.2, scripted: Some((0.3, 7.0)) };
+        let tc = TimeControl { bend_remaining: 4.5, world_dilation: 0.0, wheel: 0.1, finisher: 0.2, scripted: Some((0.3, 7.0)), aim_freeze: 1.0 };
         let bytes = serde_json::to_vec(&PowersSave::capture(&powers, &tc)).unwrap();
         let saved: PowersSave = serde_json::from_slice(&bytes).unwrap();
         let mut loaded = Powers::default();

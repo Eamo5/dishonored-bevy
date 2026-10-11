@@ -121,6 +121,8 @@ pub struct DvSouls {
     pub eyelid: Vec4,
     pub mode: u32,
     pub alpha: f32,
+    /// the sounds made are seen (not with Daud's Void Gaze I)
+    pub sounds: bool,
 }
 
 #[derive(ShaderType, Clone, Copy, Default)]
@@ -643,6 +645,11 @@ pub fn update_dark_vision(
     souls.behind = [Vec4::new(0.858_695_6, 0.810_195_9, 0.0, 1.0), Vec4::new(0.1799, 0.521_739_1, 0.070_888_47, 1.0), Vec4::new(0.291_174_38, 0.440_667_36, 0.864_130_44, 1.0)];
     souls.eyelid = Vec4::new(0.392, 0.333, 0.275, 1.0);
     let level = stats.power("DarkVision").max(1);
+    // (Daud's Void Gaze: at level 1 only the runes and bone charms, `m_Level1Tweaks`; at 2
+    // everything)
+    let void_gaze = data.active("DarkVision").is_some_and(|a| a.params.get("VoidGaze").is_some_and(|v| *v > 0.5));
+    let charms_only = void_gaze && level < 2;
+    souls.sounds = !charms_only;
     let uu = 0.01;
     let reach = data.power_f("DarkVision", level, "m_fDistance", 2000.0) * uu;
     let fade_from = data.power_f("DarkVision", level, "m_fFadeStartAtDistance", 1700.0) * uu;
@@ -704,7 +711,16 @@ pub fn update_dark_vision(
         }
     };
     let mut sighted: HashMap<Entity, bool> = HashMap::default();
-    if show {
+    if show && charms_only {
+        for (p, t) in &pickups {
+            if matches!(p.kind, crate::interact::PickupKind::Rune | crate::interact::PickupKind::BoneCharm) && t.translation.distance(at) <= reach {
+                for &m in &p.entities {
+                    collect(m, 1, &mut want);
+                }
+            }
+        }
+    }
+    if show && !charms_only {
         for (e, npc, t, _) in &npcs {
             let d = t.translation.distance(at);
             if npc.mode == crate::npc::Mode::Dead || d > reach {
@@ -778,7 +794,7 @@ pub fn dark_vision_sounds(souls: Res<DvSouls>, mut noises: MessageReader<crate::
     let now = time.elapsed_secs();
     last.retain(|(_, t)| now - *t < 0.5);
     for n in noises.read() {
-        if souls.mode != 2 || last.iter().any(|(p, _)| p.distance(n.pos) < 1.0) {
+        if souls.mode != 2 || !souls.sounds || last.iter().any(|(p, _)| p.distance(n.pos) < 1.0) {
             continue;
         }
         last.push((n.pos, now));

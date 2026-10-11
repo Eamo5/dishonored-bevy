@@ -107,6 +107,10 @@ struct ArmClips {
     bend_time: Option<ClipId>,
     switch: Option<ClipId>,
     crossbow_fire: Option<ClipId>,
+    /// Daud's: summoning, Void Gaze opening, his wristbow raised
+    summon: Option<ClipId>,
+    dark_vision: Option<ClipId>,
+    wristbow_idle: Option<ClipId>,
     pistol_fire: Option<ClipId>,
     possess: Option<ClipId>,
     swarm: Option<ClipId>,
@@ -186,7 +190,10 @@ impl ArmClips {
             windblast: lib.find("Powers_Cast_Windblast"),
             bend_time: lib.find("Powers_Cast_BendTime"),
             switch: lib.find("Powers_Switch"),
-            crossbow_fire: lib.find("Crossbow_Fire"),
+            crossbow_fire: lib.find("Crossbow_Fire").or_else(|| lib.find("Wristbow_Fire")),
+            summon: lib.find("Powers_Cast_SummonAssassin_Out"),
+            dark_vision: lib.find("Powers_Cast_DarkVision_In"),
+            wristbow_idle: lib.find("Wristbow_Idle"),
             pistol_fire: lib.find("Pistol_Fire"),
             possess: lib.find("Powers_Cast_Possession_In"),
             swarm: lib.find("Powers_Cast_Swarm"),
@@ -346,6 +353,8 @@ fn spawn_arms(
 
     if let Some((lib, clips)) = animated {
         let attach_l = find("handAttachment_L_jnt").map(|i| socket("LeftHandWpn", i));
+        // (Daud's wristbow on his forearm: the arms' `Wristbow` socket)
+        let wrist = attach_l.and_then(|_| find("handAttachment_L_jnt")).filter(|_| vis.skeleton.sockets.iter().any(|s| s.name.eq_ignore_ascii_case("Wristbow"))).map(|i| socket("Wristbow", i));
         // crossbow and pistol in the left hand, shown while selected
         let mut held = Vec::new();
         if let (Some((hand, at)), Some(a)) = (attach_l, assets.as_ref()) {
@@ -361,6 +370,7 @@ fn spawn_arms(
                 (Power::SpringRazor, "springrazor"),
             ] {
                 let Some(parts) = a.props.get(prop) else { continue };
+                let (hand, at) = if prop == "crossbow" { wrist.unwrap_or((hand, at)) } else { (hand, at) };
                 let holder = commands.spawn((at, Visibility::Hidden, RenderLayers::layer(VIEW_LAYER))).id();
                 for (mesh, mat) in &parts.view_parts {
                     let mut m = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), NotShadowCaster, RenderLayers::layer(VIEW_LAYER)));
@@ -773,8 +783,10 @@ fn animate_arms(
         let cl = match powers.cast_power {
             Power::Blink => c.blink,
             Power::Windblast => c.windblast,
+            Power::SummonAssassin => c.summon.or(c.windblast),
             Power::BendTime => c.bend_time,
-            Power::DarkVision | Power::Empty | Power::Heart => c.switch,
+            Power::DarkVision => c.dark_vision.or(c.switch),
+            Power::Empty | Power::Heart => c.switch,
             Power::Possess => c.possess,
             Power::DevouringSwarm => c.swarm,
             Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt => c.crossbow_fire,
@@ -795,8 +807,9 @@ fn animate_arms(
     if powers.selected != st.selected {
         st.selected = powers.selected;
     }
-    let idle = if ranged { c.gadgets_idle } else { c.powers_idle };
-    if anim.overlay_finished() || !(anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.razor_place)) {
+    let bow = matches!(powers.selected, Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt);
+    let idle = if ranged { if bow { c.wristbow_idle.or(c.gadgets_idle) } else { c.gadgets_idle } } else { c.powers_idle };
+    if anim.overlay_finished() || !(anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision)) {
         match idle {
             Some(cl) if !st.choking && !st.blocking => anim.play_overlay(cl, true, 1.0, 0.25),
             _ => anim.stop_overlay(0.2),
@@ -810,6 +823,7 @@ fn cast_clip(p: Power) -> &'static str {
     match p {
         Power::Blink => "Powers_Cast_Blink_Out",
         Power::Windblast => "Powers_Cast_Windblast",
+        Power::SummonAssassin => "Powers_Cast_SummonAssassin_Out",
         Power::BendTime => "Powers_Cast_BendTime",
         Power::DarkVision | Power::Empty | Power::Heart => "Powers_Switch",
         Power::Possess => "Powers_Cast_Possession_In",

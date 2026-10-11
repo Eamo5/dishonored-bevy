@@ -74,7 +74,7 @@ fn fallback(i: usize) -> &'static str {
 /// An interaction's words, its keys named as bound (`ConvertButtonTags`).
 fn words(data: &crate::gamedata::Data, i: usize) -> String {
     use crate::bindings::{hint, Act};
-    let raw = data.0.texts.get(&format!("HUD.m_InteractionTexts[{i}]")).map(|s| s.as_str()).unwrap_or(fallback(i));
+    let raw = data.ui_text(&format!("HUD.m_InteractionTexts[{i}]")).map(|s| s.as_str()).unwrap_or(fallback(i));
     let mut out = raw.replace("`GBA_Primary`", "[LMB]").replace("`GBA_Secondary`", "[RMB]");
     for (k, a) in [("`GBA_Use`", Act::Use), ("`GBA_Block`", Act::Block), ("`GBA_Jump`", Act::Jump), ("`GBA_Zoom`", Act::Zoom)] {
         if out.contains(k) {

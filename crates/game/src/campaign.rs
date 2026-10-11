@@ -140,13 +140,47 @@ pub fn chaos_high(data: &Data, s: &PlayerStats, mission: i32) -> bool {
 
 /// A start loadout (`Twk_PlayerLoadout_*`): weapons, gadgets, runes, coins, powers, upgrades.
 pub fn apply_loadout(data: &Data, name: &str, s: &mut PlayerStats) -> bool {
-    apply_loadout_from(&data.0.loadouts, name, s)
+    let ok = apply_loadout_from(&data.0.loadouts, name, s);
+    alias_powers(data, s);
+    ok
+}
+
+/// The powers given by their own names played as the ones they are ("Transversal": Blink).
+pub fn alias_powers(data: &Data, s: &mut PlayerStats) {
+    for (from, to) in &data.0.power_aliases {
+        if let Some(l) = s.powers.remove(from) {
+            let e = s.powers.entry(to.clone()).or_insert(0);
+            *e = (*e).max(l);
+        }
+    }
 }
 
 pub fn apply_loadout_from(list: &[dhcook::format::LoadoutDef], name: &str, s: &mut PlayerStats) -> bool {
     let Some(l) = list.iter().find(|l| l.name.eq_ignore_ascii_case(name)) else { return false };
-    s.weapons = l.items.iter().any(|i| i.contains("Crossbow") || i.contains("Pistol"));
-    s.no_crossbow = s.weapons && !l.items.iter().any(|i| i.contains("Crossbow"));
+    // (Daud's wristbow his crossbow)
+    let bow = |i: &String| i.contains("Crossbow") || i.contains("Wristbow");
+    s.weapons = l.items.iter().any(|i| bow(i) || i.contains("Pistol"));
+    s.no_crossbow = s.weapons && !l.items.iter().any(bow);
+    // its ammunition and elixirs, where it gives them
+    if !l.ammo.is_empty() {
+        s.bolts = 0;
+        s.sleep_darts = 0;
+        s.bullets = 0;
+    }
+    for (ty, n) in &l.ammo {
+        match ty.as_str() {
+            "Arrow" => s.bolts += n,
+            "Arrow_Sleep" => s.sleep_darts += n,
+            "Bullet" => s.bullets += n,
+            "Grenade" => *s.items.entry(crate::gadgets::GRENADES.to_string()).or_default() += n,
+            "SpringRazor" => *s.items.entry(crate::gadgets::RAZORS.to_string()).or_default() += n,
+            other => *s.items.entry(format!("Ammo_{other}")).or_default() += n,
+        }
+    }
+    if let Some([h, m]) = l.elixirs {
+        s.health_elixirs = h;
+        s.mana_elixirs = m;
+    }
     for i in &l.items {
         let gadget = if i.contains("Grenade") {
             Some(crate::gadgets::GRENADES)
@@ -193,6 +227,10 @@ pub fn direct_start_loadout(map: &str) -> Option<&'static str> {
         "l_flooded_fintro_p" | "l_flooded_fstreets_p" | "l_flooded_fassassins_p" | "l_flooded_fgate_p" | "l_flooded_frefinery_p" | "l_streetsewer_p" => "Twk_PlayerLoadout_Flooded",
         "l_pub_assault_p" => "Twk_PlayerLoadout_HubAssault",
         "l_isl_lowchaos_p" | "l_isl_highchaos_p" | "l_lighth_lowchaos_p" | "l_lighth_highchaos_p" => "Twk_PlayerLoadout_LightHouse",
+        // (The Knife of Dunwall: its first mission begins with the campaign's loadout, the
+        // later ones with the fuller default)
+        m if m.starts_with("dlc06_slaughter") => "DLC06_Twk_PlayerLoadout_Campaign",
+        m if m.starts_with("dlc06_") => "DLC06_Twk_PlayerLoadout_Default",
         _ => return None,
     };
     Some(name)
@@ -298,6 +336,9 @@ fn apply_campaign(
             }
             CampaignFx::Loadout(name) => {
                 let local = level.as_ref().is_some_and(|l| apply_loadout_from(&l.scene.loadouts, &name, &mut stats));
+                if local {
+                    alias_powers(&data, &mut stats);
+                }
                 if !local && !apply_loadout(&data, &name, &mut stats) {
                     warn!("campaign: loadout {name} unknown");
                 }

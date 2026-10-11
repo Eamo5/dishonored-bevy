@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::Path;
 
 // 103: retain unmatched-rig timelines and zero-track animation sequences.
-pub const SCENE_VERSION: u32 = 107;
+pub const SCENE_VERSION: u32 = 109;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -183,6 +183,10 @@ pub struct Scene {
     /// the characters' ragdolls (their pawns' `m_pPhysicsAsset`), by `NpcType::ragdoll`
     #[serde(default)]
     pub ragdolls: Vec<RagdollDef>,
+    /// Daud's summoned assassins (The Knife of Dunwall's Summon Assassin, by power level):
+    /// spawners of their own, never started by the level
+    #[serde(default)]
+    pub summons: Vec<u32>,
     /// a severed limb's blood (`DisSeveredLimbInfo` `SLInfo_Default`)
     #[serde(default)]
     pub severed_limbs: Option<SeveredLimbs>,
@@ -2597,10 +2601,46 @@ pub struct Audiograph {
     pub lines: Vec<(String, String)>,
 }
 
+/// A player other than Corvo (Daud: `DisDLC06GameInfo.m_CampaignPawnTweak`,
+/// `DLC06_Twk_Player_Daud_Release`), played on the maps whose names start with one of `maps`:
+/// his powers (stored under the names of Corvo's they play as), passives, attributes, pawn
+/// tweaks, start loadouts, mission statistics screens and faction.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct PlayerProfile {
+    pub name: String,
+    pub maps: Vec<String>,
+    pub actives: Vec<ActivePowerDef>,
+    pub passives: Vec<PassivePowerDef>,
+    pub attributes: std::collections::BTreeMap<String, [f32; 4]>,
+    pub pawn: std::collections::BTreeMap<String, f32>,
+    pub loadouts: Vec<LoadoutDef>,
+    pub mission_stats: Vec<MissionStatsDef>,
+    pub power_aliases: Vec<(String, String)>,
+    pub faction: String,
+    /// his interface's strings over Corvo's (the DLC's HUD tweak: `HUD.m_InteractionTexts[23]`
+    /// "End Void Gaze")
+    #[serde(default)]
+    pub texts: std::collections::BTreeMap<String, String>,
+}
+
+/// Is a faction the player's: Corvo's (`Faction_Corvo_Default`) or Daud's
+/// (`DLC06_Fctn_Daud_Default`)?
+pub fn is_player_faction(name: &str) -> bool {
+    let n = name.rsplit('.').next().unwrap_or(name).to_ascii_lowercase();
+    n.contains("faction_corvo") || n.contains("fctn_daud")
+}
+
 /// Campaign-wide game data from the original tweaks: powers, the player's attributes,
 /// bone charms, upgrades and the craftsman's store (`cache/game/gamedata.json`).
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct GameData {
+    /// the other players (Daud in The Knife of Dunwall), each with the maps they play
+    #[serde(default)]
+    pub profiles: Vec<PlayerProfile>,
+    /// the powers' names in the player's own data and the powers they are played as
+    /// ("Transversal" -> "Blink"): the profile's
+    #[serde(default)]
+    pub power_aliases: Vec<(String, String)>,
     /// the Dunwall City Trials' challenges (`DisDLC05GameInfo.m_Challenges`)
     #[serde(default)]
     pub challenges: Vec<ChallengeDef>,
@@ -2840,6 +2880,12 @@ pub struct LoadoutDef {
     pub abstract_items: Vec<(String, u32)>,
     pub powers: Vec<(String, u8)>,
     pub upgrades: Vec<String>,
+    /// ammunition by type (`eDisAmmoType`: `Arrow` 5, `Arrow_Sleep` 2...) and elixirs
+    /// (health, mana)
+    #[serde(default)]
+    pub ammo: Vec<(String, u32)>,
+    #[serde(default)]
+    pub elixirs: Option<[u32; 2]>,
 }
 
 /// A dialogue graph (`DisDialogTree`): hooks lead through branches and conditions to the

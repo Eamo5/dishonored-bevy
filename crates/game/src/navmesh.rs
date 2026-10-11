@@ -190,6 +190,15 @@ impl NavGrid {
         true
     }
 
+    /// Feet at `at` stand on the mesh (a polygon under them, not merely near).
+    pub fn on_mesh(&self, at: Vec3) -> bool {
+        let (cx, cz) = cell(at.x, at.z);
+        self.cells.get(&(cx, cz)).into_iter().flatten().any(|&pi| {
+            let p = &self.polys[pi as usize];
+            at.y >= p.lo - 0.6 && at.y <= p.hi + 0.6 && Self::inside(p, at)
+        })
+    }
+
     /// The polygon under feet at `at` (else the nearest one close by).
     pub fn locate(&self, at: Vec3) -> Option<u32> {
         let (cx, cz) = cell(at.x, at.z);

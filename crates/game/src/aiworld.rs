@@ -246,7 +246,7 @@ fn trespass(ai: Res<AiWorld>, player: Query<&Transform, With<Player>>, mut npcs:
     // (touching it: his cylinder, feet to head, in it)
     let reach = crate::player::STAND_HALF + crate::player::RADIUS;
     let touching = |h: &[Collider]| [-reach, -reach * 0.5, 0.0, reach * 0.5, reach].iter().any(|dy| inside(h, at + Vec3::Y * *dy));
-    let zones: Vec<&Zone> = ai.zones.iter().filter(|z| z.enabled && z.forbidden.iter().any(|f| f.eq_ignore_ascii_case("Faction_Corvo_Default")) && touching(&z.hulls)).collect();
+    let zones: Vec<&Zone> = ai.zones.iter().filter(|z| z.enabled && z.forbidden.iter().any(|f| dhcook::format::is_player_faction(f)) && touching(&z.hulls)).collect();
     for mut n in &mut npcs {
         if n.is_down() {
             continue;

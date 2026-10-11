@@ -20,16 +20,73 @@ impl Plugin for GameDataPlugin {
                 GameData::default()
             }
         };
-        app.insert_resource(Data(data))
+        app.insert_resource(Data(data, Corvo::default()))
             .init_resource::<Attrs>()
             .add_systems(Update, derive_attributes.run_if(in_state(GameState::InGame)));
     }
 }
 
 #[derive(Resource, Default)]
-pub struct Data(pub GameData);
+pub struct Data(pub GameData, pub Corvo);
+
+/// Corvo's own powers, passives, attributes, pawn tweaks, loadouts and mission statistics
+/// screens, kept while another player's are played (by that player's name); that player's
+/// interface strings, over Corvo's.
+#[derive(Default)]
+pub struct Corvo(Option<(String, dhcook::format::PlayerProfile)>, BTreeMap<String, String>);
 
 impl Data {
+    /// The player of a map: another's profile (Daud on The Knife of Dunwall's maps) put in
+    /// place of Corvo's, or Corvo's put back. Whose it is now.
+    pub fn use_profile(&mut self, map: &str) -> String {
+        let m = map.to_ascii_lowercase();
+        let want = self.0.profiles.iter().find(|p| p.maps.iter().any(|pre| m.starts_with(pre.as_str()))).map(|p| p.name.clone());
+        let now = self.1 .0.as_ref().map(|(n, _)| n.clone());
+        if want == now {
+            return now.unwrap_or_else(|| "Corvo".into());
+        }
+        // (Corvo's back first)
+        if let Some((_, c)) = self.1 .0.take() {
+            self.swap(c);
+        }
+        self.1 .1.clear();
+        if let Some(p) = want.as_ref().and_then(|w| self.0.profiles.iter().find(|p| &p.name == w)).cloned() {
+            let name = p.name.clone();
+            self.1 .1 = p.texts.clone();
+            let corvo = self.swap(p);
+            self.1 .0 = Some((name, corvo));
+        }
+        want.unwrap_or_else(|| "Corvo".into())
+    }
+
+    /// Put a profile's data in place, giving back what was there.
+    fn swap(&mut self, p: dhcook::format::PlayerProfile) -> dhcook::format::PlayerProfile {
+        let d = &mut self.0;
+        dhcook::format::PlayerProfile {
+            name: p.name,
+            maps: p.maps,
+            actives: std::mem::replace(&mut d.actives, p.actives),
+            passives: std::mem::replace(&mut d.passives, p.passives),
+            attributes: std::mem::replace(&mut d.attributes, p.attributes),
+            pawn: std::mem::replace(&mut d.pawn, p.pawn),
+            loadouts: std::mem::replace(&mut d.loadouts, p.loadouts),
+            mission_stats: std::mem::replace(&mut d.mission_stats, p.mission_stats),
+            power_aliases: std::mem::replace(&mut d.power_aliases, p.power_aliases),
+            faction: p.faction,
+            texts: Default::default(),
+        }
+    }
+
+    /// An interface string (`HUD.m_InteractionTexts[23]`): the player's own, else Corvo's.
+    pub fn ui_text(&self, key: &str) -> Option<&String> {
+        self.1 .1.get(key).or_else(|| self.0.texts.get(key))
+    }
+
+    /// A power by the name the player's data gives it ("Transversal": Blink).
+    pub fn power_name<'a>(&'a self, name: &'a str) -> &'a str {
+        self.0.power_aliases.iter().find(|(from, _)| from == name).map(|(_, to)| to.as_str()).unwrap_or(name)
+    }
+
     pub fn ammo_capacities(&self, stats: &PlayerStats, difficulty: u8) -> [u32; 8] {
         ["BulletCapacity", "ExplosiveBulletCapacity", "ArrowCapacity", "SleepArrowCapacity", "FlareArrowCapacity", "SpringRazorCapacity", "GrenadeCapacity", "StickyGrenadeCapacity"].map(|name| {
             (self.0.attributes.get(name).map(|_| self.attribute(name, difficulty, &stats.powers, &stats.charms))
@@ -351,6 +408,41 @@ fn derive_attributes(data: Res<Data>, settings: Res<crate::settings::Settings>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_profile_is_played_on_its_maps_and_corvo_comes_back() {
+        use dhcook::format::{ActivePowerDef, PlayerProfile};
+        let mut d = GameData::default();
+        d.actives.push(ActivePowerDef { name: "Blink".into(), mana: 10.0, ..Default::default() });
+        d.attributes.insert("HealthMax".into(), [70.0; 4]);
+        d.profiles.push(PlayerProfile {
+            name: "Daud".into(),
+            maps: vec!["dlc06_".into()],
+            actives: vec![ActivePowerDef { name: "Blink".into(), mana: 20.0, ..Default::default() }],
+            attributes: [("HealthMax".to_string(), [90.0; 4])].into_iter().collect(),
+            power_aliases: vec![("Transversal".into(), "Blink".into())],
+            texts: [("HUD.m_InteractionTexts[23]".to_string(), "End Void Gaze".to_string())].into_iter().collect(),
+            ..Default::default()
+        });
+        let mut data = Data(d, Corvo::default());
+        assert_eq!(data.use_profile("L_Streets1_P"), "Corvo");
+        assert_eq!(data.active("Blink").map(|a| a.mana), Some(10.0));
+        assert_eq!(data.use_profile("DLC06_DaudBase_P"), "Daud");
+        assert_eq!(data.active("Blink").map(|a| a.mana), Some(20.0));
+        assert_eq!(data.0.attributes["HealthMax"][1], 90.0);
+        assert_eq!(data.power_name("Transversal"), "Blink");
+        assert_eq!(data.ui_text("HUD.m_InteractionTexts[23]").map(|s| s.as_str()), Some("End Void Gaze"));
+        // (again: nothing changes)
+        assert_eq!(data.use_profile("DLC06_Slaughter_Ext_P"), "Daud");
+        assert_eq!(data.active("Blink").map(|a| a.mana), Some(20.0));
+        // back on Corvo's map: his own data
+        assert_eq!(data.use_profile("L_Prison_P"), "Corvo");
+        assert_eq!(data.active("Blink").map(|a| a.mana), Some(10.0));
+        assert_eq!(data.0.attributes["HealthMax"][1], 70.0);
+        assert_eq!(data.power_name("Transversal"), "Transversal");
+        assert!(data.ui_text("HUD.m_InteractionTexts[23]").is_none());
+        assert_eq!(data.0.profiles.len(), 1);
+    }
 
     #[test]
     fn equipping_and_removing_charms_updates_combat_attributes() {

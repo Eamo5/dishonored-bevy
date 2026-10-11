@@ -235,7 +235,18 @@ pub fn shader_library(assets: &Assets) -> Option<&'static shadercache::ShaderLib
         .get_or_init(|| {
             let pkg = assets.package("RefShaderCache-PC-D3D-SM3")?;
             match shadercache::ShaderLibrary::load(&pkg) {
-                Ok(l) => {
+                Ok(mut l) => {
+                    // (and the DLCs' caches: their own materials' shaders)
+                    for dir in resolver::dlc_dirs(&assets.cooked_dir) {
+                        let Ok(p) = upk::Package::open(&dir.join("RefShaderCache-PC-D3D-SM3.upk")) else { continue };
+                        match shadercache::ShaderLibrary::load(&p) {
+                            Ok(d) => {
+                                let n = l.merge(d);
+                                log::info!("shader cache: {} more material shader maps from {}", n, dir.display());
+                            }
+                            Err(e) => log::warn!("shader cache {}: {e:#}", dir.display()),
+                        }
+                    }
                     log::info!("shader cache: {} shaders, {} material shader maps", l.records.len(), l.maps.len());
                     Some(l)
                 }
@@ -394,6 +405,10 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
             ops: (0, 0),
             volumes: (before.3, c.scene.volumes.len() as u32),
         });
+    }
+    // Daud's summoned assassins on The Knife of Dunwall's maps
+    if map.to_ascii_lowercase().starts_with("dlc06_") {
+        c.summon_spawners();
     }
     let started = kismet::spawners_started_at_load(&levels);
     for (sp, key) in c.scene.spawners.iter_mut().zip(c.stealable_keys.iter()) {
@@ -2541,6 +2556,59 @@ impl<'a> Cooker<'a> {
         Ok(())
     }
 
+    /// Daud's summoned assassins (`DLC06_Pwr_Assassummon`, Daud's player package): a spawner
+    /// for each power level's `m_pAssassinTweaks`, never started by the level
+    /// (`scene.summons`), and the summoning's effects.
+    fn summon_spawners(&mut self) {
+        const POWER: &str = "DLC06_Twk_Powers_Assassummon.DLC06_Pwr_Assassummon";
+        let power = self.assets.find(POWER).or_else(|| {
+            let pkg = self.assets.package("DLC06_Twk_Player_Daud_SF")?;
+            self.assets.add_search(pkg);
+            self.assets.find(POWER)
+        });
+        let Some(power) = power else {
+            log::warn!("summon: no {POWER}");
+            return;
+        };
+        let ch = self.chain(&power);
+        for lvl in 0..2 {
+            let Some((pkg, Value::Struct(_, s))) = ch.get_idx_pkg("m_PowerLevels", lvl).map(|(p, v)| (p.clone(), v.clone())) else { continue };
+            let Some(t) = Props(s).object("m_pAssassinTweaks").filter(|o| *o != 0).and_then(|o| self.assets.resolve(&pkg, o)) else { continue };
+            let npc_type = self.npc_type(&t);
+            self.scene.summons.push(self.scene.spawners.len() as u32);
+            self.scene.spawners.push(Spawner {
+                name: format!("SummonedAssassin{}", lvl + 1),
+                position: [0.0; 3],
+                yaw: 0.0,
+                pawn: t.path(),
+                route: None,
+                spawn_on_begin_play: false,
+                npc_type,
+                script_start: false,
+                story_group: String::new(),
+                stealable: None,
+                faction: None,
+                aware: false,
+                squad: String::new(),
+                can_flee: false,
+                spawn_at: None,
+                spawn_on_help: false,
+                spawn_visible: true,
+                spawn_near: true,
+                tether: Vec::new(),
+            });
+            self.tether_keys.push(Vec::new());
+            self.spawner_keys.push((String::new(), 0));
+            self.stealable_keys.push(None);
+        }
+        for (name, field) in [("summon_trigger", "m_pAppearanceEffect_Template"), ("summon_target", "m_pTargetingEffect_Ground_Template")] {
+            if let Some(id) = ch.obj(self.assets, field).and_then(|o| self.particle_system(&o)) {
+                self.scene.effects.push((name.to_string(), id));
+            }
+        }
+        log::info!("summon: {} assassin spawners", self.scene.summons.len());
+    }
+
     /// A security device: its power, detection volume, damage and sounds (from its tweak).
     fn rat_spawner(&mut self, actor: &Obj) -> Result<()> {
         let ch = self.chain(actor);
@@ -3633,7 +3701,8 @@ impl<'a> Cooker<'a> {
                 p.rsplit('.').next().unwrap_or(&p).to_string()
             })
             .collect();
-        let hostile = enemies.iter().any(|e| e.to_ascii_lowercase().contains("faction_corvo"));
+        // (hostile to the player: Corvo's faction among its enemies, or Daud's)
+        let hostile = enemies.iter().any(|e| is_player_faction(e));
         self.scene.factions.insert(name.clone(), enemies);
         (name, hostile)
     }
@@ -6041,7 +6110,21 @@ impl<'a> Cooker<'a> {
             ("grenade", "Grenade.Grenade"),
             ("springrazor", "SpringRazor.SpringRazor"),
         ];
-        for (name, path) in GAME_PROPS {
+        // (Daud's sword, wristbow and its bolts on The Knife of Dunwall's maps)
+        const DAUD_PROPS: &[(&str, &str)] = &[
+            ("player_sword", "DLC06_DaudSword.DLC06_DaudSword"),
+            ("crossbow", "DLC06_WristBow.DLC06_WristBow"),
+            ("bolt", "DLC06_WristBow.DLC06_Wrist_bolt_01"),
+            ("bolt_sleep", "DLC06_WristBow.DLC06_Wrist_bolt_Sleep"),
+            ("bolt_explosive", "DLC06_WristBow.DLC06_Wrist_Bolt_Explosive"),
+        ];
+        let daud = self.scene.name.to_ascii_lowercase().starts_with("dlc06_");
+        let props: Vec<(&str, &str)> = GAME_PROPS
+            .iter()
+            .map(|&(n, p)| DAUD_PROPS.iter().find(|d| daud && d.0 == n).copied().unwrap_or((n, p)))
+            .chain(DAUD_PROPS.iter().copied().filter(|d| daud && !GAME_PROPS.iter().any(|g| g.0 == d.0)))
+            .collect();
+        for (name, path) in props.iter() {
             let Some(obj) = self.assets.find(path) else {
                 log::warn!("prop {path} not found");
                 continue;
@@ -6078,8 +6161,17 @@ impl<'a> Cooker<'a> {
         // a blade in flesh: its blood (the contact system's sword against a body)
         self.scene.blade_blood = self.blade_blood();
         self.scene.severed_limbs = self.severed_limbs();
-        // Corvo's first-person arms: a skinned rig exposed as the "player_arms" character type
-        if let Some(obj) = self.assets.find("Engine.Ply_Player.Skm_Player") {
+        // the first-person arms: a skinned rig exposed as the "player_arms" character type
+        // (Corvo's; Daud's on The Knife of Dunwall's maps: his pawn's `m_pSkeletalMesh`, his
+        // sets over Corvo's)
+        let daud = self.scene.name.to_ascii_lowercase().starts_with("dlc06_");
+        if daud && self.assets.find("DLC06_PlyDaud.DLC06_Skm_Player_Daud").is_none() {
+            if let Some(pkg) = self.assets.package("DLC06_Twk_Player_Daud_SF") {
+                self.assets.add_search(pkg);
+            }
+        }
+        let arms_mesh = if daud { self.assets.find("DLC06_PlyDaud.DLC06_Skm_Player_Daud") } else { None };
+        if let Some(obj) = arms_mesh.or_else(|| self.assets.find("Engine.Ply_Player.Skm_Player")) {
             match skeletal::read_skeletal_mesh(&obj.pkg, obj.idx) {
                 Ok(d) => {
                     let skeleton = self.scene.skeletons.len() as u32;
@@ -6109,8 +6201,9 @@ impl<'a> Cooker<'a> {
                         "Ply_WeeperAttack_as.Ply_WeeperAttack_as",
                         "Ply_Empty_CarryCorpse_as.Ply_Empty_CarryCorpse_as",
                     ];
+                    const DAUD_SETS: &[&str] = &["DLC06_PlyDaud_Powers_as.DLC06_PlyDaud_Powers_as", "DLC06_PlyDaud_Wristbow_as.DLC06_PlyDaud_Wristbow_as", "DLC06_PlyDaud_Assassination_as.DLC06_PlyDaud_Assassination_as"];
                     let mut sets = Vec::new();
-                    for path in PLAYER_SETS {
+                    for path in PLAYER_SETS.iter().chain(if daud { DAUD_SETS } else { &[] }) {
                         match self.assets.find(path) {
                             Some(set) => sets.push(set),
                             None => log::warn!("player anim set {path} not found"),

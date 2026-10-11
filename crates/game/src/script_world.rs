@@ -135,7 +135,7 @@ impl Party {
     /// A faction by its tweak's name (`DisFaction_Defaults.Faction_Guard_Default`).
     pub fn faction(name: &str) -> Party {
         let n = name.rsplit('.').next().unwrap_or(name);
-        if n.eq_ignore_ascii_case("Faction_Corvo_Default") {
+        if dhcook::format::is_player_faction(n) {
             Party::Corvo
         } else {
             Party::Faction(n.to_string())

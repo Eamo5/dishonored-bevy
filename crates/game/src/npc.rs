@@ -1976,7 +1976,7 @@ pub(crate) fn npc_perception(
                     npc.target = npc.last_seen;
                     npc.set_mode(Mode::Investigate);
                 }
-            } else if visible && dist < 10.0 && npc.mode != Mode::Flee && stats.health < stats.max_health && !npc.fighter() && npc.may_panic() && !npc.faction.eq_ignore_ascii_case("Faction_Corvo_Default") {
+            } else if visible && dist < 10.0 && npc.mode != Mode::Flee && stats.health < stats.max_health && !npc.fighter() && npc.may_panic() && !dhcook::format::is_player_faction(&npc.faction) {
                 // civilians flee from an armed, bloodied stranger (not his own people)
                 if npc.can_flee {
                         npc.set_mode(Mode::Flee);
@@ -2000,7 +2000,7 @@ pub(crate) fn npc_perception(
                     rate += 1.5;
                 }
                 npc.awareness = (npc.awareness + rate * dt).min(1.0);
-            } else if dist < 10.0 && npc.mode != Mode::Flee && stats.health < stats.max_health && !npc.fighter() && !npc.faction.eq_ignore_ascii_case("Faction_Corvo_Default") {
+            } else if dist < 10.0 && npc.mode != Mode::Flee && stats.health < stats.max_health && !npc.fighter() && !dhcook::format::is_player_faction(&npc.faction) {
                 if npc.can_flee {
                         npc.set_mode(Mode::Flee);
                     }

@@ -188,6 +188,154 @@ fn flatten(pkg: &Package, props: &[upk::props::Prop], prefix: &str, out: &mut BT
     }
 }
 
+/// Daud's profile in The Knife of Dunwall (`DisDLC06GameInfo.m_CampaignPawnTweak`:
+/// `DLC06_Twk_Player_Daud_Release`): his powers over Corvo's they play as (Transversal is
+/// Blink, his Void Gaze Dark Vision: each tweak falls back to Corvo's), Summon Assassin, his
+/// passives, attributes (over Corvo's: `m_pAttributeTweaks[1]`, the class default's under
+/// them), pawn tweaks, the campaign's start loadouts and mission statistics screens, his
+/// faction.
+fn dlc06_profile(cooked: &Path, game: &Package, base: &GameData) -> Option<crate::format::PlayerProfile> {
+    let dir = cooked.join("..").join("DLC").join("PCConsole").join("DLC06");
+    let pkg = Package::open(&dir.join("DLC06_Twk_Player_Daud_SF.upk")).ok()?;
+    let pawn_idx = pkg.find_export("DLC06_Twk_Player_Daud.DLC06_Twk_Player_Daud_Release")?;
+    let pawn = props(&pkg, pawn_idx)?;
+    let mut p = crate::format::PlayerProfile {
+        name: "Daud".into(),
+        maps: vec!["dlc06_".into()],
+        power_aliases: vec![("Transversal".into(), "Blink".into()), ("DaudDarkVision".into(), "DarkVision".into())],
+        ..Default::default()
+    };
+    // his active powers, each over Corvo's it plays as (the tweaks' own fallback), except
+    // what a tweak keeps to itself (`m_FallbackSkip`)
+    for (key, field, mana) in [("Blink", "m_pTransversalPowerTweaks", 20.0), ("DarkVision", "m_pDarkVisionPowerTweaks", 20.0), ("BendTime", "m_pBendTimePowerTweaks", 60.0), ("SummonAssassin", "m_pSummonAssassinPowerTweaks", 40.0)] {
+        let Some(o) = pawn.object(field).filter(|o| *o > 0) else { continue };
+        let Some(obj) = props(&pkg, o) else { continue };
+        let cls = pkg.class_name(o);
+        let def = game.find_export(&format!("Default__{cls}")).and_then(|d| props(game, d));
+        let skip: Vec<String> = struct_array(&pkg, &obj, "m_FallbackSkip").iter().map(|f| s(f, "m_PropertyPathName")).collect();
+        let mut a = base.actives.iter().find(|a| a.name == key).cloned().unwrap_or_else(|| ActivePowerDef { name: key.to_string(), mana, ..Default::default() });
+        // (Daud's Blink stops time while he aims standing still: `DisDLC06ActivePowerComponent_Transversal`)
+        if key == "Blink" {
+            a.params.insert("Transversal".into(), 1.0);
+        }
+        // (his Void Gaze: runes and charms only at level 1, `DisDLC06Tweaks_DarkVision`)
+        if key == "DarkVision" {
+            a.params.insert("VoidGaze".into(), 1.0);
+        }
+        if skip.iter().any(|f| f == "m_Levels") || a.levels.is_empty() {
+            a.levels = vec![BTreeMap::new(); 2];
+            a.level_sounds = vec![BTreeMap::new(); 2];
+        }
+        for i in 0..2 {
+            let (dv, ds) = level_values(game, def.as_ref(), &Props(Vec::new()), "m_Levels", i);
+            let (ov, os) = level_values(&pkg, None, &obj, "m_Levels", i);
+            a.levels[i as usize].extend(dv.into_iter().chain(ov));
+            a.level_sounds[i as usize].extend(ds.into_iter().chain(os));
+        }
+        let mut sounds = BTreeMap::new();
+        if let Some(d) = def.as_ref() {
+            let top: Vec<upk::props::Prop> = d.0.iter().filter(|p| p.name != "m_Levels").cloned().collect();
+            flatten(game, &top, "", &mut a.params, &mut sounds);
+        }
+        let top: Vec<upk::props::Prop> = obj.0.iter().filter(|p| p.name != "m_Levels").cloned().collect();
+        flatten(&pkg, &top, "", &mut a.params, &mut sounds);
+        // (a power without levels of its own: its sounds at both)
+        if key == "SummonAssassin" {
+            for l in a.level_sounds.iter_mut() {
+                l.extend(sounds.iter().map(|(k, v)| (k.clone(), v.clone())));
+            }
+        }
+        if let Some(m) = obj.int("m_ManaCost").filter(|m| *m > 0) {
+            a.mana = m as f32;
+        }
+        // (its rune costs its own)
+        a.runes = [0, 1].map(|i| match obj.get_idx("m_RuneCosts", i) {
+            Some(Value::Int(v)) => (*v).max(0) as u32,
+            _ => 0,
+        });
+        p.actives.push(a);
+    }
+    // his passives (`m_PassivePowers`: Shadow Kill, Celerity, Vitality, Blood Thirsty, Arcane Bond)
+    p.passives = struct_array(&pkg, &pawn, "m_PassivePowers")
+        .iter()
+        .map(|pw| PassivePowerDef {
+            name: s(pw, "m_Name"),
+            levels: struct_array(&pkg, pw, "m_Levels")
+                .iter()
+                .map(|l| PassiveLevel {
+                    runes: l.int("m_RuneCost").unwrap_or(0).max(0) as u32,
+                    mods: struct_array(&pkg, l, "m_Modifiers")
+                        .iter()
+                        .map(|m| AttrMod {
+                            attribute: s(m, "m_AttributeName").trim_start_matches("Attribute_").to_string(),
+                            op: s(m, "m_ModType").trim_start_matches("eDisAttributeModifierType_").to_string(),
+                            value: m.float("m_fModValue").unwrap_or(0.0),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })
+        .collect();
+    // his attributes over Corvo's (the DLC class's defaults, then his own)
+    p.attributes = base.attributes.clone();
+    let def = game.find_export("Default__DisDLC06Tweaks_PlayerPawn_Attributes").and_then(|d| props(game, d));
+    let own = match pawn.get_idx("m_pAttributeTweaks", 1) {
+        Some(Value::Object(o)) if *o > 0 => props(&pkg, *o),
+        _ => None,
+    };
+    for a in [def.as_ref(), own.as_ref()].into_iter().flatten() {
+        for prop in &a.0 {
+            let Value::Struct(_, sub) = &prop.value else { continue };
+            let e = p.attributes.entry(prop.name.trim_start_matches("m_").to_string()).or_insert([0.0; 4]);
+            for f in sub {
+                let v = match f.value {
+                    Value::Float(v) => v,
+                    Value::Int(v) => v as f32,
+                    _ => continue,
+                };
+                match f.name.as_str() {
+                    "m_fBaseValue1_Easy" => e[0] = v,
+                    "m_fBaseValue2_Normal" => e[1] = v,
+                    "m_fBaseValue3_Hard" => e[2] = v,
+                    "m_fBaseValue4_VeryHard" => e[3] = v,
+                    _ => {}
+                }
+            }
+        }
+    }
+    // his pawn's numbers over Corvo's
+    p.pawn = base.pawn.clone();
+    let top: Vec<upk::props::Prop> = pawn.0.iter().filter(|p| !matches!(p.value, Value::Struct(..))).cloned().collect();
+    flatten(&pkg, &top, "", &mut p.pawn, &mut BTreeMap::new());
+    p.faction = match pawn.get("m_pFactionTweak") {
+        Some(Value::Object(o)) if *o != 0 => object_name(&pkg, *o),
+        _ => "DLC06_Fctn_Daud_Default".into(),
+    };
+    // his HUD's strings (`DLC06_Twk_UI.int`: `Twk_DisDLC06MoviePlayerHUD`) as `HUD.<key>`
+    if let Ok(raw) = std::fs::read(cooked.join("..").join("Localization").join("INT").join("DLC06_Twk_UI.int")) {
+        let mut hud = false;
+        for line in decode_int(&raw).lines() {
+            let line = line.trim();
+            if line.starts_with('[') && line.ends_with(']') {
+                hud = line[1..line.len() - 1].split_whitespace().next() == Some("Twk_DisDLC06MoviePlayerHUD");
+                continue;
+            }
+            let Some((k, v)) = line.split_once('=').filter(|_| hud) else { continue };
+            let v = v.trim();
+            let v = v.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(v).to_string();
+            p.texts.insert(format!("HUD.{}", k.trim()), v);
+        }
+    }
+    // the campaign's start loadouts and mission statistics screens
+    if let Ok(full) = Package::open(&dir.join("DLC06_DishonoredGameFull_P.upk")) {
+        let mut tmp = GameData::default();
+        campaign_tweaks(&full, &mut tmp);
+        p.loadouts = tmp.loadouts;
+        p.mission_stats = tmp.mission_stats;
+    }
+    Some(p)
+}
+
 /// The values of struct property `name[i]`, the class default's under the object's own.
 fn level_values(pkg: &Package, def: Option<&Props>, obj: &Props, name: &str, i: i32) -> (BTreeMap<String, f32>, BTreeMap<String, String>) {
     let mut out = BTreeMap::new();
@@ -257,6 +405,19 @@ fn loadout(pkg: &Package, i: i32) -> Option<crate::format::LoadoutDef> {
                         if let Some(o) = a.object("m_pItem").filter(|&o| o != 0) {
                             l.abstract_items.push((object_name(pkg, o), a.int("m_Quantity").unwrap_or(1).max(0) as u32));
                         }
+                    }
+                    for a in struct_array(pkg, &inv, "m_Ammo") {
+                        let ty = s(&a, "m_AmmoType").trim_start_matches("eDisAmmoType_").to_string();
+                        if !ty.is_empty() {
+                            l.ammo.push((ty, a.int("m_AmmoAmount").unwrap_or(0).max(0) as u32));
+                        }
+                    }
+                    let el = |i: i32| match inv.get_idx("m_ElixirCounts", i) {
+                        Some(Value::Int(v)) => Some((*v).max(0) as u32),
+                        _ => None,
+                    };
+                    if el(0).is_some() || el(1).is_some() {
+                        l.elixirs = Some([el(0).unwrap_or(0), el(1).unwrap_or(0)]);
                     }
                 }
                 for a in struct_array(pkg, &p, "m_StartingPowers") {
@@ -1088,6 +1249,11 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
             flatten(&startup, sub, "", &mut fields, &mut BTreeMap::new());
         }
         d.post_nodes.insert(effect.to_string(), fields);
+    }
+    // Daud (The Knife of Dunwall), where its packages are installed
+    if let Some(p) = dlc06_profile(cooked, &game, &d) {
+        log::info!("gamedata: profile {}: {} active / {} passive powers, {} attributes, {} loadouts", p.name, p.actives.len(), p.passives.len(), p.attributes.len(), p.loadouts.len());
+        d.profiles.push(p);
     }
     localization(cooked, &mut d);
     abstract_items(cooked, &mut d);

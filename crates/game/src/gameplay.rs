@@ -621,11 +621,13 @@ pub struct TimeControl {
     pub scripted: Option<(f32, f32)>,
     /// a finisher's slow motion (1: none)
     pub finisher: f32,
+    /// Daud's Blink aimed standing still: the world, and he, held (0) or let go (1)
+    pub aim_freeze: f32,
 }
 
 impl Default for TimeControl {
     fn default() -> Self {
-        Self { bend_remaining: 0.0, world_dilation: 0.0, wheel: 1.0, scripted: None, finisher: 1.0 }
+        Self { bend_remaining: 0.0, world_dilation: 0.0, wheel: 1.0, scripted: None, finisher: 1.0, aim_freeze: 1.0 }
     }
 }
 
@@ -633,7 +635,7 @@ impl TimeControl {
     pub fn world_scale(&self) -> f32 {
         let bent = if self.bend_remaining > 0.0 { self.world_dilation } else { 1.0 };
         let scripted = self.scripted.map(|s| s.0).unwrap_or(1.0);
-        bent.min(scripted).min(self.finisher) * self.wheel
+        bent.min(scripted).min(self.finisher).min(self.aim_freeze) * self.wheel
     }
     /// The time scale of what goes on through bent time (Corvo's own: a finisher's and the
     /// wheel's slow motion only).
@@ -693,12 +695,18 @@ fn reset_stats(
     mut tc: ResMut<TimeControl>,
     mut campaign: ResMut<Campaign>,
     level: Option<Res<crate::level::LevelInfo>>,
-    data: Res<crate::gamedata::Data>,
+    mut data: ResMut<crate::gamedata::Data>,
     script: Res<crate::campaign::CampaignScript>,
 ) {
     tc.bend_remaining = 0.0;
     tc.wheel = 1.0;
+    tc.aim_freeze = 1.0;
     let map = level.as_ref().map(|l| l.scene.name.clone()).unwrap_or_default();
+    // (whose map it is: Daud's on The Knife of Dunwall's)
+    let player = data.use_profile(&map);
+    if player != "Corvo" {
+        info!("player: {player} on {map}");
+    }
     let mission = crate::save::mission_name(&map);
     match campaign.carry.take() {
         Some(mut s) => {
@@ -730,7 +738,14 @@ fn reset_stats(
             let mut s = PlayerStats::default();
             let idx = crate::save::mission_index(&map);
             // the original's loadout for starting the mission, where it has one
-            let loadout = crate::campaign::direct_start_loadout(&map).is_some_and(|l| crate::campaign::apply_loadout(&data, l, &mut s));
+            // (a map's own loadout first: The Knife of Dunwall's maps carry theirs)
+            let loadout = crate::campaign::direct_start_loadout(&map).is_some_and(|l| {
+                let local = level.as_ref().is_some_and(|lv| crate::campaign::apply_loadout_from(&lv.scene.loadouts, l, &mut s));
+                if local {
+                    crate::campaign::alias_powers(&data, &mut s);
+                }
+                local || crate::campaign::apply_loadout(&data, l, &mut s)
+            });
             if !loadout {
                 s.weapons = idx >= 2;
                 if idx >= 3 || (idx == 2 && !map.to_ascii_lowercase().starts_with("l_outsiderdream")) {
