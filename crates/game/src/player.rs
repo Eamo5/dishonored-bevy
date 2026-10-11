@@ -40,11 +40,15 @@ pub const STAND_HALF: f32 = 0.58; // capsule half segment => total 1.80 m
 pub const CROUCH_HALF: f32 = 0.18; // total 1.0 m
 pub const STAND_EYE: f32 = 0.72; // above capsule centre
 pub const CROUCH_EYE: f32 = 0.3;
-pub const GRAVITY: f32 = 19.0;
+/// What pulls Corvo down (m/s²): the world's 1500 uu/s², doubled as the original's falling
+/// physics applies it (its 800 uu/s `JumpZ` rises 106.7 uu and lands after 0.533 s, as measured
+/// in roshan's r614/blink research).
+pub const GRAVITY: f32 = 30.0;
 pub const WALK_SPEED: f32 = 3.4;
 pub const SPRINT_SPEED: f32 = 6.2;
 pub const CROUCH_SPEED: f32 = 1.9;
-pub const JUMP_SPEED: f32 = 5.6;
+/// The jump's speed without the attributes (`JumpZ` 800 uu/s).
+pub const JUMP_SPEED: f32 = 8.0;
 
 #[derive(Component)]
 pub struct Player {
@@ -304,7 +308,7 @@ fn player_move(
     mut vinput: ResMut<VirtualInput>,
     mut stats: ResMut<PlayerStats>,
     (mut noise, mut steps): (MessageWriter<Noise>, MessageWriter<Footfall>),
-    (mut msgs, attrs): (ResMut<HudMessages>, Res<crate::gamedata::Attrs>),
+    (mut msgs, attrs, zone): (ResMut<HudMessages>, Res<crate::gamedata::Attrs>, Res<crate::zones::ZonePush>),
     (swim, waters, carry, possession): (Res<crate::swim::Swim>, Option<Res<crate::swim::Waters>>, Res<crate::carry::Carry>, Res<crate::possession::Possession>),
     (mut climb, climbables, mut sfx): (ResMut<crate::climb::Climb>, Option<Res<crate::climb::Climbables>>, MessageWriter<crate::audio::PostEvent>),
     (cine, settings, paused, tc): (Res<crate::script_world::Cinematic>, Res<crate::settings::Settings>, Res<Paused>, Res<crate::gameplay::TimeControl>),
@@ -438,21 +442,24 @@ fn player_move(
             p.grounded = true;
         }
         if p.grounded && !was_grounded {
-            // landing: noise and fall damage
+            // landing: noise and fall damage (by the height fallen)
             let v = p.fall_speed;
-            if v > 3.0 {
-                let gait = if v > 9.0 { Gait::LandHigh } else { Gait::LandSmall };
+            let fell = v * v / (2.0 * GRAVITY);
+            if fell > 0.24 {
+                let gait = if fell > 2.1 { Gait::LandHigh } else { Gait::LandSmall };
                 steps.write(Footfall { pos: t.translation, gait, who: Walker::Player });
                 // the original ignores footfalls for a moment after landing
                 p.step_timer = 0.8;
             }
-            if v > 7.0 {
-                noise.write(Noise { pos: t.translation, radius: (v * 0.9).min(14.0), combat: false });
+            if fell > 1.3 {
+                noise.write(Noise { pos: t.translation, radius: (0.9 * (38.0 * fell).sqrt()).min(14.0), combat: false });
             }
-            // Agility raises the speeds a fall can be taken at
-            let hurt = 13.0 * attrs.fall_damage;
+            // the original's: none up to `MaxSpeedBeforeFallingDamage`, all of his health at
+            // `MaxSpeedBeforeFallingDeath`, in between in proportion (whole points; Agility
+            // raises both)
+            let (hurt, death) = (attrs.fall_hurt, attrs.fall_death.max(attrs.fall_hurt + 0.1));
             if v > hurt && !stats.fall_damage_off {
-                let dmg = ((v - hurt) * 9.0).min(150.0);
+                let dmg = (stats.max_health * ((v - hurt) / (death - hurt)).clamp(0.0, 1.0)).trunc();
                 stats.take_damage(dmg);
                 stats.damage_flash = 1.0;
                 if stats.health <= 0.0 {
@@ -526,7 +533,7 @@ fn player_move(
             if p.crouched {
                 // stand up first
             } else {
-                p.velocity.y = JUMP_SPEED;
+                p.velocity.y = if carry.carrying() { attrs.jump_carrying } else { attrs.jump };
                 p.grounded = false;
                 p.power_jump = attrs.power_jump_time;
             }
@@ -535,7 +542,7 @@ fn player_move(
         // Agility: holding jump carries Corvo higher
         if p.power_jump > 0.0 && attrs.power_jump_accel > 0.0 && keys.pressed(bind.key(crate::bindings::Act::Jump)) && p.velocity.y > 0.0 {
             p.power_jump -= dt;
-            p.velocity.y = (p.velocity.y + attrs.power_jump_accel * dt).min(attrs.power_jump_max.max(JUMP_SPEED));
+            p.velocity.y = (p.velocity.y + attrs.power_jump_accel * dt).min(attrs.power_jump_max.max(attrs.jump));
         } else {
             p.power_jump = 0.0;
         }
@@ -553,7 +560,9 @@ fn player_move(
     };
     p.lean += (lean_target - p.lean) * (10.0 * dt).min(1.0);
 
-    kcc.translation = Some((p.velocity + p.pull) * dt);
+    // a physics volume's push (`ZoneVelocity`): all of it falling, a little walking
+    let push = if p.grounded { zone.0.with_y(0.0) * 25.0 * dt } else { zone.0 };
+    kcc.translation = Some((p.velocity + p.pull + push) * dt);
     if !p.grounded {
         p.fall_speed = (-p.velocity.y).max(0.0);
         p.air_peak = p.air_peak.max(t.translation.y);

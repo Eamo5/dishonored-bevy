@@ -7,7 +7,8 @@
 //! at the top and the powers (`powersOrder`: Windblast, Dark Vision, Blink, the Swarm, Bend
 //! Time, Possession) on round from them, each `360 / count` degrees, its icon at 75% on the
 //! 500-wide circle's rim, the separators between the two, the indicator turned to the one
-//! pointed at. The mouse points; letting go equips it.
+//! pointed at. The mouse points; letting go equips it. Daud's is The Knife of Dunwall's own
+//! movie (`UI_PowerWheel_DLC06`: `WheelHandler_DLC06`'s orders, with his gadgets and powers).
 
 use crate::audio::PostEvent;
 use crate::flash::{turn_scale, Clip, FlashClip, MovieTimelines};
@@ -38,12 +39,17 @@ pub struct Wheel {
     hover: Option<usize>,
     /// the separators' angles
     seps: Vec<f32>,
+    /// Daud's (The Knife of Dunwall's movie)
+    daud: bool,
 }
 
 /// The original's time scale while the wheel is open.
 pub const WHEEL_TIME: f32 = 0.05;
 
 const MOVIE: &str = "powerwheel";
+const MOVIE_DLC06: &str = "powerwheel_DLC06";
+/// An item's disc (`ic`), the same sprite in both movies.
+const IC_SPRITE: u16 = 29;
 const WHEEL_AT: Vec2 = Vec2::new(640.0, 354.0);
 /// half `wheel_diameter` (the circle's width, 500), the icons' scale and drawn width
 const WHEEL_R: f32 = 250.0;
@@ -60,12 +66,17 @@ const AMMO_COLOR: Color = Color::srgba(0xeb as f32 / 255.0, 1.0, 0xde as f32 / 2
 /// `WheelHandler`'s orders.
 const WEAPONS: [Power; 9] = [Power::IncendiaryBolt, Power::Crossbow, Power::SleepDart, Power::Heart, Power::SpringRazor, Power::Grenade, Power::StickyGrenade, Power::Pistol, Power::ExplosiveBullet];
 const POWERS: [Power; 6] = [Power::Windblast, Power::DarkVision, Power::Blink, Power::DevouringSwarm, Power::BendTime, Power::Possess];
+/// `WheelHandler_DLC06`'s: the explosive bolt first, Daud's gadgets last; his Void Gaze
+/// (`pow_DLC06_daudDarkVision`) after Dark Vision, Transversal and Summon Assassin last.
+const WEAPONS_DLC06: [Power; 13] = [Power::ExplosiveBolt, Power::IncendiaryBolt, Power::Crossbow, Power::SleepDart, Power::Heart, Power::SpringRazor, Power::Grenade, Power::StickyGrenade, Power::Pistol, Power::ExplosiveBullet, Power::ArcMine, Power::StunMine, Power::Chokedust];
+const POWERS_DLC06: [Power; 7] = [Power::Windblast, Power::DarkVision, Power::DevouringSwarm, Power::BendTime, Power::Possess, Power::Blink, Power::SummonAssassin];
 
-/// The items Corvo has and where each sits (`ComputeWeaponAngle` / `ComputePowerAngle`), and
-/// the separators between the groups.
-fn arrange(stats: &PlayerStats) -> (Vec<(Power, f32)>, Vec<f32>) {
-    let w: Vec<Power> = WEAPONS.iter().copied().filter(|p| p.owned(stats)).collect();
-    let p: Vec<Power> = POWERS.iter().copied().filter(|p| p.owned(stats)).collect();
+/// The items the player has and where each sits (`ComputeWeaponAngle` / `ComputePowerAngle`),
+/// and the separators between the groups.
+fn arrange(stats: &PlayerStats, daud: bool) -> (Vec<(Power, f32)>, Vec<f32>) {
+    let (weapons, powers): (&[Power], &[Power]) = if daud { (&WEAPONS_DLC06, &POWERS_DLC06) } else { (&WEAPONS, &POWERS) };
+    let w: Vec<Power> = weapons.iter().copied().filter(|p| p.owned(stats)).collect();
+    let p: Vec<Power> = powers.iter().copied().filter(|p| p.owned(stats)).collect();
     let (nw, np) = (w.len() as f32, p.len() as f32);
     if nw + np == 0.0 {
         return (Vec::new(), Vec::new());
@@ -83,10 +94,14 @@ fn arrange(stats: &PlayerStats) -> (Vec<(Power, f32)>, Vec<f32>) {
     (out, seps)
 }
 
-/// The illustration (`item_schema`'s label) for an item.
+/// The illustration (`item_schema`'s label) for an item (Daud's movie adds his mines' and
+/// chokedust's; his bolts are the crossbow's, his powers the Outsider's).
 fn schema(p: Power) -> &'static str {
     match p {
-        Power::IncendiaryBolt | Power::Crossbow | Power::SleepDart => "crossbow",
+        Power::ArcMine => "arcMine",
+        Power::StunMine => "arcMineStun",
+        Power::Chokedust => "flashSmoke",
+        Power::IncendiaryBolt | Power::Crossbow | Power::SleepDart | Power::ExplosiveBolt => "crossbow",
         Power::Pistol | Power::ExplosiveBullet => "gun",
         Power::StickyGrenade => "sticky_grenade",
         Power::Grenade => "regular_grenade",
@@ -98,7 +113,7 @@ fn schema(p: Power) -> &'static str {
 }
 
 fn is_power(p: Power) -> bool {
-    POWERS.contains(&p)
+    POWERS.contains(&p) || p == Power::SummonAssassin
 }
 
 #[derive(Component)]
@@ -135,48 +150,57 @@ fn wheel(
     (mut ui, mut images, mut timelines): (ResMut<UiImages>, ResMut<Assets<Image>>, ResMut<MovieTimelines>),
     roots: Query<Entity, With<WheelRoot>>,
     (mut equipped, mut sfx, vm): (MessageWriter<PowerEquipped>, MessageWriter<PostEvent>, Option<Res<crate::kismet::Vm>>),
+    data: Res<crate::gamedata::Data>,
 ) {
     // (the scripts may shut it: `DisSeqAct_TogglePowerWheel`)
     let held = mouse.pressed(MouseButton::Middle) && !stats.dead && !vm.as_ref().is_some_and(|v| v.wheel_off);
     if held && !w.open {
         w.open = true;
         w.aim = Vec2::ZERO;
-        let (items, seps) = arrange(&stats);
+        w.daud = data.is_daud();
+        let (items, seps) = arrange(&stats, w.daud);
         w.items = items;
         w.seps = seps;
         // (it opens on what is in hand)
         w.hover = w.items.iter().position(|(p, _)| *p == powers.selected);
         tc.wheel = WHEEL_TIME;
         sfx.write(PostEvent::named("Snd_UI_Ingame_Wheel_Hand_In", None));
-        let Some(tl) = timelines.get(MOVIE) else { return };
+        // (Daud's movie, if cooked)
+        let (movie, tl) = match timelines.get(MOVIE_DLC06).filter(|_| w.daud) {
+            Some(tl) => (MOVIE_DLC06, tl),
+            None => match timelines.get(MOVIE) {
+                Some(tl) => (MOVIE, tl),
+                None => return,
+            },
+        };
         let title: bevy::text::FontSource = fonts.title.clone().into();
         let node = || Node { position_type: PositionType::Absolute, ..default() };
         let root = commands.spawn((WheelRoot, Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }, GlobalZIndex(70), Pickable::IGNORE, DespawnOnExit(GameState::InGame))).id();
         for (sym, at) in [("_noise", Vec2::new(640.0, 360.0))] {
             if let Some(c) = Clip::export(&tl, sym) {
-                commands.spawn((Backdrop(at), FlashClip::new(MOVIE, tl.clone(), c).real(), node(), Pickable::IGNORE, ChildOf(root)));
+                commands.spawn((Backdrop(at), FlashClip::new(movie, tl.clone(), c).real(), node(), Pickable::IGNORE, ChildOf(root)));
             }
         }
         if let Some(c) = Clip::export(&tl, "wheel_mc") {
-            let mut fc = FlashClip::new(MOVIE, tl.clone(), c).real();
+            let mut fc = FlashClip::new(movie, tl.clone(), c).real();
             // (its own placeholder name fields are drawn as text)
             fc.set_visible("item_infos", false);
             commands.spawn((WheelClip, fc, node(), Pickable::IGNORE, ChildOf(root)));
         }
         for i in 0..w.seps.len() {
             if let Some(c) = Clip::export(&tl, "wheel_separator") {
-                commands.spawn((Separator(i), FlashClip::new(MOVIE, tl.clone(), c).real(), node(), Pickable::IGNORE, ChildOf(root)));
+                commands.spawn((Separator(i), FlashClip::new(movie, tl.clone(), c).real(), node(), Pickable::IGNORE, ChildOf(root)));
             }
         }
         if let Some(c) = Clip::export(&tl, "wheel_indicator") {
-            commands.spawn((Indicator, FlashClip::new(MOVIE, tl.clone(), c).real(), node(), Visibility::Hidden, Pickable::IGNORE, ChildOf(root)));
+            commands.spawn((Indicator, FlashClip::new(movie, tl.clone(), c).real(), node(), Visibility::Hidden, Pickable::IGNORE, ChildOf(root)));
         }
         for (i, (p, _)) in w.items.iter().enumerate() {
             // the item's disc (`ic`: sprite 29) and its art
-            let mut fc = FlashClip::new(MOVIE, tl.clone(), Clip::new(&tl, 29)).real();
+            let mut fc = FlashClip::new(movie, tl.clone(), Clip::new(&tl, IC_SPRITE)).real();
             fc.goto("", if is_power(*p) { "stop_pow" } else { "default" }, false);
             commands.spawn((ItemIcon(i), fc, node(), Pickable::IGNORE, ChildOf(root)));
-            if let Some((img, _)) = ui.file(&mut images, "icons", p.icon()) {
+            if let Some((img, _)) = ui.file(&mut images, "icons", p.icon_for(w.daud)) {
                 commands.spawn((ItemArt(i), ImageNode::new(img), node(), Pickable::IGNORE, ChildOf(root)));
             }
             if let Some(n) = p.ammo(&stats) {
@@ -315,7 +339,7 @@ fn layout(
         n.top = Val::Px(p.y - 18.0 * s);
     }
     let (label, sub) = match hovered {
-        Some((p, _)) => (p.name().to_uppercase(), p.ammo(&stats).map(|n| n.to_string()).unwrap_or_default()),
+        Some((p, _)) => (p.label(w.daud).to_uppercase(), p.ammo(&stats).map(|n| n.to_string()).unwrap_or_default()),
         None => (String::new(), String::new()),
     };
     for (mut t, mut f, mut n, cn) in &mut name {

@@ -38,6 +38,8 @@ enum Lock {
     Turn(Vec3),
 }
 
+static SLOW: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+
 /// Particles per emitter at most.
 const MAX_PARTICLES: usize = 400;
 /// Seconds simulated when an emitter comes into range, so it starts in its steady state.
@@ -67,6 +69,8 @@ pub struct ParticleEmitter {
     view: bool,
     /// where it was last frame (its velocity)
     last_pos: Vec3,
+    /// its beams' far end, set by gameplay (`SpawnEffect::beam_to`)
+    beam_to: Option<Vec3>,
 }
 
 struct Lens {
@@ -174,6 +178,7 @@ fn lens_effects(
                 view: false,
                 lens: Some(Lens { op, looping, stopping: false, age: 0.0 }),
                 last_pos: xf.w_axis.truncate(),
+                beam_to: None,
             },
             DespawnOnExit(GameState::InGame),
         ));
@@ -221,11 +226,13 @@ pub struct SpawnEffect {
     pub tag: Option<Entity>,
     /// drawn with Corvo's hands (`m_bMatchAttachmentDPG`: the view model's layer)
     pub view: bool,
+    /// its beams' far end (`SetBeamTargetPoint`: an arc mine's lightning to whom it strikes)
+    pub beam_to: Option<Vec3>,
 }
 
 impl SpawnEffect {
     pub fn at(name: &'static str, at: Vec3) -> Self {
-        SpawnEffect { name, at, rot: Quat::IDENTITY, secs: 3.0, follow: None, system: None, turn: false, tag: None, view: false }
+        SpawnEffect { name, at, rot: Quat::IDENTITY, secs: 3.0, follow: None, system: None, turn: false, tag: None, view: false, beam_to: None }
     }
 }
 
@@ -308,6 +315,7 @@ fn spawn_effects(
                 lens: None,
                 view: m.view,
                 last_pos: Vec3::ZERO,
+                beam_to: m.beam_to,
             },
             DespawnOnExit(GameState::InGame),
         ));
@@ -389,6 +397,8 @@ struct PfxEvent {
 struct StepCtx<'a> {
     ray: Option<&'a dyn Fn(Vec3, Vec3, f32) -> Option<(Vec3, Vec3)>>,
     emitter_vel: Vec3,
+    /// a beam's far end given by gameplay
+    beam_to: Option<Vec3>,
 }
 
 /// A beam emitter's noise (`ParticleModuleBeamNoise`): points along it, their reach (UE
@@ -519,6 +529,7 @@ fn spawn_emitters(mut commands: Commands, level: Option<Res<LevelInfo>>, assets:
                 view: false,
                 lens: None,
                 last_pos: xf.transform_point3(Vec3::ZERO),
+                beam_to: None,
             },
             DespawnOnExit(GameState::InGame),
         ));
@@ -692,6 +703,10 @@ fn spawn_one(e: &EmitterDef, xf: &Mat4, scale: f32, t_em: f32, origin: Vec3, spo
     p.vel_base = p.vel;
     p.rot_rate_base = p.rot_rate;
     p.rot3_rate_base = p.rot3_rate;
+    // (a beam aimed by gameplay: its far end that point)
+    if let Some(to) = cx.beam_to.filter(|_| p.target.is_some() || e.modules.iter().any(|m| m.class.starts_with("ParticleModuleBeam") || m.class.starts_with("ParticleModuleTypeDataBeam"))) {
+        p.target = Some(to);
+    }
     p
 }
 
@@ -971,7 +986,9 @@ fn simulate(
     };
     let lens_k = lens_fov.0;
     let (Some(data), Some(assets), Ok(cam)) = (data, assets, cam.single()) else { return };
-    let dt = time.delta_secs().min(0.1);
+    // (`DH_PFX_SLOW=<factor>`: effects in slow motion, to see the briefest)
+    let slow = *SLOW.get_or_init(|| std::env::var("DH_PFX_SLOW").ok().and_then(|v| v.parse::<f32>().ok()).filter(|v| *v > 0.0).unwrap_or(1.0));
+    let dt = time.delta_secs().min(0.1) / slow;
     // DH_PFX_LOG: nearby emitters and their particle counts every 2 s
     *log_timer -= dt;
     let log = std::env::var("DH_PFX_LOG").is_ok() && *log_timer <= 0.0;
@@ -1159,8 +1176,8 @@ fn simulate(
         let at_now = xf.transform_point3(Vec3::ZERO);
         let emitter_vel = if dt > 0.0 { (at_now - em.last_pos) / dt } else { Vec3::ZERO };
         em.last_pos = at_now;
-        let cx = StepCtx { ray: Some(&ray_fn), emitter_vel: if emitter_vel.length() < 50.0 { emitter_vel } else { Vec3::ZERO } };
-        let quiet = StepCtx { ray: None, emitter_vel: Vec3::ZERO };
+        let cx = StepCtx { ray: Some(&ray_fn), emitter_vel: if emitter_vel.length() < 50.0 { emitter_vel } else { Vec3::ZERO }, beam_to: em.beam_to };
+        let quiet = StepCtx { ray: None, emitter_vel: Vec3::ZERO, beam_to: em.beam_to };
         let mut sys_events: Vec<PfxEvent> = Vec::new();
         if !em.awake {
             em.awake = true;

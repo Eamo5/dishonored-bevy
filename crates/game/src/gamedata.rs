@@ -87,10 +87,22 @@ impl Data {
         self.0.power_aliases.iter().find(|(from, _)| from == name).map(|(_, to)| to.as_str()).unwrap_or(name)
     }
 
-    pub fn ammo_capacities(&self, stats: &PlayerStats, difficulty: u8) -> [u32; 8] {
-        ["BulletCapacity", "ExplosiveBulletCapacity", "ArrowCapacity", "SleepArrowCapacity", "FlareArrowCapacity", "SpringRazorCapacity", "GrenadeCapacity", "StickyGrenadeCapacity"].map(|name| {
+    /// Daud plays (The Knife of Dunwall's maps).
+    pub fn is_daud(&self) -> bool {
+        self.1 .0.as_ref().is_some_and(|(n, _)| n == "Daud")
+    }
+
+    /// The most of each ammunition (`eDisAmmoType` order) that can be carried: Corvo's eight,
+    /// then Daud's explosive bolts, arc mines, chokedust and stun mines (none for Corvo, whose
+    /// attributes have no such capacities).
+    pub fn ammo_capacities(&self, stats: &PlayerStats, difficulty: u8) -> [u32; crate::gadgets::AMMO_TYPES] {
+        ["BulletCapacity", "ExplosiveBulletCapacity", "ArrowCapacity", "SleepArrowCapacity", "FlareArrowCapacity", "SpringRazorCapacity", "GrenadeCapacity", "StickyGrenadeCapacity", "ExplosiveArrowCapacity", "ArcMineCapacity", "FlashSmokeCapacity", "ArcMineStunCapacity"].map(|name| {
             (self.0.attributes.get(name).map(|_| self.attribute(name, difficulty, &stats.powers, &stats.charms))
-                .unwrap_or(if matches!(name, "SpringRazorCapacity" | "GrenadeCapacity" | "StickyGrenadeCapacity") { 5.0 } else { 10.0 })
+                .unwrap_or(match name {
+                    "SpringRazorCapacity" | "GrenadeCapacity" | "StickyGrenadeCapacity" => 5.0,
+                    "ExplosiveArrowCapacity" | "ArcMineCapacity" | "FlashSmokeCapacity" | "ArcMineStunCapacity" => 0.0,
+                    _ => 10.0,
+                })
                 + self.0.upgrades.iter().filter(|u| stats.upgrades.contains(&u.id)).flat_map(|u| &u.attributes)
                     .filter(|(n, _)| n == name).map(|(_, value)| *value).sum::<f32>()).max(0.0) as u32
         })
@@ -169,8 +181,13 @@ pub struct Attrs {
     pub power_jump_accel: f32,
     pub power_jump_time: f32,
     pub power_jump_max: f32,
-    /// fall speeds (multipliers of the base thresholds) before damage / death
-    pub fall_damage: f32,
+    /// the jump's speed (`JumpZ`, `JumpZCarryingCorpse`: m/s)
+    pub jump: f32,
+    pub jump_carrying: f32,
+    /// the fall speeds (m/s) a landing starts to hurt at and kills at
+    /// (`MaxSpeedBeforeFallingDamage`, `MaxSpeedBeforeFallingDeath`; Agility raises them)
+    pub fall_hurt: f32,
+    pub fall_death: f32,
     pub mantle_rate: f32,
     pub choke_time: f32,
     pub melee_rate: f32,
@@ -214,7 +231,7 @@ pub struct Attrs {
     pub bullet: Shot,
     pub bolt: Shot,
     pub bolt_capacity: u32,
-    pub ammo_capacity: [u32; 8],
+    pub ammo_capacity: [u32; crate::gadgets::AMMO_TYPES],
     pub bolt_break_modifier: f32,
 }
 
@@ -244,13 +261,16 @@ pub struct Shot {
 }
 
 impl Shot {
-    /// The damage of a hit `d` m away, to the head or not, on someone unaware of Corvo or not.
+    /// The damage of a hit `d` m from the eye, to the head or not, on someone unaware of Corvo
+    /// or not. (The ranges count from where the shot starts, `m_fBulletSpawnDistance` 150 uu
+    /// ahead of the eye.)
     pub fn damage(&self, d: f32, head: bool, unaware: bool) -> f32 {
         if head && self.head_kill {
             return 999.0;
         }
+        let d = (d - 1.5).max(0.0);
         let mut x = self.damage;
-        if d <= self.close[0] {
+        if d < self.close[0] {
             x *= self.close[1];
         } else if d >= self.long[0] {
             x *= self.long[1];
@@ -274,7 +294,10 @@ impl Default for Attrs {
             power_jump_accel: 0.0,
             power_jump_time: 0.0,
             power_jump_max: 0.0,
-            fall_damage: 1.0,
+            jump: 8.0,
+            jump_carrying: 8.0,
+            fall_hurt: 22.5,
+            fall_death: 29.0,
             mantle_rate: 1.0,
             choke_time: 1.5,
             melee_rate: 1.0,
@@ -310,7 +333,7 @@ impl Default for Attrs {
             bullet: Shot { damage: 20.0, headshot: 3.0, head_kill: true, stealth: 1.0, close: [9.0, 1.5], long: [15.0, 1.0] },
             bolt: Shot { damage: 20.0, headshot: 1.2, head_kill: false, stealth: 2.0, close: [0.0, 1.0], long: [1e4, 1.0] },
             bolt_capacity: 10,
-            ammo_capacity: [10, 10, 10, 10, 10, 5, 5, 5],
+            ammo_capacity: [10, 10, 10, 10, 10, 5, 5, 5, 5, 5, 5, 5],
             bolt_break_modifier: 0.0,
         }
     }
@@ -327,7 +350,6 @@ fn derive_attributes(data: Res<Data>, settings: Res<crate::settings::Settings>, 
     let (powers, charms) = (stats.powers.clone(), stats.charms.clone());
     let a = |n: &str| data.attribute(n, d, &powers, &charms);
     let ammo_capacity = data.ammo_capacities(&stats, d);
-    let base = |n: &str| data.attribute(n, d, &BTreeMap::new(), &[]);
     let max_health = a("HealthMax");
     let max_mana = a("ManaMax");
     if (stats.max_health - max_health).abs() > 0.01 {
@@ -348,7 +370,10 @@ fn derive_attributes(data: Res<Data>, settings: Res<crate::settings::Settings>, 
         let p = |k: &str, d0: f32| data.pawn(&format!("{key}{k}"), d0);
         let own = p("m_fDamage", 0.0);
         Shot {
-            damage: if own > 0.0 { own } else { weapon * p("m_fDamageMultiplier", 1.0) },
+            // (a bullet's: the pistol's `RangedDamage`, whole, plus its own `m_fDamage`: 10 + 20;
+            // a bolt's the crossbow's times its multiplier; as roshan's r614/blink research
+            // decoded the original)
+            damage: if own > 0.0 { weapon.trunc() + own } else { weapon * p("m_fDamageMultiplier", 1.0) },
             headshot: p("m_fDamageMultiplier_Headshot", head),
             head_kill: p("m_bKillOnHeadshot", 0.0) > 0.5,
             stealth: p("m_fDamageMultiplier_Stealth", 1.0),
@@ -360,11 +385,14 @@ fn derive_attributes(data: Res<Data>, settings: Res<crate::settings::Settings>, 
         walk: a("GroundSpeed") * UU,
         sprint: a("GroundSpeedSprint") * UU,
         crouch: a("GroundSpeedCrouch") * UU,
-        // the original's gravity is 1500 uu/s² (15 m/s²): scale so heights match ours
-        power_jump_accel: a("HeldPowerJumpAccel_PROTOTYPE") * UU * crate::player::GRAVITY / 15.0,
+        // (our falling gravity is the original's: `player::GRAVITY`)
+        power_jump_accel: a("HeldPowerJumpAccel_PROTOTYPE") * UU,
         power_jump_time: a("HeldPowerJumpButtonTime_PROTOTYPE"),
-        power_jump_max: a("JumpZ_PowerJump") * UU * (crate::player::GRAVITY / 15.0).sqrt(),
-        fall_damage: a("MaxSpeedBeforeFallingDamage") / base("MaxSpeedBeforeFallingDamage").max(1.0),
+        power_jump_max: a("JumpZ_PowerJump") * UU,
+        jump: if data.0.attributes.contains_key("JumpZ") { a("JumpZ") * UU } else { 8.0 },
+        jump_carrying: if data.0.attributes.contains_key("JumpZCarryingCorpse") { a("JumpZCarryingCorpse") * UU } else { 8.0 },
+        fall_hurt: if data.0.attributes.contains_key("MaxSpeedBeforeFallingDamage") { a("MaxSpeedBeforeFallingDamage") * UU } else { 22.5 },
+        fall_death: if data.0.attributes.contains_key("MaxSpeedBeforeFallingDeath") { a("MaxSpeedBeforeFallingDeath") * UU } else { 29.0 },
         mantle_rate: a("MantleAnimRate"),
         choke_time: a("ChokeTime").max(0.0),
         melee_rate: (1.0 + a("MeleeSpeed")).max(0.1),
@@ -496,7 +524,7 @@ mod tests {
         app.update();
         let attrs = app.world().resource::<Attrs>();
         assert_eq!(attrs.bolt_capacity, 30);
-        assert_eq!(attrs.ammo_capacity, [10, 10, 30, 10, 10, 5, 5, 5]);
+        assert_eq!(attrs.ammo_capacity, [10, 10, 30, 10, 10, 5, 5, 5, 0, 0, 0, 0]);
         assert_eq!(attrs.bolt_break_modifier, -0.5);
     }
 }

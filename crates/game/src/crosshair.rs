@@ -190,10 +190,10 @@ fn set_dispersion(fc: &mut FlashClip, crossbow: bool, v: f32, pct: f32) {
 fn reticle(p: Power) -> Option<&'static str> {
     Some(match p {
         Power::Pistol | Power::ExplosiveBullet => "crosshair_gun",
-        Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt => "crosshair_crossbow",
-        Power::Grenade => "crosshair_grenade",
+        Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt => "crosshair_crossbow",
+        Power::Grenade | Power::Chokedust => "crosshair_grenade",
         Power::StickyGrenade => "crosshair_stickyGrenade",
-        Power::SpringRazor => "crosshair_springRazor",
+        Power::SpringRazor | Power::ArcMine | Power::StunMine => "crosshair_springRazor",
         Power::Blink | Power::Windblast | Power::Possess | Power::DevouringSwarm | Power::BendTime | Power::DarkVision | Power::SummonAssassin => "crosshair_power",
         Power::Empty | Power::Heart => return None,
     })

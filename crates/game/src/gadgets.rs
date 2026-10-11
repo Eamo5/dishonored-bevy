@@ -1,7 +1,10 @@
 //! Gadgets bought from Piero (and found): grenades and sticky grenades, springrazors,
 //! incendiary bolts and explosive bullets, with the original tweaks' numbers
 //! (`DisTweaks_Explosion`: 6 m reach, full damage within 3 m; `DisTweaks_SpringRazorPlaced`:
-//! a 2.5 m trigger cylinder, 0.5 s arming, shrapnel to 9 m).
+//! a 2.5 m trigger cylinder, 0.5 s arming, shrapnel to 9 m). Daud's (The Knife of Dunwall):
+//! chokedust, thrown as a grenade, a cloud that leaves whoever breathes it choking
+//! (`DisDLC06Tweaks_Explosion`); arc mines and stun mines, placed on any surface, lightning
+//! for whoever comes near (`DisDLC06Tweaks_ArcMinePlaced`), picked back up while unspent.
 
 use crate::audio::PostEvent;
 use crate::gameplay::{HitKind, HudMessages, Noise, NpcHit, PlayerStats, TimeControl};
@@ -21,9 +24,11 @@ impl Plugin for GadgetsPlugin {
             .init_resource::<GadgetRestore>()
             .add_message::<Explosion>()
             .add_message::<NpcGrenade>()
+            .add_message::<ChokeDust>()
             .add_systems(Update, grenade_focus.after(crate::interact::FocusSet).before(crate::props::prop_focus).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, mine_focus.after(grenade_focus).before(crate::props::prop_focus).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
             .add_systems(Update, restore_gadgets.after(crate::save::restore_npcs).before(grenade_focus).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (use_gadget, npc_grenades, fly_grenades, razors, explode).chain().after(grenade_focus).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (use_gadget, npc_grenades, fly_grenades, razors, mines, choke_clouds, explode).chain().after(grenade_focus).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -33,6 +38,20 @@ pub const STICKY: &str = "StickyGrenade_Ammo_WithItem_twk";
 pub const RAZORS: &str = "SpringRazor_Ammo_WithItem_twk";
 pub const FLARES: &str = "Flare_Ammo_twk";
 pub const EXPLOSIVE: &str = "ExplosiveBullets_Ammo_twk";
+/// Daud's (The Knife of Dunwall).
+pub const EXPLOSIVE_BOLTS: &str = "DLC06_Ammo_ExplosiveBolt";
+pub const ARC_MINES: &str = "DLC06_Ammo_ArcMine";
+pub const CHOKEDUST: &str = "DLC06_Ammo_ChokeDust";
+pub const STUN_MINES: &str = "DLC06_Ammo_StunMine";
+
+/// The original's `eDisAmmoType`, in order: Corvo's eight, then The Knife of Dunwall's.
+pub const AMMO_NAMES: [&str; AMMO_TYPES] = ["Bullet", "Bullet_Explosive", "Arrow", "Arrow_Sleep", "Arrow_Flare", "SpringRazor", "Grenade", "StickyGrenade", "Arrow_Explosive", "ArcMine", "FlashSmoke", "ArcMineStun"];
+pub const AMMO_TYPES: usize = 12;
+
+/// An ammunition type by its original name (`eDisAmmoType_` dropped).
+pub fn ammo_index(name: &str) -> Option<u8> {
+    AMMO_NAMES.iter().position(|n| n.eq_ignore_ascii_case(name.trim_start_matches("eDisAmmoType_"))).map(|i| i as u8)
+}
 
 /// Original pickup ranges are inclusive; fixed quantities do not consume a random roll.
 pub fn roll_ammo_amount(min: u32, max: u32) -> u32 {
@@ -63,7 +82,7 @@ pub fn ammo_count(stats: &PlayerStats, ty: u8) -> u32 {
 }
 
 fn ammo_item(ty: u8) -> Option<&'static str> {
-    Some(match ty { 1 => EXPLOSIVE, 4 => FLARES, 5 => RAZORS, 6 => GRENADES, 7 => STICKY, _ => return None })
+    Some(match ty { 1 => EXPLOSIVE, 4 => FLARES, 5 => RAZORS, 6 => GRENADES, 7 => STICKY, 8 => EXPLOSIVE_BOLTS, 9 => ARC_MINES, 10 => CHOKEDUST, 11 => STUN_MINES, _ => return None })
 }
 
 pub fn ammo_type(item: &str) -> Option<u8> {
@@ -71,28 +90,25 @@ pub fn ammo_type(item: &str) -> Option<u8> {
         "Bullets_Store_Ammo_twk" => 0,
         "Bolt_Ammo_twk" | "Bolts_Ammo_twk" => 2,
         "SleepDart_Ammo_twk" => 3,
-        _ => return (0..8).find(|ty| ammo_item(*ty) == Some(item)),
+        _ => return (0..AMMO_TYPES as u8).find(|ty| ammo_item(*ty) == Some(item)),
     })
 }
 
 pub fn ammo_name(ty: u8) -> &'static str {
-    let item = match ty {
-        0 => {
-            return "Bullets";
-        }
-        2 => {
-            return "Crossbow Bolts";
-        }
-        3 => {
-            return "Sleep Darts";
-        }
-        1 => (EXPLOSIVE, "Explosive Bullets"),
-        4 => (FLARES, "Incendiary Bolts"),
-        5 => (RAZORS, "Springrazors"),
-        6 => (GRENADES, "Grenades"),
-        _ => (STICKY, "Sticky Grenades"),
-    };
-    item.1
+    match ty {
+        0 => "Bullets",
+        1 => "Explosive Bullets",
+        2 => "Crossbow Bolts",
+        3 => "Sleep Darts",
+        4 => "Incendiary Bolts",
+        5 => "Springrazors",
+        6 => "Grenades",
+        8 => "Explosive Bolts",
+        9 => "Arc Mines",
+        10 => "Chokedust",
+        11 => "Stun Mines",
+        _ => "Sticky Grenades",
+    }
 }
 
 /// The count of an ammunition type (the original's `eDisAmmoType` order, as `give_ammo`);
@@ -102,11 +118,7 @@ pub fn ammo_mut(stats: &mut PlayerStats, ty: u8, add: bool) -> Option<&mut u32> 
         0 => return Some(&mut stats.bullets),
         2 => return Some(&mut stats.bolts),
         3 => return Some(&mut stats.sleep_darts),
-        1 => EXPLOSIVE,
-        4 => FLARES,
-        5 => RAZORS,
-        6 => GRENADES,
-        _ => STICKY,
+        _ => ammo_item(ty)?,
     };
     if add {
         Some(stats.items.entry(key.to_string()).or_default())
@@ -120,6 +132,66 @@ pub enum Gadget {
     Grenade,
     StickyGrenade,
     SpringRazor,
+    /// Daud's
+    Chokedust,
+    ArcMine,
+    StunMine,
+}
+
+/// A mine of Daud's: lethal (`DLC06_ArcMine_Placed`) or stunning (`DLC06_StunMine_Placed`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub enum MineKind {
+    Arc,
+    Stun,
+}
+
+impl MineKind {
+    /// Its numbers' prefix in the cooked pawn data, its model, its name.
+    fn key(self) -> &'static str {
+        match self {
+            MineKind::Arc => "arcmine",
+            MineKind::Stun => "stunmine",
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            MineKind::Arc => "Arc Mine",
+            MineKind::Stun => "Stun Mine",
+        }
+    }
+    fn ammo(self) -> u8 {
+        match self {
+            MineKind::Arc => 9,
+            MineKind::Stun => 11,
+        }
+    }
+}
+
+/// Chokedust going off: its cloud (`m_fDamageRadius`), lasting `m_fExplosionDuration`.
+#[derive(Message, Clone, Copy)]
+pub struct ChokeDust {
+    pub at: Vec3,
+    pub radius: f32,
+    pub secs: f32,
+}
+
+/// How long chokedust leaves someone choking (`m_fSmokeGrenadeStunTime`).
+pub const CHOKEDUST_STUN: f32 = 4.0;
+
+#[derive(Component)]
+struct ChokeCloud {
+    radius: f32,
+    left: f32,
+    /// those it has had (each chokes once)
+    had: Vec<Entity>,
+}
+
+/// Chokedust's cloud (`DLC06_Proj_ChokeDust`'s explosion: 300 uu across, 3 s) and the most
+/// left of its fuse once it hits someone, from Daud's data.
+fn chokedust_blast(data: &crate::gamedata::Data) -> ([f32; 5], f32) {
+    let x = |k: &str, d: f32| data.pawn(&format!("chokedust.explosion.{k}"), d);
+    let r = x("m_fDamageRadius", 300.0) * 0.01;
+    ([r, x("m_fFullDamageRadius", 300.0) * 0.01, 0.0, 0.0, x("m_fExplosionDuration", 3.0)], data.pawn("chokedust.m_fMinDetonationDelayAfterHit", FUSE_AFTER_HIT))
 }
 
 /// Throw or place a gadget (the left hand, aimed along `dir`).
@@ -286,7 +358,7 @@ pub(crate) fn grenade_focus(
     focus.0 = true;
     focus.1 = Some(e);
     focus.2 = format!("Tap {} Carry", crate::bindings::hint(crate::bindings::Act::Use));
-    focus.3 = "Armed Grenade".into();
+    focus.3 = if grenades.get(e).is_ok_and(|g| g.1.kind == HitKind::Chokedust) { "Primed Chokedust" } else { "Armed Grenade" }.into();
     if keys.just_pressed(use_key) {
         if let Ok((_, mut grenade, _)) = grenades.get_mut(e) {
             grenade.take();
@@ -303,6 +375,16 @@ const BLAST: [f32; 5] = [6.0, 3.0, 6.0, 1.5, 50.0];
 pub(crate) struct Razor {
     armed: f32,
     triggered: Option<f32>,
+    /// a mine of Daud's instead: which, the shots it has fired, the wait before the next
+    mine: Option<MineKind>,
+    shots: u32,
+    wait: f32,
+}
+
+impl Razor {
+    fn placed(mine: Option<MineKind>) -> Self {
+        Razor { armed: 0.0, triggered: None, mine, shots: 0, wait: 0.0 }
+    }
 }
 
 /// Entity references use saved NPC spawners, never runtime entity IDs.
@@ -336,6 +418,12 @@ struct RazorSave {
     rotation: [f32; 4],
     armed: f32,
     triggered: Option<f32>,
+    #[serde(default)]
+    mine: Option<MineKind>,
+    #[serde(default)]
+    shots: u32,
+    #[serde(default)]
+    wait: f32,
 }
 
 #[derive(Resource, Default)]
@@ -359,6 +447,7 @@ impl GadgetsSave {
             }).collect(),
             razors: razors.into_iter().map(|(r, t)| RazorSave {
                 position: t.translation.to_array(), rotation: t.rotation.to_array(), armed: r.armed, triggered: r.triggered,
+                mine: r.mine, shots: r.shots, wait: r.wait,
             }).collect(),
         }
     }
@@ -412,15 +501,15 @@ fn restore_gadgets(
             held.0 = Some(e.id());
             held.1 = 0.0;
         }
-        model(&mut e, "grenade", Sphere::new(0.06).into());
+        model(&mut e, if g.kind == HitKind::Chokedust { "chokedust" } else { "grenade" }, Sphere::new(0.06).into());
     }
     for r in saved.razors {
         let mut e = commands.spawn((
-            Razor { armed: r.armed, triggered: r.triggered },
+            Razor { armed: r.armed, triggered: r.triggered, mine: r.mine, shots: r.shots, wait: r.wait },
             Transform::from_translation(Vec3::from(r.position)).with_rotation(Quat::from_array(r.rotation)),
             Visibility::default(), DespawnOnExit(GameState::InGame),
         ));
-        model(&mut e, "springrazor", Cylinder::new(0.09, 0.06).into());
+        model(&mut e, r.mine.map_or("springrazor", MineKind::key), Cylinder::new(0.09, 0.06).into());
     }
 }
 
@@ -435,12 +524,16 @@ fn use_gadget(
     assets: Option<Res<GameAssets>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    data: Res<crate::gamedata::Data>,
 ) {
     for u in uses.read() {
         let key = match u.gadget {
             Gadget::Grenade => GRENADES,
             Gadget::StickyGrenade => STICKY,
             Gadget::SpringRazor => RAZORS,
+            Gadget::Chokedust => CHOKEDUST,
+            Gadget::ArcMine => ARC_MINES,
+            Gadget::StunMine => STUN_MINES,
         };
         let n = stats.items.get(key).copied().unwrap_or(0);
         if n == 0 {
@@ -466,8 +559,10 @@ fn use_gadget(
             }
         };
         match u.gadget {
-            Gadget::Grenade | Gadget::StickyGrenade => {
+            Gadget::Grenade | Gadget::StickyGrenade | Gadget::Chokedust => {
                 stats.items.insert(key.into(), n - 1);
+                let choke = u.gadget == Gadget::Chokedust;
+                let (blast, after_hit) = if choke { chokedust_blast(&data) } else { (BLAST, FUSE_AFTER_HIT) };
                 // (the pin was pulled as it began to cook)
                 let fuse = (FUSE - u.cooked).max(0.0);
                 if fuse > 0.0 {
@@ -480,21 +575,31 @@ fn use_gadget(
                         vel: if fuse > 0.0 { throw_dir(u.dir, THROW_ANGLE) * THROW_SPEED } else { Vec3::ZERO },
                         fuse,
                         fuse_total: FUSE,
-                        after_hit: FUSE_AFTER_HIT,
+                        after_hit,
                         sticky: u.gadget == Gadget::StickyGrenade,
                         stuck: None,
-                        blast: BLAST,
+                        blast,
                         owner: None,
                         throwback: false,
-                        kind: if u.gadget == Gadget::StickyGrenade { HitKind::StickyGrenade } else { HitKind::Explosion },
+                        kind: match u.gadget {
+                            Gadget::StickyGrenade => HitKind::StickyGrenade,
+                            Gadget::Chokedust => HitKind::Chokedust,
+                            _ => HitKind::Explosion,
+                        },
                     },
                     Transform::from_translation(u.eye + u.dir * 0.5),
                     Visibility::default(),
                     DespawnOnExit(GameState::InGame),
                 ));
-                model(&mut ec, "grenade", Sphere::new(0.06).into());
+                model(&mut ec, if choke { "chokedust" } else { "grenade" }, Sphere::new(0.06).into());
             }
-            Gadget::SpringRazor => {
+            Gadget::SpringRazor | Gadget::ArcMine | Gadget::StunMine => {
+                let mine = match u.gadget {
+                    Gadget::ArcMine => Some(MineKind::Arc),
+                    Gadget::StunMine => Some(MineKind::Stun),
+                    _ => None,
+                };
+                let what = mine.map_or("springrazor", MineKind::name);
                 // placed on the surface aimed at, within reach
                 let Ok(ctx) = rapier.single() else { continue };
                 let mut filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
@@ -504,18 +609,19 @@ fn use_gadget(
                 // on the surface aimed at, else the floor in front
                 let ahead = u.eye + u.dir.with_y(0.0).normalize_or_zero() * 1.2;
                 let Some((_, hit)) = ctx.cast_ray_and_get_normal(u.eye, u.dir, 3.0, true, filter).or_else(|| ctx.cast_ray_and_get_normal(ahead, Vec3::NEG_Y, 3.0, true, filter)) else {
-                    msgs.push("Cannot place the springrazor here");
+                    msgs.push(format!("Cannot place the {} here", what.to_lowercase()));
                     continue;
                 };
                 stats.items.insert(key.into(), n - 1);
-                sfx.write(PostEvent::named("Snd_Spring_Razor_Install", Some(hit.point)));
+                // (a mine hums as it arms: `m_pArmingStartSoundEvent`)
+                sfx.write(PostEvent::named(if mine.is_some() { "Snd_ArcMine_Activated" } else { "Snd_Spring_Razor_Install" }, Some(hit.point)));
                 let mut ec = commands.spawn((
-                    Razor { armed: 0.0, triggered: None },
+                    Razor::placed(mine),
                     Transform::from_translation(hit.point + hit.normal * 0.03).with_rotation(Quat::from_rotation_arc(Vec3::Y, hit.normal)),
                     Visibility::default(),
                     DespawnOnExit(GameState::InGame),
                 ));
-                model(&mut ec, "springrazor", Cylinder::new(0.09, 0.06).into());
+                model(&mut ec, mine.map_or("springrazor", MineKind::key), Cylinder::new(0.09, 0.06).into());
             }
         }
     }
@@ -567,6 +673,7 @@ fn fly_grenades(
     mut sfx: MessageWriter<PostEvent>,
     mut held: ResMut<crate::props::Held>,
     cam: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
+    mut clouds: MessageWriter<ChokeDust>,
 ) {
     let dt = time.delta_secs() * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
@@ -586,7 +693,11 @@ fn fly_grenades(
         g.fuse -= dt;
         if g.fuse <= 0.0 {
             let b = g.blast;
-            blasts.write(Explosion { at: t.translation, radius: b[0], full: b[1], damage: b[4], effect: "grenade", player: Some([b[2], b[3]]), kind: g.kind });
+            if g.kind == HitKind::Chokedust {
+                clouds.write(ChokeDust { at: t.translation, radius: b[0], secs: b[4] });
+            } else {
+                blasts.write(Explosion { at: t.translation, radius: b[0], full: b[1], damage: b[4], effect: "grenade", player: Some([b[2], b[3]]), kind: g.kind });
+            }
             if in_hand {
                 held.0 = None;
                 held.1 = 0.3;
@@ -656,6 +767,9 @@ fn razors(
     let Ok(ctx) = rapier.single() else { return };
     let walls = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
     for (e, mut r, t) in &mut q {
+        if r.mine.is_some() {
+            continue;
+        }
         let p = t.translation;
         if r.armed < 0.5 {
             r.armed += dt;
@@ -719,7 +833,8 @@ fn explode(
         l < 0.3 || ctx.as_ref().is_none_or(|c| c.cast_ray(from, d / l, l - 0.2, true, walls).is_none())
     };
     for b in blasts.read() {
-        sfx.write(PostEvent::named("Snd_Grenade_Explosion", Some(b.at)));
+        // (an explosive bolt's: `DLC06_DaudArrowExplosion.m_pSoundEvent`)
+        sfx.write(PostEvent::named(if b.kind == HitKind::ExplosiveBolt { "Snd_AI_TBoy_Arrow_Fire_Expl" } else { "Snd_Grenade_Explosion" }, Some(b.at)));
         rats.write(crate::swarm::KillRats { at: b.at, radius: b.full.max(2.0), by_player: !matches!(b.kind, HitKind::EnemyExplosion | HitKind::ByOthers), source: b.at });
         fx.write(SpawnEffect::at(b.effect, b.at));
         noise.write(Noise { pos: b.at, radius: 40.0, combat: true });
@@ -767,6 +882,191 @@ fn explode(
 #[derive(Component)]
 struct ExplosionFlash(f32);
 
+/// Daud's mines: armed after `m_fArmingTime`, they strike whoever not of his comes into their
+/// cylinder (512 uu across, 256 uu above and below) and in their sight, `m_NumShots` times
+/// `m_fDelayBetweenShots` apart (`m_DamageToPawns` each; a stun mine's puts them to sleep),
+/// the lightning from their `Shoot` socket to the one struck; spent, they break.
+#[allow(clippy::too_many_arguments)]
+fn mines(
+    mut commands: Commands,
+    time: Res<Time>,
+    tc: Res<TimeControl>,
+    rapier: ReadRapierContext,
+    data: Res<crate::gamedata::Data>,
+    mut q: Query<(Entity, &mut Razor, &Transform)>,
+    npcs: Query<(Entity, &Npc, &Transform), (Without<Razor>, Without<crate::summon::Summoned>)>,
+    mut hits: MessageWriter<NpcHit>,
+    mut sfx: MessageWriter<PostEvent>,
+    mut noise: MessageWriter<Noise>,
+    mut fx: MessageWriter<SpawnEffect>,
+) {
+    let dt = time.delta_secs() * tc.world_scale();
+    let Ok(ctx) = rapier.single() else { return };
+    let walls = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+    for (e, mut m, t) in &mut q {
+        let Some(kind) = m.mine else { continue };
+        let v = |k: &str, d: f32| data.pawn(&format!("{}.{k}", kind.key()), d);
+        let at = t.translation;
+        let muzzle = at + t.rotation * Vec3::Y * 0.12;
+        let arming = v("m_fArmingTime", 2.0);
+        if m.armed < arming {
+            m.armed += dt;
+            if m.armed >= arming {
+                sfx.write(PostEvent::named("Snd_ArcMine_Activated_Stop", Some(at)));
+                sfx.write(PostEvent::named("Snd_ArcMine_Idle", Some(at)));
+            }
+            continue;
+        }
+        m.wait = (m.wait - dt).max(0.0);
+        if m.wait > 0.0 {
+            continue;
+        }
+        // (`m_FriendlyFactions`: Daud's and his assassins')
+        let friendly = |f: &str| {
+            let f = f.to_ascii_lowercase();
+            f.contains("fctn_daud") || f.contains("fctn_assassin") || f.contains("faction_corvo")
+        };
+        let target = npcs
+            .iter()
+            .filter(|(_, n, _)| !n.is_down() && !friendly(&n.faction))
+            .filter_map(|(ne, _, nt)| {
+                let chest = nt.translation + Vec3::Y * 0.35;
+                let d = chest - muzzle;
+                let len = d.length();
+                let inside = d.with_y(0.0).length() < 5.12 && d.y.abs() < 2.56;
+                (inside && len > 0.05 && ctx.cast_ray(muzzle, d / len, (len - 0.3).max(0.0), true, walls).is_none()).then_some((ne, chest, len))
+            })
+            .min_by(|a, b| a.2.total_cmp(&b.2));
+        let Some((ne, chest, _)) = target else { continue };
+        sfx.write(PostEvent::named("Snd_ArcMine_Fire", Some(muzzle)));
+        let strike = if kind == MineKind::Stun { "stunmine_strike" } else { "arcmine_strike" };
+        fx.write(SpawnEffect { secs: 0.8, beam_to: Some(chest), ..SpawnEffect::at(strike, muzzle) });
+        fx.write(SpawnEffect { follow: Some(ne), secs: 1.0, ..SpawnEffect::at("electrified", Vec3::ZERO) });
+        hits.write(NpcHit { npc: ne, damage: v("m_DamageToPawns", 50.0), kind: if kind == MineKind::Stun { HitKind::StunMine } else { HitKind::ArcMine }, from: muzzle });
+        // (`m_ShootingNoiseLoudness`: 2 m)
+        noise.write(Noise { pos: muzzle, radius: 2.0, combat: false });
+        m.shots += 1;
+        m.wait = v("m_fDelayBetweenShots", 1.0);
+        if m.shots >= v("m_NumShots", 2.0).max(1.0) as u32 {
+            // spent: it breaks (`m_pDestructionEffect`; `m_DestructionNoiseLoudness` 20 m)
+            sfx.write(PostEvent::named("Snd_ArcMine_Idle_Stop", Some(at)));
+            sfx.write(PostEvent::named("Snd_ArcMine_Destroy_Start", Some(at)));
+            fx.write(SpawnEffect { rot: t.rotation, ..SpawnEffect::at(if kind == MineKind::Stun { "stunmine_break" } else { "arcmine_break" }, at) });
+            noise.write(Noise { pos: at, radius: 20.0, combat: true });
+            commands.entity(e).despawn();
+        }
+    }
+}
+
+/// An armed mine yet to fire can be taken back (its ammunition again: `m_pGrabSound`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn mine_focus(
+    mut commands: Commands,
+    paused: Res<crate::hud::Paused>,
+    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
+    mut focus: ResMut<crate::interact::InteractFocus>,
+    held: Res<crate::props::Held>,
+    mines: Query<(Entity, &Razor, &Transform)>,
+    player: Query<(Entity, &Player)>,
+    cam: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
+    rapier: ReadRapierContext,
+    (mut stats, attrs, data): (ResMut<PlayerStats>, Res<crate::gamedata::Attrs>, Res<crate::gamedata::Data>),
+    mut sfx: MessageWriter<PostEvent>,
+    mut msgs: ResMut<HudMessages>,
+    mut log: ResMut<crate::pickuplog::PickupLog>,
+) {
+    if paused.0 || focus.0 || held.busy() || stats.dead {
+        return;
+    }
+    let (Ok((pe, p)), Ok(camera), Ok(ctx)) = (player.single(), cam.single(), rapier.single()) else { return };
+    if p.locked {
+        return;
+    }
+    let eye = camera.translation();
+    let dir = camera.forward().as_vec3();
+    let filter = QueryFilter::default().exclude_collider(pe).groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP | GROUP_NPC));
+    let nearest = mines
+        .iter()
+        .filter_map(|(e, m, t)| {
+            let kind = m.mine?;
+            let armed = m.armed >= data.pawn(&format!("{}.m_fArmingTime", kind.key()), 2.0);
+            if !armed || m.shots > 0 {
+                return None;
+            }
+            let to = t.translation - eye;
+            let d = to.length();
+            if d > 2.4 || d < 0.05 || to.dot(dir) / d < 0.94 || ctx.cast_ray(eye, to / d, (d - 0.12).max(0.0), true, filter).is_some() {
+                return None;
+            }
+            Some((e, kind, d))
+        })
+        .min_by(|a, b| a.2.total_cmp(&b.2));
+    let Some((e, kind, _)) = nearest else { return };
+    focus.0 = true;
+    focus.1 = Some(e);
+    focus.2 = format!("{} Pick up", crate::bindings::hint(crate::bindings::Act::Use));
+    focus.3 = kind.name().into();
+    if keys.just_pressed(bind.key(crate::bindings::Act::Use)) {
+        let (_, added) = give_ammo(&mut stats, &attrs, kind.ammo(), 1);
+        if added > 0 {
+            commands.entity(e).despawn();
+            focus.1 = None;
+            focus.2.clear();
+            focus.3.clear();
+            log.add(format!("{} +1", ammo_name(kind.ammo())), crate::pickuplog::ammo_icon(kind.ammo()));
+            sfx.write(PostEvent::named("Snd_ArcMine_Idle_Stop", None));
+            sfx.write(PostEvent::named("Snd_UI_Ingame_Ammo_Pickup", None));
+        } else {
+            msgs.push("You can't carry more ammo of this type");
+            sfx.write(PostEvent::named("Snd_UI_Ingame_Max_Ammo", None));
+        }
+    }
+}
+
+/// Chokedust's clouds: whoever is caught in one while it lasts chokes (`HitKind::Chokedust`),
+/// the rats near it die (`m_fRatKillRadius`).
+#[allow(clippy::too_many_arguments)]
+fn choke_clouds(
+    mut commands: Commands,
+    time: Res<Time>,
+    tc: Res<TimeControl>,
+    data: Res<crate::gamedata::Data>,
+    mut puffs: MessageReader<ChokeDust>,
+    mut clouds: Query<(Entity, &mut ChokeCloud, &Transform)>,
+    npcs: Query<(Entity, &Npc, &Transform), Without<ChokeCloud>>,
+    mut hits: MessageWriter<NpcHit>,
+    mut sfx: MessageWriter<PostEvent>,
+    mut noise: MessageWriter<Noise>,
+    mut fx: MessageWriter<SpawnEffect>,
+    mut rats: MessageWriter<crate::swarm::KillRats>,
+) {
+    for p in puffs.read() {
+        if std::env::var_os("DH_GADGET_LOG").is_some() {
+            let near: Vec<String> = npcs.iter().filter(|(_, n, _)| !n.is_down()).map(|(_, n, t)| (n, t.translation.distance(p.at))).filter(|(_, d)| *d < 12.0).map(|(n, d)| format!("{} {d:.1} m", n.name)).collect();
+            info!("chokedust: a {:.1} m cloud at {:.1} for {:.1} s; near: {near:?}", p.radius, p.at, p.secs);
+        }
+        sfx.write(PostEvent::named("Snd_DLC06_ChokeDust", Some(p.at)));
+        fx.write(SpawnEffect { secs: p.secs + 2.0, ..SpawnEffect::at("chokedust", p.at) });
+        rats.write(crate::swarm::KillRats { at: p.at, radius: data.pawn("chokedust.explosion.m_fRatKillRadius", 200.0) * 0.01, by_player: true, source: p.at });
+        noise.write(Noise { pos: p.at, radius: 10.0, combat: true });
+        commands.spawn((ChokeCloud { radius: p.radius, left: p.secs, had: Vec::new() }, Transform::from_translation(p.at), DespawnOnExit(GameState::InGame)));
+    }
+    let dt = time.delta_secs() * tc.world_scale();
+    for (e, mut c, t) in &mut clouds {
+        for (ne, n, nt) in &npcs {
+            if n.is_down() || c.had.contains(&ne) || nt.translation.distance(t.translation) > c.radius {
+                continue;
+            }
+            c.had.push(ne);
+            hits.write(NpcHit { npc: ne, damage: 0.0, kind: HitKind::Chokedust, from: t.translation });
+        }
+        c.left -= dt;
+        if c.left <= 0.0 {
+            commands.entity(e).despawn();
+        }
+    }
+}
+
 /// An explosion's flash on the original-shader surfaces (UE3 brightness).
 const FLASH_BRIGHTNESS: f32 = 6.0;
 
@@ -787,7 +1087,7 @@ mod tests {
     fn ammunition_grants_clamp_all_types_and_preserve_existing_excess() {
         let attrs = crate::gamedata::Attrs::default();
         let mut stats = crate::gameplay::PlayerStats::default();
-        for ty in 0..8 {
+        for ty in 0..super::AMMO_TYPES as u8 {
             *super::ammo_mut(&mut stats, ty, true).unwrap() = 0;
             let capacity = attrs.ammo_capacity[ty as usize];
             assert_eq!(super::give_ammo(&mut stats, &attrs, ty, capacity - 1).1, capacity - 1);
@@ -799,10 +1099,13 @@ mod tests {
             assert_eq!(super::ammo_count(&stats, ty), capacity + 4);
         }
         assert_eq!(super::give_ammo(&mut stats, &attrs, 255, 10).1, 0);
-        for id in [super::GRENADES, super::STICKY, super::RAZORS, super::FLARES, super::EXPLOSIVE, "Bolt_Ammo_twk", "Bolts_Ammo_twk", "SleepDart_Ammo_twk", "Bullets_Store_Ammo_twk"] {
+        for id in [super::GRENADES, super::STICKY, super::RAZORS, super::FLARES, super::EXPLOSIVE, super::EXPLOSIVE_BOLTS, super::ARC_MINES, super::CHOKEDUST, super::STUN_MINES, "Bolt_Ammo_twk", "Bolts_Ammo_twk", "SleepDart_Ammo_twk", "Bullets_Store_Ammo_twk"] {
             assert!(super::ammo_type(id).is_some(), "{id}");
         }
         assert!(super::ammo_type("Twk_Upgrade_AmmoPouch2").is_none());
+        assert_eq!(super::ammo_index("eDisAmmoType_FlashSmoke"), Some(10));
+        assert_eq!(super::ammo_index("ArcMineStun"), Some(11));
+        assert_eq!(super::ammo_index("Arrow_Sleep"), Some(3));
     }
     use super::*;
 
@@ -879,7 +1182,7 @@ mod tests {
         sticky.sticky = true;
         sticky.stuck = Some((wall, Vec3::ZERO));
         let pose = Transform::from_translation(Vec3::new(2.0, 3.0, 4.0)).with_rotation(Quat::from_rotation_y(0.7));
-        let razor = Razor { armed: 0.3, triggered: Some(0.2) };
+        let razor = Razor { armed: 0.3, triggered: Some(0.2), mine: Some(MineKind::Stun), shots: 1, wait: 0.4 };
         let saved = GadgetsSave::capture([(attached, &enemy, &pose), (carried, &returned, &pose), (fixed, &sticky, &pose)], [(&razor, &pose)], [(owner, 17)], Some(carried));
         let bytes = serde_json::to_vec(&saved).unwrap();
         let saved: GadgetsSave = serde_json::from_slice(&bytes).unwrap();
@@ -920,6 +1223,7 @@ mod tests {
         let (razor, t) = razors.single(app.world()).unwrap();
         assert_eq!(razor.armed, 0.3);
         assert_eq!(razor.triggered, Some(0.2));
+        assert_eq!((razor.mine, razor.shots, razor.wait), (Some(MineKind::Stun), 1, 0.4));
         assert_eq!(t.translation, pose.translation);
 
         app.world_mut().resource_mut::<GadgetRestore>().0 = Some(GadgetsSave::default());

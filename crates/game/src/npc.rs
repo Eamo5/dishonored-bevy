@@ -1540,7 +1540,7 @@ fn npc_hits(
             info!("hit {} ({}): {:?} {:.0} at health {:.0}", npc.name, npc.pawn, h.kind, h.damage, npc.health);
         }
         // those who can fight turn on Corvo when he hurts them (the Tower's guards too)
-        if !npc.enemy && npc.fighter() && !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats | HitKind::Assassinate | HitKind::Fatality | HitKind::Choke | HitKind::SleepDart | HitKind::WallOfLight) {
+        if !npc.enemy && npc.fighter() && !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats | HitKind::Assassinate | HitKind::Fatality | HitKind::Choke | HitKind::SleepDart | HitKind::WallOfLight | HitKind::StunMine) {
             npc.enemy = true;
             stances.wronged(npc.spawner);
         }
@@ -1584,6 +1584,24 @@ fn npc_hits(
                 stats.knockouts += 1;
                 msgs.push("Sleep dart hit");
                 noise.write(Noise { pos, radius: 4.0, combat: false });
+            }
+            // a stun mine's lightning: asleep, falling limp where they stood
+            HitKind::StunMine => {
+                npc.set_mode(Mode::Unconscious);
+                stats.knockouts += 1;
+                commands.entity(e).try_insert(crate::ragdoll::GoLimp::now((pos - h.from).with_y(0.0).normalize_or_zero() * 0.5, None));
+                noise.write(Noise { pos, radius: 4.0, combat: false });
+            }
+            // chokedust: choking where they stand a while, unharmed; then after whoever threw it
+            HitKind::Chokedust => {
+                npc.stagger = npc.stagger.max(crate::gadgets::CHOKEDUST_STUN);
+                npc.attack_t = None;
+                npc.hit_react = 0.35;
+                npc.last_seen = Some(h.from);
+                if npc.hostile() && npc.mode != Mode::Combat {
+                    npc.set_mode(Mode::Search);
+                }
+                sfx.write(crate::audio::PostEvent::named("Snd_DLC06_AI_Cough_Male", Some(pos + Vec3::Y)));
             }
             HitKind::Fire => {
                 // `NPCImmolationTime`: they burn, then nothing is left
@@ -1648,7 +1666,7 @@ fn npc_hits(
         }
         // blown off their feet (Wind Blast's push, an explosion's): the body flies limp
         if npc.is_down() {
-            let blast = matches!(h.kind, HitKind::Explosion | HitKind::EnemyExplosion | HitKind::GrenadeThrowback | HitKind::StickyGrenade | HitKind::ExplosiveBullet);
+            let blast = matches!(h.kind, HitKind::Explosion | HitKind::EnemyExplosion | HitKind::GrenadeThrowback | HitKind::StickyGrenade | HitKind::ExplosiveBullet | HitKind::ExplosiveBolt);
             let vel = if h.kind == HitKind::Windblast {
                 npc.velocity
             } else if blast {
@@ -1663,7 +1681,11 @@ fn npc_hits(
             }
         }
         // (Corvo's own takedowns, for the challenges' scoring)
-        let ko = matches!(h.kind, HitKind::Choke | HitKind::SleepDart) && npc.mode == Mode::Unconscious;
+        // (an arc mine's dead are ash: `m_bAshDeadPawns`)
+        if h.kind == HitKind::ArcMine && npc.mode == Mode::Dead {
+            commands.entity(e).try_insert(Ashes(-0.4));
+        }
+        let ko = matches!(h.kind, HitKind::Choke | HitKind::SleepDart | HitKind::StunMine) && npc.mode == Mode::Unconscious;
         if (stats.kills > kills0 || ko) && !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats) {
             takedowns.write(crate::gameplay::PlayerTakedown {
                 npc: h.npc,
@@ -3499,14 +3521,15 @@ fn npc_select_anim(
                 };
                 if let Some(c) = own.or_else(|| pick(&clips.attack)) {
                     // a blow with its zone (`DishonoredNotify_AttackZone`): its clip as authored,
-                    // the blow landing early in the zone (where the damage may come:
-                    // `m_fDamageZoneMaxTime` 0.12 s), the attack over once it may be broken off
+                    // the blow landing in the zone's last `m_fDamageZoneMaxTime` (0.12 s: the
+                    // original's zone handler opens the damage there, as roshan's r614/blink
+                    // research decoded it), the attack over once it may be broken off
                     // (`DishonoredNotify_AttackInterruptable`); a lunge kept to its distance
                     let zone = st.marks.get(&c).and_then(|m| m.zone.map(|z| (z, m.interruptible))).filter(|((z, _), _)| *z > 0.05 && !matches!(kind, MoveKind::Bash | MoveKind::Jump));
                     let who = npc.name.clone();
                     match (zone, npc.swing.as_mut()) {
                         (Some(((z, d), intr)), Some(s)) => {
-                            let hit = z + d.min(0.12) * 0.5;
+                            let hit = (z + d - 0.12).max(z);
                             if std::env::var("DH_MELEE_LOG").is_ok() {
                                 info!("melee: {who} {:?} by its clip: hit {:.2} -> {hit:.2}, len {:.2} -> {:.2}", s.kind, s.hit, s.len, if intr > hit { intr } else { lib.duration(c) }.max(hit + 0.1));
                             }

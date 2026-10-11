@@ -11,7 +11,7 @@ use crate::audio::PostEvent;
 use crate::gamedata::Data;
 use crate::gameplay::{HudMessages, NpcStagger, PlayerStats};
 use crate::level::{GROUP_PROP, GROUP_WORLD};
-use crate::npc::{Alert, Kind, Mode, Npc, NPC_CENTER};
+use crate::npc::{Kind, Mode, Npc, NPC_CENTER};
 use crate::player::{Player, RADIUS, STAND_HALF};
 use crate::GameState;
 use bevy::prelude::*;
@@ -252,14 +252,17 @@ pub fn find_target<'a>(
             return None;
         }
         let animal = npc.kind == Kind::Creature;
-        // people only at level 2, and only while unaware of Corvo
-        if !animal && (level < ov.map(|o| o.level).unwrap_or(2) || npc.alert == Alert::Combat || npc.mode == Mode::Combat) {
+        // people only at level 2 (`m_RequiredPossessPowerLevel`), whatever they know of Corvo but
+        // while choked (`Twk_Possessable_BaseNPC.m_AwarenessSettings`: every state but the last)
+        if !animal && (level < ov.map(|o| o.level).unwrap_or(2) || npc.mode == Mode::Choked) {
             return None;
         }
-        Some((e, t.translation + Vec3::Y * 0.3))
+        // (the target's priority: `m_TargetingPriority`, combatants over civilians over animals)
+        let weight = if animal { 0.0 } else if npc.fighter() { 2.0 } else { 1.0 };
+        Some((e, t.translation + Vec3::Y * 0.3, weight))
     });
     // the other creatures: any level
-    for (e, chest) in people.chain(hosts) {
+    for (e, chest, weight) in people.chain(hosts.map(|(e, c)| (e, c, 0.0))) {
         let to = chest - eye;
         let d = to.length();
         if d > range || d < 0.5 {
@@ -272,8 +275,11 @@ pub fn find_target<'a>(
         if ctx.cast_ray(eye, to / d, d - 0.4, true, filter).is_some() {
             continue;
         }
-        let score = d + angle * 10.0;
-        if best.is_none_or(|b| score < b.0) {
+        // the original's choice (as roshan's r614/blink research decoded it): the angle counts
+        // ten times the distance, each as how far inside its limit, plus the priority
+        let fov = 0.4 / 0.3;
+        let score = 10.0 * (fov - angle) / fov + (range - d) / range + weight;
+        if best.is_none_or(|b| score > b.0) {
             best = Some((score, e));
         }
     }

@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::Path;
 
 // 103: retain unmatched-rig timelines and zero-track animation sequences.
-pub const SCENE_VERSION: u32 = 109;
+pub const SCENE_VERSION: u32 = 110;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -1673,6 +1673,23 @@ pub struct Volume {
     /// `m_bDisallowUnpossession`)
     #[serde(default)]
     pub no_unpossess: bool,
+    /// a physics volume's pain (`bPainCausing`) and push (`ZoneVelocity`, m/s; not a water's
+    /// current), and its rank among those it overlaps (`Priority`)
+    #[serde(default)]
+    pub pain: Option<VolumePain>,
+    #[serde(default)]
+    pub push: Option<[f32; 3]>,
+    #[serde(default)]
+    pub priority: i32,
+}
+
+/// What a physics volume hurts: `DamagePerSec` every `PainInterval` (s), and as one enters with
+/// `bEntryPain`.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct VolumePain {
+    pub per_sec: f32,
+    pub interval: f32,
+    pub entry: bool,
 }
 
 /// A room of the sound propagation (`DishonoredAudioVolume`): where it is, the reverb it gives
@@ -2641,6 +2658,10 @@ pub struct GameData {
     /// ("Transversal" -> "Blink"): the profile's
     #[serde(default)]
     pub power_aliases: Vec<(String, String)>,
+    /// how far the AI hear each `EAINoiseLoudness`, metres (`DefaultAI.ini`'s
+    /// `[DisAINoiseManager] m_LoudnessDistanceArray`, by the enum's order)
+    #[serde(default)]
+    pub noise_loudness: std::collections::BTreeMap<String, f32>,
     /// the Dunwall City Trials' challenges (`DisDLC05GameInfo.m_Challenges`)
     #[serde(default)]
     pub challenges: Vec<ChallengeDef>,

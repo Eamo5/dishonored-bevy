@@ -60,11 +60,16 @@ pub enum Power {
     ExplosiveBullet,
     /// Daud's (The Knife of Dunwall)
     SummonAssassin,
+    ExplosiveBolt,
+    ArcMine,
+    StunMine,
+    Chokedust,
 }
 
-/// The original keyboard shortcut order (`m_AutoAssign_KeyboardItemOrder`): the first ten
+/// The original keyboard shortcut order (`DefaultUI.ini`'s `m_AutoAssign_KeyboardItemOrder`,
+/// The Knife of Dunwall's after Corvo's; its arc mine set at `[29]`, so last): the first ten
 /// items owned go on keys 1-0.
-pub const SHORTCUT_ORDER: [Power; 16] = [
+pub const SHORTCUT_ORDER: [Power; 20] = [
     Power::Pistol,
     Power::Crossbow,
     Power::Grenade,
@@ -76,12 +81,28 @@ pub const SHORTCUT_ORDER: [Power; 16] = [
     Power::DevouringSwarm,
     Power::BendTime,
     Power::Possess,
+    Power::SummonAssassin,
     Power::SleepDart,
     Power::IncendiaryBolt,
     Power::StickyGrenade,
     Power::ExplosiveBullet,
-    Power::SummonAssassin,
+    Power::ExplosiveBolt,
+    Power::Chokedust,
+    Power::StunMine,
+    Power::ArcMine,
 ];
+
+/// The shortcut order for whoever plays: Daud's Void Gaze and Transversal have places of their
+/// own (`DPWI_DLC06_DaudDarkVision`, `DPWI_DLC06_Transversal`: after Possession).
+pub fn shortcut_order(daud: bool) -> Vec<Power> {
+    let mut o = SHORTCUT_ORDER.to_vec();
+    if daud {
+        o.retain(|p| !matches!(p, Power::Blink | Power::DarkVision));
+        let at = o.iter().position(|p| *p == Power::SummonAssassin).unwrap_or(o.len());
+        o.splice(at..at, [Power::DarkVision, Power::Blink]);
+    }
+    o
+}
 
 impl Power {
     pub fn name(self) -> &'static str {
@@ -103,6 +124,26 @@ impl Power {
             Power::IncendiaryBolt => "Incendiary Bolts",
             Power::ExplosiveBullet => "Explosive Bullets",
             Power::SummonAssassin => "Summon Assassin",
+            Power::ExplosiveBolt => "Explosive Bolts",
+            Power::ArcMine => "Arc Mine",
+            Power::StunMine => "Stun Mine",
+            Power::Chokedust => "Chokedust",
+        }
+    }
+    /// Its name as the one playing has it (Daud's Transversal and Void Gaze).
+    pub fn label(self, daud: bool) -> &'static str {
+        match self {
+            Power::Blink if daud => "Transversal",
+            Power::DarkVision if daud => "Void Gaze",
+            p => p.name(),
+        }
+    }
+    /// Its icon as the one playing has it (`UI_EquipmentIcons_DLC06`'s for Daud's powers).
+    pub fn icon_for(self, daud: bool) -> &'static str {
+        match self {
+            Power::Blink if daud => "ic_pow_DLC06_transversal",
+            Power::DarkVision if daud => "ic_pow_DLC06_daudDarkVision",
+            p => p.icon(),
         }
     }
     /// The power's name in the cooked game data (`None` for weapons).
@@ -140,16 +181,20 @@ impl Power {
             Power::SpringRazor => "ic_item_springRazor",
             Power::IncendiaryBolt => "ic_item_flareBolt",
             Power::ExplosiveBullet => "ic_item_explosiveBullet",
-            Power::SummonAssassin => "ic_pow_summonAssassin",
+            Power::SummonAssassin => "ic_pow_DLC06_summonAssassin",
+            Power::ExplosiveBolt => "ic_item_DLC06_explosiveBolt",
+            Power::ArcMine => "ic_item_DLC06_arcMine",
+            Power::StunMine => "ic_item_DLC06_arcMineStun",
+            Power::Chokedust => "ic_item_DLC06_flashSmoke",
         }
     }
     /// Fired from the pistol or crossbow.
     pub fn is_ranged(self) -> bool {
-        matches!(self, Power::Pistol | Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBullet)
+        matches!(self, Power::Pistol | Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBullet | Power::ExplosiveBolt)
     }
     /// Held in the left hand rather than cast (the gadget idle).
     pub fn is_gadget(self) -> bool {
-        self.is_ranged() || matches!(self, Power::Heart | Power::Grenade | Power::StickyGrenade | Power::SpringRazor)
+        self.is_ranged() || matches!(self, Power::Heart | Power::Grenade | Power::StickyGrenade | Power::SpringRazor | Power::ArcMine | Power::StunMine | Power::Chokedust)
     }
     /// The inventory entry of a gadget's ammunition (`stats.items`).
     pub fn ammo_item(self) -> Option<&'static str> {
@@ -160,6 +205,28 @@ impl Power {
             Power::SpringRazor => RAZORS,
             Power::IncendiaryBolt => FLARES,
             Power::ExplosiveBullet => EXPLOSIVE,
+            Power::ExplosiveBolt => EXPLOSIVE_BOLTS,
+            Power::ArcMine => ARC_MINES,
+            Power::StunMine => STUN_MINES,
+            Power::Chokedust => CHOKEDUST,
+            _ => return None,
+        })
+    }
+    /// Its ammunition's type (`eDisAmmoType` order), for its name.
+    pub fn ammo_type(self) -> Option<u8> {
+        Some(match self {
+            Power::Pistol => 0,
+            Power::ExplosiveBullet => 1,
+            Power::Crossbow => 2,
+            Power::SleepDart => 3,
+            Power::IncendiaryBolt => 4,
+            Power::SpringRazor => 5,
+            Power::Grenade => 6,
+            Power::StickyGrenade => 7,
+            Power::ExplosiveBolt => 8,
+            Power::ArcMine => 9,
+            Power::Chokedust => 10,
+            Power::StunMine => 11,
             _ => return None,
         })
     }
@@ -177,7 +244,13 @@ impl Power {
             (Some(k), _) => stats.power(k) > 0,
             // gadgets once found or bought
             (_, Some(item)) => stats.items.contains_key(item),
-            _ => self != Power::Empty && stats.weapons && !(stats.no_crossbow && matches!(self, Power::Crossbow | Power::SleepDart)),
+            _ => {
+                self != Power::Empty
+                    && stats.weapons
+                    && !(stats.no_crossbow && matches!(self, Power::Crossbow | Power::SleepDart))
+                    && !(stats.no_pistol && self == Power::Pistol)
+                    && !(stats.no_heart && self == Power::Heart)
+            }
         }
     }
     pub fn level(self, stats: &PlayerStats) -> u8 {
@@ -190,8 +263,8 @@ impl Power {
 }
 
 /// The shortcut keys' items.
-pub fn shortcuts(stats: &PlayerStats) -> Vec<Power> {
-    SHORTCUT_ORDER.iter().copied().filter(|p| p.owned(stats)).take(10).collect()
+pub fn shortcuts(stats: &PlayerStats, daud: bool) -> Vec<Power> {
+    shortcut_order(daud).into_iter().filter(|p| p.owned(stats)).take(10).collect()
 }
 
 /// A power was used (level scripts listen: `DisSeqEvent_PowerUsed`).
@@ -317,6 +390,7 @@ impl Projectile {
         let (prefix, speed, gravity) = match kind {
             HitKind::SleepDart => ("arrow_sleep", 0.7, 0.4),
             HitKind::Fire => ("arrow_flare", 0.2, 0.5),
+            HitKind::ExplosiveBolt => ("arrow_explosive", data.pawn("arrow.m_fSpeedMultiplier", 1.0), 0.5),
             _ => ("arrow", 1.0, 1.3),
         };
         let speed = data.pawn("crossbow.m_fArrowFireSpeed", 20000.0) * UU * data.pawn(&format!("{prefix}.m_fSpeedMultiplier"), speed).max(0.0);
@@ -366,7 +440,7 @@ fn projectile_model(entity: &mut EntityCommands, assets: Option<&GameAssets>, ki
             crate::fxlight::FxLight { color: Vec3::new(1.0, 0.55, 0.2), brightness: 3.0, radius: 5.0 },
         ));
     }
-    let prop = match kind { HitKind::SleepDart => "bolt_sleep", HitKind::Fire => "bolt_flare", _ => "bolt" };
+    let prop = match kind { HitKind::SleepDart => "bolt_sleep", HitKind::Fire => "bolt_flare", HitKind::ExplosiveBolt => "bolt_explosive", _ => "bolt" };
     if let Some(parts) = assets.and_then(|a| a.props.get(prop).or(a.props.get("bolt"))) {
         entity.with_children(|c| {
             for (mesh, mat) in &parts.parts {
@@ -446,9 +520,9 @@ pub(crate) fn bolt_focus(
     }
 }
 
-fn reset_powers(mut p: ResMut<Powers>, stats: Res<PlayerStats>) {
+fn reset_powers(mut p: ResMut<Powers>, stats: Res<PlayerStats>, data: Res<Data>) {
     *p = Powers::default();
-    p.selected = shortcuts(&stats).into_iter().find(|p| p.key().is_some()).unwrap_or(Power::Empty);
+    p.selected = shortcuts(&stats, data.is_daud()).into_iter().find(|p| p.key().is_some()).unwrap_or(Power::Empty);
 }
 
 fn spawn_blink_marker(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>) {
@@ -478,12 +552,13 @@ fn select_power(
     mut equipped: MessageWriter<PowerEquipped>,
     mut sfx: MessageWriter<PostEvent>,
     (possession, choice, paused): (Res<crate::possession::Possession>, Res<crate::choice::Choice>, Res<crate::hud::Paused>),
+    data: Res<Data>,
 ) {
     // the number keys answer a choice on screen
     if paused.0 || possession.host.is_some() || choice.pending.is_some() {
         return;
     }
-    let list = shortcuts(&stats);
+    let list = shortcuts(&stats, data.is_daud());
     let mut sel = None;
     let digits = [
         KeyCode::Digit1,
@@ -889,31 +964,37 @@ fn use_power(
                 }
             }
         }
-        Power::Grenade | Power::StickyGrenade | Power::SpringRazor => {
+        Power::Grenade | Power::StickyGrenade | Power::SpringRazor | Power::Chokedust | Power::ArcMine | Power::StunMine => {
             if sel.ammo(&stats) == Some(0) {
-                msgs.push(format!("Out of {}s", sel.name().to_lowercase()));
+                msgs.push(format!("Out of {}", sel.ammo_type().map(crate::gadgets::ammo_name).unwrap_or("ammunition").to_lowercase()));
                 sfx.write(PostEvent::named("Snd_Power_Empty", None));
                 return;
             }
-            // a grenade: the pin pulled, it cooks while held (`cook_grenade`)
-            if matches!(sel, Power::Grenade | Power::StickyGrenade) {
+            // a grenade (chokedust too): the pin pulled, it cooks while held (`cook_grenade`)
+            if matches!(sel, Power::Grenade | Power::StickyGrenade | Power::Chokedust) {
                 powers.cooking = Some((sel, 0.0));
                 sfx.write(PostEvent::named("Snd_Grenade_Pin", None));
                 return;
             }
-            gadget.write(crate::gadgets::UseGadget { gadget: crate::gadgets::Gadget::SpringRazor, eye, dir, cooked: 0.0 });
+            let g = match sel {
+                Power::ArcMine => crate::gadgets::Gadget::ArcMine,
+                Power::StunMine => crate::gadgets::Gadget::StunMine,
+                _ => crate::gadgets::Gadget::SpringRazor,
+            };
+            gadget.write(crate::gadgets::UseGadget { gadget: g, eye, dir, cooked: 0.0 });
             powers.cooldown = 1.0;
         }
-        Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt => {
+        Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt => {
             let (kind, empty) = match sel {
                 Power::SleepDart => (HitKind::SleepDart, "Out of sleep darts"),
                 Power::IncendiaryBolt => (HitKind::Fire, "Out of incendiary bolts"),
+                Power::ExplosiveBolt => (HitKind::ExplosiveBolt, "Out of explosive bolts"),
                 _ => (HitKind::Bolt, "Out of bolts"),
             };
             let ammo = match sel {
                 Power::SleepDart => &mut stats.sleep_darts,
                 Power::Crossbow => &mut stats.bolts,
-                _ => stats.items.entry(crate::gadgets::FLARES.to_string()).or_default(),
+                p => stats.items.entry(p.ammo_item().unwrap_or(crate::gadgets::FLARES).to_string()).or_default(),
             };
             if *ammo == 0 {
                 msgs.push(empty);
@@ -982,6 +1063,20 @@ fn use_power(
                     }
                     hits.write(NpcHit { npc: hit, damage, kind: HitKind::Bullet, from: pt.translation });
                     sfx.write(PostEvent::named("Imp_Bullet_on_Body", Some(at)));
+                    // it goes through (`m_fPiercingChance` 1): the next one in its line takes
+                    // `m_fPostPiercingDamageRatio` of it and stops it (roshan's r614/blink research)
+                    if !explosive && rand::random::<f32>() <= data.pawn("bullet.m_fPiercingChance", 1.0) {
+                        let on = filter.exclude_collider(hit);
+                        if let Some((next, t2)) = ctx.cast_ray(at + dir * 0.05, dir, (80.0 - toi).max(0.0), true, on) {
+                            if let Ok((_, nt2, n2)) = npcs.get(next) {
+                                let at2 = at + dir * (0.05 + t2);
+                                let head2 = at2.y - nt2.translation.y > HEAD;
+                                let d2 = attrs.bullet.damage(toi + 0.05 + t2, head2, n2.alert != crate::npc::Alert::Combat) * data.pawn("bullet.m_fPostPiercingDamageRatio", 0.5);
+                                hits.write(NpcHit { npc: next, damage: d2, kind: HitKind::Bullet, from: pt.translation });
+                                sfx.write(PostEvent::named("Imp_Bullet_on_Body", Some(at2)));
+                            }
+                        }
+                    }
                 } else if let Ok(s) = strikeables.get(hit) {
                     struck.write(crate::gameplay::Struck { target: s.0, damage: attrs.bullet.damage(toi, false, false), kind: HitKind::Bullet, at });
                     sfx.write(PostEvent::named("Imp_Bullet_on_Body", Some(at)));
@@ -1076,6 +1171,7 @@ fn update_projectiles(
     (surfaces, mut sfx): (Query<&ColliderSurfaces>, MessageWriter<PostEvent>),
     (strikeables, mut struck, mut world_hits): (Query<&crate::gameplay::Strikeable>, MessageWriter<crate::gameplay::Struck>, MessageWriter<WorldDamage>),
     globals: Query<&GlobalTransform>,
+    mut blasts: MessageWriter<crate::gadgets::Explosion>,
 ) {
     let dt = time.delta_secs() * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
@@ -1098,6 +1194,25 @@ fn update_projectiles(
             pr.life -= dt;
         }
         if pr.life <= 0.0 {
+            // an explosive bolt goes off where it struck (`m_fDetonationTimer` after), the one
+            // it is in taking `m_fAttachedDamage` too (`DLC06_DaudArrowExplosion`: 500 uu
+            // reach, 200 uu full, 50 damage)
+            if pr.kind == HitKind::ExplosiveBolt && pr.stuck {
+                let x = |k: &str, d: f32| data.pawn(&format!("arrow_explosive.explosion.{k}"), d);
+                if let Some(a) = pr.attachment {
+                    hits.write(NpcHit { npc: a.npc, damage: x("m_fAttachedDamage", 50.0), kind: HitKind::ExplosiveBolt, from: t.translation });
+                }
+                let player_reach = data.0.pawn.get("arrow_explosive.explosion.m_fPlayerDamageRadius").map(|r| [r * UU, x("m_fPlayerFullDamageRadius", 150.0) * UU]);
+                blasts.write(crate::gadgets::Explosion {
+                    at: t.translation - t.forward().as_vec3() * 0.15,
+                    radius: x("m_fDamageRadius", 500.0) * UU,
+                    full: x("m_fFullDamageRadius", 200.0) * UU,
+                    damage: x("m_RadialDamage", 50.0),
+                    effect: "bolt_explosion",
+                    player: player_reach,
+                    kind: HitKind::ExplosiveBolt,
+                });
+            }
             commands.entity(e).despawn();
             continue;
         }
@@ -1122,6 +1237,11 @@ fn update_projectiles(
             let what = if npcs.get(hit).is_ok() { "Body" } else { impact_surface(surface) };
             if pr.kind == HitKind::Bolt {
                 pr.recoverable = data.pawn("arrow.m_bCanRecoverAmmoInEnvironment", 1.0) > 0.0;
+            }
+            // (an explosive bolt: its fuse)
+            if pr.kind == HitKind::ExplosiveBolt {
+                pr.recoverable = false;
+                pr.life = data.pawn("arrow_explosive.m_fDetonationTimer", 0.4).max(0.01);
             }
             sfx.write(PostEvent::named(&format!("Imp_Arrow_on_{what}"), Some(t.translation)));
             if pr.kind == HitKind::Fire && npcs.get(hit).is_err() {
@@ -1150,15 +1270,18 @@ fn update_projectiles(
                     };
                     hits.write(NpcHit { npc: hit, damage, kind: pr.kind, from: t.translation });
                 }
-                if pr.kind == HitKind::Bolt && data.pawn("arrow.m_bCanRecoverAmmoInBodies", 1.0) > 0.0
+                let explosive = pr.kind == HitKind::ExplosiveBolt;
+                if explosive || pr.kind == HitKind::Bolt && data.pawn("arrow.m_bCanRecoverAmmoInBodies", 1.0) > 0.0
                     && Projectile::survives_body_hit(data.pawn("arrow.m_fChanceToBreak", 0.7), attrs.bolt_break_modifier, rand::random::<f32>()) {
                     let nearest = rig.and_then(|r| (0..r.len()).filter_map(|i| Some((i, *globals.get(r.joint_at(i)?).ok()?)))
                         .min_by(|a, b| a.1.translation().distance_squared(t.translation).total_cmp(&b.1.translation().distance_squared(t.translation))));
                     let frame = nearest.map(|(_, g)| g).unwrap_or(GlobalTransform::from(*nt));
                     pr.attachment = Some(BoltAttachment { npc: hit, bone: nearest.map(|(i, _)| i),
                         offset: frame.affine().inverse().transform_point3(t.translation), rotation: frame.compute_transform().rotation.inverse() * t.rotation });
-                    pr.recoverable = true;
-                    pr.life = data.pawn("arrow.m_fStuckInAlivePawnVanishTime", 10.0).max(0.01);
+                    pr.recoverable = !explosive;
+                    if !explosive {
+                        pr.life = data.pawn("arrow.m_fStuckInAlivePawnVanishTime", 10.0).max(0.01);
+                    }
                 } else {
                     commands.entity(e).despawn();
                 }
@@ -1282,7 +1405,7 @@ mod projectile_tests {
         let mut app = App::new();
         app.init_resource::<Time>().init_resource::<Attrs>().init_resource::<Data>()
             .insert_resource(TimeControl { bend_remaining: 10.0, world_dilation: 0.0, ..default() })
-            .add_message::<NpcHit>().add_message::<PostEvent>().add_message::<crate::gameplay::Struck>().add_message::<WorldDamage>()
+            .add_message::<NpcHit>().add_message::<PostEvent>().add_message::<crate::gameplay::Struck>().add_message::<WorldDamage>().add_message::<crate::gadgets::Explosion>()
             .add_systems(Update, update_projectiles);
         app.world_mut().spawn((DefaultRapierContext, RapierContextSimulation::default()));
         let e = app.world_mut().spawn((Projectile { vel: Vec3::X * 10.0, kind: HitKind::Bolt, life: 10.0, stuck: false, recoverable: true, attachment: None }, Transform::IDENTITY)).id();
@@ -1342,7 +1465,11 @@ fn cook_grenade(
         return;
     }
     let t = t + time.delta_secs() * tc.world_scale();
-    let g = if p == Power::StickyGrenade { crate::gadgets::Gadget::StickyGrenade } else { crate::gadgets::Gadget::Grenade };
+    let g = match p {
+        Power::StickyGrenade => crate::gadgets::Gadget::StickyGrenade,
+        Power::Chokedust => crate::gadgets::Gadget::Chokedust,
+        _ => crate::gadgets::Gadget::Grenade,
+    };
     let (eye, dir) = (cg.translation(), cg.forward().as_vec3());
     if t >= crate::gadgets::FUSE || !mouse.pressed(MouseButton::Right) {
         powers.cooking = None;
@@ -1361,7 +1488,7 @@ mod elixir_input_tests {
     fn menu_number_keys_do_not_change_equipped_power() {
         let mut app = App::new();
         app.init_resource::<ButtonInput<KeyCode>>().init_resource::<AccumulatedMouseScroll>()
-            .init_resource::<PlayerStats>().init_resource::<Powers>()
+            .init_resource::<PlayerStats>().init_resource::<Powers>().init_resource::<Data>()
             .init_resource::<crate::possession::Possession>().init_resource::<crate::choice::Choice>()
             .insert_resource(crate::hud::Paused(true))
             .add_message::<PowerEquipped>().add_message::<PostEvent>().add_systems(Update, select_power);

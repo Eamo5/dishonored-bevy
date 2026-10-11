@@ -703,8 +703,9 @@ fn use_devices(
     }
 }
 
-/// Walls of light: crossing one while it runs is death, unless its friends (or, rewired,
-/// Corvo).
+/// Walls of light: crossing one while it runs burns characters to ash, unless its friends (or,
+/// rewired, Corvo); Corvo it shocks for its `m_Damage` (100) as he touches it. While Bend Time
+/// stops the world it can be walked through (as roshan's r614/blink research decoded it).
 #[allow(clippy::too_many_arguments)]
 fn walls(
     mut devices: ResMut<Devices>,
@@ -717,7 +718,10 @@ fn walls(
     mut ambient: Local<Vec<bool>>,
     (time, mut sheets): (Res<Time>, Query<(&WallSheet, &mut Visibility, &MeshMaterial3d<StandardMaterial>)>),
     mut mats: ResMut<Assets<StandardMaterial>>,
+    (tc, mut touching): (Res<crate::gameplay::TimeControl>, Local<Vec<bool>>),
 ) {
+    // (stopped time: no collision, nothing burns)
+    let stopped = tc.bend_remaining > 0.0 && tc.world_dilation <= 0.0;
     // the sheets show while their wall runs (blue; rewired, green), flickering
     let flicker = 0.8 + 0.2 * (time.elapsed_secs() * 23.0).sin() * (time.elapsed_secs() * 7.0).cos();
     for (s, mut v, m) in &mut sheets {
@@ -737,6 +741,9 @@ fn walls(
     if ambient.len() != devices.list.len() {
         *ambient = vec![false; devices.list.len()];
     }
+    if touching.len() != devices.list.len() {
+        *touching = vec![false; devices.list.len()];
+    }
     let inside = |w: &(Mat4, Vec3, Vec3), p: Vec3| {
         let l = w.0.transform_point3(p);
         l.cmpge(w.1 - Vec3::splat(0.25)).all() && l.cmple(w.2 + Vec3::splat(0.25)).all()
@@ -754,18 +761,26 @@ fn walls(
                 sfx.write(PostEvent::named(s, Some(Vec3::from(d.def.position))));
             }
         }
-        if !on {
+        if !on || stopped {
+            touching[i] = false;
             continue;
         }
         let rewired = devices.rewired(d);
         if let Ok(pt) = player.single() {
-            if !rewired && !stats.dead && inside(w, pt.translation) {
-                stats.health = 0.0;
-                stats.dead = true;
-                msgs.push("Disintegrated by a Wall of Light");
+            let now_in = !rewired && !stats.dead && inside(w, pt.translation);
+            if now_in && !touching[i] {
+                let damage = if d.def.damage > 0.0 { d.def.damage } else { 100.0 };
+                stats.take_damage(damage);
+                stats.damage_flash = 1.0;
+                stats.hit_from = Some(pt.translation);
                 let s = d.def.sounds.get("m_ShockSound").cloned().unwrap_or_else(|| "Snd_P_Death_Light".into());
                 sfx.write(PostEvent::named(&s, None));
+                if stats.health <= 0.0 {
+                    stats.dead = true;
+                    msgs.push("Disintegrated by a Wall of Light");
+                }
             }
+            touching[i] = now_in;
         }
         for (e, n, t) in &npcs {
             if n.is_down() {

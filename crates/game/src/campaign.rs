@@ -161,36 +161,47 @@ pub fn apply_loadout_from(list: &[dhcook::format::LoadoutDef], name: &str, s: &m
     let bow = |i: &String| i.contains("Crossbow") || i.contains("Wristbow");
     s.weapons = l.items.iter().any(|i| bow(i) || i.contains("Pistol"));
     s.no_crossbow = s.weapons && !l.items.iter().any(bow);
-    // its ammunition and elixirs, where it gives them
+    // (Daud's: the wristbow alone, neither pistol nor Heart)
+    let wristbow = l.items.iter().any(|i| i.contains("Wristbow"));
+    s.no_pistol = wristbow && !l.items.iter().any(|i| i.contains("Pistol"));
+    s.no_heart = wristbow && !l.items.iter().any(|i| i.contains("Heart"));
+    // its ammunition (by the original's `eDisAmmoType`) and elixirs, where it gives them
     if !l.ammo.is_empty() {
-        s.bolts = 0;
-        s.sleep_darts = 0;
-        s.bullets = 0;
+        for ty in 0..crate::gadgets::AMMO_TYPES as u8 {
+            if let Some(n) = crate::gadgets::ammo_mut(s, ty, false) {
+                *n = 0;
+            }
+        }
     }
     for (ty, n) in &l.ammo {
-        match ty.as_str() {
-            "Arrow" => s.bolts += n,
-            "Arrow_Sleep" => s.sleep_darts += n,
-            "Bullet" => s.bullets += n,
-            "Grenade" => *s.items.entry(crate::gadgets::GRENADES.to_string()).or_default() += n,
-            "SpringRazor" => *s.items.entry(crate::gadgets::RAZORS.to_string()).or_default() += n,
-            other => *s.items.entry(format!("Ammo_{other}")).or_default() += n,
+        match crate::gadgets::ammo_index(ty).and_then(|t| crate::gadgets::ammo_mut(s, t, true)) {
+            Some(c) => *c += n,
+            None => *s.items.entry(format!("Ammo_{ty}")).or_default() += n,
         }
     }
     if let Some([h, m]) = l.elixirs {
         s.health_elixirs = h;
         s.mana_elixirs = m;
     }
+    // the gadgets held (their ammunition the loadout's own; a loadout without any, two)
     for i in &l.items {
-        let gadget = if i.contains("Grenade") {
-            Some(crate::gadgets::GRENADES)
+        use crate::gadgets::*;
+        let gadget = if i.contains("GrenadeDaud") {
+            // (Daud's grenade hand: chokedust, and grenades found)
+            Some(CHOKEDUST)
+        } else if i.contains("Grenade") {
+            Some(GRENADES)
         } else if i.contains("SpringRazor") {
-            Some(crate::gadgets::RAZORS)
+            Some(RAZORS)
+        } else if i.contains("Inv_StunMine") {
+            Some(STUN_MINES)
+        } else if i.contains("Inv_ArcMine") {
+            Some(ARC_MINES)
         } else {
             None
         };
         if let Some(g) = gadget {
-            *s.items.entry(g.to_string()).or_default() += 2;
+            *s.items.entry(g.to_string()).or_default() += if l.ammo.is_empty() { 2 } else { 0 };
         }
     }
     for (item, n) in &l.abstract_items {

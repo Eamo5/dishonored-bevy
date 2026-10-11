@@ -56,7 +56,7 @@ pub enum AiFx {
     /// the giving op (its cooked pickup)
     GivePickup(u32),
     /// a noise at a place (or its maker), heard so far, in alarm or not
-    Noise { maker: Vec<Val>, at: Vec<Val>, radius: f32, combat: bool },
+    Noise { maker: Vec<Val>, at: Vec<Val>, loudness: String, combat: bool },
     /// go and look at something (`DisSeqAct_AIStartDistraction`)
     Distract { targets: Vec<Val>, to: Vec<Val> },
     /// suspicious (true) or calm
@@ -482,7 +482,8 @@ fn apply_ai_fx(
                 }
             }
             AiFx::GivePickup(op) => give_pickup(&g.ops[op as usize].props, &data, &attrs, &mut stats, &mut msgs, &mut vm),
-            AiFx::Noise { maker, at, radius, combat } => {
+            AiFx::Noise { maker, at, loudness, combat } => {
+                let radius = data.0.noise_loudness.get(&loudness).copied().unwrap_or(5.0);
                 if let Some(pos) = at.iter().chain(maker.iter()).find_map(|v| place(v)) {
                     noise.write(crate::gameplay::Noise { pos, radius, combat });
                 }

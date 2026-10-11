@@ -80,6 +80,16 @@ pub enum HitKind {
     SpringRazor,
     /// a wall of light's disintegration
     WallOfLight,
+    /// The Knife of Dunwall: an explosive bolt's blast
+    ExplosiveBolt,
+    /// an arc mine's lightning
+    ArcMine,
+    /// a stun mine's: asleep where they stand (`DisDLC06DamageType_ArcMineStunShot`:
+    /// `m_bPutToSleep`, `m_bInstaRagdoll`)
+    StunMine,
+    /// chokedust: stunned a while, unharmed (`DisDLC06DamageType_SmokeGrenade`:
+    /// `m_bCannotKillNPC`)
+    Chokedust,
 }
 
 /// Corvo took someone down (killed, or knocked out): who, how, for the challenges' scoring
@@ -223,6 +233,11 @@ pub struct PlayerStats {
     /// only the pistol so far (the Prison's, picked up)
     #[serde(default)]
     pub no_crossbow: bool,
+    /// Daud's kit: his wristbow, no pistol and no Heart (his loadouts' items)
+    #[serde(default)]
+    pub no_pistol: bool,
+    #[serde(default)]
+    pub no_heart: bool,
     /// Blood Thirst's meter
     pub adrenaline: f32,
     /// Remaining time before adrenaline starts burning away (Sustained Rage).
@@ -543,6 +558,8 @@ impl Default for PlayerStats {
             items: Default::default(),
             weapons: true,
             no_crossbow: false,
+            no_pistol: false,
+            no_heart: false,
             adrenaline: 0.0,
             adrenaline_delay: 0.0,
             adrenaline_gain: 0.0,

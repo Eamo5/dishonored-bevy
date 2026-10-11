@@ -307,6 +307,27 @@ fn dlc06_profile(cooked: &Path, game: &Package, base: &GameData) -> Option<crate
     p.pawn = base.pawn.clone();
     let top: Vec<upk::props::Prop> = pawn.0.iter().filter(|p| !matches!(p.value, Value::Struct(..))).cloned().collect();
     flatten(&pkg, &top, "", &mut p.pawn, &mut BTreeMap::new());
+    // his gadgets' numbers: the explosive bolt's (`arrow_explosive.`), the placed arc and
+    // stun mines' (`arcmine.`, `stunmine.`), chokedust's grenade component (`chokedust.`);
+    // their blasts' (`<key>explosion.`, with `m_RadialDamage` at normal difficulty)
+    let scalars = |t: &upk::props::Props| -> Vec<upk::props::Prop> { t.0.iter().filter(|p| matches!(p.value, Value::Float(..) | Value::Int(..) | Value::Bool(..))).cloned().collect() };
+    for (path, key, blast) in [
+        ("DLC06_Twk_Inv_PlayerSpecific.DLC06_Proj_WristBolt_Explosive", "arrow_explosive.", "m_pExplosionTweak"),
+        ("DLC06_Inv_ArcMine.DLC06_ArcMine_Placed", "arcmine.", "m_pExplosion"),
+        ("DLC06_Inv_ArcMine.DLC06_StunMine_Placed", "stunmine.", "m_pExplosion"),
+        ("DLC06_Proj_Flashsmoke.DLC06_Proj_ChokeDust.DisDLC06Tweaks_GrenadeComponent_0", "chokedust.", "m_pExplosionTweaks"),
+    ] {
+        let Some(t) = pkg.find_export(path).and_then(|i| props(&pkg, i)) else { continue };
+        flatten(&pkg, &scalars(&t), key, &mut p.pawn, &mut BTreeMap::new());
+        let Some(Value::Object(o)) = t.get(blast) else { continue };
+        let Some(x) = (*o > 0).then(|| props(&pkg, *o)).flatten() else { continue };
+        flatten(&pkg, &scalars(&x), &format!("{key}explosion."), &mut p.pawn, &mut BTreeMap::new());
+        if let Some(Value::Struct(_, s)) = x.get("m_RadialDamage") {
+            if let Some(v) = Props(s.clone()).float("m_fBaseValue2_Normal") {
+                p.pawn.insert(format!("{key}explosion.m_RadialDamage"), v);
+            }
+        }
+    }
     p.faction = match pawn.get("m_pFactionTweak") {
         Some(Value::Object(o)) if *o != 0 => object_name(&pkg, *o),
         _ => "DLC06_Fctn_Daud_Default".into(),
@@ -1162,6 +1183,27 @@ fn conv_graph(pkg: &std::sync::Arc<Package>, tree: &str) -> crate::format::ConvG
 }
 
 /// Cook `game/gamedata.json`.
+/// How far the AI hear each noise loudness (metres): `DefaultAI.ini`'s
+/// `[DishonoredGame.DisAINoiseManager] m_LoudnessDistanceArray`, one per `EAINoiseLoudness` in
+/// the enum's order (whisper 3 m, the numbered levels 5, 15, 30 and 60 m; roshan's r614/blink
+/// research pointed to the table, where we had guessed it native).
+pub fn noise_loudness(cooked: &Path, game: &Package) -> BTreeMap<String, f32> {
+    let names = enum_names(game, "EAINoiseLoudness");
+    let Ok(ini) = std::fs::read_to_string(cooked.join("..").join("Config").join("DefaultAI.ini")) else { return BTreeMap::new() };
+    let mut section = false;
+    let mut dists = Vec::new();
+    for line in ini.lines().map(str::trim) {
+        if line.starts_with('[') {
+            section = line.eq_ignore_ascii_case("[DishonoredGame.DisAINoiseManager]");
+            continue;
+        }
+        if let Some(v) = line.strip_prefix("m_LoudnessDistanceArray=").filter(|_| section) {
+            dists.push(v.trim().parse::<f32>().unwrap_or(0.0) * 0.01);
+        }
+    }
+    names.into_iter().zip(dists).collect()
+}
+
 pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
     let game = Package::open(&cooked.join("DishonoredGame.upk")).context("DishonoredGame.upk")?;
     let startup = Package::open(&cooked.join("Startup.upk")).context("Startup.upk")?;
@@ -1171,6 +1213,7 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
             d.pawn.insert("world.DefaultGravityZ".into(), gravity);
         }
     }
+    d.noise_loudness = noise_loudness(cooked, &game);
     arms(&game, &startup, &mut d);
     audiographs(cooked, &startup, &mut d);
     player_stats(&game, &startup, &mut d);

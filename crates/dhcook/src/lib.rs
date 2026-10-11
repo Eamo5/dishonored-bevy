@@ -4204,32 +4204,46 @@ impl<'a> Cooker<'a> {
         }
     }
 
-    /// Events' trigger limits from their class defaults when the level leaves them unset
-    /// (`DisSeqEvent_DialogOutputs` defaults to 0, unlimited: with UE3's base 1 a dialogue's
-    /// second output never reached the scripts).
+    /// Events' trigger limits and retrigger delays from their class defaults when the level
+    /// leaves them unset (`DisSeqEvent_DialogOutputs` defaults to 0, unlimited: with UE3's base 1
+    /// a dialogue's second output never reached the scripts; `SeqEvent_Touch` waits 0.1 s
+    /// before it fires again).
     fn event_defaults(&mut self) {
-        let mut cache: HashMap<String, Option<i32>> = HashMap::new();
+        let mut cache: HashMap<String, (Option<i32>, Option<f32>)> = HashMap::new();
         for i in 0..self.scene.kismet.ops.len() {
             let class = self.scene.kismet.ops[i].class.clone();
-            if !(class.starts_with("SeqEvent") || class.starts_with("DisSeqEvent")) || self.scene.kismet.ops[i].props.contains_key("MaxTriggerCount") {
+            if !(class.starts_with("SeqEvent") || class.starts_with("DisSeqEvent")) {
                 continue;
             }
-            let max = match cache.get(&class) {
+            let (max, retrigger) = match cache.get(&class) {
                 Some(m) => *m,
                 None => {
-                    let m = ["DishonoredGame", "Engine", "GameFramework", "UDKBase"].iter().find_map(|p| {
-                        let o = self.assets.find(&format!("{p}.Default__{class}"))?;
-                        match self.chain(&o).get("MaxTriggerCount") {
-                            Some(Value::Int(n)) => Some(*n),
-                            _ => None,
-                        }
-                    });
+                    let m = ["DishonoredGame", "Engine", "GameFramework", "UDKBase"]
+                        .iter()
+                        .find_map(|p| {
+                            let o = self.assets.find(&format!("{p}.Default__{class}"))?;
+                            let ch = self.chain(&o);
+                            let max = match ch.get("MaxTriggerCount") {
+                                Some(Value::Int(n)) => Some(*n),
+                                _ => None,
+                            };
+                            let re = match ch.get("ReTriggerDelay") {
+                                Some(Value::Float(f)) => Some(*f),
+                                _ => None,
+                            };
+                            Some((max, re))
+                        })
+                        .unwrap_or((None, None));
                     cache.insert(class.clone(), m);
                     m
                 }
             };
-            if let Some(n) = max {
-                self.scene.kismet.ops[i].props.insert("MaxTriggerCount".into(), KVal::Int(n));
+            let props = &mut self.scene.kismet.ops[i].props;
+            if let (Some(n), false) = (max, props.contains_key("MaxTriggerCount")) {
+                props.insert("MaxTriggerCount".into(), KVal::Int(n));
+            }
+            if let (Some(f), false) = (retrigger, props.contains_key("ReTriggerDelay")) {
+                props.insert("ReTriggerDelay".into(), KVal::Float(f));
             }
         }
     }
@@ -4570,7 +4584,18 @@ impl<'a> Cooker<'a> {
                 ForbiddenZone { owners: names("m_OwningFactions"), forbidden: names("m_ForbiddenFactions"), enabled: ach.bool("m_bEnabled").unwrap_or(true) }
             });
             let no_unpossess = cls == "DisPossessionVolume" && ach.bool("m_bDisallowUnpossession").unwrap_or(true);
-            self.scene.volumes.push(Volume { kind: cls, name: actor.name().to_string(), hulls, water, stealth, zone, no_unpossess });
+            // (a physics volume's pain and push: Boyle's spiked fences)
+            let pain = (ach.bool("bPainCausing") == Some(true)).then(|| crate::format::VolumePain {
+                per_sec: ach.float("DamagePerSec").unwrap_or(0.0),
+                interval: ach.float("PainInterval").unwrap_or(1.0),
+                entry: ach.bool("bEntryPain").unwrap_or(true),
+            });
+            let push = if water.is_none() { ach.vector("ZoneVelocity").filter(|v| v.iter().any(|c| *c != 0.0)).map(ue_point) } else { None };
+            let priority = match ach.get("Priority") {
+                Some(Value::Int(p)) => *p,
+                _ => 0,
+            };
+            self.scene.volumes.push(Volume { kind: cls, name: actor.name().to_string(), hulls, water, stealth, zone, no_unpossess, pain, push, priority });
         }
         Ok(())
     }
@@ -5323,7 +5348,7 @@ impl<'a> Cooker<'a> {
             }
             if let Some(n) = noise {
                 let c = self.chain(&n);
-                im.noise = noise_meters(c.name("m_NoiseLoudness").unwrap_or(""));
+                im.noise = noise_meters(&self.assets.cooked_dir, c.name("m_NoiseLoudness").unwrap_or(""));
                 im.threatening = c.name("m_NoiseContext").is_some_and(|x| x.contains("Threatening"));
             }
             if !im.sound.is_empty() || im.particle.is_some() || im.noise > 0.0 {
@@ -5395,7 +5420,7 @@ impl<'a> Cooker<'a> {
         let st = steps.last()?;
         let res = |o: Option<i32>| o.filter(|o| *o != 0).and_then(|o| self.assets.resolve(&pkg, o));
         let sound = res(st.object("m_pSoundEvent")).map(|o| o.name().to_string()).unwrap_or_default();
-        let noise = noise_meters(st.name("m_AINoiseLoudness").unwrap_or(""));
+        let noise = noise_meters(&self.assets.cooked_dir, st.name("m_AINoiseLoudness").unwrap_or(""));
         let threatening = st.name("m_AINoiseContext").is_some_and(|c| c.contains("Threatening") || c.contains("Danger"));
         let particle = res(st.object("m_pParticleSystem")).and_then(|ps| self.particle_system(&ps));
         let particle_offset = ue_dir(st.vector("m_ParticleSystemOffset").unwrap_or([0.0; 3])).map(|v| v * UNIT);
@@ -5845,7 +5870,7 @@ impl<'a> Cooker<'a> {
         }
         let index = self.scene.volumes.len() as u32;
         self.actor_ref(actor).volume = Some(index);
-        self.scene.volumes.push(Volume { kind: actor.class(), name: actor.name().to_string(), hulls: vec![hull], water: None, stealth: None, zone: None, no_unpossess: false });
+        self.scene.volumes.push(Volume { kind: actor.class(), name: actor.name().to_string(), hulls: vec![hull], water: None, stealth: None, zone: None, no_unpossess: false, pain: None, push: None, priority: 0 });
         Ok(())
     }
 
@@ -5986,6 +6011,13 @@ impl<'a> Cooker<'a> {
     }
 
     fn cook_props(&mut self) {
+        // (Daud's things on The Knife of Dunwall's maps: his player package's)
+        let daud = self.scene.name.to_ascii_lowercase().starts_with("dlc06_");
+        if daud && self.assets.find("DLC06_ArcMine.DLC06_ArcMine").is_none() {
+            if let Some(pkg) = self.assets.package("DLC06_Twk_Player_Daud_SF") {
+                self.assets.add_search(pkg);
+            }
+        }
         // the effects gameplay spawns (the weapons' and powers' tweaks name these)
         const GAME_EFFECTS: &[(&str, &str)] = &[
             ("grenade", "Vfx_Weapon.Effects.Grenade.ps_grenade"),
@@ -6030,6 +6062,21 @@ impl<'a> Cooker<'a> {
             ("tattoo_glow_3", "Vfx_GamePlay.Powers.Ps_Tattoo_Glow_03"),
             ("tattoo_glow_4", "Vfx_GamePlay.Powers.Ps_Tattoo_Glow_04"),
             ("tattoo_glow_wb", "Vfx_GamePlay.Powers.Ps_Tattoo_Glow_WB"),
+        ];
+        // ... and Daud's gadgets': the arc mines' lightning (`m_pLightningParticleSystem`),
+        // breaking (`m_pDestructionEffect`) and blast, rats shocked by them
+        // (`m_pShockEffectForRats`), chokedust's cloud and trail, the explosive bolt's blast
+        // (`DLC06_DaudArrowExplosion.m_pExplosionEffect`)
+        const DAUD_EFFECTS: &[(&str, &str)] = &[
+            ("arcmine_strike", "DLC06_VFX_Weapon.Effects.ArcMine.ArcMine_Strike"),
+            ("stunmine_strike", "DLC06_VFX_Weapon.Effects.ArcMine.ArcStunMine_Strike"),
+            ("arcmine_break", "DLC06_VFX_Weapon.Effects.ArcMine.ArcMine_Break"),
+            ("stunmine_break", "DLC06_VFX_Weapon.Effects.ArcMine.ArcStunMine_Break"),
+            ("arcmine_explosion", "DLC06_VFX_Weapon.Effects.ArcMine.ArcMine_Explosion"),
+            ("shock", "Vfx_GamePlay.WallLight.ps_shock_electrified"),
+            ("chokedust", "DLC06_VFX_Weapon.Effects.Chokedust.Chokedust_Explosion"),
+            ("chokedust_trail", "DLC06_VFX_Weapon.Effects.Chokedust.Chokedust_Trail"),
+            ("bolt_explosion", "vfx_characters.Effects.ps_TB_ArrowExplosion"),
         ];
         // the textures gameplay effects sample (`DarkVision_PMAT`, `PPG_DarkVisionFinal_Mat`)
         const GAME_TEXTURES: &[(&str, &str)] = &[
@@ -6085,7 +6132,7 @@ impl<'a> Cooker<'a> {
                 None => log::warn!("texture {path} not found"),
             }
         }
-        for (name, path) in GAME_EFFECTS {
+        for (name, path) in GAME_EFFECTS.iter().chain(if daud { DAUD_EFFECTS } else { &[] }) {
             let Some(obj) = self.assets.find(path) else {
                 log::debug!("effect {path} not found");
                 continue;
@@ -6117,8 +6164,17 @@ impl<'a> Cooker<'a> {
             ("bolt", "DLC06_WristBow.DLC06_Wrist_bolt_01"),
             ("bolt_sleep", "DLC06_WristBow.DLC06_Wrist_bolt_Sleep"),
             ("bolt_explosive", "DLC06_WristBow.DLC06_Wrist_Bolt_Explosive"),
+            // (his gadgets: the mines placed, chokedust thrown)
+            ("arcmine", "DLC06_ArcMine.DLC06_ArcMine"),
+            ("stunmine", "DLC06_ArcMine.DLC06_ArcMine"),
+            ("chokedust", "DLC06_FlashSmoke.DLC06_FlashSmoke"),
         ];
-        let daud = self.scene.name.to_ascii_lowercase().starts_with("dlc06_");
+        // (a mine's own look, by its slots: lethal or stunning (`m_pBaseMaterial`), armed
+        // (`m_StateMaterialIndex` 1: `m_pActiveMaterial`))
+        const PROP_MATERIALS: &[(&str, &[(usize, &str)])] = &[
+            ("arcmine", &[(0, "DLC06_ArcMine.DLC06_ArcMinePlayer_Lethal_Inst"), (1, "DLC06_ArcMine.DLC06_ArcMine_Armed_Inst")]),
+            ("stunmine", &[(0, "DLC06_ArcMine.DLC06_ArcMinePlayer_Stun_Inst"), (1, "DLC06_ArcMine.DLC06_ArcMine_Armed_Inst")]),
+        ];
         let props: Vec<(&str, &str)> = GAME_PROPS
             .iter()
             .map(|&(n, p)| DAUD_PROPS.iter().find(|d| daud && d.0 == n).copied().unwrap_or((n, p)))
@@ -6143,7 +6199,7 @@ impl<'a> Cooker<'a> {
             if (self.opts.force || !self.root.join(&file).exists()) && mf.write(&self.root.join(&file)).is_err() {
                 continue;
             }
-            let mats: Vec<u32> = d
+            let mut mats: Vec<u32> = d
                 .materials
                 .iter()
                 .map(|&m| match self.assets.resolve(&obj.pkg, m) {
@@ -6151,6 +6207,11 @@ impl<'a> Cooker<'a> {
                     None => 0,
                 })
                 .collect();
+            for (slot, mpath) in PROP_MATERIALS.iter().filter(|p| p.0 == *name).flat_map(|p| p.1.iter()) {
+                if let (Some(m), Some(o)) = (mats.get_mut(*slot), self.assets.find(mpath)) {
+                    *m = self.material(&o);
+                }
+            }
             let materials = d.sections.iter().map(|s| *mats.get(s.material as usize).unwrap_or(&0)).collect();
             let mesh = self.scene.meshes.len() as u32;
             self.scene.meshes.push(MeshRef { name: obj.path(), file, min, max, simple: Vec::new(), ..Default::default() });
@@ -7136,17 +7197,16 @@ fn cook_anim_set(set: &Obj, layout: &AnimLayout, path: &Path) -> Result<bool> {
 }
 
 /// A skeletal mesh's sockets (`Sockets`), relative to their bones in Bevy space.
-/// How far the AI hear a noise of an `EAINoiseLoudness` (the numbered levels are guesses: their
-/// table is native).
-fn noise_meters(n: &str) -> f32 {
-    match n {
-        n if n.ends_with('m') => n.trim_start_matches("EAINoiseLoudness").trim_end_matches('m').parse::<f32>().unwrap_or(10.0),
-        "EAINoiseLoudness1" => 5.0,
-        "EAINoiseLoudness2" => 10.0,
-        "EAINoiseLoudness3" => 20.0,
-        "EAINoiseLoudness4" => 30.0,
-        _ => 0.0,
+static NOISE_TABLE: std::sync::OnceLock<std::collections::BTreeMap<String, f32>> = std::sync::OnceLock::new();
+
+/// How far the AI hear a noise of an `EAINoiseLoudness` (`gamedata::noise_loudness`: the
+/// install's `DefaultAI.ini` table; the named "Nm" levels by their names without it).
+fn noise_meters(cooked: &Path, n: &str) -> f32 {
+    let table = NOISE_TABLE.get_or_init(|| upk::Package::open(&cooked.join("DishonoredGame.upk")).map(|g| gamedata::noise_loudness(cooked, &g)).unwrap_or_default());
+    if let Some(m) = table.get(n) {
+        return *m;
     }
+    n.strip_prefix("EAINoiseLoudness").and_then(|x| x.strip_suffix('m')).and_then(|x| x.parse::<f32>().ok()).unwrap_or(0.0)
 }
 
 /// A skeletal mesh's socket in mesh space, through its bind pose (a door's keyhole, a tap's
@@ -7347,6 +7407,10 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         ("UI_ItemIcons_Large", "items", ""),
         ("Startup", "itemsmall", "UI_ItemIcons_Small."),
         ("Startup", "icons", "UI_EquipmentIcons."),
+        // (and Daud's: The Knife of Dunwall's gadgets and powers, its items)
+        ("UI_EquipmentIcons_DLC06_SF", "icons", "UI_EquipmentIcons_DLC06."),
+        ("UI_ItemIcons_Small_DLC06_SF", "itemsmall", "UI_ItemIcons_Small_DLC06."),
+        ("UI_ItemIcons_Large_DLC06", "items", ""),
         // the mask's lens frame
         ("Startup", "effects", "AltScreen_Effects.SpyGlass"),
         ("UI_portraits_objectives", "portraits", ""),
@@ -7429,6 +7493,8 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         // (its challenge menu, in its menu map; its pause menu)
         ("L_DLC05_MainMenu_P", "UI_ChallengesMenu_DLC05."),
         ("UI_PauseMenu_DLC05_SF", "UI_PauseMenu_DLC05."),
+        // The Knife of Dunwall: Daud's wheel
+        ("UI_PowerWheel_DLC06_SF", ""),
     ] {
         // (the game's packages, or the DLC's)
         let path = std::iter::once(cooked.to_path_buf()).chain(crate::resolver::dlc_dirs(cooked)).map(|d| d.join(format!("{pkg_name}.upk"))).find(|p| p.exists());

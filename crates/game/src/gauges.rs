@@ -189,6 +189,7 @@ fn update_gauges(
     window: Query<&Window, With<PrimaryWindow>>,
     stats: Res<PlayerStats>,
     powers: Res<Powers>,
+    data: Res<crate::gamedata::Data>,
     mut meters: ResMut<Meters>,
     mut ui: ResMut<crate::ui_images::UiImages>,
     mut images: ResMut<Assets<Image>>,
@@ -229,7 +230,7 @@ fn update_gauges(
     // the icon of what the left hand holds, and its ammunition
     if m.icon != Some(powers.selected) {
         m.icon = Some(powers.selected);
-        let h = ui.file(&mut images, "icons", powers.selected.icon()).map(|(h, _)| h);
+        let h = ui.file(&mut images, "icons", powers.selected.icon_for(data.is_daud())).map(|(h, _)| h);
         for (_, _, _, _, _, _, _, im, _, is_icon) in &mut pieces {
             if let (true, Some(mut im)) = (is_icon, im) {
                 if let Some(h) = &h {

@@ -37,7 +37,7 @@ impl Weapon {
     pub fn of(p: Power) -> Option<Weapon> {
         match p {
             Power::Pistol | Power::ExplosiveBullet => Some(Weapon::Pistol),
-            Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt => Some(Weapon::Crossbow),
+            Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt => Some(Weapon::Crossbow),
             _ => None,
         }
     }

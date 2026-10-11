@@ -222,6 +222,12 @@ pub struct OpState {
     index: i32,
     and_seen: u64,
     paused: bool,
+    /// a switch's outputs turned off once fired (`bAutoDisableLinks`)
+    #[serde(default)]
+    off: u64,
+    /// when an event last fired (`ReTriggerDelay`)
+    #[serde(default)]
+    last: Option<f32>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -244,6 +250,60 @@ pub enum TaskState {
     Active,
     Completed,
     Failed,
+}
+
+#[cfg(test)]
+mod flow_tests {
+    use super::*;
+    use dhcook::format::{KInput, KOp, KOutput};
+
+    fn switch(class: &str, links: usize, props: &[(&str, KVal)]) -> Vm {
+        let mut g = Graph::default();
+        g.ops.push(KOp {
+            class: class.into(),
+            name: format!("{class}_0"),
+            inputs: vec![KInput { desc: "In".into(), ..Default::default() }, KInput { desc: "Reset".into(), ..Default::default() }],
+            outputs: (0..links).map(|i| KOutput { desc: format!("Link {}", i + 1), links: vec![(1 + i as u32, 0, 0.0)], linked: None }).collect(),
+            props: props.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
+            ..Default::default()
+        });
+        for i in 0..links {
+            g.ops.push(KOp { class: "SeqAct_Log".into(), name: format!("SeqAct_Log_{i}"), ..Default::default() });
+        }
+        Vm::new(Arc::new(g), &[])
+    }
+
+    #[test]
+    fn a_random_switch_with_auto_disable_never_repeats_until_reset() {
+        let mut vm = switch("SeqAct_RandomSwitch", 3, &[("LinkCount", KVal::Int(3)), ("bAutoDisableLinks", KVal::Bool(true))]);
+        let mut picked = Vec::new();
+        for _ in 0..3 {
+            vm.queue.clear();
+            vm.exec(0, 0);
+            picked.extend(vm.queue.iter().map(|q| q.0));
+        }
+        picked.sort();
+        assert_eq!(picked, vec![1, 2, 3]);
+        // all off: nothing more until Reset
+        vm.queue.clear();
+        vm.exec(0, 0);
+        assert!(vm.queue.is_empty());
+        vm.exec(0, 1);
+        vm.exec(0, 0);
+        assert_eq!(vm.queue.len(), 1);
+    }
+
+    #[test]
+    fn a_switch_with_auto_disable_fires_each_link_once() {
+        let mut vm = switch("SeqAct_Switch", 2, &[("LinkCount", KVal::Int(2)), ("bLooping", KVal::Bool(true)), ("bAutoDisableLinks", KVal::Bool(true))]);
+        let mut fired = Vec::new();
+        for _ in 0..4 {
+            vm.queue.clear();
+            vm.exec(0, 0);
+            fired.extend(vm.queue.iter().map(|q| q.0));
+        }
+        assert_eq!(fired, vec![1, 2]);
+    }
 }
 
 #[cfg(test)]
@@ -374,6 +434,11 @@ pub struct Vm {
     npc_seen: HashMap<Entity, (Mode, Alert, f32, bool)>,
     /// how many of Corvo's noises each character had heard (`DisSeqEvent_PlayerHeard`)
     npc_heard: HashMap<Entity, u32>,
+    /// those being assassinated (`DisSeqEvent_Assassinated` started for them), and whether
+    /// it has finished them
+    being_assassinated: HashMap<Entity, bool>,
+    /// someone hostile is fighting Corvo (an autosave waits for peace: `DIAT_PlayerInCombat`)
+    in_combat: bool,
     /// Corvo is in a rat
     in_rat: bool,
     /// the actors whose destruction the scripts were told of (`SeqEvent_Destroyed`)
@@ -656,6 +721,8 @@ impl Vm {
             hook_time: HashMap::new(),
             npc_seen: HashMap::new(),
             npc_heard: HashMap::new(),
+            being_assassinated: HashMap::new(),
+            in_combat: false,
             in_rat: false,
             destroyed: HashSet::new(),
             player_combat: false,
@@ -1036,10 +1103,18 @@ impl Vm {
             return false;
         }
         let max = self.pi(ev, "MaxTriggerCount").unwrap_or(1);
+        let retrigger = self.pf(ev, "ReTriggerDelay").unwrap_or(0.0);
+        let now = self.time;
         let s = &mut self.st[ev as usize];
         if s.disabled || max > 0 && s.fired >= max as u32 {
             return false;
         }
+        // (not again within `ReTriggerDelay` of its last firing: UE3's `SequenceEvent`, as
+        // roshan's r614/blink research notes it)
+        if retrigger > 0.0 && s.last.is_some_and(|t| now - t < retrigger) {
+            return false;
+        }
+        s.last = Some(now);
         s.fired += 1;
         if self.trace {
             let op = &self.g.ops[ev as usize];
@@ -1382,6 +1457,9 @@ impl Vm {
 
             // ---------------------------------------------------- flow control
             "SeqAct_Delay" => match input {
+                // (already counting, Start restarts it only with `bStartWillRestart`: off by
+                // the class default, so a second Start is ignored)
+                0 if !self.pb(op, "bStartWillRestart").unwrap_or(false) && self.latent.iter().any(|l| matches!(l, Latent::Delay { op: o, .. } if *o == op)) => {}
                 0 => {
                     let d = self.read_f(op, "Duration", "Duration", 1.0).max(0.0);
                     self.latent.retain(|l| !matches!(l, Latent::Delay { op: o, .. } if *o == op));
@@ -1425,6 +1503,7 @@ impl Vm {
                 let count = self.pi(op, "LinkCount").unwrap_or(opd.outputs.len() as i32).max(1);
                 let inc = self.pi(op, "IncrementAmount").unwrap_or(1);
                 let looping = self.pb(op, "bLooping").unwrap_or(false);
+                let auto = self.pb(op, "bAutoDisableLinks").unwrap_or(false);
                 let from_var = self.read(op, "Index").iter().find_map(|v| v.as_f32()).map(|f| f as i32);
                 let s = &mut self.st[op as usize];
                 if !s.init {
@@ -1441,13 +1520,40 @@ impl Vm {
                     next = if looping { 1 } else { count + 1 };
                 }
                 s.index = next;
-                if idx >= 1 && idx <= count {
+                // (an output fired with `bAutoDisableLinks` is off from then on)
+                let bit = 1u64 << (idx - 1).clamp(0, 63);
+                if idx >= 1 && idx <= count && s.off & bit == 0 {
+                    if auto {
+                        s.off |= bit;
+                    }
                     self.fire(op, (idx - 1) as usize);
                 }
             }
             "SeqAct_RandomSwitch" => {
-                let n = self.pi(op, "LinkCount").unwrap_or(opd.outputs.len() as i32).max(1) as u32;
-                self.fire(op, (rand::random::<u32>() % n) as usize);
+                // one of the outputs still on (`bAutoDisableLinks` turns each off as it fires;
+                // Reset, or looping once all are off, turns them back on), as roshan's
+                // r614/blink research found the original does
+                let n = self.pi(op, "LinkCount").unwrap_or(opd.outputs.len() as i32).clamp(1, 64) as u32;
+                let auto = self.pb(op, "bAutoDisableLinks").unwrap_or(false);
+                let looping = self.pb(op, "bLooping").unwrap_or(false);
+                let s = &mut self.st[op as usize];
+                if input == 1 {
+                    s.off = 0;
+                    return;
+                }
+                let all = if n >= 64 { u64::MAX } else { (1u64 << n) - 1 };
+                if looping && s.off & all == all {
+                    s.off = 0;
+                }
+                let on: Vec<u32> = (0..n).filter(|i| s.off & (1u64 << i) == 0).collect();
+                if on.is_empty() {
+                    return;
+                }
+                let pick = on[(rand::random::<u32>() as usize) % on.len()];
+                if auto {
+                    s.off |= 1u64 << pick;
+                }
+                self.fire(op, pick as usize);
             }
             "SeqAct_AndGate" => {
                 let need = self.linked_inputs[op as usize].max(1);
@@ -1773,11 +1879,11 @@ impl Vm {
                 self.fire(op, 0);
             }
             "DisSeqAct_AINoise" => {
-                let loud = self.ps(op, "m_eNoiseLoudness").and_then(|l| l.trim_start_matches("EAINoiseLoudness").parse::<usize>().ok()).unwrap_or(1);
-                let radius = [3.0, 6.0, 10.0, 16.0, 24.0, 40.0][loud.min(5)];
+                // (how far: the original's loudness table, `GameData::noise_loudness`)
+                let loudness = self.ps(op, "m_eNoiseLoudness").unwrap_or_else(|| "EAINoiseLoudness1".into());
                 let combat = self.ps(op, "m_eNoiseContext").is_some_and(|c| c.contains("Danger"));
                 let (maker, at) = (self.read(op, "NoiseMaker"), self.read(op, "NoiseLocation"));
-                self.ai_fx.push(crate::script_world::AiFx::Noise { maker, at, radius, combat });
+                self.ai_fx.push(crate::script_world::AiFx::Noise { maker, at, loudness, combat });
                 self.fire(op, 0);
             }
             "DisSeqAct_AIStartDistraction" => {
@@ -2338,10 +2444,17 @@ impl Vm {
                 self.fire(op, 0);
             }
             "DisSeqAct_AutoSave" => {
-                // the save goes through: Out, then Accepted
-                self.effects.push(Effect::AutoSave);
+                // the save goes through (Out, then Accepted), unless Corvo is fighting: then
+                // it is dropped (Denied), but for a mission's start or `m_bEvenInCombat` (as
+                // roshan's r614/blink research decoded the original)
+                let forced = self.pb(op, "m_bMissionStart").unwrap_or(false) || self.pb(op, "m_bEvenInCombat").unwrap_or(false);
                 self.fire(op, 0);
-                self.fire(op, 1);
+                if self.in_combat && !forced {
+                    self.fire_desc(op, "Denied");
+                } else {
+                    self.effects.push(Effect::AutoSave);
+                    self.fire(op, 1);
+                }
             }
             "DisSeqAct_OpenCraftsmanStore" => {
                 let tweak = self.ps(op, "m_pTweaks").unwrap_or_default();
@@ -4703,8 +4816,10 @@ fn world_events(
     npcs: Query<(Entity, &Npc, &FromSpawner, &Transform), Without<Player>>,
     (cam, rapier): (Query<&GlobalTransform, With<crate::player::PlayerCamera>>, bevy_rapier3d::prelude::ReadRapierContext),
     (journal, stats, bites, hosts): (Res<crate::journal::Journal>, Res<crate::gameplay::PlayerStats>, Res<crate::swarm::RatBites>, Query<&crate::possession::Host, Without<Npc>>),
+    assassin_marks: Query<(Has<crate::npc::AssassinClip>, Has<crate::npc::DropKilled>)>,
 ) {
     let vm = &mut *vm;
+    vm.in_combat = npcs.iter().any(|(_, n, _, _)| !n.is_down() && n.hostile() && n.mode == Mode::Combat);
     // Corvo going into a rat and out (`DisSeqEvent_RatPossess`: the Lighthouse's sewers)
     let rat = possession.host.and_then(|h| hosts.get(h).ok()).is_some_and(|h| !h.fish && !h.rooted);
     if rat != vm.in_rat {
@@ -4977,6 +5092,22 @@ fn world_events(
             vm.actor_event(actor, &["DisSeqEvent_PawnSighted"], OutSel::Index(0), who.clone());
         }
         // and heard (`DisSeqEvent_PlayerHeard`: the Bridge's guards, the kennel's dogs)
+        // assassinated (`DisSeqEvent_Assassinated`): Started as they go into their part of the kill
+        // (an assassination, a finisher, a drop kill), whatever they knew; Finished as it kills
+        // them (as roshan's r614/blink research found the original fires it)
+        let (in_kill, dropped) = assassin_marks.get(e).unwrap_or((false, false));
+        if in_kill || dropped {
+            if !vm.being_assassinated.contains_key(&e) {
+                vm.being_assassinated.insert(e, false);
+                vm.actor_event(actor, &["DisSeqEvent_Assassinated"], OutSel::Desc("Started"), who.clone());
+            }
+            if npc.mode == Mode::Dead && vm.being_assassinated.insert(e, true) == Some(false) {
+                vm.actor_event(actor, &["DisSeqEvent_Assassinated"], OutSel::Desc("Finished"), who.clone());
+            }
+        } else if !npc.is_down() {
+            // (a kill broken off: another may start)
+            vm.being_assassinated.remove(&e);
+        }
         let heard = vm.npc_heard.insert(e, npc.heard_player).unwrap_or(npc.heard_player);
         if npc.heard_player > heard && !npc.is_down() {
             vm.actor_event(actor, &["DisSeqEvent_PlayerHeard"], OutSel::Index(0), who.clone());
@@ -5008,9 +5139,6 @@ fn world_events(
                 Mode::Dead => {
                     vm.actor_event(actor, &["SeqEvent_Death"], OutSel::Index(0), who.clone());
                     vm.actor_event(actor, &["DisSeqEvent_NPCIncapacitated"], OutSel::Desc("Dead"), who.clone());
-                    if alert0 == Alert::Unaware {
-                        vm.actor_event(actor, &["DisSeqEvent_Assassinated"], OutSel::Index(0), who.clone());
-                    }
                 }
                 Mode::Unconscious => {
                     vm.actor_event(actor, &["DisSeqEvent_NPCIncapacitated"], OutSel::Desc("Asleep"), who.clone());

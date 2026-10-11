@@ -362,12 +362,16 @@ fn spawn_arms(
                 (Power::Crossbow, "crossbow"),
                 (Power::SleepDart, "crossbow"),
                 (Power::IncendiaryBolt, "crossbow"),
+                (Power::ExplosiveBolt, "crossbow"),
                 (Power::Pistol, "pistol"),
                 (Power::ExplosiveBullet, "pistol"),
                 (Power::Heart, "heart"),
                 (Power::Grenade, "grenade"),
                 (Power::StickyGrenade, "grenade"),
                 (Power::SpringRazor, "springrazor"),
+                (Power::ArcMine, "arcmine"),
+                (Power::StunMine, "stunmine"),
+                (Power::Chokedust, "chokedust"),
             ] {
                 let Some(parts) = a.props.get(prop) else { continue };
                 let (hand, at) = if prop == "crossbow" { wrist.unwrap_or((hand, at)) } else { (hand, at) };
@@ -789,10 +793,10 @@ fn animate_arms(
             Power::Empty | Power::Heart => c.switch,
             Power::Possess => c.possess,
             Power::DevouringSwarm => c.swarm,
-            Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt => c.crossbow_fire,
+            Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt => c.crossbow_fire,
             Power::Pistol | Power::ExplosiveBullet => c.pistol_fire,
-            Power::Grenade | Power::StickyGrenade => c.grenade_throw,
-            Power::SpringRazor => c.razor_place,
+            Power::Grenade | Power::StickyGrenade | Power::Chokedust => c.grenade_throw,
+            Power::SpringRazor | Power::ArcMine | Power::StunMine => c.razor_place,
         };
         if let Some(cl) = cl {
             anim.restart_overlay(cl, false, 1.0, 0.08);
@@ -807,7 +811,7 @@ fn animate_arms(
     if powers.selected != st.selected {
         st.selected = powers.selected;
     }
-    let bow = matches!(powers.selected, Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt);
+    let bow = matches!(powers.selected, Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt);
     let idle = if ranged { if bow { c.wristbow_idle.or(c.gadgets_idle) } else { c.gadgets_idle } } else { c.powers_idle };
     if anim.overlay_finished() || !(anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision)) {
         match idle {
@@ -828,10 +832,10 @@ fn cast_clip(p: Power) -> &'static str {
         Power::DarkVision | Power::Empty | Power::Heart => "Powers_Switch",
         Power::Possess => "Powers_Cast_Possession_In",
         Power::DevouringSwarm => "Powers_Cast_Swarm",
-        Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt => "Crossbow_Fire",
+        Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt => "Crossbow_Fire",
         Power::Pistol | Power::ExplosiveBullet => "Pistol_Fire",
-        Power::Grenade | Power::StickyGrenade => "Gadgets_Grenade_Deploy",
-        Power::SpringRazor => "Gadgets_SpringRazor_Deploy",
+        Power::Grenade | Power::StickyGrenade | Power::Chokedust => "Gadgets_Grenade_Deploy",
+        Power::SpringRazor | Power::ArcMine | Power::StunMine => "Gadgets_SpringRazor_Deploy",
     }
 }
 

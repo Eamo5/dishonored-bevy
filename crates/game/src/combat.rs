@@ -53,6 +53,11 @@ const VERSUS_TIME: f32 = 1.6;
 /// How near in time the two blows must land to lock (s: `m_fVersusZoneMaxTime` is 0.07 on
 /// Corvo's attack zones; widened for the guards' coarser blow timing).
 const VERSUS_ZONE: f32 = 0.12;
+/// When Corvo's blow lands into his swing (s): in the last `m_fDamageZoneMaxTime` (0.05 s) of
+/// his attack clips' `DishonoredNotify_AttackZone` (`Sword_Ready_Attack{Right,Left}_A_Small` end
+/// at 0.346 / 0.343 s), as the original's zone handler opens it (roshan's r614/blink research
+/// decoded it and measured the blow 0.30-0.35 s after the press).
+const PLAYER_HIT: f32 = 0.29;
 
 /// Can these two blows lock? A guard's blade blow (not a kick or a leap) landing within the
 /// zone of Corvo's, each facing the other (Corvo within `m_fVersusAngle` 20 degrees of it, it
@@ -230,6 +235,9 @@ pub struct Sword {
     pub hold: f32,
     pub blocking: bool,
     pub block_t: f32,
+    /// after a tap parry, a plain block for a while (`m_fForceBlockTimeOnPerfectParryTap`):
+    /// no other parry until it ends
+    pub forced_block: f32,
     pub parry_flash: f32,
     pub recoil: f32,
     /// drop assassinations made (the arms play each), and the side the victim was taken from
@@ -450,6 +458,7 @@ fn sword_input(
     }
     let dt = time.delta_secs();
     sword.parry_flash = (sword.parry_flash - dt).max(0.0);
+    sword.forced_block = (sword.forced_block - dt).max(0.0);
     sword.recoil = (sword.recoil - dt).max(0.0);
     // held by a weeper: attacks are spent struggling free
     if let Ok(mut g) = grabbed_q.single_mut() {
@@ -592,7 +601,7 @@ fn sword_input(
     stats.adrenaline = stats.adrenaline.min(attrs.adrenaline_max);
     if sword.swing > 0.0 {
         sword.swing += dt * attrs.melee_rate;
-        if !sword.hit_done && sword.swing > 0.13 {
+        if !sword.hit_done && sword.swing > PLAYER_HIT {
             sword.hit_done = true;
             rats.write(crate::swarm::KillRats { at: eye + fwd * 1.5, radius: 0.9, by_player: true, source: eye });
             if let Some((e, _)) = nearest_target(eye, fwd, 2.4, 0.55, npcs.iter()) {
@@ -917,7 +926,7 @@ fn receive_hits(
             continue;
         }
         // Corvo's own blow about to land: the blades lock
-        if !h.kick && !h.push && versus.npc.is_none() && sword.swing > 0.0 && !sword.hit_done && 0.13 - sword.swing < VERSUS_ZONE {
+        if !h.kick && !h.push && versus.npc.is_none() && sword.swing > 0.0 && !sword.hit_done && PLAYER_HIT - sword.swing < VERSUS_ZONE {
             if let Ok((mut npc, nt)) = npcs.get_mut(h.npc) {
                 if can_lock(&npc, nt, pt.translation, fwd, |d| d.abs() < 0.1) {
                     sword.hit_done = true;
@@ -951,9 +960,12 @@ fn receive_hits(
         if sword.blocking && facing {
             noise.write(Noise { pos: pt.translation, radius: 14.0, combat: true });
             sfx.write(PostEvent::named("Snd_Imp_Sword_vs_Sword_ak", None));
-            if sword.block_t < 0.2 {
+            // (a tap parry forces a plain block for 0.3 s after: `DishonoredPlayerPawn`'s
+            // block handler, as roshan's r614/blink research reads it)
+            if sword.block_t < 0.2 && sword.forced_block <= 0.0 {
                 stagger.write(NpcStagger { npc: h.npc, secs: 1.8, parried: true });
                 sword.parry_flash = 0.25;
+                sword.forced_block = 0.3;
                 msgs.push("Parried!");
             } else {
                 stagger.write(NpcStagger { npc: h.npc, secs: 0.5, parried: false });
@@ -962,7 +974,12 @@ fn receive_hits(
             continue;
         }
         let plague = npcs.get(h.npc).is_ok_and(|(n, _)| n.pawn.to_ascii_lowercase().contains("weeper"));
-        let damage = if plague { (h.damage - attrs.plague_damage_reduction).max(0.0) } else { h.damage };
+        let mut damage = if plague { (h.damage - attrs.plague_damage_reduction).max(0.0) } else { h.damage };
+        // a blow from behind his view halves (`DishonoredPlayerPawn.m_fOffscreenMeleeDamageReduction`
+        // 0.5 on every difficulty; at least 1: found by roshan's r614/blink research)
+        if damage > 0.0 && fwd.dot(h.from - pt.translation) < 0.0 {
+            damage = (damage * (1.0 - 0.5)).round().max(1.0);
+        }
         if damage <= 0.0 {
             continue;
         }

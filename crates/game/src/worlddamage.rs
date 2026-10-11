@@ -148,6 +148,11 @@ pub fn hit_type(kind: HitKind, dist: f32, attrs: &Attrs) -> &'static str {
         HitKind::Impact => "DisDamageType_Impact",
         HitKind::SpringRazor => "DisDamageType_SpringRazor",
         HitKind::WallOfLight => "DisDamageType_WallOfLight",
+        // (The Knife of Dunwall's)
+        HitKind::ExplosiveBolt => "DisDLC06DamageType_ExplosiveBoltExplosion",
+        HitKind::ArcMine => "DisDLC06DamageType_ArcMineShot",
+        HitKind::StunMine => "DisDLC06DamageType_ArcMineStunShot",
+        HitKind::Chokedust => "DisDLC06DamageType_SmokeGrenadeExplosion",
         _ => "DishonoredDamageType",
     }
 }

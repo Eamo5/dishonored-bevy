@@ -335,11 +335,11 @@ fullscreen display, vertical sync and the crosshair.
   then `..OfChaining` up to `m_ParryChainsAllowed` in a row, a parry breaking their guard at
   `m_BlockBreakRate_Min`..`Max`; a character off balance from Corvo's parry dies to the
   counter (a fatality). A character's blow keeps its clip's timing: the clip plays as
-  authored, the blow lands early in its attack zone (`DishonoredNotify_AttackZone`, its
-  `m_fDamageZoneMaxTime` 0.12 s) and the attack ends once it may be broken off
-  (`DishonoredNotify_AttackInterruptable`). A City Watch guard's short blow lands about 0.55 s
-  in, his long one about 0.85 s; a fast one about 0.2 s. Moves without a zone keep their fitted
-  timings. A character going down lets its sword fall at its clip's `DisNotify_DropItem` (the
+  authored. The blow lands in the last `m_fDamageZoneMaxTime` (0.12 s) of its attack zone
+  (`DishonoredNotify_AttackZone`), where the original's zone handler opens the damage, as roshan's
+  r614/blink research decoded it. The attack ends once it may be broken off
+  (`DishonoredNotify_AttackInterruptable`). Corvo's own blow lands 0.29 s into his swing: his A
+  swings' zones end at 0.35 s, less his 0.05 s. Moves without a zone keep their fitted timings. A character going down lets its sword fall at its clip's `DisNotify_DropItem` (the
   deaths', the assassinations', the finishers'), else soon after falling. The sword becomes a
   loose body that lands beside it. His pistol's bullet (`Twk_Proj_BulletUpgraded`) deals 20, ×1.5
   within 9 m, and kills with a head shot (`m_bKillOnHeadshot`); a crossbow bolt deals the
@@ -1114,8 +1114,79 @@ fullscreen display, vertical sync and the crosshair.
   - *Shaders*: the DLCs' shader caches (`DLC\PCConsole\DLCnn\RefShaderCache-PC-D3D-SM3.upk`)
     join the base game's in the shader library (802 more material shader maps), so the DLCs'
     own materials draw with their original shaders.
-  The rest of DLC06 (its other maps, gadgets, store and campaign flow) waits for the DLC's
-  maps to be cooked. `DH_SUMMON_LOG`.
+  - *Gadgets*: The Knife of Dunwall's four ammunition types follow Corvo's eight
+    (`eDisAmmoType`: explosive bolts, arc mines, chokedust, stun mines), carried up to Daud's
+    own capacities (`ExplosiveArrowCapacity`, `ArcMineCapacity`, `FlashSmokeCapacity`,
+    `ArcMineStunCapacity`). Their numbers come from his package's tweaks.
+    - Explosive bolts (`DLC06_Proj_WristBolt_Explosive`) fly at half a bolt's drop and stick.
+      After `m_fDetonationTimer` (0.4 s) they go off (`DLC06_DaudArrowExplosion`: 5 m reach,
+      full within 2 m, 50 damage, 50 more to the one they are in).
+    - Chokedust (`DLC06_Proj_ChokeDust`, from Daud's grenade hand) is thrown and cooked like a
+      grenade. It leaves a 3 m cloud for 3 s. Whoever is caught in it chokes for 4 s, unharmed
+      (`m_bCannotKillNPC`), then goes looking for whoever threw it. Rats within 2 m die.
+    - Arc mines and stun mines (`DisDLC06Tweaks_ArcMinePlaced`) are placed on any surface and
+      arm in 2 s. They strike anyone outside Daud's factions (`m_FriendlyFactions`) who comes
+      into their cylinder (5.12 m across, 2.56 m up and down) and in sight: twice, 1 s apart,
+      the lightning drawn from the mine to the one struck. An arc mine's dead are ash
+      (`m_bAshDeadPawns`); a stun mine's victims fall asleep, limp (`m_bPutToSleep`,
+      `m_bInstaRagdoll`). Spent, the mine breaks. While armed and unspent it can be picked
+      back up.
+    - Keys 1-0 follow `DefaultUI.ini`'s `m_AutoAssign_KeyboardItemOrder`, Daud's items
+      included (its arc mine set at `[29]`, so last). The wheel is the DLC's own movie
+      (`UI_PowerWheel_DLC06`, `WheelHandler_DLC06`'s orders and illustrations). The icons are
+      `UI_EquipmentIcons_DLC06` and `UI_ItemIcons_Small_DLC06`, and the names are his
+      ("Transversal", "Void Gaze").
+  The rest of DLC06 (its other maps, store and campaign flow) waits for the DLC's maps to be
+  cooked. `DH_SUMMON_LOG`; `DH_GADGET_LOG` (chokedust clouds and who they catch); `DH_PFX_SLOW=<n>`
+  (every effect n times slower, to see the briefest: an arc mine's 0.1 s lightning).
+
+## Rules from roshan's r614/blink research
+
+[r614/blink](https://github.com/r614/blink), by roshan (r614), is another Rust/Bevy port of
+Dishonored. It is GPL-3.0, and none of its code is used here. Its research notes, decoded from the
+original executable and measured in the running game, pointed at these rules. Each was checked
+against the install's own data where it carries them, then implemented independently:
+
+- **Kismet flow.** A Switch or RandomSwitch with `bAutoDisableLinks` turns each output off as it
+  fires. A RandomSwitch picks only among the outputs still on, until Reset (or, looping, once all are
+  off). Without this, Boyle's mansion could leave two sisters looking guilty.
+  - Events wait `ReTriggerDelay` before firing again; the cooker now merges the class defaults
+    (`SeqEvent_Touch` 0.1 s), as it already did for `MaxTriggerCount`.
+  - A Delay that is running ignores a second Start unless `bStartWillRestart`, which defaults to off
+    (the class default, read from `Engine.upk`).
+- **`DisSeqEvent_Assassinated`.** "Started" fires as the victim goes into its part of an
+  assassination, finisher or drop kill, whatever it knew. "Finished" fires as the kill lands. It used
+  to fire on any unaware death, so a crossbow kill counted as a drop kill in the Drop Attack trial.
+- **Hearing.** How far a noise carries comes from `DefaultAI.ini`'s
+  `[DisAINoiseManager] m_LoudnessDistanceArray`, by `EAINoiseLoudness`: whisper 3 m, the numbered
+  levels 5, 15, 30 and 60 m. It is cooked into the game data for the scripts' noises and into maps
+  for impacts.
+- **Jumping and falling.** Corvo falls at twice the world's 1500 uu/s², which is how the original's
+  800 uu/s `JumpZ` rises 1.07 m and lands after 0.533 s. A fall hurts from
+  `MaxSpeedBeforeFallingDamage` (22.5 m/s) and kills at `MaxSpeedBeforeFallingDeath` (29 m/s), in
+  proportion between (Agility raises both). Agility's power jump uses the original numbers unscaled.
+- **Melee defence.** A blow from behind Corvo's view does half damage
+  (`m_fOffscreenMeleeDamageReduction` 0.5, at least 1). A tap parry forces a plain block for 0.3 s,
+  with no second parry until it ends.
+- **The pistol.**
+  - A bullet does the pistol's `RangedDamage` plus its own `m_fDamage` (10 + 20).
+  - Its range bands count from where it starts, 1.5 m ahead of the eye.
+  - It goes through the first person: the next in line takes `m_fPostPiercingDamageRatio` (half).
+- **Possession.** Anyone not choked can be possessed (`Twk_Possessable_BaseNPC.m_AwarenessSettings`),
+  combat included. The target is chosen with the angle weighted ten times the distance, plus its
+  priority: combatants over civilians over animals.
+- **Melee timing.** A blow lands where the original's zone handler opens the damage: in the last
+  `m_fDamageZoneMaxTime` of its clip's `DishonoredNotify_AttackZone`. That is 0.29 s into Corvo's
+  swing (blink measured 0.30–0.35 s).
+- **Walls of light.** One shocks Corvo for its `m_Damage` (100) as he touches it, rather than
+  killing him outright, so health upgrades can survive it. While Bend Time stops the world it can be
+  walked through.
+- **Autosaves.** A level script's autosave is denied while Corvo is fighting, unless it is a
+  mission's start or `m_bEvenInCombat`.
+- **Physics volumes** (`zones.rs`). A `PhysicsVolume`'s pain (`bPainCausing`: `DamagePerSec` every
+  `PainInterval`, and on entry) and push (`ZoneVelocity`: all of it falling, a little walking) now
+  apply. These are Boyle's spiked fences, which hurt and shove Corvo off. The volume he is in is the
+  highest `Priority` one around his centre.
 
 ## Parity audit status
 

@@ -67,6 +67,11 @@ pub fn ammo_icon(ty: u8) -> Option<&'static str> {
         5 => "SpringRazor_Small",
         6 => "CorvoGrenade_Small",
         7 => "CorvoStickyGrenade_Small",
+        // (Daud's: `UI_ItemIcons_Small_DLC06`)
+        8 => "DLC06_ExplosiveBolt_Small",
+        9 => "DLC06_ArcMine_Small",
+        10 => "DLC06_ChokeDust_Small",
+        11 => "DLC06_ArcMineStun_Small",
         _ => return None,
     })
 }

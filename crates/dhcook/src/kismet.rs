@@ -622,9 +622,10 @@ pub fn cook(levels: &[Arc<Package>], refs: &HashMap<ActorKey, KActor>) -> Kismet
         }
         // ammunition set, given or taken (type in the original's `eDisAmmoType` order:
         // bullets, explosive bullets, bolts, sleep darts, incendiary bolts, springrazors,
-        // grenades, sticky grenades; amount)
+        // grenades, sticky grenades; The Knife of Dunwall's explosive bolts, arc mines,
+        // chokedust, stun mines; amount)
         if op.class == "DisSeqAct_ModifyAmmo" {
-            const TYPES: [&str; 8] = ["Bullet", "Bullet_Explosive", "Arrow", "Arrow_Sleep", "Arrow_Flare", "SpringRazor", "Grenade", "StickyGrenade"];
+            const TYPES: [&str; 12] = ["Bullet", "Bullet_Explosive", "Arrow", "Arrow_Sleep", "Arrow_Flare", "SpringRazor", "Grenade", "StickyGrenade", "Arrow_Explosive", "ArcMine", "FlashSmoke", "ArcMineStun"];
             let list: Vec<KVal> = struct_array(&pkg, &props, "m_Ammo")
                 .iter()
                 .filter_map(|e| {
