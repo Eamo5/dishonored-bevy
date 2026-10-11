@@ -20,6 +20,7 @@ impl Plugin for KeyholePlugin {
             .add_systems(OnEnter(GameState::InGame), (|mut p: ResMut<Peek>| *p = Peek::default(), spawn_mask))
             .add_systems(Update, mark_doors.run_if(in_state(GameState::InGame)))
             .add_systems(Update, keyhole_input.after(crate::interact::FocusSet).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, keyhole_fade.after(keyhole_input).run_if(in_state(GameState::InGame)))
             .add_systems(Update, keyhole_view.after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
     }
 }
@@ -44,7 +45,21 @@ pub struct Peek {
     hold: f32,
     /// this press went to the keyhole: its release opens nothing
     pub consumed: bool,
+    /// the keyhole about to be looked through (the view changes under the fade)
+    pending: Option<(usize, Vec3, f32)>,
+    /// the fade (seconds into it, going to the keyhole or leaving it)
+    fade: Option<(f32, bool)>,
 }
+
+/// The fades (as roshan's r614/blink research timed them): to black over 0.2 s, the view through
+/// the keyhole from 0.3 s; leaving, back from black over 0.3 s.
+const FADE_IN: f32 = 0.2;
+const SWITCH: f32 = 0.3;
+const FADE_BACK: f32 = 0.2;
+const FADE_OUT: f32 = 0.3;
+
+#[derive(Component)]
+struct Fade;
 
 #[derive(Component)]
 struct Mask;
@@ -76,6 +91,14 @@ fn spawn_mask(mut commands: Commands, mut ui: ResMut<crate::ui_images::UiImages>
         Some(images.add(out))
     });
     let black = Color::BLACK;
+    commands.spawn((
+        Fade,
+        Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() },
+        BackgroundColor(Color::BLACK.with_alpha(0.0)),
+        Pickable::IGNORE,
+        GlobalZIndex(0),
+        DespawnOnExit(GameState::InGame),
+    ));
     commands
         .spawn((
             Mask,
@@ -134,7 +157,11 @@ fn keyhole_input(
             p.locked = false;
             set_vis(&mut mask, Visibility::Hidden);
             used.write(Interaction::Keyhole { instance: k.instance, used: false });
+            peek.fade = Some((0.0, false));
         }
+        return;
+    }
+    if peek.pending.is_some() {
         return;
     }
     if keys.just_pressed(use_key) {
@@ -160,14 +187,62 @@ fn keyhole_input(
             // through the door, away from Corvo
             let through = if n.dot(Vec3::from(k.center) - pt.translation) >= 0.0 { n } else { -n };
             let yaw = (-through.x).atan2(-through.z);
-            peek.at = Some((kd.0, through, yaw));
+            // (the view changes under the fade: `keyhole_fade`)
+            peek.pending = Some((kd.0, through, yaw));
+            peek.fade = Some((0.0, true));
             peek.consumed = true;
             p.locked = true;
             p.velocity = Vec3::ZERO;
-            p.yaw = yaw;
-            p.pitch = 0.0;
-            set_vis(&mut mask, Visibility::Inherited);
-            used.write(Interaction::Keyhole { instance: k.instance, used: true });
+        }
+    }
+}
+
+/// The fades to and from the keyhole, and the view's change under them.
+#[allow(clippy::type_complexity)]
+fn keyhole_fade(
+    time: Res<Time>,
+    level: Option<Res<LevelInfo>>,
+    mut peek: ResMut<Peek>,
+    mut player: Query<&mut Player>,
+    mut nodes: ParamSet<(Query<&mut BackgroundColor, With<Fade>>, Query<&mut Visibility, With<Mask>>)>,
+    mut used: MessageWriter<Interaction>,
+) {
+    let Some((t, going)) = peek.fade else { return };
+    let t = t + time.delta_secs();
+    let alpha = if going {
+        if t < FADE_IN {
+            t / FADE_IN
+        } else if t < SWITCH {
+            1.0
+        } else {
+            1.0 - ((t - SWITCH) / FADE_BACK).min(1.0)
+        }
+    } else {
+        1.0 - (t / FADE_OUT).min(1.0)
+    };
+    for mut c in nodes.p0().iter_mut() {
+        c.0 = Color::BLACK.with_alpha(alpha.clamp(0.0, 1.0));
+    }
+    if going && t >= SWITCH {
+        if let Some((i, through, yaw)) = peek.pending.take() {
+            peek.at = Some((i, through, yaw));
+            if let Ok(mut p) = player.single_mut() {
+                p.yaw = yaw;
+                p.pitch = 0.0;
+            }
+            for mut v in nodes.p1().iter_mut() {
+                *v = Visibility::Inherited;
+            }
+            if let Some(k) = level.as_ref().and_then(|l| l.scene.keyholes.get(i)) {
+                used.write(Interaction::Keyhole { instance: k.instance, used: true });
+            }
+        }
+    }
+    let end = if going { SWITCH + FADE_BACK } else { FADE_OUT };
+    peek.fade = (t < end).then_some((t, going));
+    if peek.fade.is_none() {
+        for mut c in nodes.p0().iter_mut() {
+            c.0 = Color::BLACK.with_alpha(0.0);
         }
     }
 }

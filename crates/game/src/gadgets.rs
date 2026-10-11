@@ -703,10 +703,15 @@ fn fly_grenades(
         g.fuse -= dt;
         if g.fuse <= 0.0 {
             let b = g.blast;
+            // (one sunk into a wall goes off just out of it)
+            let at = match g.stuck {
+                Some((w, off)) if npcs.get(w).is_err() => t.translation + off,
+                _ => t.translation,
+            };
             if g.kind == HitKind::Chokedust {
-                clouds.write(ChokeDust { at: t.translation, radius: b[0], secs: b[4] });
+                clouds.write(ChokeDust { at, radius: b[0], secs: b[4] });
             } else {
-                blasts.write(Explosion { at: t.translation, radius: b[0], full: b[1], damage: b[4], effect: "grenade", player: Some([b[2], b[3]]), kind: g.kind });
+                blasts.write(Explosion { at, radius: b[0], full: b[1], damage: b[4], effect: "grenade", player: Some([b[2], b[3]]), kind: g.kind });
                 // (stuck to someone: `m_fAttachedDamage` 75 more to them)
                 if let Some((who, _)) = g.stuck.filter(|(w, _)| npcs.get(*w).is_ok()) {
                     hits.write(NpcHit { npc: who, damage: 75.0, kind: g.kind, from: t.translation });
@@ -743,8 +748,10 @@ fn fly_grenades(
         if let Some((hit, h)) = ctx.cast_ray_and_get_normal(t.translation, step / len, len + 0.06, true, filter) {
             t.translation = h.point + h.normal * 0.06;
             if g.sticky {
-                // sticks to what it hits: a person carries it
-                g.stuck = Some(npcs.get(hit).map(|(_, nt)| (hit, t.translation - nt.translation)).unwrap_or((hit, Vec3::ZERO)));
+                // sticks to what it hits, sunk 5 uu into it (as roshan's r614/blink research found):
+                // a person carries it; on the world it keeps how far out its blast starts
+                t.translation = h.point - h.normal * 0.05;
+                g.stuck = Some(npcs.get(hit).map(|(_, nt)| (hit, t.translation - nt.translation)).unwrap_or((hit, h.normal * 0.11)));
                 if npcs.get(hit).is_err() {
                     g.vel = Vec3::ZERO;
                 }
@@ -1231,7 +1238,7 @@ mod tests {
         let mut sticky = grenade(None);
         sticky.kind = HitKind::StickyGrenade;
         sticky.sticky = true;
-        sticky.stuck = Some((wall, Vec3::ZERO));
+        sticky.stuck = Some((wall, Vec3::Y * 0.11));
         let pose = Transform::from_translation(Vec3::new(2.0, 3.0, 4.0)).with_rotation(Quat::from_rotation_y(0.7));
         let razor = Razor { armed: 0.3, triggered: Some(0.2), mine: Some(MineKind::Stun), shots: 1, wait: 0.4 };
         let saved = GadgetsSave::capture([(attached, &enemy, &pose), (carried, &returned, &pose), (fixed, &sticky, &pose)], [(&razor, &pose)], [(owner, 17)], Some(carried));
@@ -1261,7 +1268,7 @@ mod tests {
                     assert_eq!(g.owner, Some(new_owner));
                     assert_eq!(g.stuck, Some((new_owner, Vec3::Y)));
                 }
-                HitKind::StickyGrenade => assert_eq!(g.stuck, Some((Entity::PLACEHOLDER, Vec3::ZERO))),
+                HitKind::StickyGrenade => assert_eq!(g.stuck, Some((Entity::PLACEHOLDER, Vec3::Y * 0.11))),
                 HitKind::Explosion => {
                     assert_eq!(e, held);
                     assert!(g.throwback);

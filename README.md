@@ -1290,6 +1290,8 @@ against the install's own data where it carries them, then implemented independe
     2.3 m.
     - Up to 1.2 m is an instant step-up; above that a 0.7 s climb to 1.7 m, then 1.033 s.
     - Where only a crouch fits, he mantles into a crouch.
+    - He mantles only where his whole body fits on top, standing or crouched. A single ray
+      upwards used to let him climb into pipes stacked on a wall or a tree over a planter.
     - In the air, Jump alone mantles.
   - Leaning swings the head about a pivot 3.5 m below (2.6 m crouched), up to 20 degrees: about
     1.2 m sideways.
@@ -1303,7 +1305,7 @@ against the install's own data where it carries them, then implemented independe
   - An incendiary bolt does 50, never killing outright, and sets its target alight 0.5 s later.
   - Grenades bounce the original's way: floors and walls lose different amounts, bodies almost all.
     The fuse runs out whatever they hit, and a sticky grenade does 75 more to whoever it is stuck
-    to.
+    to. A sticky grenade sinks 5 cm into what it sticks to; on a wall it goes off just out of it.
   - The Spring Razor kills everyone in a 2.5 m cylinder along its surface's normal and in its
     sight; the Spring Razor upgrade doubles the radius. Corvo caught in it takes 5. A blast sets it
     off 0.75 s later.
@@ -1320,7 +1322,8 @@ against the install's own data where it carries them, then implemented independe
 - **Tripwires** are snapped by anyone walking into them, guards too. Launchers fire at once,
   straight at their target.
 - **The interface.** The health and mana gauges show for 8 s after a change; a keyhole needs Use
-  held 0.3 s.
+  held 0.3 s. The screen fades to black over 0.2 s and the keyhole's view comes up at 0.3 s;
+  leaving fades back from black over 0.3 s.
 - **The slide.** Crouching while sprinting at 4 m/s or more slides. The speed eases to the
   sneaking speed over 1.1 s along the way it began. It ends early if that way turns more than 25°,
   or when let go after 0.55 s.
@@ -1846,7 +1849,12 @@ DH_SCRIPT="wait 2; behind lone; attack; wait 1; log; shot kill; exit" ./target/r
 Commands: `wait S`, `goto X Y Z [S]` (walk there over the level's navmesh, using, swinging at
 or jumping onto what holds it up; `DH_GOTO_LOG`), `gototask [N] [S]` (to the N-th objective marker), `tp/fly X Y Z YAW PITCH`, `look YAW PITCH`, `lookat X Y Z`, `walk S`,
 `attack`, `block S`, `key K`, `hold K S`, `rmb`, `rmbhold S`, `mmbhold S`, `behind [N|lone]`,
-`front N`, `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `runes N`,
+`front N|NAME [D]` (D m before a character: beyond 3 m, the furthest spot with a floor and its
+sight), `ledge [LOW] [HIGH] [crouch]` (before the nearest edge Corvo could mantle onto, LOW-HIGH m
+high; `crouch`, only one he'd arrive crouched on; `DH_MANTLE_LOG` logs what blocks a mantle's
+top), `pos` (his position, velocity, footing), `pistol [NAME]` (the nearest hostile character
+carries a pistol and turns on him), `npchere [D]` (the nearest hostile character moved D m
+before him), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `runes N`,
 `charms N`, `mana`, `ammo TYPE N` (0 bullets .. 6 grenades, 7 sticky), `fx EFFECT [DIST]`,
 `remote EVENT` (a level-script remote event, e.g. `ChangeLvl_fromStreets1_toHub`), `chaos N`,
 `ko [NAME]` (a sleep dart into the nearest, or the nearest whose name or pawn holds NAME),

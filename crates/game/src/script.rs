@@ -305,7 +305,7 @@ fn run_script(
     doors: Query<&GlobalTransform, With<crate::interact::Door>>,
     usables: Query<&Transform, (With<crate::interact::Usable>, Without<Player>, Without<Npc>, Without<crate::interact::Pickup>)>,
     (mut exit, mut fx, mut vm): (MessageWriter<AppExit>, MessageWriter<crate::particles::SpawnEffect>, Option<ResMut<crate::kismet::Vm>>),
-    (diag, data, rapier, mut explosions): (Res<bevy::diagnostic::DiagnosticsStore>, Res<crate::gamedata::Data>, bevy_rapier3d::prelude::ReadRapierContext, MessageWriter<crate::gadgets::Explosion>),
+    (diag, data, rapier, mut explosions, player_ent): (Res<bevy::diagnostic::DiagnosticsStore>, Res<crate::gamedata::Data>, bevy_rapier3d::prelude::ReadRapierContext, MessageWriter<crate::gadgets::Explosion>, Query<Entity, With<Player>>),
     (mut powers, warming, swim, npc_ents, focus, pockets, krusts, strikeables, fish, (hosts, possession), (props, level, traps, mut devices, usable_rigs)): (
         ResMut<crate::powers::Powers>,
         Option<Res<crate::warmup::Warmup>>,
@@ -817,6 +817,39 @@ fn run_script(
                 });
             }
         }
+        "npchere" => {
+            // (tests) npchere [D]: the nearest standing hostile character is moved D m (default
+            // 1.5) before Corvo, on his floor
+            let d = if cmd.len() > 1 { f(1) } else { 1.5 };
+            let fwd = Quat::from_rotation_y(p.yaw) * Vec3::NEG_Z;
+            let feet = t.translation - Vec3::Y * (crate::player::STAND_HALF + crate::player::RADIUS);
+            let to = feet + fwd.with_y(0.0).normalize_or_zero() * d + Vec3::Y * (crate::npc::NPC_HALF + crate::npc::NPC_RADIUS);
+            let at = t.translation;
+            commands.queue(move |w: &mut World| {
+                let mut q = w.query::<(&Npc, &mut Transform)>();
+                if let Some((n, mut nt)) = q.iter_mut(w).filter(|(n, _)| !n.is_down() && n.hostile()).min_by(|a, b| a.1.translation.distance(at).total_cmp(&b.1.translation.distance(at))) {
+                    info!("script: {} moved to {to:.2}", n.name);
+                    nt.translation = to;
+                }
+            });
+        }
+        "pistol" => {
+            // (tests) pistol [NAME]: the nearest standing hostile character (whose name holds NAME)
+            // carries a pistol, and fights
+            let at = t.translation;
+            let named = cmd.get(1).cloned().unwrap_or_default();
+            commands.queue(move |w: &mut World| {
+                let mut q = w.query::<(&mut Npc, &Transform)>();
+                if let Some((mut n, _)) = q.iter_mut(w).filter(|(n, _)| !n.is_down() && n.hostile() && n.name.contains(&named)).min_by(|a, b| a.1.translation.distance(at).total_cmp(&b.1.translation.distance(at))) {
+                    // (and turns on Corvo)
+                    n.ranged = 1;
+                    n.enemy = true;
+                    n.alert = crate::npc::Alert::Combat;
+                    n.set_mode(crate::npc::Mode::Combat);
+                    info!("script: {} carries a pistol (may shoot {}, flags {:#x})", n.name, n.may_shoot(), n.brain_flags);
+                }
+            });
+        }
         "spawn" => {
             // (tests) spawn NAME: a spawner the level scripts would start (a wolfhound's kennel)
             let want = cmd.get(1).cloned().unwrap_or_default();
@@ -1042,6 +1075,58 @@ fn run_script(
                 p.yaw = (-to.x).atan2(-to.z);
                 p.pitch = (to.y / to.length().max(1e-3)).asin();
                 info!("script: wall {} mid {mid:.2}, player at {at:.2}", dv.def.actor);
+            }
+        }
+        "ledge" => {
+            // ledge [LOW] [HIGH] [crouch]: stand on this floor before the nearest edge LOW-HIGH m (default
+            // 0.55-2.3) high that Corvo could mantle onto, facing it
+            let lo = if cmd.len() > 1 { f(1) } else { 0.55 };
+            let hi = if cmd.len() > 2 { f(2) } else { 2.3 };
+            // (`crouch`: only an edge with no room to stand on)
+            let low_room = cmd.get(3).is_some_and(|s| s == "crouch");
+            let (Ok(ctx), Ok(pe)) = (rapier.single(), player_ent.single()) else { return };
+            let world = bevy_rapier3d::prelude::QueryFilter::default().exclude_collider(pe).exclude_sensors().groups(bevy_rapier3d::prelude::CollisionGroups::new(bevy_rapier3d::prelude::Group::ALL, crate::level::GROUP_WORLD | crate::level::GROUP_PROP));
+            let feet = t.translation.y - crate::player::STAND_HALF - crate::player::RADIUS;
+            let mut found = None;
+            'search: for r in 1..120 {
+                for a in 0..32 {
+                    let dir = Quat::from_rotation_y(a as f32 * std::f32::consts::TAU / 32.0) * Vec3::NEG_Z;
+                    let c = t.translation.with_y(feet + 1.0) + dir * r as f32 * 0.5;
+                    let Some((_, hit)) = ctx.cast_ray_and_get_normal(c, Vec3::NEG_Y, 4.0, true, world) else { continue };
+                    let floor = hit.point.y;
+                    if hit.time_of_impact < 0.05 || hit.normal.y < 0.95 {
+                        continue;
+                    }
+                    // flat floor, and room to stand
+                    let stand = Transform::from_xyz(c.x, floor + crate::player::STAND_HALF + crate::player::RADIUS + 0.04, c.z);
+                    let mut blocked = false;
+                    let body = bevy_rapier3d::prelude::Collider::capsule_y(crate::player::STAND_HALF, crate::player::RADIUS);
+                    ctx.intersect_shape(stand.translation, Quat::IDENTITY, &*body.raw, world, |_| {
+                        blocked = true;
+                        false
+                    });
+                    if blocked {
+                        continue;
+                    }
+                    for k in 0..16 {
+                        let yaw = k as f32 * std::f32::consts::TAU / 16.0;
+                        if let Some((_, h, crouch)) = crate::player::mantle_dest(&ctx, pe, &stand, yaw, 0.0).filter(|(_, h, c)| (lo..=hi).contains(h) && (!low_room || *c)) {
+                            found = Some((stand.translation, yaw, h, crouch));
+                            break 'search;
+                        }
+                    }
+                }
+            }
+            match found {
+                Some((at, yaw, h, crouch)) => {
+                    t.translation = at;
+                    p.velocity = Vec3::ZERO;
+                    p.noclip = false;
+                    p.yaw = yaw;
+                    p.pitch = -0.2;
+                    info!("script: ledge {h:.2} m{} from {at:.2}", if crouch { " (crouched)" } else { "" });
+                }
+                None => info!("script: no ledge {lo}-{hi} m"),
             }
         }
         "trap" => {
@@ -1298,12 +1383,40 @@ fn run_script(
             list.sort_by(|a, b| a.0.total_cmp(&b.0));
             if let Some((_, fwd, pos)) = list.get(skip) {
                 // (`side`: 3 m off its right, a little ahead: its sight seen across)
-                let at = match cmd[0].as_str() {
+                let mut at = match cmd[0].as_str() {
                     "behind" => *pos + *fwd * -cmd.get(2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(1.25),
                     "side" => *pos + *fwd * 1.0 + Vec3::new(-fwd.z, 0.0, fwd.x) * 3.0,
-                    _ => *pos + *fwd * 3.0,
-                };
-                t.translation = Vec3::new(at.x, pos.y, at.z);
+                    // (`front N D`: D m before it)
+                    _ => *pos + *fwd * cmd.get(2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(3.0),
+                }
+                .with_y(pos.y);
+                // (further than 3 m before it: the furthest spot up to there with a floor, room to
+                // stand and its sight of him)
+                let far = cmd.get(2).and_then(|s| s.parse::<f32>().ok()).filter(|d| cmd[0] == "front" && *d > 3.0);
+                if let (Some(far), Ok(ctx), Ok(pe)) = (far, rapier.single(), player_ent.single()) {
+                    let world = bevy_rapier3d::prelude::QueryFilter::default().exclude_collider(pe).exclude_sensors().groups(bevy_rapier3d::prelude::CollisionGroups::new(bevy_rapier3d::prelude::Group::ALL, crate::level::GROUP_WORLD | crate::level::GROUP_PROP));
+                    let body = bevy_rapier3d::prelude::Collider::capsule_y(crate::player::STAND_HALF, crate::player::RADIUS);
+                    let eye = *pos + Vec3::Y * 0.72;
+                    let mut d = far;
+                    while d >= 3.0 {
+                        let c = *pos + *fwd * d + Vec3::Y * 1.0;
+                        if let Some((_, toi)) = ctx.cast_ray(c, Vec3::NEG_Y, 3.0, true, world) {
+                            let stand = c - Vec3::Y * (toi - crate::player::STAND_HALF - crate::player::RADIUS - 0.04);
+                            let mut blocked = false;
+                            ctx.intersect_shape(stand, Quat::IDENTITY, &*body.raw, world, |_| {
+                                blocked = true;
+                                false
+                            });
+                            let to = stand + Vec3::Y * 0.6 - eye;
+                            if !blocked && toi > 0.05 && ctx.cast_ray(eye, to.normalize_or_zero(), to.length(), true, world).is_none() {
+                                at = stand;
+                                break;
+                            }
+                        }
+                        d -= 0.5;
+                    }
+                }
+                t.translation = at;
                 let to = (*pos - t.translation).with_y(0.0);
                 p.yaw = (-to.x).atan2(-to.z);
                 p.pitch = -0.15;
@@ -1347,6 +1460,7 @@ fn run_script(
             commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
             script.timer = 0.2;
         }
+        "pos" => info!("script: at {:.2}{} v {:.2}{}{}", t.translation, if p.crouched { " crouched" } else { "" }, p.velocity, if p.grounded { " ground" } else { "" }, if p.locked { " locked" } else { "" }),
         "log" => {
             let fps = diag
                 .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS)

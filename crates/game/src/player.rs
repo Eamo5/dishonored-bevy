@@ -691,10 +691,10 @@ fn mantle_time(h: f32, crouch: bool) -> f32 {
 
 /// Where a mantle from `t` facing `yaw` would put Corvo, the ledge's height above his feet, and
 /// whether only a crouch fits there.
-fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, t: &Transform, yaw: f32, fall: f32) -> Option<(Vec3, f32, bool)> {
+pub(crate) fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, t: &Transform, yaw: f32, fall: f32) -> Option<(Vec3, f32, bool)> {
     let fwd = Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
     let feet = t.translation - Vec3::Y * (STAND_HALF + RADIUS);
-    let filter = QueryFilter::default().exclude_collider(e).groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
+    let filter = QueryFilter::default().exclude_collider(e).exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     // wall in front at waist height?
     let (_, wall) = ctx.cast_ray_and_get_normal(feet + Vec3::Y * 0.7, fwd, RADIUS + 0.6, true, filter)?;
     if wall.normal.y.abs() > 0.5 {
@@ -703,7 +703,7 @@ fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, t: &Trans
     // ledge top within reach (a top no steeper than 45 degrees)
     let probe = wall.point + fwd * 0.35;
     let probe = Vec3::new(probe.x, feet.y + MANTLE_MAX, probe.z);
-    let (_, top) = ctx.cast_ray_and_get_normal(probe, Vec3::NEG_Y, MANTLE_MAX, true, filter)?;
+    let (top_e, top) = ctx.cast_ray_and_get_normal(probe, Vec3::NEG_Y, MANTLE_MAX, true, filter)?;
     let h = top.point.y - feet.y;
     let least = if fall > 20.0 {
         return None;
@@ -715,15 +715,26 @@ fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, t: &Trans
     if top.normal.y < 0.7 || !(least..=MANTLE_MAX).contains(&h) {
         return None;
     }
-    // headroom at the destination: standing, else crouched
-    let up = top.point + Vec3::Y * 0.05;
-    if ctx.cast_ray(up, Vec3::Y, 1.8, true, filter).is_none() {
-        return Some((top.point + Vec3::Y * (STAND_HALF + RADIUS + 0.05) + fwd * 0.2, h, false));
+    // room for him at the destination: standing, else crouched
+    let fits = |half: f32| {
+        let at = top.point + Vec3::Y * (half + RADIUS + 0.05) + fwd * 0.2;
+        // (held a little clear of the top's own bumps)
+        let body = Collider::capsule_y(half, RADIUS * 0.9);
+        let mut blocked = false;
+        ctx.intersect_shape(at + Vec3::Y * 0.12, Quat::IDENTITY, &*body.raw, filter, |hit| {
+            if std::env::var("DH_MANTLE_LOG").is_ok() {
+                let c = ctx.colliders.entity2collider().get(&hit).and_then(|h| ctx.colliders.colliders.get(*h));
+                info!("mantle fit: {hit:?} blocks {at:.2} (edge {h:.2}, half {half}, ledge's own {}, top n {:.2}): {:?} {:?}", hit == top_e, top.normal, c.map(|c| c.shape().shape_type()), c.map(|c| c.compute_aabb()));
+            }
+            blocked = true;
+            false
+        });
+        (!blocked).then_some(at)
+    };
+    if let Some(at) = fits(STAND_HALF) {
+        return Some((at, h, false));
     }
-    if ctx.cast_ray(up, Vec3::Y, (CROUCH_HALF + RADIUS) * 2.0 + 0.05, true, filter).is_none() {
-        return Some((top.point + Vec3::Y * (CROUCH_HALF + RADIUS + 0.05) + fwd * 0.2, h, true));
-    }
-    None
+    fits(CROUCH_HALF).map(|at| (at, h, true))
 }
 
 fn mantle(
@@ -771,6 +782,7 @@ fn mantle(
         return;
     }
     let Some((dest, h, crouch)) = found else { return };
+    info!("mantle: {h:.2} m edge, {:.3} s{}", mantle_time(h, crouch), if crouch { ", crouched" } else { "" });
     if crouch {
         p.crouched = true;
         *col = Collider::capsule_y(CROUCH_HALF, RADIUS);

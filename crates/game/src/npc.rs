@@ -2757,6 +2757,7 @@ pub(crate) fn npc_brain(
                     let ready = npc.shoot_cd <= 0.0 && npc.sees_player && npc.attack_t.is_none() && d > 2.5 && d < 30.0 && npc.stagger <= 0.0;
                     if npc.ranged == 1 && ready && !aimed && (unreachable || npc.velocity.with_y(0.0).length() < 0.3) {
                         npc.aim = Some((0.75 + rand::random::<f32>() * 0.5, 0.0));
+                        info!("{} aims its pistol {d:.1} m away", npc.name);
                         npc.target = None;
                         continue;
                     }
@@ -2773,9 +2774,11 @@ pub(crate) fn npc_brain(
                         // end of its reach
                         let k = ((d - 2.5) / 27.5).clamp(0.0, 1.0);
                         let chance = (npc.arms.accuracy[0] + (npc.arms.accuracy[1] - npc.arms.accuracy[0]) * k) * if npc.ranged == 1 { 1.0 - attrs.npc_gun_miss } else { 1.0 };
-                        if rand::random::<f32>() < chance {
+                        let hit = rand::random::<f32>() < chance;
+                        if hit {
                             hit_writer.write(PlayerHit { npc: e, from: pos, damage: npc.arms.ranged, kick: false, big: false, push: false });
                         }
+                        info!("{} shoots {d:.1} m ({})", npc.name, if hit { "hit" } else { "miss" });
                         shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: npc.ranged >= 2 });
                         noise.write(Noise { pos, radius: 40.0, kind: NoiseKind::Danger });
                     }
