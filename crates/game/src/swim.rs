@@ -293,13 +293,13 @@ fn breathe(
     if swim.under.is_some() && !gills {
         swim.breath = (swim.breath - dt).max(0.0);
         if swim.breath <= 0.0 {
-            // the original's drowning attributes (`DrowningDamageStep` / `-Amount`), a tenth
-            // of Corvo's health per unit
+            // the original's drowning attributes: `DrowningDamageAmount` points every
+            // `DrowningDamageStep` (1 a second, as roshan's r614/blink research measured)
             swim.drown_t += dt;
             let step = attrs.drown_step.max(0.1);
             while swim.drown_t >= step {
                 swim.drown_t -= step;
-                let damage = attrs.drown_damage * 0.1 * stats.max_health;
+                let damage = attrs.drown_damage.max(0.0);
                 stats.take_damage(damage);
                 stats.damage_flash = 1.0;
                 if stats.health <= 0.0 {

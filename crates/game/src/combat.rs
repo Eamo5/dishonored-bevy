@@ -1,7 +1,7 @@
 //! Player melee: Corvo's sword (view model), attacks, assassinations, blocking/parrying,
 //! chokeholds, and receiving damage.
 
-use crate::gameplay::{HitKind, HudMessages, Noise, NpcHit, NpcStagger, PlayerHit, PlayerStats};
+use crate::gameplay::{HitKind, HudMessages, Noise, NoiseKind, NpcHit, NpcStagger, PlayerHit, PlayerStats};
 use crate::level::{GameAssets, LevelSpawnSet};
 use crate::npc::{Alert, Mode, Npc};
 use crate::player::{Player, PlayerCamera};
@@ -83,7 +83,7 @@ fn lock_blades(v: &mut Versus, e: Entity, npc: &mut Npc, at: Vec3, sfx: &mut Mes
     npc.gesture(4);
     info!("sword lock with {}", npc.name);
     sfx.write(crate::audio::PostEvent::named("Snd_Imp_Sword_vs_Sword_ak", Some(at)));
-    noise.write(Noise { pos: at, radius: 14.0, combat: true });
+    noise.write(Noise { pos: at, radius: 8.0, kind: NoiseKind::Threatening });
 }
 
 /// The lock under way: Corvo's presses, then how it ends.
@@ -277,8 +277,10 @@ pub struct SwordGrip;
 #[derive(Component)]
 pub struct SwordModel;
 
-/// Seconds of a chokehold before the victim goes limp.
-pub const CHOKE_TIME: f32 = 2.2;
+/// Seconds of a chokehold before the victim goes limp, without `ChokeTime`: the choke's loop
+/// (`Sword_Choke_Loop_Master`, 5.03 s). The original's hold is `ChokeTime` (1.5 s, less with
+/// Strong Arms) and then the loop, about 6.5 s, as roshan's r614/blink research decoded it.
+pub const CHOKE_TIME: f32 = 5.033;
 
 /// Active chokehold on an NPC.
 #[derive(Component)]
@@ -327,6 +329,15 @@ pub fn spawn_view_model(
             commands.entity(model).add_child(m);
         }
     }
+}
+
+/// May Corvo assassinate it (`DisItemContext_Assassinate`'s `m_AssassinateOnAwareness`, as
+/// roshan's r614/blink research decoded it): unaware, surprised, suspicious or begging, from any
+/// side; not fighting him, fearful or choked, and not running (`m_bCanAssassinateRunners` off).
+fn assassinable(npc: &Npc) -> bool {
+    let fighting = npc.mode == Mode::Combat && npc.alert == Alert::Combat;
+    let running = npc.velocity.with_y(0.0).length() > (npc.gait[1] + npc.gait[2]) * 0.5;
+    !fighting && !running && !matches!(npc.mode, Mode::Flee | Mode::Choked)
 }
 
 fn nearest_target<'a>(
@@ -489,13 +500,11 @@ fn sword_input(
     // its side as the victim sees Corvo, quick unless he's sneaking, the carried body's
     // variant with one on his shoulder
     if grabbed && p.grounded && mouse.just_pressed(MouseButton::Left) && !keys.pressed(bind.key(crate::bindings::Act::Block)) {
-        let target = nearest_target(eye, fwd, 2.4, 0.55, npcs.iter().map(|(e, n, t)| (e, n, t)));
+        let target = nearest_target(eye, fwd, 2.75, 0.55, npcs.iter().map(|(e, n, t)| (e, n, t)));
         if let Some((e, _)) = target {
             let (_, mut npc, nt) = npcs.get_mut(e).unwrap();
             let from = (pt.translation - nt.translation).with_y(0.0).normalize_or_zero();
             let f = npc.forward();
-            let behind = f.dot(from) < -0.2;
-            let unaware = npc.alert != Alert::Combat || !npc.sees_player;
             // (the targets and nobles die their own dramatic deaths: `DramaticDeath_*_Slave`
             // with Corvo's `Sword_DramaticDeath_*_Master`, before him or behind him)
             let lib = rigs.get(e).ok().map(|a| a.lib.clone());
@@ -510,7 +519,7 @@ fn sword_input(
                 Some((master, slave))
             });
             let human = npc.kind != crate::npc::Kind::Creature && (npc.kind != crate::npc::Kind::Story || dramatic.is_some());
-            if human && unaware && (behind || npc.alert == Alert::Unaware) && npc.mode != Mode::Combat {
+            if human && assassinable(&npc) {
                 let right = f.cross(Vec3::Y);
                 let side = if from.dot(f) > 0.707 {
                     "Front"
@@ -540,13 +549,13 @@ fn sword_input(
         return;
     }
     // a drop assassination: attacking while falling onto someone
-    if grabbed && mouse.just_pressed(MouseButton::Left) && !p.grounded && p.velocity.y < -2.5 {
+    if grabbed && mouse.pressed(MouseButton::Left) && !p.grounded && p.velocity.y < 0.0 && sword.swing == 0.0 {
         let feet = pt.translation - Vec3::Y * (crate::player::STAND_HALF + crate::player::RADIUS);
         let below = npcs
             .iter()
             .filter(|(_, n, _)| !n.is_down() && n.kind != crate::npc::Kind::Creature)
             .map(|(e, n, nt)| (e, n, nt, nt.translation + Vec3::Y * crate::npc::NPC_CENTER - feet))
-            .filter(|(_, _, _, d)| d.with_y(0.0).length() < 1.6 && d.y < 0.6 && d.y > -6.0)
+            .filter(|(_, _, _, d)| d.with_y(0.0).length() < 1.6 && d.y < 0.6 && d.y > -3.5)
             .min_by(|a, b| a.3.length().total_cmp(&b.3.length()));
         if let Some((e, n, nt, _)) = below {
             // the side Corvo came from, as the victim faces
@@ -608,8 +617,7 @@ fn sword_input(
                 let (_, mut npc, nt) = npcs.get_mut(e).unwrap();
                 let to_player = (pt.translation - nt.translation).with_y(0.0).normalize_or_zero();
                 let behind = npc.forward().dot(to_player) < -0.2;
-                let unaware = npc.alert != Alert::Combat || !npc.sees_player;
-                if unaware && (behind || npc.alert == Alert::Unaware) && npc.mode != Mode::Combat {
+                if assassinable(&npc) {
                     hits.write(NpcHit { npc: e, damage: 999.0, kind: HitKind::Assassinate, from: pt.translation });
                 } else if npc.stagger > 1.0 || (attrs.sword_damage >= npc.health && npc.min_health <= 0.0 && npc.kind != crate::npc::Kind::Creature) {
                     // off balance after Corvo's parry (or dazed), or a blow that kills: a
@@ -641,7 +649,7 @@ fn sword_input(
                         npc.parries = 0;
                         npc.stagger = 0.9;
                     }
-                    noise.write(Noise { pos: nt.translation, radius: 14.0, combat: true });
+                    noise.write(Noise { pos: nt.translation, radius: 8.0, kind: NoiseKind::Threatening });
                     sfx.write(crate::audio::PostEvent::named("Snd_Imp_Sword_vs_Sword_ak", Some(nt.translation + Vec3::Y)));
                     sword.recoil = 0.3;
                     msgs.push("Blocked");
@@ -649,6 +657,16 @@ fn sword_input(
                     npc.parries = 0;
                     hits.write(NpcHit { npc: e, damage: attrs.sword_damage, kind: HitKind::Sword, from: pt.translation });
                 }
+            } else if let Some(e) = npcs
+                .iter()
+                .filter(|(_, n, _)| n.mode == Mode::Unconscious)
+                .map(|(e, _, t)| (e, t.translation + Vec3::Y * 0.3))
+                .filter(|(_, at)| (*at - eye).length() < 2.4 && (*at - eye).normalize_or_zero().dot(fwd) > 0.6)
+                .min_by(|a, b| a.1.distance(eye).total_cmp(&b.1.distance(eye)))
+                .map(|(e, _)| e)
+            {
+                // one lying knocked out: the blade kills them where they lie
+                hits.write(NpcHit { npc: e, damage: attrs.sword_damage, kind: HitKind::Sword, from: pt.translation });
             } else if let Some((s, at)) = strikeables
                 .iter()
                 .map(|(s, g)| (s.0, g.translation()))
@@ -712,7 +730,7 @@ mod pause_tests {
             velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
             grounded: true, lean: 0.0, noclip: false, eye_height: crate::player::STAND_EYE,
             locked: true, air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
-            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0,
+            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0, speed_cap: 0.0,
         }, Transform::IDENTITY, Choking { npc: target, t: 0.5, duration: 3.0 })).id();
         app.update();
         assert_eq!(app.world().get::<Choking>(player).map(|ch| ch.t), Some(0.5));
@@ -749,8 +767,9 @@ fn chokehold(
     }
     if let Some(mut ch) = choking {
         ch.t += time.delta_secs();
-        // the hold must be kept: let go and the victim breaks free
-        if !keys.pressed(bind.key(crate::bindings::Act::Block)) && ch.t < ch.duration {
+        // the hold must be kept through its loop: let go then and the victim breaks free
+        let in_loop = ch.t > ch.duration - CHOKE_TIME;
+        if in_loop && !keys.pressed(bind.key(crate::bindings::Act::Block)) && ch.t < ch.duration {
             if let Ok((_, mut npc, _)) = npcs.get_mut(ch.npc) {
                 npc.mode = Mode::Combat;
                 npc.alert = Alert::Combat;
@@ -804,8 +823,8 @@ fn chokehold(
     npc.mode = Mode::Choked;
     npc.attack_t = None;
     p.locked = true;
-    // The entry animation still plays; Strong Arms shortens the sustained hold.
-    commands.entity(pe).insert(Choking { npc: e, t: 0.0, duration: CHOKE_TIME - 1.5 + attrs.choke_time });
+    // its start (`ChokeTime`: Strong Arms shortens it), then the loop
+    commands.entity(pe).insert(Choking { npc: e, t: 0.0, duration: attrs.choke_time.max(0.0) + CHOKE_TIME });
     msgs.push(format!("Choking {}...", npc.name));
 }
 
@@ -949,7 +968,7 @@ fn receive_hits(
             sword.recoil = 0.8;
             stats.hit_from = Some(h.from);
             sfx.write(PostEvent::named("Snd_Imp_Fist_on_Body_cue_ak", None));
-            noise.write(Noise { pos: pt.translation, radius: 12.0, combat: true });
+            noise.write(Noise { pos: pt.translation, radius: 15.0, kind: NoiseKind::Help });
             continue;
         }
         let fwd = Quat::from_rotation_y(p.yaw) * Vec3::NEG_Z;
@@ -958,7 +977,7 @@ fn receive_hits(
         // is a block begun within `m_fTapForPerfectParryWindow` (0.2 s) of the blow
         let facing = fwd.dot(to_npc) > 50f32.to_radians().cos();
         if sword.blocking && facing {
-            noise.write(Noise { pos: pt.translation, radius: 14.0, combat: true });
+            noise.write(Noise { pos: pt.translation, radius: 8.0, kind: NoiseKind::Threatening });
             sfx.write(PostEvent::named("Snd_Imp_Sword_vs_Sword_ak", None));
             // (a tap parry forces a plain block for 0.3 s after: `DishonoredPlayerPawn`'s
             // block handler, as roshan's r614/blink research reads it)
@@ -986,6 +1005,8 @@ fn receive_hits(
         if plague {
             stats.mana = (stats.mana + attrs.plague_mana).min(stats.max_mana);
             stats.mana_cap = stats.mana_cap.max(stats.mana);
+        } else {
+            damage = attrs.armored(damage);
         }
         stats.take_damage(damage);
         stats.damage_flash = 1.0;

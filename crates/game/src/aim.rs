@@ -105,7 +105,7 @@ impl Aim {
 }
 
 /// What the weapon's upgrades owned add to one of its attributes.
-fn upgrade_sum(data: &Data, stats: &PlayerStats, w: Weapon, attr: &str) -> f32 {
+pub(crate) fn upgrade_sum(data: &Data, stats: &PlayerStats, w: Weapon, attr: &str) -> f32 {
     data.0.upgrades.iter().filter(|u| u.id.starts_with(w.upgrades()) && stats.upgrades.contains(&u.id)).flat_map(|u| u.attributes.iter()).filter(|(n, _)| n == attr).map(|(_, v)| v).sum()
 }
 

@@ -6,7 +6,7 @@
 //! (`m_bDisappearAfterCombat`, `m_fNoCombatTimeout`). With Arcane Bond II he moves through
 //! bent time as Daud does.
 
-use crate::gameplay::{Noise, PlayerStats};
+use crate::gameplay::{Noise, NoiseKind, PlayerStats};
 use crate::level::{GameAssets, LevelInfo};
 use crate::npc::{Mode, Npc, NPC_CENTER};
 use crate::world_light::WorldLighting;
@@ -77,7 +77,7 @@ fn summon(
             Summoned { foe: r.target, fresh: true, idle: 0.0 },
         ));
         fx.write(crate::particles::SpawnEffect::at("summon_trigger", r.at));
-        noise.write(Noise { pos: r.at, radius: 4.0, combat: true });
+        noise.write(Noise { pos: r.at, radius: 4.0, kind: NoiseKind::Threatening });
         if std::env::var_os("DH_SUMMON_LOG").is_some() {
             info!("summon: assassin (level {}) at {:.1}{}", r.level, r.at, if r.target.is_some() { ", for an enemy" } else { "" });
         }

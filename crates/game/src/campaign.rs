@@ -11,7 +11,7 @@ use crate::kismet::Vm;
 use crate::npc::{Kind, Npc, NpcSpawned};
 use crate::GameState;
 use bevy::prelude::*;
-use dhcook::format::{KVal, Kismet as Graph};
+use dhcook::format::{DarknessDef, KVal, Kismet as Graph};
 use std::sync::Arc;
 
 pub struct CampaignPlugin;
@@ -48,12 +48,13 @@ pub enum CampaignFx {
     /// commit op's output fires there
     ChangeMap { map: String, tag: Option<String>, op: u32, levels: Vec<String> },
     MissionBegin(String),
-    MissionEnd { tweak: String, darkness: i32 },
+    MissionEnd(String),
     ShowStats { tweak: String, op: u32 },
     Loadout(String),
     AbstractItem(String),
     Chapter(String),
     IncrementStat(String),
+    /// `DisSeqAct_AddDarkness`: points onto the chaos score
     Darkness(i32),
 }
 
@@ -117,25 +118,60 @@ pub fn mission_number(data: &Data, map: &str) -> i32 {
     data.0.missions.iter().find(|(_, maps)| maps.iter().any(|m| m.trim().eq_ignore_ascii_case(map))).map(|m| m.0).unwrap_or(-1)
 }
 
-/// This mission's share of the chaos: lethal play against the people met. Killing a fifth
-/// of them makes a mission high chaos; most of them, very high.
-pub fn mission_chaos(s: &PlayerStats) -> i32 {
-    let lethal = s.kills as f32 + s.civilians_killed as f32;
-    let met = s.npcs_met.max(12) as f32;
-    let r = lethal / met;
-    if r >= 0.5 {
-        2
-    } else if r >= 0.2 {
-        1
-    } else {
-        0
+/// The chaos level a score reaches: the last of `m_DarknessLevels`' steps at or under it.
+pub fn darkness_level(levels: &[i32], score: i32) -> i32 {
+    if levels.is_empty() {
+        return 0;
     }
+    levels.iter().rposition(|&l| score >= l).map(|i| i as i32).unwrap_or(-1)
+}
+
+/// Points onto the chaos score (never below 0), and the level it now reaches.
+pub fn add_chaos(dark: &DarknessDef, s: &mut PlayerStats, n: i32) {
+    let before = s.chaos_level;
+    s.chaos_score = s.chaos_score.saturating_add(n).max(0);
+    s.chaos_level = darkness_level(&dark.levels, s.chaos_score);
+    if s.chaos_level != before {
+        info!("campaign: chaos score {} (level {before} -> {})", s.chaos_score, s.chaos_level);
+    }
+}
+
+/// A statistic the deeds count grew (`DisDarknessManager`'s deeds): every deed on it whose
+/// victim filter takes the victim (its pawn tweak lineage, none excluded, the deed's own in it;
+/// no victim: anyone) counts one, and a deed reaching its threshold adds its points and starts
+/// again (no carry). As roshan's r614/blink research decoded the original.
+pub fn notify_deed(dark: &DarknessDef, s: &mut PlayerStats, stat: &str, victim: Option<&[String]>) {
+    if s.deed_counters.len() < dark.deeds.len() {
+        s.deed_counters.resize(dark.deeds.len(), 0);
+    }
+    for (i, d) in dark.deeds.iter().enumerate() {
+        if d.stat != stat {
+            continue;
+        }
+        if let Some(v) = victim {
+            let is = |n: &str| v.iter().any(|x| x.eq_ignore_ascii_case(n));
+            if d.excluded.iter().any(|x| is(x)) || (!d.tweak.is_empty() && !is(&d.tweak)) {
+                continue;
+            }
+        }
+        s.deed_counters[i] += 1;
+        if s.deed_counters[i] >= d.threshold {
+            s.deed_counters[i] = 0;
+            add_chaos(dark, s, d.value);
+        }
+    }
+}
+
+/// A pawn tweak's lineage (itself and what it falls back on) in the level's characters.
+fn lineage(level: Option<&crate::level::LevelInfo>, pawn: &str) -> Vec<String> {
+    let own = || vec![pawn.rsplit('.').next().unwrap_or(pawn).to_string()];
+    level.and_then(|l| l.scene.npc_types.iter().find(|t| t.name == pawn)).map(|t| if t.lineage.is_empty() { own() } else { t.lineage.clone() }).unwrap_or_else(own)
 }
 
 /// Is the campaign high chaos now (the threshold of the mission being played)?
 pub fn chaos_high(data: &Data, s: &PlayerStats, mission: i32) -> bool {
     let t = data.0.chaos_thresholds.get(mission.max(0) as usize).copied().unwrap_or(i32::MAX);
-    s.chaos_level + mission_chaos(s) >= t.max(1)
+    s.chaos_level >= t.max(1)
 }
 
 /// A start loadout (`Twk_PlayerLoadout_*`): weapons, gadgets, runes, coins, powers, upgrades.
@@ -288,8 +324,15 @@ fn apply_campaign(
         }
     }
     let map = level.as_ref().map(|l| l.scene.name.as_str()).unwrap_or("");
-    vm.mission_chaos = mission_chaos(&stats);
+    // the deeds: kills (by the victim's lineage), alarms, bodies found
+    for (stat, pawn) in std::mem::take(&mut stats.deeds_pending) {
+        let victim = (!pawn.is_empty()).then(|| lineage(level.as_deref(), &pawn));
+        notify_deed(&data.0.darkness, &mut stats, stat, victim.as_deref());
+    }
     stats.chaos_high = chaos_high(&data, &stats, mission_number(&data, map));
+    vm.darkness_levels.clone_from(&data.0.darkness.levels);
+    vm.darkness = stats.chaos_level;
+    vm.darkness_score = stats.chaos_score;
     // a travel destination in no loaded map, and the campaign didn't change map
     if let Some((tag, left)) = vm.goto_fallback.take() {
         let left = left - time.delta_secs();
@@ -337,11 +380,12 @@ fn apply_campaign(
                 stats.npcs_met = 0;
                 stats.counters.clear();
             }
-            CampaignFx::MissionEnd { tweak, darkness } => {
-                info!("campaign: mission {tweak} ends, chaos level {} -> {darkness}", stats.chaos_level);
-                stats.chaos_level = darkness;
+            // (the deeds' counters start again; the score stays)
+            CampaignFx::MissionEnd(tweak) => {
+                info!("campaign: mission {tweak} ends, chaos score {} (level {})", stats.chaos_score, stats.chaos_level);
+                stats.deed_counters.clear();
             }
-            CampaignFx::Darkness(d) => stats.chaos_level = d,
+            CampaignFx::Darkness(n) => add_chaos(&data.0.darkness, &mut stats, n),
             CampaignFx::ShowStats { tweak, op } => {
                 show.write(crate::mission::ShowMissionStats { tweak, op });
             }
@@ -380,7 +424,12 @@ fn apply_campaign(
                 }
             }
             CampaignFx::Chapter(c) => stats.chapter = c,
-            CampaignFx::IncrementStat(s) => *stats.counters.entry(s).or_default() += 1,
+            CampaignFx::IncrementStat(s) => {
+                if let Some(d) = ["ePlayerStat_NumKills", "ePlayerStat_NumAlarmsTriggered", "ePlayerStat_NumCorpsesDiscovered"].into_iter().find(|d| *d == s) {
+                    notify_deed(&data.0.darkness, &mut stats, d, None);
+                }
+                *stats.counters.entry(s).or_default() += 1
+            }
         }
     }
 }
@@ -485,5 +534,73 @@ pub fn restore_hub(mut commands: Commands, level: Option<Res<crate::level::Level
             }
             commands.entity(e).try_despawn();
         }
+    }
+}
+
+#[cfg(test)]
+mod chaos_tests {
+    use super::*;
+    use dhcook::format::DeedDef;
+
+    /// Corvo's table in short: civilians (not weepers) +6 each, guards +6 every fourth,
+    /// alarms +6 every fifth.
+    fn corvo() -> DarknessDef {
+        let deed = |stat: &str, threshold, tweak: &str, excluded: &[&str]| DeedDef { stat: stat.into(), threshold, value: 6, tweak: tweak.into(), excluded: excluded.iter().map(|s| s.to_string()).collect() };
+        DarknessDef {
+            levels: vec![0, 12, 48, 72, 96, 114, 138, 162, 168, 200, 390],
+            deeds: vec![
+                deed("ePlayerStat_NumKills", 1, "Pwn_Civ_Base", &["Pwn_Weeper_Base"]),
+                deed("ePlayerStat_NumKills", 4, "Pwn_Guard_Base", &[]),
+                deed("ePlayerStat_NumKills", 4, "Pwn_Weeper_Base", &[]),
+                deed("ePlayerStat_NumAlarmsTriggered", 5, "", &[]),
+            ],
+        }
+    }
+
+    fn line(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn deeds_raise_the_score_and_level() {
+        let dark = corvo();
+        let mut s = PlayerStats::default();
+        let civ = line(&["Pwn_CivMiddle_F_1", "Pwn_Civ_Base"]);
+        let weeper = line(&["Pwn_WeeperMiddle_F_1", "Pwn_Weeper_Base", "Pwn_Civ_Base"]);
+        let guard = line(&["Pwn_CityGuard_MTall_1", "Pwn_Guard_Base"]);
+        notify_deed(&dark, &mut s, "ePlayerStat_NumKills", Some(&civ));
+        assert_eq!((s.chaos_score, s.chaos_level), (6, 0));
+        notify_deed(&dark, &mut s, "ePlayerStat_NumKills", Some(&civ));
+        assert_eq!((s.chaos_score, s.chaos_level), (12, 1));
+        // a weeper is no civilian: it counts towards the weepers' fourth
+        notify_deed(&dark, &mut s, "ePlayerStat_NumKills", Some(&weeper));
+        assert_eq!(s.chaos_score, 12);
+        for k in 1..=4 {
+            notify_deed(&dark, &mut s, "ePlayerStat_NumKills", Some(&guard));
+            assert_eq!(s.chaos_score, if k < 4 { 12 } else { 18 }, "guard kill {k}");
+        }
+        // five alarms; mission end empties the counters and keeps the score
+        for _ in 0..4 {
+            notify_deed(&dark, &mut s, "ePlayerStat_NumAlarmsTriggered", None);
+        }
+        assert_eq!(s.chaos_score, 18);
+        s.deed_counters.clear();
+        notify_deed(&dark, &mut s, "ePlayerStat_NumAlarmsTriggered", None);
+        assert_eq!(s.chaos_score, 18);
+        // the scripts' points: never below 0
+        add_chaos(&dark, &mut s, -100);
+        assert_eq!((s.chaos_score, s.chaos_level), (0, 0));
+        add_chaos(&dark, &mut s, 100000);
+        assert_eq!(s.chaos_level, 10);
+    }
+
+    #[test]
+    fn level_steps() {
+        let levels = corvo().levels;
+        assert_eq!(darkness_level(&levels, 0), 0);
+        assert_eq!(darkness_level(&levels, 47), 1);
+        assert_eq!(darkness_level(&levels, 48), 2);
+        assert_eq!(darkness_level(&levels, 389), 9);
+        assert_eq!(darkness_level(&[], 50), 0);
     }
 }

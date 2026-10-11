@@ -354,20 +354,10 @@ fn ambushes(ai: Res<AiWorld>, player: Query<&Transform, With<Player>>, mut npcs:
     }
 }
 
-/// The alarm's level (`DAISL_*`) a reinforcement waits for, as the characters' alert.
-fn wanted_level(s: &str) -> u8 {
-    let s = s.to_ascii_lowercase();
-    if s.contains("suspect") || s.contains("curious") {
-        1
-    } else if s.contains("search") || s.contains("alert") || s.contains("investig") {
-        2
-    } else {
-        3
-    }
-}
-
-/// Reinforcements: the spawners waiting for the alarm, or their squad's call for help, spawn
-/// (out of Corvo's sight and away from him unless allowed).
+/// Reinforcements: the spawners waiting for their squad's call for help spawn (out of Corvo's
+/// sight and away from him unless allowed). (A spawner's `m_SpawnAtSuspicionLevel` is not a
+/// trigger but the suspicion its character starts with, as roshan's r614/blink research decoded
+/// it: `script_world::spawn_props`; alarm squads come from the bells and the scripts.)
 #[allow(clippy::too_many_arguments)]
 fn reinforcements(
     level: Option<Res<LevelInfo>>,
@@ -386,20 +376,12 @@ fn reinforcements(
     *check = 0.5;
     let (Some(level), Ok(c)) = (level, cam.single()) else { return };
     let present: HashSet<u32> = npcs.iter().map(|(_, f)| f.0).collect();
-    // how far the alarm has gone, and the squads now fighting (calling for help)
-    let mut alarm = 0u8;
+    // the squads now fighting (calling for help)
     for (n, _) in &npcs {
         if n.is_down() || !n.enemy {
             continue;
         }
-        let l = match (n.alert, n.mode) {
-            (Alert::Combat, _) => 3,
-            (_, Mode::Search) => 2,
-            (Alert::Suspicious, _) => 1,
-            _ => 0,
-        };
-        alarm = alarm.max(l);
-        if l == 3 && !n.squad.is_empty() {
+        if n.alert == Alert::Combat && !n.squad.is_empty() {
             ai.called.insert(n.squad.to_ascii_lowercase());
         }
     }
@@ -411,9 +393,8 @@ fn reinforcements(
         if sp.spawn_on_begin_play || present.contains(&i) || ai.reinforced.contains(&i) {
             continue;
         }
-        let by_alarm = sp.spawn_at.as_deref().is_some_and(|l| alarm > 0 && alarm >= wanted_level(l));
         let by_help = sp.spawn_on_help && !sp.squad.is_empty() && ai.called.contains(&sp.squad.to_ascii_lowercase());
-        if !by_alarm && !by_help {
+        if !by_help {
             continue;
         }
         let at = Vec3::from(sp.position) + Vec3::Y * 0.9;

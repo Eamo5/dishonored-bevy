@@ -6,7 +6,7 @@
 //! guards in a fight, call everyone nearby and the reinforcements of their spawners.
 
 use crate::audio::PostEvent;
-use crate::gameplay::{HitKind, HudMessages, Noise, NpcHit, PlayerStats};
+use crate::gameplay::{HitKind, HudMessages, Noise, NoiseKind, NpcHit, PlayerStats};
 use crate::interact::{Interaction, Usable};
 use crate::level::{LevelInfo, LevelInstance, LevelSpawnSet};
 use crate::npc::{Alert, Mode, Npc, SpawnRequest};
@@ -51,7 +51,10 @@ pub struct Device {
     pub rewired: bool,
     phase: Phase,
     cooldown: f32,
-    /// Time a nearby fighting guard has spent approaching this alarm.
+    /// an alarm bell: the guard on the way to ring it (and for how long), and how long it has
+    /// been there
+    ringer: Option<Entity>,
+    ringer_t: f32,
     fighting_near: f32,
     /// walls of light: the wall's box (world -> local matrix and local bounds)
     wall: Option<(Mat4, Vec3, Vec3)>,
@@ -876,7 +879,7 @@ fn pylons(
                             }
                         }
                     }
-                    noise.write(Noise { pos: base, radius: 20.0, combat: true });
+                    noise.write(Noise { pos: base, radius: 20.0, kind: NoiseKind::Threatening });
                     gizmos.line(base + Vec3::Y * d.def.height * 0.9, at, Color::srgb(0.6, 0.85, 1.0));
                     Phase::Firing(0.0)
                 } else {
@@ -912,11 +915,14 @@ fn alarms(
     mut spawn: MessageWriter<SpawnRequest>,
     mut msgs: ResMut<HudMessages>,
     player: Query<&Transform, With<Player>>,
-    mut npcs: Query<(&mut Npc, &Transform), Without<Player>>,
+    mut npcs: Query<(Entity, &mut Npc, &Transform), Without<Player>>,
     mut stats: ResMut<PlayerStats>,
+    mut noise: MessageWriter<Noise>,
+    mut global_cooldown: Local<f32>,
 ) {
     let dt = time.delta_secs();
     let ppos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
+    *global_cooldown = (*global_cooldown - dt).max(0.0);
     for i in 0..devices.list.len() {
         if devices.list[i].def.kind != "AlarmBell" {
             continue;
@@ -926,46 +932,114 @@ fn alarms(
         d.cooldown = (d.cooldown - dt).max(0.0);
         match d.phase {
             Phase::Ringing(t) => {
-                // the area hears it and converges on Corvo's last known position
-                if t < 0.1 {
-                    for (mut n, nt) in &mut npcs {
-                        if n.hostile() && !n.is_down() && nt.translation.distance(pos) < 60.0 && n.mode != Mode::Combat {
-                            n.alert = Alert::Combat;
-                            n.awareness = n.awareness.max(0.9);
+                // after `m_fAlarmRingDelayBeforeAINoise` the area hears it (the bell's noise:
+                // `Loudness4`, an alarm) and comes to look; the guards who saw Corvo know where
+                // he was
+                let delay = d.def.params.get("m_fAlarmRingDelayBeforeAINoise").copied().unwrap_or(2.5);
+                if t < delay && t + dt >= delay {
+                    noise.write(Noise { pos, radius: 60.0, kind: NoiseKind::Alarm });
+                    for (_, mut n, nt) in &mut npcs {
+                        if n.hostile() && !n.is_down() && nt.translation.distance(pos) < 60.0 && n.mode != Mode::Combat && n.alert == Alert::Combat {
                             n.last_seen = Some(ppos);
                             n.set_mode(Mode::Search);
                         }
                     }
                 }
-                d.phase = if t + dt > 30.0 { Phase::Idle } else { Phase::Ringing(t + dt) };
+                // it rings while anyone still hunts him; then every bell waits
+                // `DisAlarmGlobalManager.m_fAlarmCooldown`
+                let hunted = npcs.iter().any(|(_, n, _)| n.hostile() && !n.is_down() && n.alert == Alert::Combat);
+                d.phase = if t > delay + 1.0 && !hunted { Phase::Idle } else { Phase::Ringing(t + dt) };
                 if d.phase == Phase::Idle {
+                    *global_cooldown = 10.0;
                     if let Some(s) = d.def.sounds.get("m_pAlarmRingEndEvent") {
                         sfx.write(PostEvent::named(s, Some(pos)));
                     }
                 }
             }
             _ => {
-                // a guard fighting near the bell goes and rings it
-                let reach = d.def.params.get("m_fNPCGoToAlarmCloseness").copied().unwrap_or(3500.0) * 0.01;
-                let fighting = npcs.iter().any(|(n, t)| n.hostile() && n.mode == Mode::Combat && !n.is_down() && t.translation.distance(pos) < reach);
-                let w = &mut d.fighting_near;
-                *w = if fighting { *w + dt } else { 0.0 };
-                // the time it takes a guard to get there
-                if *w > 4.0 && d.cooldown <= 0.0 {
-                    *w = 0.0;
+                // a guard who has found Corvo (busted) within `m_fNPCGoToAlarmCloseness` of the
+                // bell runs to it, the nearest of them, unless Corvo is on him (`m_fFightRadius`
+                // 5 m); within `m_fNPCUseCloseness` it waits `m_fWaitTimeBeforeRing` and rings
+                // (`DisBehaviorTriggerAlarm`, as roshan's r614/blink research decoded it)
+                let reach = d.def.params.get("m_fNPCGoToAlarmCloseness").copied().unwrap_or(5000.0) * 0.01;
+                let usable = d.def.params.get("m_fNPCUseCloseness").copied().unwrap_or(150.0) * 0.01 + 0.6;
+                let may_ring = |n: &Npc, at: Vec3| n.hostile() && !n.is_down() && n.alert == Alert::Combat && n.kind == crate::npc::Kind::Guard && at.distance(ppos) > 5.0;
+                // (the one on the way gives up: down, fighting him now, or unable to get there;
+                // then the bell rests a while)
+                if let Some(who) = d.ringer {
+                    d.ringer_t += dt;
+                    let lost = d.ringer_t > 20.0;
+                    if lost {
+                        d.cooldown = d.cooldown.max(10.0);
+                    }
+                    let keep = !lost && npcs.get(who).is_ok_and(|(_, n, nt)| n.alarm_run == Some(pos) && may_ring(n, nt.translation));
+                    if !keep {
+                        if let Ok((_, mut n, _)) = npcs.get_mut(who) {
+                            n.alarm_run = None;
+                        }
+                        d.ringer = None;
+                        d.fighting_near = 0.0;
+                    }
+                }
+                if d.ringer.is_none() && d.cooldown <= 0.0 && *global_cooldown <= 0.0 {
+                    let pick = npcs
+                        .iter()
+                        .filter(|(_, n, t)| n.alarm_run.is_none() && may_ring(n, t.translation) && t.translation.distance(pos) < reach)
+                        .min_by(|a, b| a.2.translation.distance(pos).total_cmp(&b.2.translation.distance(pos)))
+                        .map(|(e, _, _)| e);
+                    if let Some(e) = pick {
+                        if let Ok((_, mut n, _)) = npcs.get_mut(e) {
+                            n.alarm_run = Some(pos);
+                            n.bark_req = (n.bark_req.0.wrapping_add(1), "ALARM_GO_TO_RING_ALARM");
+                            info!("alarm: {} runs to ring the bell", n.name);
+                        }
+                        d.ringer = Some(e);
+                        d.ringer_t = 0.0;
+                        d.fighting_near = 0.0;
+                    }
+                }
+                let mut rung = false;
+                if let Some(who) = d.ringer {
+                    if let Ok((_, mut n, nt)) = npcs.get_mut(who) {
+                        if nt.translation.distance(pos) < usable {
+                            d.fighting_near += dt;
+                            if d.fighting_near >= 0.25 {
+                                n.alarm_run = None;
+                                rung = true;
+                            }
+                        }
+                    }
+                    if rung {
+                        d.ringer = None;
+                        d.fighting_near = 0.0;
+                    }
+                }
+                if rung {
                     d.phase = Phase::Ringing(0.0);
                     stats.alarms_rung += 1;
+                    stats.deeds_pending.push(("ePlayerStat_NumAlarmsTriggered", String::new()));
                     d.cooldown = d.def.params.get("m_fTimeInBetweenUses").copied().unwrap_or(30.0);
                     if let Some(s) = d.def.sounds.get("m_pAlarmRingBeginEvent") {
                         sfx.write(PostEvent::named(s, Some(pos)));
                     }
                     msgs.push("The alarm has been raised");
+                    // its spawners come: those far enough from Corvo
+                    // (`m_fSpawnerMinDistFromPlayer`) first, up to `m_MaxSpawnedPawnsPerRing`
                     if let Some(level) = level.as_ref() {
                         let max = d.def.params.get("m_MaxSpawnedPawnsPerRing").copied().unwrap_or(2.0) as usize;
-                        for name in d.def.spawners.iter().take(max) {
-                            if let Some(si) = level.scene.spawners.iter().position(|s| s.name == *name) {
-                                spawn.write(SpawnRequest(si as u32));
-                            }
+                        let min_dist = d.def.params.get("m_fSpawnerMinDistFromPlayer").copied().unwrap_or(1500.0) * 0.01;
+                        let mut list: Vec<(usize, bool)> = d
+                            .def
+                            .spawners
+                            .iter()
+                            .filter_map(|name| level.scene.spawners.iter().position(|s| s.name == *name))
+                            .map(|si| (si, Vec3::from(level.scene.spawners[si].position).distance(ppos) >= min_dist))
+                            .collect();
+                        if list.iter().any(|(_, far)| *far) {
+                            list.retain(|(_, far)| *far);
+                        }
+                        for (si, _) in list.into_iter().take(max) {
+                            spawn.write(SpawnRequest(si as u32));
                         }
                     }
                 }

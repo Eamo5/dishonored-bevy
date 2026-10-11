@@ -40,13 +40,65 @@ fn log_health(stats: Res<PlayerStats>, mut last: Local<Option<f32>>, player: Que
     *last = Some(h);
 }
 
-/// A sound the AI can hear.
+/// A sound the AI can hear: where, how far (the original's loudness classes, `DefaultAI.ini`
+/// `m_LoudnessDistanceArray`), and what it is to them.
 #[derive(Message, Clone, Copy)]
 pub struct Noise {
     pub pos: Vec3,
     pub radius: f32,
-    /// Combat noise (sword clashes, screams) puts listeners straight into combat.
-    pub combat: bool,
+    pub kind: NoiseKind,
+}
+
+/// What a noise is to those who hear it (`EAINoiseContext` as their attention takes it): an
+/// anomaly (footsteps, a door, a body falling), a threat (blades meeting, a thrown thing),
+/// danger (a shot, an explosion), a death rattle, a cry for help, an alarm bell. The noises'
+/// loudness and contexts are those roshan's r614/blink research decoded from the original's
+/// contact system and callers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NoiseKind {
+    Anomaly,
+    Threatening,
+    Danger,
+    DeathRattle,
+    Help,
+    Alarm,
+}
+
+impl NoiseKind {
+    /// A Kismet noise's context (`EAINoiseContext`: `AINC_Danger`...).
+    pub fn of_context(c: &str) -> Self {
+        let c = c.to_ascii_lowercase();
+        if c.contains("danger") || c.contains("explosion") || c.contains("watchtower") {
+            NoiseKind::Danger
+        } else if c.contains("threat") || c.contains("wolzap") {
+            NoiseKind::Threatening
+        } else if c.contains("deathrattle") {
+            NoiseKind::DeathRattle
+        } else if c.contains("help") {
+            NoiseKind::Help
+        } else if c.contains("alarm") {
+            NoiseKind::Alarm
+        } else {
+            NoiseKind::Anomaly
+        }
+    }
+    /// Its slot in an attention profile's heard reactions (`Attention::heard`).
+    pub fn slot(self) -> usize {
+        self as usize
+    }
+}
+
+impl Noise {
+    /// A fighting noise: what puts the armed on their guard (and NPCs without an attention
+    /// profile straight into combat).
+    pub fn combat(&self) -> bool {
+        matches!(self.kind, NoiseKind::Threatening | NoiseKind::Danger | NoiseKind::Help | NoiseKind::Alarm)
+    }
+    /// What sets civilians running (the panic behaviour's `m_ScaryNoises`: danger, threats,
+    /// an alarm bell, a cry for help, a death rattle; anything but an anomaly).
+    pub fn panics(&self) -> bool {
+        self.kind != NoiseKind::Anomaly
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
@@ -260,10 +312,21 @@ pub struct PlayerStats {
     /// where the last blow came from (the HUD's directional damage)
     #[serde(skip)]
     pub hit_from: Option<Vec3>,
-    /// the campaign's chaos level (`DisSeqVar_DarknessLevel`): missions played lethally add to it
+    /// the campaign's chaos level (`DisSeqVar_DarknessLevel`): the step of the player tweak's
+    /// `m_DarknessLevels` its score reaches (see `campaign::notify_deed`)
     pub chaos_level: i32,
     /// at or past the current mission's high-chaos threshold
     pub chaos_high: bool,
+    /// the chaos score (`m_DarknessScore`, `DisSeqVar_Darkness`): what the deeds and the scripts
+    /// add, never below 0, kept across missions
+    #[serde(default)]
+    pub chaos_score: i32,
+    /// this mission's deed counters (`m_DeedCounters`)
+    #[serde(default)]
+    pub deed_counters: Vec<i32>,
+    /// the statistics grown this frame that the deeds count: which, and the victim's pawn
+    #[serde(skip)]
+    pub deeds_pending: Vec<(&'static str, String)>,
     /// this mission: people met, alarms rung, bodies found by the guards
     pub npcs_met: u32,
     pub alarms_rung: u32,
@@ -572,6 +635,9 @@ impl Default for PlayerStats {
             hit_from: None,
             chaos_level: 0,
             chaos_high: false,
+            chaos_score: 0,
+            deed_counters: Vec::new(),
+            deeds_pending: Vec::new(),
             npcs_met: 0,
             alarms_rung: 0,
             bodies_found: 0,
@@ -596,7 +662,16 @@ impl PlayerStats {
         self.mana_cap = (self.mana + attrs.mana_regen_portion).min(self.max_mana);
         self.mana_delay = attrs.mana_regen_delay;
     }
-    /// Dishonored's chaos: lethal play raises it (see `campaign::chaos_high`).
+    /// The player killed someone (pawn tweak `pawn`): the statistics, and the chaos deeds on
+    /// kills.
+    pub fn killed(&mut self, pawn: &str, civilian: bool) {
+        self.kills += 1;
+        if civilian {
+            self.civilians_killed += 1;
+        }
+        self.deeds_pending.push(("ePlayerStat_NumKills", pawn.to_string()));
+    }
+    /// Dishonored's chaos: the deeds raise it (see `campaign::chaos_high`).
     pub fn chaos(&self) -> &'static str {
         if self.chaos_high {
             "High"
@@ -640,24 +715,54 @@ pub struct TimeControl {
     pub finisher: f32,
     /// Daud's Blink aimed standing still: the world, and he, held (0) or let go (1)
     pub aim_freeze: f32,
+    /// Bend Time's own pace for Corvo (`m_PlayerDilation`: 0.85, then 0.9); how far it still
+    /// has to come in or go out (0 settled .. 1: over `m_fTimeDilationWarmupTime` in,
+    /// `..CooldownTime` out, seconds) and whether it was running when last looked at
+    pub player_dilation: f32,
+    pub bend_lag: f32,
+    pub bend_on: bool,
+    pub ramp_in: f32,
+    pub ramp_out: f32,
 }
 
 impl Default for TimeControl {
     fn default() -> Self {
-        Self { bend_remaining: 0.0, world_dilation: 0.0, wheel: 1.0, scripted: None, finisher: 1.0, aim_freeze: 1.0 }
+        Self { bend_remaining: 0.0, world_dilation: 0.0, wheel: 1.0, scripted: None, finisher: 1.0, aim_freeze: 1.0, player_dilation: 1.0, bend_lag: 0.0, bend_on: false, ramp_in: 0.15, ramp_out: 0.25 }
     }
 }
 
 impl TimeControl {
+    /// How far bent time holds now (0..1): coming in over its warm-up, going out over its
+    /// cool-down.
+    pub fn bend_ramp(&self) -> f32 {
+        if self.bend_remaining > 0.0 {
+            1.0 - self.bend_lag
+        } else {
+            self.bend_lag
+        }
+    }
+    /// Bent time starts (or stops): its ramp turns about from where it is.
+    pub fn bend_turn(&mut self) {
+        let on = self.bend_remaining > 0.0;
+        if on != self.bend_on {
+            self.bend_on = on;
+            self.bend_lag = 1.0 - self.bend_lag;
+        }
+    }
     pub fn world_scale(&self) -> f32 {
-        let bent = if self.bend_remaining > 0.0 { self.world_dilation } else { 1.0 };
+        // (bent time comes in and goes out over its warm-up and cool-down)
+        let bent = 1.0 + (self.world_dilation - 1.0) * self.bend_ramp();
         let scripted = self.scripted.map(|s| s.0).unwrap_or(1.0);
         bent.min(scripted).min(self.finisher).min(self.aim_freeze) * self.wheel
     }
-    /// The time scale of what goes on through bent time (Corvo's own: a finisher's and the
-    /// wheel's slow motion only).
+    /// Corvo's pace through his bent time (`m_PlayerDilation`, as it comes in).
+    pub fn player_rate(&self) -> f32 {
+        1.0 + (self.player_dilation - 1.0) * self.bend_ramp()
+    }
+    /// The time scale of what goes on through bent time (Corvo's own: his pace in it, a
+    /// finisher's and the wheel's slow motion).
     pub fn own_scale(&self) -> f32 {
-        self.finisher.min(1.0) * self.wheel
+        self.finisher.min(1.0) * self.wheel * self.player_rate()
     }
     /// A character's time scale: the world's, or its own if bent time passes it by.
     pub fn npc_scale(&self, out_of_bend: bool) -> f32 {
@@ -807,6 +912,11 @@ pub struct Campaign {
 fn tick_time_control(time: Res<Time>, mut tc: ResMut<TimeControl>, mut sfx: MessageWriter<crate::audio::PostEvent>) {
     let was = tc.bend_remaining;
     tc.bend_remaining = (tc.bend_remaining - time.delta_secs()).max(0.0);
+    // (Bend Time's warm-up and cool-down: linear, as measured by roshan's r614/blink research)
+    let dt = time.delta_secs();
+    tc.bend_turn();
+    let span = if tc.bend_on { tc.ramp_in } else { tc.ramp_out };
+    tc.bend_lag = (tc.bend_lag - dt / span.max(0.01)).max(0.0);
     if was > 0.0 && tc.bend_remaining <= 0.0 {
         sfx.write(crate::audio::PostEvent::named("Snd_Power_P_Bend_Time_Stop", None));
         sfx.write(crate::audio::PostEvent::named("Snd_UI_Ingame_Slomo_End", None));

@@ -507,11 +507,13 @@ fn run_script(
             }
         }
         "chaos" => {
-            // chaos N: the campaign's chaos level
+            // chaos N: the campaign's chaos level (the score at its step)
             let n: i32 = cmd.get(1).and_then(|v| v.parse().ok()).unwrap_or(0);
             stats.chaos_level = n;
+            stats.chaos_score = data.0.darkness.levels.get(n.max(0) as usize).copied().unwrap_or(n * 12);
             if let Some(vm) = vm.as_mut() {
                 vm.darkness = n;
+                vm.darkness_score = stats.chaos_score;
             }
         }
         "kop" => {

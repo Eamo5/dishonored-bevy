@@ -481,7 +481,7 @@ fn pose_ragdolls(
             if let (Some(h), Some(w)) = (hips, waters.as_ref()) {
                 if npc.mode == Mode::Unconscious && w.at(h).is_some() {
                     npc.set_mode(Mode::Dead);
-                    stats.kills += 1;
+                    stats.killed(&npc.pawn, !npc.hostile());
                     stats.knockouts = stats.knockouts.saturating_sub(1);
                     msgs.push(format!("{} drowned", npc.name));
                 }

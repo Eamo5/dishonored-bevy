@@ -536,14 +536,17 @@ pub fn cook(levels: &[Arc<Package>], refs: &HashMap<ActorKey, KActor>) -> Kismet
         };
         let mut op = KOp { class: cls, name, ..Default::default() };
         op.parent = props.object("ParentSequence").and_then(|o| ex.ops.get(&(pi, o)).copied());
+        // (a disabled link carries nothing; an input's own delay adds to what reaches it: as
+        // roshan's r614/blink research found the original's links work)
+        let disabled = |l: &Props| matches!(l.get("bDisabled"), Some(Value::Bool(true)));
         for l in struct_array(&pkg, &props, "InputLinks") {
             let linked = l.object("LinkedOp").and_then(|o| ex.ops.get(&(pi, o)).copied());
-            op.inputs.push(KInput { desc: str_of(&l, "LinkDesc"), linked });
+            op.inputs.push(KInput { desc: str_of(&l, "LinkDesc"), linked, delay: l.float("ActivateDelay").unwrap_or(0.0).max(0.0), disabled: disabled(&l) });
         }
         for l in struct_array(&pkg, &props, "OutputLinks") {
             let delay = l.float("ActivateDelay").unwrap_or(0.0);
             let mut links = Vec::new();
-            for t in struct_array(&pkg, &l, "Links") {
+            for t in struct_array(&pkg, &l, "Links").into_iter().filter(|_| !disabled(&l)) {
                 if let Some(&target) = t.object("LinkedOp").and_then(|o| ex.ops.get(&(pi, o))) {
                     let input = match t.get("InputLinkIdx") {
                         Some(Value::Int(v)) => (*v).max(0) as u32,
@@ -694,11 +697,16 @@ pub fn cook(levels: &[Arc<Package>], refs: &HashMap<ActorKey, KActor>) -> Kismet
         }
         ex.out.vars.push(v);
     }
-    // conversations of the dialogue actors the scripts talk to
+    // conversations of the dialogue actors the scripts talk to (The Knife of Dunwall's
+    // `DisDLC06DialogOneShot`s too, with Daud as a speaker: roshan's r614/blink research found
+    // them missed)
     let dialog_actors: Vec<((usize, i32), u32)> = ex
         .actors
         .iter()
-        .filter(|((pi, o), _)| levels[*pi].class_name(*o).contains("DisDialog"))
+        .filter(|((pi, o), _)| {
+            let cls = levels[*pi].class_name(*o);
+            cls.contains("DisDialog") || cls.starts_with("DisDLC06Dialog")
+        })
         .map(|(k, v)| (*k, *v))
         .collect();
     // every dialogue tree of the levels
@@ -857,6 +865,7 @@ fn dialog_tree(pkg: &Package, t: i32, voices: &HashMap<[u32; 4], Vec<String>>) -
                     None => KDialogNodeKind::Pass,
                 },
                 "DisConv_TimeLimit" => KDialogNodeKind::TimeLimit(p.float("m_fTimeLimitInSeconds").unwrap_or(0.0)),
+                "DisConv_CompareDarknessLevel" => KDialogNodeKind::Darkness(p.int("m_LevelToCompare").unwrap_or(0)),
                 "DisConv_RandomBranch" | "DisConv_RandomSequentialBranch" => KDialogNodeKind::Random,
                 "DisConv_SequentialBranch" => KDialogNodeKind::Sequential,
                 "DisConv_KismetActivateRemoteEvent" => match p.get("m_EventName") {
@@ -1308,6 +1317,26 @@ fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<
                     options.push((text, begin));
                 }
                 steps[at] = KDialogStep::Choice(options);
+                return;
+            }
+            // the chaos level's branches (outputs leading the same way share theirs)
+            "DisConv_CompareDarknessLevel" => {
+                let links: Vec<Option<i32>> = struct_array(pkg, &p, "m_OutputLinks").iter().map(|l| l.object("m_pLink").filter(|o| *o > 0)).collect();
+                let at = steps.len();
+                steps.push(KDialogStep::End);
+                let mut begins = [None; 3];
+                for k in 0..3 {
+                    let Some(link) = links.get(k).copied().flatten() else { continue };
+                    if let Some(j) = (0..k).find(|&j| links.get(j).copied().flatten() == Some(link)) {
+                        begins[k] = begins[j];
+                        continue;
+                    }
+                    begins[k] = Some(steps.len() as u32);
+                    // (each its own walk: branches that meet again each say what follows)
+                    walk_steps(pkg, Some(link), voices, steps, &mut seen.clone());
+                    steps.push(KDialogStep::End);
+                }
+                steps[at] = KDialogStep::Darkness(p.int("m_LevelToCompare").unwrap_or(0), begins);
                 return;
             }
             _ => {}

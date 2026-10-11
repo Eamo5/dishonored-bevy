@@ -22,7 +22,10 @@ impl Plugin for SavePlugin {
             .add_message::<LoadRequest>()
             .insert_resource(SaveSlots::scan())
             .add_systems(OnEnter(GameState::InGame), arm_pending)
-            .add_systems(Update, (quick_keys, save_game, load_game, discard_level_states).chain().after(crate::kismet::apply_effects).run_if(in_state(GameState::InGame)))
+            .init_resource::<SaveBlocked>()
+            .init_resource::<ArrivalSave>()
+            .add_systems(Update, (save_blocked, quick_keys, arrival_save, save_game, load_game, discard_level_states).chain().after(crate::kismet::apply_effects).run_if(in_state(GameState::InGame)))
+            .add_systems(OnEnter(GameState::InGame), queue_arrival_save.before(arm_pending).after(crate::level::LevelSpawnSet))
             .add_systems(OnEnter(GameState::InGame), return_to_level.after(arm_pending).after(crate::level::LevelSpawnSet))
             .add_systems(Update, (apply_pending, restore_npcs).chain().run_if(in_state(GameState::InGame)));
     }
@@ -31,8 +34,87 @@ impl Plugin for SavePlugin {
 #[derive(Message, Clone, Copy)]
 pub struct SaveRequest(pub usize);
 
-/// The slot the level scripts' autosaves go to.
+/// Whether Corvo may save now (a manual or quick save): not while fighting (nor for 1 s
+/// after), blinking, choking or assassinating someone, choosing (nor 0.1 s after), in a
+/// cinematic (nor 1 s after) or peeking through a keyhole, as roshan's r614/blink research
+/// decoded the original's rules. The seconds left of each lingering reason.
+#[derive(Resource, Default)]
+pub struct SaveBlocked {
+    pub now: bool,
+    after: [f32; 3],
+}
+
+#[allow(clippy::too_many_arguments)]
+fn save_blocked(
+    time: Res<Time>,
+    mut b: ResMut<SaveBlocked>,
+    npcs: Query<&Npc>,
+    player: Query<(Has<crate::combat::Choking>, Has<crate::combat::Assassinating>), With<Player>>,
+    powers: Res<crate::powers::Powers>,
+    choice: Res<crate::choice::Choice>,
+    cine: Res<crate::script_world::Cinematic>,
+    peek: Res<crate::keyhole::Peek>,
+) {
+    let dt = time.delta_secs();
+    let fighting = npcs.iter().any(|n| !n.is_down() && n.hostile() && n.mode == crate::npc::Mode::Combat);
+    let (choking, assassinating) = player.single().unwrap_or((false, false));
+    for (i, (on, linger)) in [(fighting, 1.0), (choice.pending.is_some(), 0.1), (cine.on, 1.0)].into_iter().enumerate() {
+        b.after[i] = if on { linger } else { (b.after[i] - dt).max(0.0) };
+    }
+    b.now = b.after.iter().any(|t| *t > 0.0) || powers.blink.is_some() || choking || assassinating || peek.at.is_some();
+}
+
+/// The slot the autosaves are asked for: they go to it or the next, in turn, never over the
+/// newer one (`SGS_DisAutoSave0` / `1`); a mission's start save (`DisSeqAct_AutoSave`'s
+/// `m_bMissionStart`) to its own (`SGS_DisMission0..8`), as roshan's r614/blink research
+/// decoded the original's slots.
 pub const AUTOSAVE_SLOT: usize = 9;
+pub const AUTOSAVE_SLOT_B: usize = 10;
+pub const MISSION_SLOT: usize = 11;
+/// The last slot there is.
+pub const LAST_SLOT: usize = MISSION_SLOT + 8;
+
+/// An autosave's slot (either of the two).
+pub fn is_autosave(slot: usize) -> bool {
+    slot == AUTOSAVE_SLOT || slot == AUTOSAVE_SLOT_B
+}
+
+/// A mission start's slot (missions 0..8).
+pub fn is_mission_save(slot: usize) -> bool {
+    (MISSION_SLOT..=LAST_SLOT).contains(&slot)
+}
+
+/// Where the next autosave goes: the autosave slot not holding the newer autosave.
+fn autosave_target(slots: &SaveSlots) -> usize {
+    let at = |s: usize| slots.info(s).map(|i| i.2);
+    match (at(AUTOSAVE_SLOT), at(AUTOSAVE_SLOT_B)) {
+        (Some(a), Some(b)) if a > b => AUTOSAVE_SLOT_B,
+        (Some(_), None) => AUTOSAVE_SLOT_B,
+        _ => AUTOSAVE_SLOT,
+    }
+}
+
+/// An autosave on arriving in a map (every map load but a reload: the original's engine queues
+/// one), once the level has settled; seconds left.
+#[derive(Resource, Default)]
+struct ArrivalSave(Option<f32>);
+
+fn queue_arrival_save(mut arrival: ResMut<ArrivalSave>, pending: Option<Res<PendingLoad>>, level: Option<Res<LevelInfo>>) {
+    let reload = pending.is_some_and(|p| !p.level_only);
+    // (not the menus' maps, nor the trials': they keep no saves)
+    let map = level.map(|l| l.scene.name.to_ascii_lowercase()).unwrap_or_default();
+    let skip = map.is_empty() || map.contains("mainmenu") || map.starts_with("dlc05") || (std::env::var("DH_SCRIPT").is_ok() && std::env::var("DH_AUTOSAVE").is_err());
+    arrival.0 = (!reload && !skip).then_some(2.0);
+}
+
+fn arrival_save(time: Res<Time>, mut arrival: ResMut<ArrivalSave>, mut save: MessageWriter<SaveRequest>) {
+    let Some(left) = arrival.0.as_mut() else { return };
+    *left -= time.delta_secs();
+    if *left <= 0.0 {
+        arrival.0 = None;
+        save.write(SaveRequest(AUTOSAVE_SLOT));
+    }
+}
 
 #[derive(Message, Clone, Copy)]
 pub struct LoadRequest(pub usize);
@@ -284,7 +366,7 @@ pub fn mission_index(map: &str) -> usize {
 impl SaveSlots {
     pub fn scan() -> SaveSlots {
         let mut slots = Vec::new();
-        for slot in 0..=AUTOSAVE_SLOT {
+        for slot in 0..=LAST_SLOT {
             #[derive(Deserialize)]
             struct Head {
                 map: String,
@@ -315,7 +397,8 @@ impl SaveSlots {
         let s = self.slots.iter().find(|s| s.0 == slot)?;
         let name = match slot {
             0 => "Quicksave".to_string(),
-            AUTOSAVE_SLOT => "Autosave".to_string(),
+            s if is_autosave(s) => "Autosave".to_string(),
+            s if is_mission_save(s) => "Mission start".to_string(),
             _ => format!("Slot {slot}"),
         };
         Some(format!("{name}  -  {}  -  {}", s.2, ago(s.3)))
@@ -364,7 +447,7 @@ fn save_game(
     mut requests: MessageReader<SaveRequest>,
     level: Option<Res<LevelInfo>>,
     mut vm: Option<ResMut<Vm>>,
-    stats: Res<PlayerStats>,
+    (stats, blocked): (Res<PlayerStats>, Res<SaveBlocked>),
     time: Res<Time>,
     mut slots: ResMut<SaveSlots>,
     mut msgs: ResMut<HudMessages>,
@@ -386,18 +469,33 @@ fn save_game(
         Query<(Entity, &crate::fish::Fish, &Transform, Option<&crate::anim::Animator>)>, Query<(Entity, &crate::krust::Krust, Option<&crate::anim::Animator>)>, Res<crate::fish::FishMeals>,
     ),
     (cine, script_ui, mut campaign, powers, tc, carry, matinee, krust_spit, trap_parts, darts, tower_arrows, tower_state, ragdolls, globals): (Res<crate::script_world::Cinematic>, Option<Res<crate::kismet::ScriptUi>>, ResMut<crate::gameplay::Campaign>, Res<crate::powers::Powers>, Res<crate::gameplay::TimeControl>, Res<crate::carry::Carry>, Res<crate::matinee::MatineeState>, Query<(&crate::krust::Spit, &Transform)>, Query<(&crate::traps::TrapPart, Option<&crate::anim::Animator>)>, Query<(&crate::traps::Dart, &Transform)>, Query<(&crate::watchtower::Arrow, &Transform)>, Query<&crate::watchtower::Tower>, Query<(&crate::ragdoll::Ragdoll, &crate::npc::NpcRig, &GlobalTransform)>, Query<&GlobalTransform>),
-    mut saving: MessageWriter<crate::globalui::ShowSaving>,
+    (mut saving, mut waiting): (MessageWriter<crate::globalui::ShowSaving>, Local<Option<(usize, f32)>>),
 ) {
     // the scripts keeping the map's state for a return (`DisSeqAct_SaveLevelState`; a partial
     // one, the Hound Pits': only its pickups, `Campaign::hub_taken`)
     let keep = vm.as_mut().and_then(|v| v.level_state_save.take()).filter(|partial| !partial);
-    let slot = requests.read().last().map(|r| r.0);
+    let asked = requests.read().last().map(|r| r.0);
+    // (an autosave or a mission's start save waits until saving is allowed, a while at most)
+    if let Some(s) = asked.filter(|s| is_autosave(*s) || is_mission_save(*s)) {
+        *waiting = Some((s, 20.0));
+    }
+    let mut slot = asked.filter(|s| !(is_autosave(*s) || is_mission_save(*s)));
+    if let Some((s, left)) = *waiting {
+        if !(stats.dead || blocked.now) {
+            slot = Some(s);
+            *waiting = None;
+        } else {
+            *waiting = (left > time.delta_secs()).then_some((s, left - time.delta_secs()));
+        }
+    }
+    let auto = slot.is_some_and(|s| is_autosave(s) || is_mission_save(s));
+    let slot = slot.map(|s| if is_autosave(s) { autosave_target(&slots) } else { s });
     if slot.is_none() && keep.is_none() {
         return;
     }
     let Some(level) = level else { return };
     let Ok((pt, p)) = player.single() else { return };
-    if stats.dead && slot.is_some() {
+    if (stats.dead || blocked.now) && slot.is_some() {
         msgs.push("Can't save now");
         return;
     }
@@ -528,7 +626,9 @@ fn save_game(
     }) {
         Ok(()) => {
             saving.write(crate::globalui::ShowSaving);
-            msgs.push(if slot == 0 { "Quicksaved".to_string() } else { format!("Saved to slot {slot}") });
+            if !auto {
+                msgs.push(if slot == 0 { "Quicksaved".to_string() } else { format!("Saved to slot {slot}") });
+            }
             *slots = SaveSlots::scan();
         }
         Err(e) => {
@@ -686,8 +786,11 @@ fn apply_pending(
         let ok = if level_only { vm.restore_level_state(k) } else { vm.restore_state(k) };
         if !ok {
             warn!("save: the level scripts changed since this save; their state was not restored");
+        } else {
+            vm.level_restored();
         }
         vm.darkness = stats.chaos_level;
+        vm.darkness_score = stats.chaos_score;
     }
     if !level_only {
         // (the start-up's cinematic, e.g. waking in the cell, gives way to the save's)

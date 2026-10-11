@@ -7,7 +7,7 @@
 //! for whoever comes near (`DisDLC06Tweaks_ArcMinePlaced`), picked back up while unspent.
 
 use crate::audio::PostEvent;
-use crate::gameplay::{HitKind, HudMessages, Noise, NpcHit, PlayerStats, TimeControl};
+use crate::gameplay::{HitKind, HudMessages, Noise, NoiseKind, NpcHit, PlayerStats, TimeControl};
 use crate::level::{GameAssets, GROUP_NPC, GROUP_PROP, GROUP_WORLD};
 use crate::npc::Npc;
 use crate::particles::SpawnEffect;
@@ -789,7 +789,7 @@ fn razors(
                 // the shrapnel: everyone in sight within 9 m
                 sfx.write(PostEvent::named("Snd_Spring_Razor_Shot", Some(p)));
                 fx.write(SpawnEffect { rot: t.rotation, ..SpawnEffect::at("springrazor", p) });
-                noise.write(Noise { pos: p, radius: 20.0, combat: true });
+                noise.write(Noise { pos: p, radius: 15.0, kind: NoiseKind::Threatening });
                 for (ne, n, nt) in &npcs {
                     let to = nt.translation - p;
                     let d = to.length();
@@ -822,7 +822,7 @@ fn explode(
     time: Res<Time>,
     mut fx: MessageWriter<SpawnEffect>,
     mut rats: MessageWriter<crate::swarm::KillRats>,
-    rapier: bevy_rapier3d::prelude::ReadRapierContext,
+    (rapier, attrs): (bevy_rapier3d::prelude::ReadRapierContext, Res<crate::gamedata::Attrs>),
 ) {
     // a blast reaches what it can see (the original's `VisibleCollidingActors`)
     let ctx = rapier.single().ok();
@@ -837,11 +837,11 @@ fn explode(
         sfx.write(PostEvent::named(if b.kind == HitKind::ExplosiveBolt { "Snd_AI_TBoy_Arrow_Fire_Expl" } else { "Snd_Grenade_Explosion" }, Some(b.at)));
         rats.write(crate::swarm::KillRats { at: b.at, radius: b.full.max(2.0), by_player: !matches!(b.kind, HitKind::EnemyExplosion | HitKind::ByOthers), source: b.at });
         fx.write(SpawnEffect::at(b.effect, b.at));
-        noise.write(Noise { pos: b.at, radius: 40.0, combat: true });
+        noise.write(Noise { pos: b.at, radius: 25.0, kind: NoiseKind::Threatening });
         let scale = |d: f32| if d <= b.full { 1.0 } else { (1.0 - (d - b.full) / (b.radius - b.full).max(0.1)).max(0.0) };
         for (e, n, t) in &npcs {
             let d = t.translation.distance(b.at);
-            if !n.is_down() && d < b.radius && seen(b.at + Vec3::Y * 0.3, t.translation) {
+            if (!n.is_down() || n.mode == crate::npc::Mode::Unconscious) && d < b.radius && seen(b.at + Vec3::Y * 0.3, t.translation) {
                 hits.write(NpcHit { npc: e, damage: b.damage * scale(d), kind: b.kind, from: b.at });
             }
         }
@@ -851,7 +851,7 @@ fn explode(
             let [reach, full] = b.player.unwrap_or([b.radius, 1.5]);
             if d < reach && !stats.dead && seen(b.at + Vec3::Y * 0.3, pt.translation) {
                 let k = if d <= full { 1.0 } else { (1.0 - (d - full) / (reach - full).max(0.01)).max(0.0) };
-                stats.take_damage(b.damage * k);
+                stats.take_damage(attrs.armored(b.damage * k));
                 stats.damage_flash = 1.0;
                 stats.hit_from = Some(b.at);
                 if stats.health <= 0.0 {
@@ -944,7 +944,7 @@ fn mines(
         fx.write(SpawnEffect { follow: Some(ne), secs: 1.0, ..SpawnEffect::at("electrified", Vec3::ZERO) });
         hits.write(NpcHit { npc: ne, damage: v("m_DamageToPawns", 50.0), kind: if kind == MineKind::Stun { HitKind::StunMine } else { HitKind::ArcMine }, from: muzzle });
         // (`m_ShootingNoiseLoudness`: 2 m)
-        noise.write(Noise { pos: muzzle, radius: 2.0, combat: false });
+        noise.write(Noise { pos: muzzle, radius: 2.0, kind: NoiseKind::Anomaly });
         m.shots += 1;
         m.wait = v("m_fDelayBetweenShots", 1.0);
         if m.shots >= v("m_NumShots", 2.0).max(1.0) as u32 {
@@ -952,7 +952,7 @@ fn mines(
             sfx.write(PostEvent::named("Snd_ArcMine_Idle_Stop", Some(at)));
             sfx.write(PostEvent::named("Snd_ArcMine_Destroy_Start", Some(at)));
             fx.write(SpawnEffect { rot: t.rotation, ..SpawnEffect::at(if kind == MineKind::Stun { "stunmine_break" } else { "arcmine_break" }, at) });
-            noise.write(Noise { pos: at, radius: 20.0, combat: true });
+            noise.write(Noise { pos: at, radius: 20.0, kind: NoiseKind::Threatening });
             commands.entity(e).despawn();
         }
     }
@@ -1048,7 +1048,7 @@ fn choke_clouds(
         sfx.write(PostEvent::named("Snd_DLC06_ChokeDust", Some(p.at)));
         fx.write(SpawnEffect { secs: p.secs + 2.0, ..SpawnEffect::at("chokedust", p.at) });
         rats.write(crate::swarm::KillRats { at: p.at, radius: data.pawn("chokedust.explosion.m_fRatKillRadius", 200.0) * 0.01, by_player: true, source: p.at });
-        noise.write(Noise { pos: p.at, radius: 10.0, combat: true });
+        noise.write(Noise { pos: p.at, radius: 10.0, kind: NoiseKind::Threatening });
         commands.spawn((ChokeCloud { radius: p.radius, left: p.secs, had: Vec::new() }, Transform::from_translation(p.at), DespawnOnExit(GameState::InGame)));
     }
     let dt = time.delta_secs() * tc.world_scale();

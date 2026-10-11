@@ -116,6 +116,8 @@ struct ArmClips {
     swarm: Option<ClipId>,
     grenade_throw: Option<ClipId>,
     razor_place: Option<ClipId>,
+    /// the guns' reload stages (`Pistol_Reload_In`...), by name
+    reload: Vec<(&'static str, ClipId)>,
     // drop assassinations, by side (front, back, left, right)
     drop_kill: [Option<ClipId>; 4],
     // swimming (both hands, the sword away)
@@ -198,6 +200,7 @@ impl ArmClips {
             possess: lib.find("Powers_Cast_Possession_In"),
             swarm: lib.find("Powers_Cast_Swarm"),
             grenade_throw: lib.find("Gadgets_Grenade_Deploy"),
+            reload: ["Pistol_Reload_In", "Pistol_Reload_Out", "Pistol_FastReload", "Crossbow_Reload_In", "Crossbow_Reload_Out", "Crossbow_RapidReload"].into_iter().filter_map(|n| lib.find(n).map(|c| (n, c))).collect(),
             razor_place: lib.find("Gadgets_SpringRazor_Deploy"),
         };
         (c.idle.is_some() && c.walk.is_some()).then_some(c)
@@ -223,6 +226,8 @@ struct ArmsAnim {
     parry_flash: f32,
     damage_flash: f32,
     cast_seq: u32,
+    /// the reload clips seen asked for
+    reload_seq: u32,
     selected: Power,
     attach_l: Option<(Entity, Transform)>,
     /// ranged weapon meshes held in the left hand: (power, parent entity)
@@ -420,6 +425,7 @@ fn spawn_arms(
                 parry_flash: 0.0,
                 damage_flash: 0.0,
                 cast_seq: powers.as_ref().map(|p| p.cast_seq).unwrap_or(0),
+                reload_seq: powers.as_ref().map(|p| p.reload_anim.0).unwrap_or(0),
                 selected: Power::Pistol,
                 attach_l,
                 held,
@@ -778,10 +784,20 @@ fn animate_arms(
         // Do not replay casts or switches made before the full-body sequence
         // when normal gameplay resumes.
         st.cast_seq = powers.cast_seq;
+        st.reload_seq = powers.reload_anim.0;
         st.selected = powers.selected;
         return;
     }
     let ranged = powers.selected.is_gadget();
+    // a gun's reload: its stages' clips, the gun held open between them
+    let reloading = crate::aim::Weapon::of(powers.selected).is_some_and(|w| powers.reload[w as usize] > 0.0);
+    if powers.reload_anim.0 != st.reload_seq {
+        st.reload_seq = powers.reload_anim.0;
+        if let Some(&(name, cl)) = c.reload.iter().find(|(n, _)| *n == powers.reload_anim.1) {
+            anim.restart_overlay(cl, false, 1.0, 0.08);
+            st.started.push(name.to_string());
+        }
+    }
     if powers.cast_seq != st.cast_seq {
         st.cast_seq = powers.cast_seq;
         let cl = match powers.cast_power {
@@ -813,7 +829,8 @@ fn animate_arms(
     }
     let bow = matches!(powers.selected, Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt);
     let idle = if ranged { if bow { c.wristbow_idle.or(c.gadgets_idle) } else { c.gadgets_idle } } else { c.powers_idle };
-    if anim.overlay_finished() || !(anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision)) {
+    let in_reload = c.reload.iter().any(|(_, cl)| anim.overlay_is(Some(*cl)));
+    if !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision))) {
         match idle {
             Some(cl) if !st.choking && !st.blocking => anim.play_overlay(cl, true, 1.0, 0.25),
             _ => anim.stop_overlay(0.2),

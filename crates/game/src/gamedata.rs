@@ -74,6 +74,7 @@ impl Data {
             power_aliases: std::mem::replace(&mut d.power_aliases, p.power_aliases),
             faction: p.faction,
             texts: Default::default(),
+            darkness: std::mem::replace(&mut d.darkness, p.darkness),
         }
     }
 
@@ -177,6 +178,11 @@ pub struct Attrs {
     pub walk: f32,
     pub sprint: f32,
     pub crouch: f32,
+    /// the speeds sideways and backwards (`GroundStrafeMultiplier*`, `GroundBackwardMultiplier*`:
+    /// running, sprinting, sneaking) and how fast a slowing takes hold (`m_fSpeedBlendDownSpeed`)
+    pub strafe: [f32; 3],
+    pub backward: [f32; 2],
+    pub speed_blend_down: f32,
     /// Agility's power jump: holding jump keeps pushing up (m/s²) for a while, to a speed
     pub power_jump_accel: f32,
     pub power_jump_time: f32,
@@ -197,6 +203,12 @@ pub struct Attrs {
     pub npc_gun_miss: f32,
     pub plague_damage_reduction: f32,
     pub plague_mana: f32,
+    /// the armour's points off a blow (the Improved Armor upgrade's `DamageReduction`, whole)
+    pub armor: f32,
+    /// running and sprinting make no noise (the Silent Movement upgrades: `SilentRunning`,
+    /// `SilentSprinting`: his `Footfall_Run_Player_Silent` steps)
+    pub silent_running: bool,
+    pub silent_sprinting: bool,
     pub mana_regen_delay: f32,
     /// mana per second while regenerating, and how far above the last expense it refills
     pub mana_regen_rate: f32,
@@ -236,6 +248,16 @@ pub struct Attrs {
 }
 
 impl Attrs {
+    /// A blow, a shot or a blast less the armour: whole points off, never below 1 (the
+    /// player's `TakeDamage`, as roshan's r614/blink research decoded it; bites, electricity
+    /// and the plague go round it).
+    pub fn armored(&self, damage: f32) -> f32 {
+        if damage <= 0.0 || self.armor <= 0.0 {
+            damage
+        } else {
+            (damage - self.armor).max(1.0)
+        }
+    }
     pub fn elixir_capacity(&self, mana: bool) -> u32 {
         if mana { self.max_mana_elixirs } else { self.max_elixirs }
     }
@@ -289,6 +311,9 @@ impl Default for Attrs {
     fn default() -> Self {
         Attrs {
             walk: 4.0,
+            strafe: [0.7, 0.6, 0.5],
+            backward: [0.8, 0.55],
+            speed_blend_down: 8.0,
             sprint: 6.0,
             crouch: 2.75,
             power_jump_accel: 0.0,
@@ -307,6 +332,9 @@ impl Default for Attrs {
             npc_gun_miss: 0.0,
             plague_damage_reduction: 0.0,
             plague_mana: 0.0,
+            armor: 0.0,
+            silent_running: false,
+            silent_sprinting: false,
             mana_regen_delay: 3.0,
             mana_regen_rate: 10.0,
             mana_regen_portion: 20.0,
@@ -364,6 +392,8 @@ fn derive_attributes(data: Res<Data>, settings: Res<crate::settings::Settings>, 
     }
     let step = a("ManaRegenStepTime").max(0.01);
     let h_step = a("HealthRegenRate").max(0.005);
+    // a multiplier of the attributes, its own default where they have none
+    let m = |n: &str, d0: f32| if data.0.attributes.contains_key(n) { a(n) } else { d0 };
     // his weapons' damage, and their projectiles
     let item = |n: &str, d0: f32| data.0.attributes.get(n).map(|v| v[d.min(3) as usize]).filter(|v| *v > 0.0).unwrap_or(d0);
     let shot = |key: &str, weapon: f32, head: f32| {
@@ -383,6 +413,9 @@ fn derive_attributes(data: Res<Data>, settings: Res<crate::settings::Settings>, 
     };
     *attrs = Attrs {
         walk: a("GroundSpeed") * UU,
+        strafe: [m("GroundStrafeMultiplierRun", 0.7), m("GroundStrafeMultiplierSprint", 0.6), m("GroundStrafeMultiplierSneak", 0.5)],
+        backward: [m("GroundBackwardMultiplierRun", 0.8), m("GroundBackwardMultiplierSprint", 0.55)],
+        speed_blend_down: data.pawn("m_fSpeedBlendDownSpeed", 8.0),
         sprint: a("GroundSpeedSprint") * UU,
         crouch: a("GroundSpeedCrouch") * UU,
         // (our falling gravity is the original's: `player::GRAVITY`)
@@ -401,6 +434,9 @@ fn derive_attributes(data: Res<Data>, settings: Res<crate::settings::Settings>, 
         mana_potion_full_chance: a("PotionManaBonusChanceRatio").clamp(0.0, 1.0),
         npc_gun_miss: a("ChanceNPCGunMiss").clamp(0.0, 1.0),
         plague_damage_reduction: a("PlagueDamageReduction").max(0.0),
+        silent_running: data.0.upgrades.iter().any(|u| stats.upgrades.contains(&u.id) && u.attributes.iter().any(|(n, v)| n == "SilentRunning" && *v > 0.0)),
+        silent_sprinting: data.0.upgrades.iter().any(|u| stats.upgrades.contains(&u.id) && u.attributes.iter().any(|(n, v)| n == "SilentSprinting" && *v > 0.0)),
+        armor: data.0.upgrades.iter().filter(|u| stats.upgrades.contains(&u.id)).flat_map(|u| &u.attributes).filter(|(n, _)| n == "DamageReduction").map(|(_, v)| *v).sum::<f32>().trunc().max(0.0),
         plague_mana: a("ManaGainOnPlagueDamage").max(0.0),
         mana_regen_delay: a("ManaRegenInitialDelay"),
         mana_regen_rate: a("ManaRegenAmount") / step,

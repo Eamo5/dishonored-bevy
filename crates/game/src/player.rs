@@ -1,7 +1,7 @@
 //! First-person player (Corvo) controller.
 
 use crate::footsteps::{Footfall, Gait, Walker};
-use crate::gameplay::{HudMessages, Noise, PlayerStats};
+use crate::gameplay::{HudMessages, Noise, NoiseKind, PlayerStats};
 use crate::hud::Paused;
 use crate::level::{LevelInfo, LevelSpawnSet, GROUP_NPC, GROUP_PLAYER, GROUP_PROP, GROUP_WORLD};
 use crate::powers::Powers;
@@ -18,6 +18,7 @@ pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<Slide>();
         app.init_resource::<VirtualInput>()
             .init_resource::<MantleSpot>()
             .add_systems(OnEnter(GameState::InGame), spawn_player.after(LevelSpawnSet))
@@ -50,6 +51,18 @@ pub const CROUCH_SPEED: f32 = 1.9;
 /// The jump's speed without the attributes (`JumpZ` 800 uu/s).
 pub const JUMP_SPEED: f32 = 8.0;
 
+/// A slide under way (crouching from a sprint): since it began (s), which way, how fast at
+/// first (m/s).
+#[derive(Resource, Default)]
+pub struct Slide(pub Option<(f32, Vec3, f32)>);
+
+/// The slide (`StatePlayerMasterSlide`, as roshan's r614/blink research measured it): from a
+/// sprint of at least 400 uu/s, the speed eases to the sneaking one over 1.1 s, along the way
+/// it began; it ends there, or when the way turns more than 25 degrees; let go after 0.55 s.
+const SLIDE_TIME: f32 = 1.1;
+const SLIDE_MIN_SPEED: f32 = 4.0;
+const SLIDE_CANCEL: f32 = 0.55;
+
 #[derive(Component)]
 pub struct Player {
     pub velocity: Vec3,
@@ -70,6 +83,8 @@ pub struct Player {
     pub fall_speed: f32,
     /// the highest point since leaving the ground (a fall's height)
     pub air_peak: f32,
+    /// the speed cap last frame (a slowing blends in: `m_fSpeedBlendDownSpeed`)
+    pub speed_cap: f32,
     /// Agility: seconds the held jump keeps pushing up
     pub power_jump: f32,
     /// dragged along (an assassin's Attract Spell), m/s
@@ -142,7 +157,7 @@ pub fn spawn_player(mut commands: Commands, level: Option<Res<LevelInfo>>, confi
                 spawn: pos,
                 mantle: None,
                 step_timer: 0.0,
-                fall_speed: 0.0, air_peak: 0.0,
+                fall_speed: 0.0, air_peak: 0.0, speed_cap: 0.0,
                 power_jump: 0.0,
                 pull: Vec3::ZERO,
             },
@@ -224,7 +239,7 @@ mod look_tests {
         let player = app.world_mut().spawn((Player {
             velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
             grounded: false, lean: 0.0, noclip: false, eye_height: STAND_EYE, locked: false,
-            air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0, fall_speed: 0.0, air_peak: 0.0,
+            air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0, fall_speed: 0.0, air_peak: 0.0, speed_cap: 0.0,
             power_jump: 0.0, pull: Vec3::ZERO,
         }, Transform::IDENTITY)).id();
         for mode in 0..3 {
@@ -311,7 +326,7 @@ fn player_move(
     (mut msgs, attrs, zone): (ResMut<HudMessages>, Res<crate::gamedata::Attrs>, Res<crate::zones::ZonePush>),
     (swim, waters, carry, possession): (Res<crate::swim::Swim>, Option<Res<crate::swim::Waters>>, Res<crate::carry::Carry>, Res<crate::possession::Possession>),
     (mut climb, climbables, mut sfx): (ResMut<crate::climb::Climb>, Option<Res<crate::climb::Climbables>>, MessageWriter<crate::audio::PostEvent>),
-    (cine, settings, paused, tc): (Res<crate::script_world::Cinematic>, Res<crate::settings::Settings>, Res<Paused>, Res<crate::gameplay::TimeControl>),
+    (cine, settings, paused, tc, mut slide): (Res<crate::script_world::Cinematic>, Res<crate::settings::Settings>, Res<Paused>, Res<crate::gameplay::TimeControl>, ResMut<Slide>),
     mut q: Query<(
         Entity,
         &mut Player,
@@ -353,6 +368,8 @@ fn player_move(
     let jump_pressed = !held && (keys.just_pressed(bind.key(crate::bindings::Act::Jump)) || std::mem::take(&mut vinput.jump));
     // (held in the air with the world while Daud's Blink is aimed)
     let dt = if wish == Vec3::ZERO && !jump_pressed { dt * tc.aim_freeze.clamp(0.0, 1.0) } else { dt };
+    // (his own pace through Bend Time: `m_PlayerDilation`)
+    let dt = dt * tc.player_rate();
 
     if p.noclip {
         let look = Quat::from_rotation_y(p.yaw) * Quat::from_rotation_x(p.pitch) * Vec3::NEG_Z;
@@ -451,8 +468,8 @@ fn player_move(
                 // the original ignores footfalls for a moment after landing
                 p.step_timer = 0.8;
             }
-            if fell > 1.3 {
-                noise.write(Noise { pos: t.translation, radius: (0.9 * (38.0 * fell).sqrt()).min(14.0), combat: false });
+            if fell > 0.24 && !p.crouched {
+                noise.write(Noise { pos: t.translation, radius: if fell > 2.1 { 8.0 } else { 4.0 }, kind: NoiseKind::Anomaly });
             }
             // the original's: none up to `MaxSpeedBeforeFallingDamage`, all of his health at
             // `MaxSpeedBeforeFallingDeath`, in between in proportion (whole points; Agility
@@ -499,31 +516,65 @@ fn player_move(
                 t.translation.y += STAND_HALF - CROUCH_HALF;
             }
         } else {
+            // (from a sprint: a slide)
+            let horiz = p.velocity.with_y(0.0);
+            if p.sprinting && p.grounded && horiz.length() >= SLIDE_MIN_SPEED && !carry.carrying() {
+                slide.0 = Some((0.0, horiz.normalize(), horiz.length()));
+            }
             p.crouched = true;
             *col = Collider::capsule_y(CROUCH_HALF, RADIUS);
             t.translation.y -= STAND_HALF - CROUCH_HALF;
         }
     }
+    // a slide ends at its time, when its way turns (a wall), when let go late enough, off the
+    // ground, or stood up
+    if let Some((st, way, _)) = slide.0 {
+        let moved = out.map(|o| o.effective_translation.with_y(0.0)).unwrap_or(Vec3::ZERO);
+        let turned = moved.length() > 1e-3 && moved.normalize().dot(way) < 25f32.to_radians().cos();
+        if st >= SLIDE_TIME || turned || (st >= SLIDE_CANCEL && wish == Vec3::ZERO) || !p.grounded || !p.crouched || host.is_some() {
+            slide.0 = None;
+        }
+    }
 
-    p.sprinting = keys.pressed(bind.key(crate::bindings::Act::Sprint)) && !p.crouched && wish.dot(fwd) > 0.3 && !carry.carrying() && host.is_none();
-    // the original's ground speeds (Agility 2 sprints faster; `GroundSpeedCarryingCorpse`);
-    // a creature's (`m_fGroundSpeedWhilePossessed`)
+    // (sprinting in any direction, as the original allows)
+    p.sprinting = keys.pressed(bind.key(crate::bindings::Act::Sprint)) && !p.crouched && wish != Vec3::ZERO && !carry.carrying() && host.is_none();
+    // sideways or backwards (the original's: within 10 degrees of sideways going forward, 50
+    // going back; else within 40 of straight back)
+    let (ahead, side) = (wish.dot(fwd), wish.dot(right));
+    let mag = wish.length().max(1e-4);
+    let off_side = (side.abs() / mag).clamp(0.0, 1.0).acos().to_degrees();
+    let off_back = (ahead.abs() / mag).clamp(0.0, 1.0).acos().to_degrees();
+    let strafing = wish != Vec3::ZERO && off_side < if ahead >= 0.0 { 10.0 } else { 50.0 };
+    let backwards = !strafing && ahead < 0.0 && off_back < 40.0;
+    // the original's ground speeds (Agility 2 sprints faster; `GroundSpeedCarryingCorpse`),
+    // sideways and backwards at their multipliers; a creature's (`m_fGroundSpeedWhilePossessed`)
     let speed = if let Some(b) = host {
         b.ground
     } else if carry.carrying() {
         attrs.carry.min(if p.crouched { attrs.crouch } else { attrs.walk })
     } else if p.crouched {
-        attrs.crouch
+        if strafing { attrs.walk * attrs.strafe[2] } else { attrs.crouch }
     } else if p.sprinting {
-        attrs.sprint
+        attrs.sprint * if strafing { attrs.strafe[1] } else if backwards { attrs.backward[1] } else { 1.0 }
     } else {
-        attrs.walk
+        attrs.walk * if strafing { attrs.strafe[0] } else if backwards { attrs.backward[0] } else { 1.0 }
     };
     let weapon_factor = if host.is_none() && !stats.unarmed && !stats.sheathed { attrs.weapon_speed } else { 1.0 };
-    let target = wish * speed * weapon_factor;
+    // (a slowing blends in at `m_fSpeedBlendDownSpeed`, a quickening at once)
+    let cap = speed * weapon_factor;
+    p.speed_cap = if cap < p.speed_cap { p.speed_cap + (cap - p.speed_cap) * (dt * attrs.speed_blend_down).clamp(0.0, 1.0) } else { cap };
+    let target = wish * p.speed_cap;
     let accel = if p.grounded { 14.0 } else { 3.0 };
     let horiz = Vec3::new(p.velocity.x, 0.0, p.velocity.z);
-    let new_h = horiz + (target - horiz) * (accel * dt).min(1.0);
+    let mut new_h = horiz + (target - horiz) * (accel * dt).min(1.0);
+    if let Some((st, way, v0)) = slide.0.as_mut() {
+        // v0 + (crouch - v0)(1 - cos(pi t / 1.1)) / 2
+        *st += dt;
+        let to = attrs.crouch * weapon_factor;
+        let v = *v0 + (to - *v0) * (1.0 - (std::f32::consts::PI * (*st / SLIDE_TIME).min(1.0)).cos()) * 0.5;
+        new_h = *way * v;
+        p.speed_cap = p.speed_cap.max(v);
+    }
     p.velocity.x = new_h.x;
     p.velocity.z = new_h.z;
 
@@ -578,9 +629,15 @@ fn player_move(
             p.step_timer = if p.sprinting { 0.32 } else if p.crouched { 0.6 } else { 0.5 };
             let gait = if p.crouched { Gait::Sneak } else if p.sprinting { Gait::Sprint } else { Gait::Walk };
             steps.write(Footfall { pos: t.translation, gait, who: Walker::Player });
-            let radius = if p.crouched { 0.0 } else if p.sprinting { 9.0 } else { 3.0 };
+            let radius = if p.crouched || (p.sprinting && attrs.silent_sprinting) || (!p.sprinting && attrs.silent_running) {
+                0.0
+            } else if p.sprinting {
+                12.0
+            } else {
+                6.0
+            };
             if radius > 0.0 {
-                noise.write(Noise { pos: t.translation, radius, combat: false });
+                noise.write(Noise { pos: t.translation, radius, kind: NoiseKind::Anomaly });
             }
         }
     }

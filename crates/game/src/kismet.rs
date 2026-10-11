@@ -135,7 +135,8 @@ pub const CONV_CHOICE: u32 = 0x8000_0000;
 #[derive(Clone, Copy, Debug)]
 enum Toucher {
     Player { proxy: bool },
-    Npc,
+    /// a character: its spawner, and whether it is down (a body)
+    Npc { spawner: u32, down: bool },
 }
 
 /// World changes requested by the scripts.
@@ -203,8 +204,9 @@ pub enum Effect {
     Power(String, u8),
     /// open a store (its tweak object's name)
     Store(String),
-    /// save the game (`DisSeqAct_AutoSave`, at mission starts and milestones)
-    AutoSave,
+    /// save the game (`DisSeqAct_AutoSave`, at mission starts and milestones; a mission
+    /// start's: its number)
+    AutoSave(Option<u8>),
     /// a key onto Corvo's ring (`DisSeqAct_AddKey`: its `m_Name`)
     Key(String),
     /// an abstract item (note, invitation) taken from Corvo: its object path
@@ -450,9 +452,11 @@ pub struct Vm {
     interp_pos: HashMap<u32, f32>,
     /// the campaign's scripts merged in: their first op and variable
     pub campaign: Option<(u32, u32)>,
-    /// the campaign's chaos level (`DisSeqVar_DarknessLevel`) and this mission's share of it
+    /// the campaign's chaos level (`DisSeqVar_DarknessLevel`), its score (`DisSeqVar_Darkness`)
+    /// and the score's steps (`m_DarknessLevels`), kept from the player's statistics
     pub darkness: i32,
-    pub mission_chaos: i32,
+    pub darkness_score: i32,
+    pub darkness_levels: Vec<i32>,
     /// `SeqAct_PrepareMapChange`'s map
     pending_map: Option<String>,
     pending_levels: Vec<String>,
@@ -544,6 +548,8 @@ pub struct Vm {
     player_proxy: bool,
     /// characters standing in trigger volumes (volume actor, spawner)
     npc_touching: HashSet<(u32, u32)>,
+    /// the spawners whose characters are down (bodies set off only what lets them)
+    down_spawners: HashSet<u32>,
     /// volumes whose touch events characters can set off (`bPlayerOnly` false)
     npc_touch_actors: Option<Vec<u32>>,
     /// Corvo's health / mana set (`DisSeqAct_SetPlayerHealth` / `Mana`): percent of the most
@@ -731,7 +737,8 @@ impl Vm {
             interp_pos: HashMap::new(),
             campaign: None,
             darkness: 0,
-            mission_chaos: 0,
+            darkness_score: 0,
+            darkness_levels: Vec::new(),
             pending_map: None,
             pending_levels: Vec::new(),
             inert: Vec::new(),
@@ -779,6 +786,7 @@ impl Vm {
             set_physics: Vec::new(),
             player_proxy: false,
             npc_touching: HashSet::new(),
+            down_spawners: HashSet::new(),
             npc_touch_actors: None,
             npc_pawn: HashMap::new(),
             door_open: HashMap::new(),
@@ -1001,6 +1009,7 @@ impl Vm {
         match class {
             "SeqVar_Player" | "DisSeqVar_PlayerPawn" => Val::Player,
             "DisSeqVar_DarknessLevel" => Val::Int(self.darkness),
+            "DisSeqVar_Darkness" => Val::Int(self.darkness_score),
             "SeqVar_RandomFloat" => {
                 let p = &self.g.vars[v as usize].props;
                 let get = |k: &str, d: f32| match p.get(k) {
@@ -1079,10 +1088,16 @@ impl Vm {
         }
     }
 
-    /// Activate the links of an op's output.
+    /// Activate the links of an op's output (each input's own delay added, a disabled input
+    /// taking nothing).
     fn fire(&mut self, op: u32, out: usize) {
         let Some(o) = self.g.ops[op as usize].outputs.get(out) else { return };
         for &(t, i, d) in &o.links {
+            let input = self.g.ops.get(t as usize).and_then(|x| x.inputs.get(i as usize));
+            if input.is_some_and(|x| x.disabled) {
+                continue;
+            }
+            let d = d + input.map_or(0.0, |x| x.delay);
             if d > 0.0 {
                 self.timers.push((d, t, i));
             } else {
@@ -1103,7 +1118,9 @@ impl Vm {
             return false;
         }
         let max = self.pi(ev, "MaxTriggerCount").unwrap_or(1);
-        let retrigger = self.pf(ev, "ReTriggerDelay").unwrap_or(0.0);
+        // (one leaving a touch volume isn't held back by it)
+        let leaving_touch = out == 1 && matches!(self.g.ops[ev as usize].class.as_str(), "SeqEvent_Touch" | "DisSeqEvent_Touch");
+        let retrigger = if leaving_touch { 0.0 } else { self.pf(ev, "ReTriggerDelay").unwrap_or(0.0) };
         let now = self.time;
         let s = &mut self.st[ev as usize];
         if s.disabled || max > 0 && s.fired >= max as u32 {
@@ -1155,10 +1172,13 @@ impl Vm {
         }
     }
 
-    /// Whether a touch event answers this toucher: characters only where `bPlayerOnly` is off,
-    /// and only the kinds its `ClassProximityTypes` names (the possession proxy: a rat's or a
-    /// fish's ways), none its `IgnoredClassProximityTypes` names.
-    fn touch_accepts(&self, ev: u32, who: Toucher) -> bool {
+    /// Whether a touch event answers this toucher: characters only where `bPlayerOnly` is off
+    /// (not asked of one leaving), and only the kinds its `ClassProximityTypes` names (the
+    /// possession proxy: a rat's or a fish's ways), none its `IgnoredClassProximityTypes` names;
+    /// only the pawns its `ProximityTweaks` names, none its `IgnoredProximityTweaks`; a body only
+    /// with `bAllowDeadPawns` (and only bodies with `m_bOnlyDeadOrSleepingPawns`). As roshan's
+    /// r614/blink research decoded the original's touch.
+    fn touch_accepts(&self, ev: u32, who: Toucher, leaving: bool) -> bool {
         let classes = |k: &str| -> Vec<String> {
             match self.prop(ev, k) {
                 Some(KVal::List(l)) => l.iter().filter_map(|v| if let KVal::Str(s) = v { Some(s.rsplit('.').next().unwrap_or(s).to_ascii_lowercase()) } else { None }).collect(),
@@ -1168,9 +1188,30 @@ impl Vm {
         let mine: &[&str] = match who {
             Toucher::Player { proxy: false } => &["dishonoredplayerpawn", "dishonoredpawn", "pawn", "actor"],
             Toucher::Player { proxy: true } => &["dispossessionproxypawn", "dishonoredplayerpawn", "dishonoredpawn", "pawn", "actor"],
-            Toucher::Npc => &["dishonorednpcpawn", "dishonoredpawn", "pawn", "actor"],
+            Toucher::Npc { .. } => &["dishonorednpcpawn", "dishonoredpawn", "pawn", "actor"],
         };
-        if matches!(who, Toucher::Npc) && self.pb(ev, "bPlayerOnly").unwrap_or(true) {
+        if matches!(who, Toucher::Npc { .. }) && !leaving && self.pb(ev, "bPlayerOnly").unwrap_or(true) {
+            return false;
+        }
+        let down = matches!(who, Toucher::Npc { down: true, .. });
+        let only_down = self.pb(ev, "m_bOnlyDeadOrSleepingPawns").unwrap_or(false);
+        if (down && !(only_down || self.pb(ev, "bAllowDeadPawns").unwrap_or(false))) || (only_down && !down) {
+            return false;
+        }
+        // (the pawn tweaks it answers, and those it ignores)
+        let tweak = match who {
+            Toucher::Npc { spawner, .. } => self.npc_pawn.get(&spawner).map(|p| p.to_ascii_lowercase()),
+            Toucher::Player { .. } => None,
+        };
+        let named = |k: &str| -> Option<bool> {
+            let Some(KVal::List(l)) = self.prop(ev, k) else { return None };
+            let list: Vec<String> = l.iter().filter_map(|v| if let KVal::Str(s) = v { Some(s.to_ascii_lowercase()) } else { None }).collect();
+            if list.is_empty() {
+                return None;
+            }
+            Some(tweak.as_ref().is_some_and(|t| list.iter().any(|x| x == t || x.rsplit('.').next() == t.rsplit('.').next())))
+        };
+        if named("ProximityTweaks") == Some(false) || named("IgnoredProximityTweaks") == Some(true) {
             return false;
         }
         let only = classes("ClassProximityTypes");
@@ -1180,11 +1221,18 @@ impl Vm {
         !classes("IgnoredClassProximityTypes").iter().any(|c| mine.contains(&c.as_str()))
     }
 
-    /// A volume touched (0) or left (1) by someone.
+    /// A volume touched (0) or left (1) by someone; left by everyone, "Empty" (2).
     fn touch_event(&mut self, actor: u32, out: usize, who: Toucher, instigator: Val) {
         for ev in self.events_of.get(&actor).cloned().unwrap_or_default() {
-            if matches!(self.g.ops[ev as usize].class.as_str(), "SeqEvent_Touch" | "DisSeqEvent_Touch") && self.touch_accepts(ev, who) {
+            if matches!(self.g.ops[ev as usize].class.as_str(), "SeqEvent_Touch" | "DisSeqEvent_Touch") && self.touch_accepts(ev, who, out == 1) {
                 self.event(ev, out, Some(instigator.clone()));
+            }
+        }
+        if out == 1 && !self.touching.contains(&actor) && !self.npc_touching.iter().any(|(a, _)| *a == actor) {
+            for ev in self.events_of.get(&actor).cloned().unwrap_or_default() {
+                if matches!(self.g.ops[ev as usize].class.as_str(), "SeqEvent_Touch" | "DisSeqEvent_Touch") && self.g.ops[ev as usize].outputs.len() > 2 {
+                    self.event(ev, 2, None);
+                }
             }
         }
     }
@@ -1208,12 +1256,12 @@ impl Vm {
             return;
         }
         if let Some(KVal::Actor(a)) = self.prop(ev, "Originator").cloned() {
-            if self.touching.contains(&a) && self.touch_accepts(ev, Toucher::Player { proxy: self.player_proxy }) {
+            if self.touching.contains(&a) && self.touch_accepts(ev, Toucher::Player { proxy: self.player_proxy }, false) {
                 self.event(ev, 0, Some(Val::Player));
             }
             let npcs: Vec<u32> = self.npc_touching.iter().filter(|(v, _)| *v == a).map(|(_, s)| *s).collect();
             for s in npcs {
-                if self.touch_accepts(ev, Toucher::Npc) {
+                if self.touch_accepts(ev, Toucher::Npc { spawner: s, down: self.down_spawners.contains(&s) }, false) {
                     let who = self.spawner_actor.get(&s).map(|x| Val::Actor(*x));
                     self.event(ev, 0, who);
                 }
@@ -1459,20 +1507,23 @@ impl Vm {
             "SeqAct_Delay" => match input {
                 // (already counting, Start restarts it only with `bStartWillRestart`: off by
                 // the class default, so a second Start is ignored)
-                0 if !self.pb(op, "bStartWillRestart").unwrap_or(false) && self.latent.iter().any(|l| matches!(l, Latent::Delay { op: o, .. } if *o == op)) => {}
+                0 if !self.pb(op, "bStartWillRestart").unwrap_or(false) && self.latent.iter().any(|l| matches!(l, Latent::Delay { op: o, .. } if *o == op)) => {
+                    // (a paused one goes on)
+                    self.st[op as usize].paused = false;
+                }
                 0 => {
                     let d = self.read_f(op, "Duration", "Duration", 1.0).max(0.0);
                     self.latent.retain(|l| !matches!(l, Latent::Delay { op: o, .. } if *o == op));
                     self.st[op as usize].paused = false;
                     self.latent.push(Latent::Delay { op, left: d });
                 }
+                // Stop: no more, nothing fired; Pause: held (as roshan's r614/blink research
+                // decoded the original's Delay)
                 1 => {
                     self.latent.retain(|l| !matches!(l, Latent::Delay { op: o, .. } if *o == op));
-                    self.fire(op, 1);
                 }
                 _ => {
-                    let s = &mut self.st[op as usize];
-                    s.paused = !s.paused;
+                    self.st[op as usize].paused = true;
                 }
             },
             "SeqAct_Gate" => {
@@ -1494,7 +1545,11 @@ impl Vm {
                             self.fire(op, 0);
                         }
                     }
-                    1 => s.gate_open = true,
+                    // (opening starts its count again)
+                    1 => {
+                        s.gate_open = true;
+                        s.index = 0;
+                    }
                     2 => s.gate_open = false,
                     _ => s.gate_open = !s.gate_open,
                 }
@@ -1504,11 +1559,14 @@ impl Vm {
                 let inc = self.pi(op, "IncrementAmount").unwrap_or(1);
                 let looping = self.pb(op, "bLooping").unwrap_or(false);
                 let auto = self.pb(op, "bAutoDisableLinks").unwrap_or(false);
+                // (its Index read each time, written back after: the scripts may set it)
                 let from_var = self.read(op, "Index").iter().find_map(|v| v.as_f32()).map(|f| f as i32);
                 let s = &mut self.st[op as usize];
                 if !s.init {
                     s.init = true;
                     s.index = from_var.unwrap_or(1);
+                } else if let Some(v) = from_var {
+                    s.index = v;
                 }
                 if input == 1 {
                     s.index = 1;
@@ -1527,6 +1585,9 @@ impl Vm {
                         s.off |= bit;
                     }
                     self.fire(op, (idx - 1) as usize);
+                }
+                if from_var.is_some() {
+                    self.write(op, "Index", Val::Int(next));
                 }
             }
             "SeqAct_RandomSwitch" => {
@@ -1556,13 +1617,16 @@ impl Vm {
                 self.fire(op, pick as usize);
             }
             "SeqAct_AndGate" => {
+                // once everything leading here has come, it fires and stays shut (`bOpen`)
                 let need = self.linked_inputs[op as usize].max(1);
                 let s = &mut self.st[op as usize];
+                if s.init {
+                    return;
+                }
                 s.and_seen |= 1u64 << (input.min(63));
                 s.fired += 1;
                 if s.fired >= need {
-                    s.fired = 0;
-                    s.and_seen = 0;
+                    s.init = true;
                     self.fire(op, 0);
                 }
             }
@@ -1702,9 +1766,10 @@ impl Vm {
                 self.fire(op, if v { 0 } else { 1 });
             }
             "DisSeqCond_CompareBoolExtended" => {
-                let vals = self.read(op, "Bool");
-                let all = !vals.is_empty() && vals.iter().all(|v| v.as_bool().unwrap_or(false));
-                self.fire(op, if all { 0 } else { 1 });
+                // all true (0), none (1), some (2)
+                let vals: Vec<bool> = self.read(op, "Bool").iter().map(|v| v.as_bool().unwrap_or(false)).collect();
+                let n = vals.iter().filter(|b| **b).count();
+                self.fire(op, if !vals.is_empty() && n == vals.len() { 0 } else if n == 0 { 1 } else { 2 });
             }
             "DisSeqCond_IsPlayerInCombat" => self.fire(op, if self.player_combat { 0 } else { 1 }),
             // not the automated test harness
@@ -1881,9 +1946,9 @@ impl Vm {
             "DisSeqAct_AINoise" => {
                 // (how far: the original's loudness table, `GameData::noise_loudness`)
                 let loudness = self.ps(op, "m_eNoiseLoudness").unwrap_or_else(|| "EAINoiseLoudness1".into());
-                let combat = self.ps(op, "m_eNoiseContext").is_some_and(|c| c.contains("Danger"));
+                let kind = crate::gameplay::NoiseKind::of_context(&self.ps(op, "m_eNoiseContext").unwrap_or_default());
                 let (maker, at) = (self.read(op, "NoiseMaker"), self.read(op, "NoiseLocation"));
-                self.ai_fx.push(crate::script_world::AiFx::Noise { maker, at, loudness, combat });
+                self.ai_fx.push(crate::script_world::AiFx::Noise { maker, at, loudness, kind });
                 self.fire(op, 0);
             }
             "DisSeqAct_AIStartDistraction" => {
@@ -2090,7 +2155,11 @@ impl Vm {
             "DisSeqAct_BackupAndClearInventory" => {
                 // Corvo's things put away (the dream: all but his coins)
                 self.inventory_ops.push((true, self.pb(op, "m_bAlsoApplyToUpgrades").unwrap_or(false)));
+                // Out, then "Finished (After Unequip)" once his hands are empty (the Hound Pits'
+                // trip to the Flooded District goes on from it: found by roshan's r614/blink
+                // research)
                 self.fire(op, 0);
+                self.fire(op, 1);
             }
             "DisSeqAct_RestoreInventoryFromBackup" => {
                 self.inventory_ops.push((false, false));
@@ -2452,7 +2521,9 @@ impl Vm {
                 if self.in_combat && !forced {
                     self.fire_desc(op, "Denied");
                 } else {
-                    self.effects.push(Effect::AutoSave);
+                    // (a mission's start: its own slot, `4 + m_MissionNumber` in the original's)
+                    let mission = self.pb(op, "m_bMissionStart").unwrap_or(false).then(|| self.pi(op, "m_MissionNumber").unwrap_or(-1)).filter(|n| (0..9).contains(n));
+                    self.effects.push(Effect::AutoSave(mission.map(|n| n as u8)));
                     self.fire(op, 1);
                 }
             }
@@ -3350,21 +3421,20 @@ impl Vm {
                 }
             }
             "DisSeqAct_AddDarkness" => {
-                self.darkness = (self.darkness + self.pi(op, "m_Value").unwrap_or(0)).clamp(0, 100);
-                self.campaign_fx.push(crate::campaign::CampaignFx::Darkness(self.darkness));
+                // points onto the score (`Add`: never below 0); the campaign keeps it
+                let n = self.pi(op, "m_Value").unwrap_or(0);
+                self.darkness_score = self.darkness_score.saturating_add(n).max(0);
+                self.darkness = crate::campaign::darkness_level(&self.darkness_levels, self.darkness_score);
+                self.campaign_fx.push(crate::campaign::CampaignFx::Darkness(n));
                 self.fire(op, 0);
             }
             "DisSeqAct_MissionStatsTracking" => {
                 let tweak = self.ps(op, "m_pMissionStatsTweaks").unwrap_or_default();
                 let tweak = tweak.rsplit('.').next().unwrap_or(&tweak).to_string();
                 if input == 0 {
-                    self.mission_chaos = 0;
                     self.campaign_fx.push(crate::campaign::CampaignFx::MissionBegin(tweak));
                 } else {
-                    // the mission's chaos joins the campaign's
-                    self.darkness += self.mission_chaos;
-                    self.mission_chaos = 0;
-                    self.campaign_fx.push(crate::campaign::CampaignFx::MissionEnd { tweak, darkness: self.darkness });
+                    self.campaign_fx.push(crate::campaign::CampaignFx::MissionEnd(tweak));
                 }
                 self.fire(op, 0);
             }
@@ -3798,6 +3868,10 @@ impl Vm {
                         c.3 = steps.len();
                         continue;
                     }
+                    dhcook::format::KDialogStep::Darkness(level, begins) => {
+                        c.3 = begins[darkness_branch(self.darkness, *level)].map(|b| b as usize).unwrap_or(steps.len());
+                        continue;
+                    }
                     dhcook::format::KDialogStep::Matinee(guid) => {
                         for (i, op) in g.ops.iter().enumerate() {
                             if op.class == "SeqAct_Interp" && matches!(op.props.get("m_MatineeGUID"), Some(KVal::Str(x)) if x == guid) {
@@ -3942,6 +4016,7 @@ impl Vm {
                 }
                 self.walk_tree(tree, out(0), depth + 1)
             }
+            K::Darkness(level) => self.walk_tree(tree, out(darkness_branch(self.darkness, *level)), depth + 1),
             K::Hook { .. } | K::Pass => linked.into_iter().find_map(|o| self.walk_tree(tree, o, depth + 1)),
         }
     }
@@ -4103,6 +4178,18 @@ impl Vm {
             self.restore_campaign(&vals, &st);
         }
         true
+    }
+
+    /// A level's state put back (a save loaded, a kept map returned to): its
+    /// `SeqEvent_LevelLoaded`s fire "State Restored" (output 3), their counts reset, as the
+    /// original does after restoring (found by roshan's r614/blink research).
+    pub fn level_restored(&mut self) {
+        let loaded: Vec<u32> = (0..self.g.ops.len() as u32).filter(|&i| self.g.ops[i as usize].class == "SeqEvent_LevelLoaded" && self.g.ops[i as usize].outputs.len() > 3).collect();
+        for i in loaded {
+            self.st[i as usize].fired = 0;
+            self.event(i, 3, None);
+        }
+        self.pump();
     }
 
     /// The mission statistics screen of a `DisSeqAct_ShowMissionStats` was closed.
@@ -4566,6 +4653,7 @@ fn setup(
         }
     }
     vm.darkness = stats.chaos_level;
+    vm.darkness_score = stats.chaos_score;
     if let Some((vals, st)) = campaign.script_state.take() {
         vm.restore_campaign(&vals, &st);
     }
@@ -5013,10 +5101,9 @@ fn world_events(
     let watched = vm.npc_touch_actors.clone().unwrap_or_default();
     if !watched.is_empty() {
         let mut now: HashSet<(u32, u32)> = HashSet::new();
-        for (_, n, f, t) in &npcs {
-            if n.is_down() {
-                continue;
-            }
+        // (bodies too: the events that let them, `bAllowDeadPawns`, answer them)
+        vm.down_spawners = npcs.iter().filter(|(_, n, _, _)| n.is_down()).map(|(_, _, f, _)| f.0).collect();
+        for (_, _n, f, t) in &npcs {
             for &a in &watched {
                 let Some(hulls) = vm.touch.iter().find(|(x, _)| *x == a).map(|(_, h)| h) else { continue };
                 let at = t.translation - moved.get(&a).copied().unwrap_or(Vec3::ZERO);
@@ -5033,12 +5120,14 @@ fn world_events(
                 info!("kismet: character of spawner {s} ({}) touches {}", vm.npc_pawn.get(&s).map(|x| x.as_str()).unwrap_or("?"), vm.g.actors.get(a as usize).map(|x| x.name.as_str()).unwrap_or("?"));
             }
             if let Some(&sa) = vm.spawner_actor.get(&s) {
-                vm.touch_event(a, 0, Toucher::Npc, Val::Actor(sa));
+                let down = vm.down_spawners.contains(&s);
+                vm.touch_event(a, 0, Toucher::Npc { spawner: s, down }, Val::Actor(sa));
             }
         }
         for (a, s) in left {
             if let Some(&sa) = vm.spawner_actor.get(&s) {
-                vm.touch_event(a, 1, Toucher::Npc, Val::Actor(sa));
+                let down = vm.down_spawners.contains(&s);
+                vm.touch_event(a, 1, Toucher::Npc { spawner: s, down }, Val::Actor(sa));
             }
         }
     }
@@ -5738,10 +5827,10 @@ pub fn apply_effects(
                     *c = c.saturating_sub(1);
                 }
             }
-            Effect::AutoSave => {
+            Effect::AutoSave(mission) => {
                 // (test runs leave the player's saves alone)
                 if std::env::var("DH_SCRIPT").is_err() || std::env::var("DH_AUTOSAVE").is_ok() {
-                    autosave.write(crate::save::SaveRequest(crate::save::AUTOSAVE_SLOT));
+                    autosave.write(crate::save::SaveRequest(mission.map(|n| crate::save::MISSION_SLOT + n as usize).unwrap_or(crate::save::AUTOSAVE_SLOT)));
                 }
             }
             Effect::Hide(v, h) => {
@@ -6058,6 +6147,18 @@ pub fn apply_effects(
 }
 
 /// The cooked map that has a player start tagged `tag`.
+/// `DisConv_CompareDarknessLevel`'s output for the chaos level against `than`: 0 the same,
+/// 1 lower, 2 higher (as roshan's r614/blink research decoded it).
+fn darkness_branch(level: i32, than: i32) -> usize {
+    if level == than {
+        0
+    } else if than <= level {
+        2
+    } else {
+        1
+    }
+}
+
 pub fn find_start(tag: &str) -> Option<(String, usize)> {
     #[derive(serde::Deserialize)]
     struct Starts {

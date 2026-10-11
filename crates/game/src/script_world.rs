@@ -56,7 +56,7 @@ pub enum AiFx {
     /// the giving op (its cooked pickup)
     GivePickup(u32),
     /// a noise at a place (or its maker), heard so far, in alarm or not
-    Noise { maker: Vec<Val>, at: Vec<Val>, loudness: String, combat: bool },
+    Noise { maker: Vec<Val>, at: Vec<Val>, loudness: String, kind: crate::gameplay::NoiseKind },
     /// go and look at something (`DisSeqAct_AIStartDistraction`)
     Distract { targets: Vec<Val>, to: Vec<Val> },
     /// suspicious (true) or calm
@@ -260,7 +260,7 @@ fn scripted_shots(
             sn.yaw = (-flat.x).atan2(-flat.z);
         }
         shots.write(crate::npc::NpcShot { from, to: at, bow: sn.ranged >= 2 });
-        noise.write(crate::gameplay::Noise { pos: from, radius: 40.0, combat: true });
+        noise.write(crate::gameplay::Noise { pos: from, radius: 40.0, kind: crate::gameplay::NoiseKind::Danger });
         if rand::random::<f32>() < q.4 {
             // (the pistol's 20; a character's bullet kills another outright:
             // `m_bInstaDeath_NonPlayerToNPC`)
@@ -482,10 +482,10 @@ fn apply_ai_fx(
                 }
             }
             AiFx::GivePickup(op) => give_pickup(&g.ops[op as usize].props, &data, &attrs, &mut stats, &mut msgs, &mut vm),
-            AiFx::Noise { maker, at, loudness, combat } => {
+            AiFx::Noise { maker, at, loudness, kind } => {
                 let radius = data.0.noise_loudness.get(&loudness).copied().unwrap_or(5.0);
                 if let Some(pos) = at.iter().chain(maker.iter()).find_map(|v| place(v)) {
-                    noise.write(crate::gameplay::Noise { pos, radius, combat });
+                    noise.write(crate::gameplay::Noise { pos, radius, kind });
                 }
             }
             AiFx::Distract { targets, to } => {
@@ -1029,6 +1029,13 @@ fn spawn_props(
             npc.alert = crate::npc::Alert::Combat;
             npc.awareness = 1.0;
             npc.last_seen = pos;
+        } else if npc.alert == crate::npc::Alert::Unaware && !npc.is_down() {
+            // the suspicion it starts with (`m_SpawnAtSuspicionLevel`, at most Suspecting)
+            let start = level.as_ref().and_then(|l| l.scene.spawners.get(from.0 as usize)).and_then(|s| s.spawn_at.clone()).unwrap_or_default().to_ascii_lowercase();
+            if start.contains("curious") || start.contains("suspect") || start.contains("search") || start.contains("alert") || start.contains("investig") || start.contains("combat") || start.contains("busted") {
+                npc.alert = crate::npc::Alert::Suspicious;
+                npc.awareness = npc.awareness.max(0.4);
+            }
         }
     }
 }

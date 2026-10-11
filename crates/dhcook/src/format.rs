@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::Path;
 
 // 103: retain unmatched-rig timelines and zero-track animation sequences.
-pub const SCENE_VERSION: u32 = 110;
+pub const SCENE_VERSION: u32 = 112;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -500,6 +500,9 @@ pub enum KDialogNodeKind {
     Remote(String),
     /// anything else passes on through its first output
     Pass,
+    /// the chaos level against this one (`DisConv_CompareDarknessLevel`): output 0 the same,
+    /// 1 lower, 2 higher
+    Darkness(i32),
 }
 
 /// A conversation flattened along its first links.
@@ -530,6 +533,9 @@ pub enum KDialogStep {
     /// the player answers (`DisConv_PlayerChoice`): each option's text and the step its
     /// branch starts at (in this list)
     Choice(Vec<(String, u32)>),
+    /// the chaos level against this one (`DisConv_CompareDarknessLevel`): the step the same,
+    /// a lower and a higher level's branch starts at (none: the conversation ends)
+    Darkness(i32, [Option<u32>; 3]),
     /// the end of a branch
     End,
 }
@@ -572,6 +578,12 @@ pub struct KInput {
     pub desc: String,
     /// For sub-sequences: the inner `SequenceActivated` event this input fires.
     pub linked: Option<u32>,
+    /// what activating it waits (`ActivateDelay`, s), and whether it takes nothing
+    /// (`bDisabled`)
+    #[serde(default)]
+    pub delay: f32,
+    #[serde(default)]
+    pub disabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -856,6 +868,10 @@ pub struct NpcType {
     /// its ragdoll (`m_pPhysicsAsset`), in `Scene::ragdolls`
     #[serde(default)]
     pub ragdoll: Option<u32>,
+    /// its pawn tweak and those it falls back on (`m_FallbackChainCooked`), by object name:
+    /// what the chaos deeds' victims are told by (`Pwn_Civ_Base`, `Pwn_Guard_Base`...)
+    #[serde(default)]
+    pub lineage: Vec<String>,
 }
 
 /// A character's numbers and arms. Its attributes are those of its pawn's attribute tweak
@@ -2638,6 +2654,31 @@ pub struct PlayerProfile {
     /// "End Void Gaze")
     #[serde(default)]
     pub texts: std::collections::BTreeMap<String, String>,
+    /// his chaos (Daud's own deeds and levels)
+    #[serde(default)]
+    pub darkness: DarknessDef,
+}
+
+/// Chaos, the game's "darkness" (`DisDarknessManager`, from the player's pawn tweak): a score
+/// the deeds raise, read as a level (`m_DarknessLevels`: the most of whose steps the score
+/// reaches). The rules are those roshan's r614/blink research decoded.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct DarknessDef {
+    pub levels: Vec<i32>,
+    pub deeds: Vec<DeedDef>,
+}
+
+/// A deed (`m_Deeds`): each `threshold` of a statistic (`ePlayerStat_NumKills` of the victims
+/// whose tweak lineage holds `tweak` and none of `excluded`, `..NumAlarmsTriggered`,
+/// `..NumCorpsesDiscovered`) adds `value` to the score.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct DeedDef {
+    pub stat: String,
+    pub threshold: i32,
+    pub value: i32,
+    /// object names (`Pwn_Civ_Base`); empty: anyone
+    pub tweak: String,
+    pub excluded: Vec<String>,
 }
 
 /// Is a faction the player's: Corvo's (`Faction_Corvo_Default`) or Daud's
@@ -2715,6 +2756,9 @@ pub struct GameData {
     pub missions: Vec<(i32, Vec<String>)>,
     #[serde(default)]
     pub chaos_thresholds: Vec<i32>,
+    /// Corvo's chaos: its deeds and levels
+    #[serde(default)]
+    pub darkness: DarknessDef,
     /// The chapters (`Twk_ChapterInfoList`) by tag: the journal's mission page
     #[serde(default)]
     pub chapters: Vec<ChapterDef>,

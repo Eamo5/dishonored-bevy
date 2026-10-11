@@ -186,7 +186,8 @@ fn draw(
                 }
                 let prefix = match slot {
                     0 => data.text("Twk_GFxMoviePlayerMenuBase", "m_QuicksavePrefix"),
-                    crate::save::AUTOSAVE_SLOT => data.text("Twk_GFxMoviePlayerMenuBase", "m_AutosavePrefix"),
+                    s if crate::save::is_autosave(s) => data.text("Twk_GFxMoviePlayerMenuBase", "m_AutosavePrefix"),
+                    s if crate::save::is_mission_save(s) => data.text("Twk_GFxMoviePlayerMenuBase", "m_MissionSavePrefix"),
                     _ => String::new(),
                 };
                 text_box(&mut commands, root, s, off, list_pt(x + 496.1, y - 14.75), Vec2::new(411.45, 36.1), -2.5, local_date(at), title_font(23.0), color, true);

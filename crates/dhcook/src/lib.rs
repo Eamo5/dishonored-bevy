@@ -2995,6 +2995,7 @@ impl<'a> Cooker<'a> {
         let stats = Some(self.npc_stats(tweak));
         let attachments = self.npc_attachments(&ch);
         let ragdoll = ch.obj(self.assets, "m_pPhysicsAsset").filter(|p| p.class() == "PhysicsAsset").and_then(|p| self.ragdoll(&p));
+        let lineage = self.tweak_lineage(tweak).iter().map(|p| p.rsplit('.').next().unwrap_or(p).to_string()).collect();
         self.scene.npc_types.push(NpcType {
             name,
             kind: kind.into(),
@@ -3017,6 +3018,7 @@ impl<'a> Cooker<'a> {
             attachments,
             out_of_bend: ch.bool("m_bAlwaysOutOfBendTime").unwrap_or(false),
             ragdoll,
+            lineage,
         });
         Ok(Some(id))
     }
@@ -4963,6 +4965,7 @@ impl<'a> Cooker<'a> {
             attachments: Vec::new(),
             out_of_bend: false,
             ragdoll: None,
+            lineage: Vec::new(),
             name: body.path(),
             kind: "device".into(),
             skeleton: Some(skeleton),
@@ -6364,6 +6367,7 @@ impl<'a> Cooker<'a> {
                             attachments: Vec::new(),
                             out_of_bend: false,
                             ragdoll: None,
+                            lineage: Vec::new(),
                             name: "player_arms".into(),
                             kind: "player".into(),
                             skeleton: Some(skeleton),
@@ -6423,6 +6427,7 @@ impl<'a> Cooker<'a> {
                                 attachments: Vec::new(),
                                 out_of_bend: false,
                                 ragdoll: None,
+                                lineage: Vec::new(),
                                 name: "rat".into(),
                                 kind: "rat".into(),
                                 skeleton: Some(skeleton),

@@ -49,6 +49,24 @@ fn wild_feeding_duration(spawner: Option<&dhcook::format::RatSpawner>) -> f32 {
 }
 
 /// Only the portion of this world-time step after the post-kill delay can feed.
+/// How long a body has lain for the rats (`m_fEatStartupDelayAfterKill`): the knocked out
+/// never died, so no wait (roshan's r614/blink research: the rats eat living eatable targets).
+fn eaten_age(n: &Npc) -> f32 {
+    if n.mode == Mode::Unconscious {
+        f32::MAX
+    } else {
+        n.corpse_age
+    }
+}
+
+/// A body eaten to the bones: gone; one knocked out dies of it (a kill).
+fn eaten(commands: &mut Commands, hits: &mut MessageWriter<NpcHit>, e: Entity, n: &Npc, at: Vec3) {
+    if n.mode == Mode::Unconscious {
+        hits.write(NpcHit { npc: e, damage: 999.0, kind: HitKind::Rats, from: at });
+    }
+    commands.entity(e).insert((crate::npc::ConsumedBody, Visibility::Hidden));
+}
+
 fn feeding_step(corpse_age: f32, delay: f32, dt: f32) -> f32 {
     (corpse_age - delay.max(0.0)).clamp(0.0, dt.max(0.0))
 }
@@ -458,9 +476,8 @@ fn summon(
             warn!("no rat in this map's cooked data (recook it)");
             continue;
         };
-        // level 1 calls a few dozen, level 2 more (the original asks for hundreds; the
-        // global manager keeps what's on screen far lower)
-        let count = (data.power_f("DevouringSwarm", r.level, "m_RatSpawnerSettings.SpawnNum", 30.0) as usize).clamp(8, 60);
+        // the level's rats (`m_RatSpawnerSettings.SpawnNum`: 30, then 60)
+        let count = (data.power_f("DevouringSwarm", r.level, "m_RatSpawnerSettings.SpawnNum", 30.0) as usize).clamp(1, 200);
         let radius = (data.power_f("DevouringSwarm", r.level, "m_RatSpawnerSettings.SpawnRadius", 55.0) * 0.01).max(0.4);
         let slot = wl.as_mut().map(|w| w.alloc_slot()).unwrap_or(0);
         let mut rats = Vec::new();
@@ -672,7 +689,7 @@ mod kill_tests {
             velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: true, sprinting: false,
             grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
             air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
-            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0,
+            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0, speed_cap: 0.0,
         })).id();
         let swarm = app.world_mut().spawn((Transform::default(), Swarm {
             wild: Some(Wild { home: Vec3::ZERO, roam: 0.0, detect: 10.0, escape: 1.0,
@@ -1055,9 +1072,9 @@ fn swarm_brain(
                 }
             }
             if goal.is_none() && can_eat {
-                let body = s.eating.map(|e| e.0).filter(|e| npcs.get(*e).is_ok_and(|(_, nn, t, v)| nn.mode == Mode::Dead && v != Some(&Visibility::Hidden) && swarm_target_visible(&ctx, center, t.translation))).or_else(|| {
+                let body = s.eating.map(|e| e.0).filter(|e| npcs.get(*e).is_ok_and(|(_, nn, t, v)| nn.is_down() && v != Some(&Visibility::Hidden) && swarm_target_visible(&ctx, center, t.translation))).or_else(|| {
                     npcs.iter()
-                        .filter(|(_, nn, t, v)| nn.mode == Mode::Dead && !nn.corpse && *v != Some(&Visibility::Hidden) && t.translation.distance(w.home) < w.detect * 2.0 && swarm_target_visible(&ctx, center, t.translation))
+                        .filter(|(_, nn, t, v)| nn.is_down() && !nn.corpse && *v != Some(&Visibility::Hidden) && t.translation.distance(w.home) < w.detect * 2.0 && swarm_target_visible(&ctx, center, t.translation))
                         .min_by(|a, b| a.2.translation.distance(center).total_cmp(&b.2.translation.distance(center)))
                         .map(|(e, _, _, _)| e)
                 });
@@ -1066,10 +1083,11 @@ fn swarm_brain(
                     busy = true;
                     let t = if s.eating.map(|x| x.0) == Some(be) { s.eating.unwrap().1 } else { 0.0 };
                     let delay = spawner.and_then(|s| s.params.get("m_fEatStartupDelayAfterKill")).copied().unwrap_or(1.0);
-                    let t = if bt.translation.distance(center) < 1.2 { t + feeding_step(corpse.corpse_age, delay, dt) } else { t };
+                    let age = eaten_age(corpse);
+                    let t = if bt.translation.distance(center) < 1.2 { t + feeding_step(age, delay, dt) } else { t };
                     s.eating = Some((be, t));
-                    if corpse.corpse_age >= delay.max(0.0) && t >= wild_feeding_duration(spawner) {
-                        commands.entity(be).insert((crate::npc::ConsumedBody, Visibility::Hidden));
+                    if age >= delay.max(0.0) && t >= wild_feeding_duration(spawner) {
+                        eaten(&mut commands, &mut hits, be, corpse, center);
                         s.eating = None;
                     }
                 } else {
@@ -1149,9 +1167,9 @@ fn swarm_brain(
             s.eating = None;
         } else if can_eat {
             // a body to eat?
-            let body = s.eating.map(|e| e.0).filter(|e| npcs.get(*e).is_ok_and(|(_, n, t, v)| n.mode == Mode::Dead && v != Some(&Visibility::Hidden) && swarm_target_visible(&ctx, center, t.translation))).or_else(|| {
+            let body = s.eating.map(|e| e.0).filter(|e| npcs.get(*e).is_ok_and(|(_, n, t, v)| n.is_down() && v != Some(&Visibility::Hidden) && swarm_target_visible(&ctx, center, t.translation))).or_else(|| {
                 npcs.iter()
-                    .filter(|(_, n, t, v)| n.mode == Mode::Dead && *v != Some(&Visibility::Hidden) && t.translation.distance(center) < detect && swarm_target_visible(&ctx, center, t.translation))
+                    .filter(|(_, n, t, v)| n.is_down() && *v != Some(&Visibility::Hidden) && t.translation.distance(center) < detect && swarm_target_visible(&ctx, center, t.translation))
                     .min_by(|a, b| a.2.translation.distance(center).total_cmp(&b.2.translation.distance(center)))
                     .map(|(e, _, _, _)| e)
             });
@@ -1160,14 +1178,15 @@ fn swarm_brain(
                     goal = bt.translation;
                     let t = if s.eating.map(|x| x.0) == Some(be) { s.eating.unwrap().1 } else { 0.0 };
                     let delay = summon_setting(&data, s.level, "m_fEatStartupDelayAfterKill", 1.0);
-                    let t = if bt.translation.distance(center) < 1.2 { t + feeding_step(corpse.corpse_age, delay, dt) } else { t };
+                    let age = eaten_age(corpse);
+                    let t = if bt.translation.distance(center) < 1.2 { t + feeding_step(age, delay, dt) } else { t };
                     s.eating = Some((be, t));
                     // startup then the limbs (`m_fEatStartupDuration`, `m_fEatPerLimbDuration`)
                     let default_duration = if s.level >= 2 { 0.75 } else { 1.5 };
                     let eat = summon_setting(&data, s.level, "m_fEatStartupDuration", default_duration)
                         + summon_setting(&data, s.level, "m_fEatPerLimbDuration", default_duration) * if s.level >= 2 { 3.0 } else { 5.0 };
-                    if corpse.corpse_age >= delay.max(0.0) && t >= eat {
-                        commands.entity(be).insert((crate::npc::ConsumedBody, Visibility::Hidden));
+                    if age >= delay.max(0.0) && t >= eat {
+                        eaten(&mut commands, &mut hits, be, corpse, center);
                         s.eating = None;
                     }
                 }

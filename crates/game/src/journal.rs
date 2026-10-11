@@ -191,9 +191,15 @@ pub(crate) fn inventory(data: &Data, stats: &PlayerStats, tab: u8) -> Vec<InvEnt
     out
 }
 
-/// Bone charms Corvo can wear at once (`m_MaxActivatedBoneCharmCount`, plus Piero's upgrades).
+/// Bone charms Corvo can wear at once (`m_MaxActivatedBoneCharmCount`, plus one for each
+/// Mystical Artifact owned: `Twk_Upgrade_Statue*`'s `MaxActivatedBoneCharmCountBonus`).
 pub fn charm_slots(data: &Data, stats: &PlayerStats) -> usize {
-    data.pawn("m_MaxActivatedBoneCharmCount", 3.0) as usize + stats.upgrades.iter().filter(|u| u.starts_with("Twk_Upgrade_BoneCharms")).count()
+    data.pawn("m_MaxActivatedBoneCharmCount", 3.0) as usize + charm_slot_bonus(data, |id| stats.upgrades.iter().any(|u| u == id))
+}
+
+/// The slots the upgrades `owned` add (all of them: the most there can be).
+pub fn charm_slot_bonus(data: &Data, owned: impl Fn(&str) -> bool) -> usize {
+    data.0.upgrades.iter().filter(|u| owned(&u.id)).flat_map(|u| &u.attributes).filter(|(n, _)| n == "MaxActivatedBoneCharmCountBonus").map(|(_, v)| v.max(0.0) as usize).sum()
 }
 
 /// (game data name, journal title key, tutorial note key, illustration)

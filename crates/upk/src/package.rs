@@ -8,6 +8,45 @@ use std::path::{Path, PathBuf};
 
 pub const PACKAGE_TAG: u32 = 0x9E2A83C1;
 
+/// The mods' backups by install (TFC Installer's `TFCInstallerBackups`): each set's folder, in
+/// the order they were installed, and whether it is a texture pack (it left `*.tfcInstalled`).
+static BACKUPS: std::sync::OnceLock<std::sync::Mutex<HashMap<PathBuf, Vec<(PathBuf, bool)>>>> = std::sync::OnceLock::new();
+
+/// Which copy of an install's package to read. TFC Installer keeps each file a mod replaces as
+/// `TFCInstallerBackups\<n>\<path>Backup`. Texture packs (HD textures, their own `.tfc` caches)
+/// are kept; for a package another mod replaced (a "patches" mod that rewrote the powers'
+/// tweaks and level scripts), the copy from before the first such mod is read, so the game's
+/// values are the original's. `DH_MODDED=1` reads the install as it is.
+pub fn original_path(path: &Path) -> PathBuf {
+    if std::env::var_os("DH_MODDED").is_some() {
+        return path.to_path_buf();
+    }
+    let Some(root) = path.ancestors().skip(1).find(|d| d.join("TFCInstallerBackups").is_dir()) else { return path.to_path_buf() };
+    let Ok(rel) = path.strip_prefix(root) else { return path.to_path_buf() };
+    let sets = {
+        let mut cache = BACKUPS.get_or_init(Default::default).lock().unwrap();
+        cache
+            .entry(root.to_path_buf())
+            .or_insert_with(|| {
+                let mut sets: Vec<(PathBuf, bool)> = std::fs::read_dir(root.join("TFCInstallerBackups"))
+                    .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_dir()).collect::<Vec<_>>())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|d| {
+                        let texture = std::fs::read_dir(&d).map(|rd| rd.filter_map(|e| e.ok()).any(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("tfcInstalled")))).unwrap_or(false);
+                        (d, texture)
+                    })
+                    .collect();
+                sets.sort();
+                sets
+            })
+            .clone()
+    };
+    let mut backup = rel.as_os_str().to_owned();
+    backup.push("Backup");
+    sets.iter().filter(|(_, texture)| !texture).map(|(d, _)| d.join(&backup)).find(|p| p.is_file()).unwrap_or_else(|| path.to_path_buf())
+}
+
 pub const COMPRESS_ZLIB: u32 = 1;
 pub const COMPRESS_LZO: u32 = 2;
 
@@ -97,8 +136,11 @@ pub fn decompress_chunk(src: &[u8], pos: usize, flags: u32) -> Result<Vec<u8>> {
 }
 
 impl Package {
+    /// A package of the install, as the game shipped it where a gameplay mod replaced it
+    /// (`original_path`).
     pub fn open(path: &Path) -> Result<Package> {
-        let file = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        let source = original_path(path);
+        let file = std::fs::read(&source).with_context(|| format!("reading {}", source.display()))?;
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
         Self::from_bytes(name, path.to_path_buf(), file)
     }

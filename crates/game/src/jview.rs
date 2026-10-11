@@ -986,7 +986,7 @@ fn charms(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
     let root = cx.root;
     cx.sym(root, Vec2::ZERO, false, "j_boneCharms_mc", pg(0.0, 0.0), |_| {});
     let unlocked = crate::journal::charm_slots(data, stats);
-    let max = data.pawn("m_MaxActivatedBoneCharmCount", 3.0) as usize + data.0.upgrades.iter().filter(|u| u.id.starts_with("Twk_Upgrade_BoneCharms")).count();
+    let max = data.pawn("m_MaxActivatedBoneCharmCount", 3.0) as usize + crate::journal::charm_slot_bonus(data, |_| true);
     let worn = stats.charms.len();
     let list_at = pg(-505.0, -215.0);
     cx.sym(root, Vec2::ZERO, false, "j_bc_charmsList", list_at, |fc| {

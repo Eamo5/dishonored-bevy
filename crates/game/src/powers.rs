@@ -6,7 +6,7 @@
 use crate::audio::PostEvent;
 use crate::footsteps::{impact_surface, ray_surface, ColliderSurfaces};
 use crate::gamedata::{Attrs, Data};
-use crate::gameplay::{HitKind, HudMessages, Noise, NpcHit, NpcStagger, PlayerStats, TimeControl};
+use crate::gameplay::{HitKind, HudMessages, Noise, NoiseKind, NpcHit, NpcStagger, PlayerStats, TimeControl};
 use crate::level::{GameAssets, GROUP_NPC, GROUP_PROP, GROUP_WORLD};
 use crate::npc::Npc;
 use crate::player::{Player, PlayerCamera, RADIUS, STAND_HALF};
@@ -31,7 +31,7 @@ impl Plugin for PowersPlugin {
             .add_systems(Update, bolt_focus.after(crate::interact::FocusSet).before(crate::gadgets::grenade_focus).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
             .add_systems(
                 Update,
-                (select_power, use_power, transversal_freeze, cook_grenade, blink_travel, update_projectiles, regenerate, dark_vision_post, crate::darkvision::update_dark_vision, crate::darkvision::dark_vision_sounds)
+                (select_power, use_power, windblast_gusts, transversal_freeze, cook_grenade, blink_travel, update_projectiles, regenerate, dark_vision_post, crate::darkvision::update_dark_vision, crate::darkvision::dark_vision_sounds)
                     .chain()
                     .after(crate::gadgets::grenade_focus)
                     .run_if(in_state(GameState::InGame)),
@@ -293,7 +293,35 @@ pub struct Powers {
     swallow: bool,
     /// a grenade cooking in the hand: which, and for how long (`GrenadeCooking`)
     pub cooking: Option<(Power, f32)>,
+    /// Blink held back after each move or cancel (`m_fCooldownTime`), and Dark Vision's time
+    /// in a fight (`m_fDesactivateInCombatTimer`)
+    pub blink_lock: f32,
+    pub dv_combat: f32,
+    /// each gun's magazine (pistol, crossbow): the ammunition in it and the rounds spent from
+    /// it; its reload under way (s, counted while it is in hand); the arms' reload clip to
+    /// play (bumped, which)
+    pub magazine: [Option<(Power, u32)>; 2],
+    pub reload: [f32; 2],
+    pub reload_anim: (u32, &'static str),
+    /// Wind Blasts under way
+    pub gusts: Vec<Gust>,
 }
+
+/// A Wind Blast under way: since the cast (s), from where and which way, its level; who it
+/// reaches (gathered once as it starts: each with its push and damage factor) and has not yet.
+#[derive(Clone)]
+pub struct Gust {
+    pub t: f32,
+    eye: Vec3,
+    dir: Vec3,
+    from: Vec3,
+    level: u8,
+    targets: Option<Vec<(Entity, f32)>>,
+}
+
+/// The cast clip's `DisNotify_WindBlast` (s): when the blast starts (roshan's r614/blink
+/// research).
+const WINDBLAST_NOTIFY: f32 = 0.27;
 
 impl Default for Powers {
     fn default() -> Self {
@@ -310,8 +338,124 @@ impl Default for Powers {
             cast_power: Power::Blink,
             swallow: false,
             cooking: None,
+            blink_lock: 0.0,
+            dv_combat: 0.0,
+            magazine: [None; 2],
+            reload: [0.0; 2],
+            reload_anim: (0, ""),
+            gusts: Vec::new(),
         }
     }
+}
+
+/// The time a gun's fire action takes before the next shot or its reload (`Pistol_Fire`:
+/// 0.3984 s; the crossbow's 24 frames).
+const FIRE_ACTION: f32 = 0.4;
+
+/// A gun's reload, as the original's stages time it (`DisTweaks_ReloadGunPlayer`: in,
+/// `m_fReloadTime` over `ReloadSpeed`, out; with `FastReload` its quick action, that long, as
+/// roshan's r614/blink research timed them): seconds, and the quick one or not.
+fn reload_time(data: &Data, stats: &PlayerStats, w: crate::aim::Weapon) -> (f32, bool) {
+    let fast = crate::aim::upgrade_sum(data, stats, w, "FastReload");
+    if fast > 0.0 {
+        return (fast, true);
+    }
+    let speed = crate::aim::upgrade_sum(data, stats, w, "ReloadSpeed");
+    let [i, mid, o] = reload_stages(w);
+    (i + if speed > 0.0 { mid / speed } else { mid } + o, false)
+}
+
+/// A gun's reload stages (in, the timed middle, out: s).
+fn reload_stages(w: crate::aim::Weapon) -> [f32; 3] {
+    match w {
+        crate::aim::Weapon::Pistol => [0.426, 0.75, 0.302],
+        crate::aim::Weapon::Crossbow => [0.225 / 1.3, 1.0, 0.169 / 1.3],
+    }
+}
+
+/// Rounds a gun's magazine holds (`1 + MagazineBonus` for the pistol, one bolt).
+fn magazine_size(data: &Data, stats: &PlayerStats, w: crate::aim::Weapon) -> u32 {
+    1 + crate::aim::upgrade_sum(data, stats, w, "MagazineBonus").max(0.0) as u32
+}
+
+/// A gun's reload begins (after `delay`), for the ammunition `sel`.
+fn start_reload(powers: &mut Powers, data: &Data, stats: &PlayerStats, sel: Power, delay: f32) {
+    let Some(w) = crate::aim::Weapon::of(sel) else { return };
+    powers.reload[w as usize] = reload_time(data, stats, w).0 + delay + 1e-4;
+    powers.magazine[w as usize] = Some((sel, 0));
+}
+
+/// Whether the gun has a round of `sel` in it; empty, or loaded with another ammunition, it
+/// reloads first.
+fn chamber(powers: &mut Powers, data: &Data, stats: &PlayerStats, sel: Power) -> bool {
+    let Some(w) = crate::aim::Weapon::of(sel) else { return true };
+    let i = w as usize;
+    if powers.reload[i] > 0.0 {
+        return false;
+    }
+    match powers.magazine[i] {
+        Some((p, spent)) if p == sel && spent < magazine_size(data, stats, w) => true,
+        None => {
+            powers.magazine[i] = Some((sel, 0));
+            true
+        }
+        _ => {
+            start_reload(powers, data, stats, sel, 0.0);
+            false
+        }
+    }
+}
+
+/// A round fired: the magazine emptied, the gun reloads after its fire action while
+/// ammunition is held.
+fn spend_round(powers: &mut Powers, data: &Data, stats: &PlayerStats, sel: Power, held: u32) {
+    let Some(w) = crate::aim::Weapon::of(sel) else { return };
+    let i = w as usize;
+    let spent = match &mut powers.magazine[i] {
+        Some((p, n)) if *p == sel => {
+            *n += 1;
+            *n
+        }
+        _ => {
+            powers.magazine[i] = Some((sel, 1));
+            1
+        }
+    };
+    if spent >= magazine_size(data, stats, w) && held > 0 {
+        start_reload(powers, data, stats, sel, FIRE_ACTION);
+    }
+}
+
+/// The gun in hand's reload goes on; its stages' clips start as they come (and the sound its
+/// first stage's notify plays: `Snd_Weapon_Gun_Corvo_Reload`, `Snd_Crossbow_P_Reload`).
+fn tick_reload(powers: &mut Powers, data: &Data, stats: &PlayerStats, dt: f32) -> Option<&'static str> {
+    let w = crate::aim::Weapon::of(powers.selected)?;
+    let i = w as usize;
+    let before = powers.reload[i];
+    if before <= 0.0 {
+        return None;
+    }
+    let left = (before - dt).max(0.0);
+    powers.reload[i] = left;
+    let (t, fast) = reload_time(data, stats, w);
+    let pistol = w == crate::aim::Weapon::Pistol;
+    let out = reload_stages(w)[2];
+    let clip = if before > t && left <= t {
+        Some(match (pistol, fast) {
+            (true, true) => "Pistol_FastReload",
+            (true, false) => "Pistol_Reload_In",
+            (false, true) => "Crossbow_RapidReload",
+            (false, false) => "Crossbow_Reload_In",
+        })
+    } else if !fast && before > out && left <= out {
+        Some(if pistol { "Pistol_Reload_Out" } else { "Crossbow_Reload_Out" })
+    } else {
+        None
+    };
+    if let Some(c) = clip {
+        powers.reload_anim = (powers.reload_anim.0.wrapping_add(1), c);
+    }
+    (before > t && left <= t).then_some(if pistol { "Snd_Weapon_Gun_Corvo_Reload" } else { "Snd_Crossbow_P_Reload" })
 }
 
 #[derive(Component)]
@@ -342,6 +486,12 @@ pub struct PowersSave {
     bend_remaining: f32,
     world_dilation: f32,
     scripted: Option<(f32, f32)>,
+    #[serde(default = "one")]
+    player_dilation: f32,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 impl PowersSave {
@@ -355,6 +505,7 @@ impl PowersSave {
             bend_remaining: time.bend_remaining,
             world_dilation: time.world_dilation,
             scripted: time.scripted,
+            player_dilation: time.player_dilation,
         }
     }
 
@@ -372,6 +523,8 @@ impl PowersSave {
             bend_remaining: self.bend_remaining,
             world_dilation: self.world_dilation,
             scripted: self.scripted,
+            player_dilation: self.player_dilation,
+            bend_on: self.bend_remaining > 0.0,
             ..default()
         };
     }
@@ -672,18 +825,18 @@ fn use_power(
     mut stats: ResMut<PlayerStats>,
     mut tc: ResMut<TimeControl>,
     mut msgs: ResMut<HudMessages>,
-    (mut hits, mut stag, mut noise, mut sfx, mut used, mut world_hits): (MessageWriter<NpcHit>, MessageWriter<NpcStagger>, MessageWriter<Noise>, MessageWriter<PostEvent>, MessageWriter<PowerUsed>, MessageWriter<WorldDamage>),
+    (mut hits, mut noise, mut sfx, mut used, mut world_hits): (MessageWriter<NpcHit>, MessageWriter<Noise>, MessageWriter<PostEvent>, MessageWriter<PowerUsed>, MessageWriter<WorldDamage>),
     mut player: Query<(Entity, &Transform, &mut Player)>,
     (cam, surfaces, strikeables, mut struck): (Query<&GlobalTransform, With<PlayerCamera>>, Query<&ColliderSurfaces>, Query<&crate::gameplay::Strikeable>, MessageWriter<crate::gameplay::Struck>),
     mut marker: Query<(&mut Transform, &mut Visibility), (With<BlinkMarker>, Without<Player>)>,
-    mut npcs: Query<(Entity, &Transform, &mut Npc), (Without<Player>, Without<BlinkMarker>)>,
+    npcs: Query<(Entity, &Transform, &Npc), (Without<Player>, Without<BlinkMarker>)>,
     (mut possession, mut start_possess, hosts, possess_overrides): (
         ResMut<crate::possession::Possession>,
         MessageWriter<crate::possession::PossessRequest>,
         Query<(Entity, &GlobalTransform), (With<crate::possession::Host>, Without<crate::possession::Possessed>)>,
         Res<crate::possession::PossessOverrides>,
     ),
-    (mut swarm, mut gadget, mut blast, mut door_blast, mut kill_cams): (MessageWriter<crate::swarm::SummonSwarm>, MessageWriter<crate::gadgets::UseGadget>, MessageWriter<crate::gadgets::Explosion>, MessageWriter<crate::interact::DoorBlast>, MessageWriter<crate::killcam::StartKillCam>),
+    (mut swarm, mut gadget, mut blast, mut kill_cams): (MessageWriter<crate::swarm::SummonSwarm>, MessageWriter<crate::gadgets::UseGadget>, MessageWriter<crate::gadgets::Explosion>, MessageWriter<crate::killcam::StartKillCam>),
     (mut aim, held, paused, mut summon, nav): (ResMut<crate::aim::Aim>, Res<crate::props::Held>, Res<crate::hud::Paused>, MessageWriter<crate::summon::Summon>, Option<Res<crate::navmesh::NavGrid>>),
 ) {
     if paused.0 {
@@ -696,13 +849,23 @@ fn use_power(
     let dt = time.delta_secs();
     powers.cooldown = (powers.cooldown - dt).max(0.0);
     powers.fov_kick = (powers.fov_kick - dt * 3.0).max(0.0);
+    if let Some(s) = tick_reload(&mut powers, &data, &stats, dt * tc.player_rate()) {
+        sfx.write(PostEvent::named(s, None));
+    }
     let Ok((pe, pt, mut p)) = player.single_mut() else { return };
     let Ok(cg) = cam.single() else { return };
     let eye = cg.translation();
     let dir = cg.forward().as_vec3();
     let Ok(ctx) = rapier.single() else { return };
-    // Dark Vision lasts its duration
+    powers.blink_lock = (powers.blink_lock - dt).max(0.0);
+    // Dark Vision lasts its duration, and ends a while into a fight (as roshan's r614/blink
+    // research decoded the original: `m_fDesactivateInCombatTimer`)
     if powers.dark_vision {
+        let fighting = npcs.iter().any(|(_, _, n)| !n.is_down() && n.hostile() && n.mode == crate::npc::Mode::Combat);
+        powers.dv_combat = if fighting { powers.dv_combat + dt } else { 0.0 };
+        if powers.dv_combat > data.active("DarkVision").and_then(|a| a.params.get("m_fDesactivateInCombatTimer")).copied().unwrap_or(1.0) {
+            powers.dark_vision_left = 0.0;
+        }
         powers.dark_vision_left -= dt;
         if powers.dark_vision_left <= 0.0 {
             powers.dark_vision = false;
@@ -730,9 +893,13 @@ fn use_power(
     // Blink aiming
     let blink_range = (data.power_f("Blink", level, "m_HorizDistance", 1100.0)).min(data.power_f("Blink", level, "m_Distance", 2000.0)) * UU;
     let blink_vert = data.power_f("Blink", level, "m_VertDistance", 500.0) * UU;
-    if sel == Power::Blink && can_act && mouse.pressed(MouseButton::Right) {
+    // (aiming Blink needs its mana, and waits out its cooldown after the last move or cancel)
+    let blink_ready = stats.mana >= Power::Blink.mana(&data) && powers.blink_lock <= 0.0;
+    if sel == Power::Blink && can_act && mouse.pressed(MouseButton::Right) && (blink_ready || powers.aiming) {
         powers.aiming = true;
         powers.blink_target = blink_destination(&ctx, pe, eye, dir, blink_range, blink_vert);
+    } else if sel == Power::Blink && can_act && mouse.just_pressed(MouseButton::Right) && stats.mana < Power::Blink.mana(&data) {
+        out_of_mana(&mut powers, &mut sfx, &mut msgs);
     }
     if let Ok((mut mt, mut mv)) = marker.single_mut() {
         match (powers.aiming && sel == Power::Blink, powers.blink_target) {
@@ -746,6 +913,8 @@ fn use_power(
     let cost = sel.mana(&data);
     if powers.aiming && sel == Power::Blink && mouse.just_released(MouseButton::Right) {
         powers.aiming = false;
+        // (moved or not, Blink waits its cooldown after the move: `m_fCooldownTime`)
+        powers.blink_lock = data.active("Blink").and_then(|a| a.params.get("m_fCooldownTime")).copied().unwrap_or(1.0) + 0.27;
         if let Some(target) = powers.blink_target.take() {
             if tune.inhibited {
                 // an Overseer's music box: the Mark fails
@@ -878,8 +1047,14 @@ fn use_power(
             stats.spend_mana(cost, &attrs);
             // level 2 stops time; its duration is counted in the stopped world's time in the
             // original, so both levels last the level-1 span here
-            tc.bend_remaining = data.power_f("BendTime", 1, "m_TimeDuration", 12.0);
+            // the level's: how long, the world's and Corvo's paces, coming in and going out
+            // (`Twk_BendTime`: 12 s at 0.15 / 0.85, then 8 s stopped / 0.9; 0.15 s in, 0.25 out)
+            tc.bend_remaining = data.power_f("BendTime", level, "m_TimeDuration", 12.0);
             tc.world_dilation = data.power_f("BendTime", level, "m_WorldDilation", 0.15);
+            tc.player_dilation = data.power_f("BendTime", level, "m_PlayerDilation", 1.0);
+            tc.ramp_in = data.power_f("BendTime", level, "m_fTimeDilationWarmupTime", 0.15);
+            tc.ramp_out = data.power_f("BendTime", level, "m_fTimeDilationCooldownTime", 0.25);
+            tc.bend_turn();
             sfx.write(PostEvent::named(data.power_sound("BendTime", level, "m_pBendTimeSoundStartEvent").unwrap_or("Snd_Power_P_Bend_Time"), None));
             sfx.write(PostEvent::named("Snd_UI_Ingame_Slomo_Start", None));
             powers.cooldown = 0.5;
@@ -887,42 +1062,9 @@ fn use_power(
         Power::Windblast => {
             stats.spend_mana(cost, &attrs);
             powers.cooldown = 1.0;
-            let force = data.power_f("Windblast", level, "m_Force", 1800.0);
-            let up = data.power_f("Windblast", level, "m_ExtraUpForce", 1000.0);
-            let damage = data.power_f("Windblast", level, "m_Damage", 20.0);
-            let reach = data.power_f("Windblast", level, "m_Distance", 3000.0) * UU * 0.3;
-            let half_angle = (data.power_f("Windblast", level, "m_Angle", 135.0) * 0.5).to_radians().min(1.2);
-            // (the scripts' candles and fires it blows out, the things it knocks over)
-            world_hits.write(WorldDamage::player(Reach::Cone { at: eye, dir, len: reach, half: half_angle }, damage, "DisDamageType_WindBlast"));
-            let flat = dir.with_y(0.0).normalize_or_zero();
             sfx.write(PostEvent::named(data.power_sound("Windblast", level, "m_pWindBlastSoundEvent").unwrap_or("Snd_Pwr_P_Windblast_Lvl_1"), None));
-            // the push: level 1 throws people off their feet, level 2 against walls hard
-            // enough to kill
-            let push = (8.0 + (force / 1800.0).ln().max(0.0) * 4.0).min(18.0);
-            let lift = (2.5 + (up / 1000.0).ln().max(0.0) * 1.5).min(6.0);
-            let filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
-            for (e, nt, mut npc) in &mut npcs {
-                if npc.is_down() {
-                    continue;
-                }
-                let to = nt.translation - pt.translation;
-                let d = to.length();
-                if d > reach || to.normalize_or_zero().dot(dir).acos() > half_angle {
-                    continue;
-                }
-                let falloff = 1.0 - (d / reach) * 0.5;
-                npc.velocity += flat * push * falloff + Vec3::Y * lift;
-                stag.write(NpcStagger { npc: e, secs: 2.0, parried: false });
-                // slammed into a wall?
-                let wall = ctx.cast_ray(nt.translation, flat, push * 0.35, true, filter).is_some();
-                let dmg = if wall && level >= 2 { 500.0 } else if wall { damage + 15.0 } else { damage };
-                if dmg > 0.0 {
-                    hits.write(NpcHit { npc: e, damage: dmg, kind: HitKind::Windblast, from: pt.translation });
-                }
-            }
-            noise.write(Noise { pos: pt.translation, radius: 15.0, combat: true });
-            // (and the doors before it: the wooden ones break)
-            door_blast.write(crate::interact::DoorBlast { from: pt.translation, dir, reach, half_angle, damage });
+            // (the blast itself starts at the cast clip's `DisNotify_WindBlast`: `windblast_gusts`)
+            powers.gusts.push(Gust { t: 0.0, eye, dir, from: pt.translation, level, targets: None });
         }
         Power::Possess => {
             let range = data.power_f("Possess", level, "m_fPossessRange", 1000.0) * UU;
@@ -1001,9 +1143,19 @@ fn use_power(
                 sfx.write(PostEvent::named("Snd_Power_Empty", None));
                 return;
             }
+            if !chamber(&mut powers, &data, &stats, sel) {
+                return;
+            }
+            let ammo = match sel {
+                Power::SleepDart => &mut stats.sleep_darts,
+                Power::Crossbow => &mut stats.bolts,
+                p => stats.items.entry(p.ammo_item().unwrap_or(crate::gadgets::FLARES).to_string()).or_default(),
+            };
             *ammo -= 1;
+            let held = *ammo;
             stats.shots_fired += 1;
-            powers.cooldown = 0.9;
+            powers.cooldown = FIRE_ACTION;
+            spend_round(&mut powers, &data, &stats, sel, held);
             sfx.write(PostEvent::named("Snd_Crossbow_P_Fire", None));
             // (the bolt strays within the aim's cone; the view kicks)
             let dir = aim.scatter(dir);
@@ -1032,7 +1184,6 @@ fn use_power(
             if let Some(npc) = lethal {
                 kill_cams.write(crate::killcam::StartKillCam { bolt: e.id(), npc });
             }
-            noise.write(Noise { pos: pt.translation, radius: 3.0, combat: false });
         }
         Power::Pistol | Power::ExplosiveBullet => {
             let explosive = sel == Power::ExplosiveBullet;
@@ -1042,9 +1193,15 @@ fn use_power(
                 sfx.write(PostEvent::named("Snd_Power_Empty", None));
                 return;
             }
+            if !chamber(&mut powers, &data, &stats, sel) {
+                return;
+            }
+            let ammo = if explosive { stats.items.entry(crate::gadgets::EXPLOSIVE.to_string()).or_default() } else { &mut stats.bullets };
             *ammo -= 1;
+            let held = *ammo;
             stats.shots_fired += 1;
-            powers.cooldown = 1.2;
+            powers.cooldown = FIRE_ACTION;
+            spend_round(&mut powers, &data, &stats, sel, held);
             let dir = aim.scatter(dir);
             aim.fire(&data, &stats, sel);
             let filter = QueryFilter::default().exclude_collider(pe).groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_NPC | GROUP_PROP));
@@ -1082,12 +1239,13 @@ fn use_power(
                     sfx.write(PostEvent::named("Imp_Bullet_on_Body", Some(at)));
                 } else {
                     sfx.write(PostEvent::named(&format!("Imp_Bullet_on_{}", impact_surface(surface)), Some(at)));
+                    noise.write(Noise { pos: at, radius: 30.0, kind: NoiseKind::Danger });
                 }
                 if npcs.get(hit).is_err() {
                     world_hits.write(WorldDamage::player(Reach::Hit { collider: hit, at }, attrs.bullet.damage(toi, false, false), crate::worlddamage::bullet_type(toi, &attrs)));
                 }
             }
-            noise.write(Noise { pos: pt.translation, radius: 30.0, combat: true });
+            noise.write(Noise { pos: pt.translation, radius: 60.0, kind: NoiseKind::Danger });
         }
     }
     if cast {
@@ -1097,6 +1255,106 @@ fn use_power(
             used.write(PowerUsed(sel));
         }
     }
+}
+
+/// Wind Blasts under way, as the original's (decoded by roshan's r614/blink research): at the
+/// cast clip's notify it gathers, once, everyone within its cone (`m_Angle`) and `m_Distance`,
+/// by k = (1 - d/R)^2 x ((cos to aim - cos half) / (1 - cos half))^2 (past 1 m); its front
+/// (`m_Speed`) reaches each in turn: the push `m_Force` along the aim, its height raised to
+/// `m_ExtraUpForce` x (1 - d/R), times k (a body flies at half that momentum, at least 800 uu/s
+/// across); the damage `m_Damage` x k, `m_HitWallAdditionalDamage` more for one slammed into a
+/// wall. The doors, the scripts' things and the loose props before it go as it starts.
+#[allow(clippy::too_many_arguments)]
+fn windblast_gusts(
+    time: Res<Time>,
+    tc: Res<TimeControl>,
+    data: Res<Data>,
+    mut powers: ResMut<Powers>,
+    mut npcs: Query<(Entity, &Transform, &mut Npc)>,
+    rapier: ReadRapierContext,
+    (mut hits, mut stag, mut noise): (MessageWriter<NpcHit>, MessageWriter<NpcStagger>, MessageWriter<Noise>),
+    (mut world_hits, mut door_blast, mut props): (MessageWriter<WorldDamage>, MessageWriter<crate::interact::DoorBlast>, MessageWriter<crate::props::PropGust>),
+) {
+    if powers.gusts.is_empty() {
+        return;
+    }
+    let Ok(ctx) = rapier.single() else { return };
+    let dt = time.delta_secs() * tc.own_scale();
+    let filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+    for g in powers.gusts.iter_mut() {
+        g.t += dt;
+        if g.t < WINDBLAST_NOTIFY {
+            continue;
+        }
+        let level = g.level;
+        let force = data.power_f("Windblast", level, "m_Force", 1800.0);
+        let up = data.power_f("Windblast", level, "m_ExtraUpForce", 1000.0);
+        let damage = data.power_f("Windblast", level, "m_Damage", 20.0);
+        let reach = data.power_f("Windblast", level, "m_Distance", 3000.0) * UU;
+        let speed = data.power_f("Windblast", level, "m_Speed", 5000.0) * UU;
+        let half_angle = (data.power_f("Windblast", level, "m_Angle", 135.0) * 0.5).to_radians();
+        let wall_bonus = data.active("Windblast").and_then(|a| a.params.get("m_HitWallAdditionalDamage")).copied().unwrap_or(100.0);
+        let cos_half = half_angle.cos();
+        let flat = g.dir.with_y(0.0).normalize_or_zero();
+        let (eye, dir) = (g.eye, g.dir);
+        let factor = |at: Vec3| -> Option<(f32, f32, f32)> {
+            let to = at - eye;
+            let d = to.length();
+            let along = flat.dot(to.with_y(0.0).normalize_or_zero());
+            if d >= reach || along <= cos_half {
+                return None;
+            }
+            let near = 1.0 - (d / reach).min(1.0);
+            let mut k = near * near;
+            if d > 1.0 {
+                let a = (along - cos_half) / (1.0 - cos_half);
+                k *= a * a;
+            }
+            (k > 0.0).then_some((d, k, near))
+        };
+        if g.targets.is_none() {
+            // it starts: gathered once; the scripts' candles and fires it blows out, the
+            // things it knocks over, the doors (the wooden ones break), the loose props
+            g.targets = Some(npcs.iter().filter(|(_, _, n)| !n.is_down()).filter_map(|(e, t, _)| factor(t.translation).map(|(d, _, _)| (e, d))).collect());
+            world_hits.write(WorldDamage::player(Reach::Cone { at: eye, dir, len: reach, half: half_angle }, damage, "DisDamageType_WindBlast"));
+            door_blast.write(crate::interact::DoorBlast { from: g.from, dir, reach, half_angle, damage });
+            props.write(crate::props::PropGust { eye, dir, reach, half_angle, force, up });
+            noise.write(Noise { pos: g.from, radius: 15.0, kind: NoiseKind::Danger });
+        }
+        let front = (g.t - WINDBLAST_NOTIFY) * speed;
+        let Some(targets) = g.targets.as_mut() else { continue };
+        targets.retain(|&(e, d0)| {
+            if d0 > front {
+                return true;
+            }
+            let Ok((_, nt, mut npc)) = npcs.get_mut(e) else { return false };
+            if npc.is_down() {
+                return false;
+            }
+            let Some((_, k, near)) = factor(nt.translation) else { return false };
+            let z = dir.y * force;
+            let z = if z < 0.0 { z + near * up } else { z.max(near * up) };
+            let momentum = Vec3::new(dir.x * force, z, dir.z * force) * k;
+            let mut vel = momentum * 0.5 * UU;
+            let across = vel.with_y(0.0);
+            if across.length() < 4.0 {
+                let lift = vel.y;
+                vel = across.normalize_or(flat) * 4.0;
+                vel.y = lift;
+            }
+            npc.velocity += vel;
+            stag.write(NpcStagger { npc: e, secs: 2.0, parried: false });
+            // slammed into a wall within the flight's first moments?
+            let wall = ctx.cast_ray(nt.translation, vel.with_y(0.0).normalize_or(flat), (vel.with_y(0.0).length() * 0.3).max(0.5), true, filter).is_some();
+            // (the wall's bonus at level 2 only, flung at 500 uu/s or more)
+            let dmg = (damage * k).round() + if wall && level >= 2 && vel.length() >= 5.0 { wall_bonus } else { 0.0 };
+            if dmg > 0.0 {
+                hits.write(NpcHit { npc: e, damage: dmg, kind: HitKind::Windblast, from: g.from });
+            }
+            false
+        });
+    }
+    powers.gusts.retain(|g| g.targets.as_ref().is_none_or(|t| !t.is_empty()) && g.t < 3.0);
 }
 
 fn out_of_mana(powers: &mut Powers, sfx: &mut MessageWriter<PostEvent>, msgs: &mut HudMessages) {
@@ -1261,7 +1519,8 @@ fn update_projectiles(
                 world_hits.write(WorldDamage::player(Reach::Hit { collider: hit, at: t.translation }, damage, kind));
             }
             if let Ok((npc, nt, rig)) = npcs.get(hit) {
-                if !npc.is_down() {
+                // (a bolt or fire kills one lying knocked out too)
+                if !npc.is_down() || (npc.mode == crate::npc::Mode::Unconscious && matches!(pr.kind, HitKind::Bolt | HitKind::Fire)) {
                     // a bolt: doubled on the unaware (`m_fDamageMultiplier_Stealth`), more to the head
                     let damage = match pr.kind {
                         HitKind::Bolt => attrs.bolt.damage(0.0, t.translation.y - nt.translation.y > HEAD, npc.alert != crate::npc::Alert::Combat),
@@ -1316,7 +1575,7 @@ mod projectile_tests {
     fn loading_preserves_active_powers_and_resets_transient_menu_slowdown() {
         let powers = Powers { selected: Power::Crossbow, dark_vision: true, dark_vision_left: 6.5,
             cooldown: 0.4, cooking: Some((Power::Grenade, 1.2)), blink: Some((Vec3::X, Vec3::Z, 0.05)), ..default() };
-        let tc = TimeControl { bend_remaining: 4.5, world_dilation: 0.0, wheel: 0.1, finisher: 0.2, scripted: Some((0.3, 7.0)), aim_freeze: 1.0 };
+        let tc = TimeControl { bend_remaining: 4.5, world_dilation: 0.0, wheel: 0.1, finisher: 0.2, scripted: Some((0.3, 7.0)), aim_freeze: 1.0, ..default() };
         let bytes = serde_json::to_vec(&PowersSave::capture(&powers, &tc)).unwrap();
         let saved: PowersSave = serde_json::from_slice(&bytes).unwrap();
         let mut loaded = Powers::default();

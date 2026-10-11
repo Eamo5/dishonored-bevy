@@ -1,6 +1,6 @@
 //! Interaction: pickups (coins, elixirs, food, keys, notes...) and doors.
 
-use crate::gameplay::{HudMessages, Noise, PlayerStats};
+use crate::gameplay::{HudMessages, Noise, NoiseKind, PlayerStats};
 use crate::level::{InstanceCollider, LevelInfo, LevelInstance, LevelSpawnSet};
 use crate::player::{Player, PlayerCamera};
 use crate::GameState;
@@ -818,7 +818,7 @@ pub fn use_focus(
             }
             used.write(Interaction::Door { instance: li.index, opened: true, cw: door.dir > 0.0 });
         }
-        noise.write(Noise { pos: gt.translation(), radius: 5.0, combat: false });
+        noise.write(Noise { pos: gt.translation(), radius: 5.0, kind: NoiseKind::Anomaly });
     }
 }
 
@@ -900,11 +900,17 @@ fn break_doors(
         let Some(def) = level.scene.door(&li.actor, li.index).filter(|d| d.health > 0.0) else { continue };
         let mid = t.translation + Vec3::Y * 1.0;
         let mut dmg = 0.0f32;
+        // (Wind Blast's damage by its factor: the square of how near, times the square of how
+        // near the aim within its cone)
         for w in &winds {
             let to = mid - w.from;
             let d = to.length();
-            if d <= w.reach && to.normalize_or_zero().dot(w.dir).acos() <= w.half_angle {
-                dmg = dmg.max(w.damage);
+            let (flat, bearing, cos_half) = (w.dir.with_y(0.0).normalize_or_zero(), to.with_y(0.0).normalize_or_zero(), w.half_angle.cos());
+            let along = flat.dot(bearing);
+            if d < w.reach && along > cos_half {
+                let near = 1.0 - d / w.reach;
+                let a = if d > 1.0 { (along - cos_half) / (1.0 - cos_half) } else { 1.0 };
+                dmg = dmg.max((w.damage * near * near * a * a).round());
             }
         }
         for (at, radius, damage) in &blasts {

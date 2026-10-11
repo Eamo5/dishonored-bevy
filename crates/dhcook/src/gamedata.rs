@@ -347,6 +347,7 @@ fn dlc06_profile(cooked: &Path, game: &Package, base: &GameData) -> Option<crate
             p.texts.insert(format!("HUD.{}", k.trim()), v);
         }
     }
+    p.darkness = darkness(&pkg, &pawn);
     // the campaign's start loadouts and mission statistics screens
     if let Ok(full) = Package::open(&dir.join("DLC06_DishonoredGameFull_P.upk")) {
         let mut tmp = GameData::default();
@@ -612,6 +613,34 @@ fn missions_ini(cooked: &Path, d: &mut GameData) {
             }
         }
     }
+}
+
+/// A player pawn tweak's chaos (`m_DarknessLevels`, `m_Deeds`).
+fn darkness(pkg: &Package, pawn: &Props) -> crate::format::DarknessDef {
+    // (deed tweaks by object name: `DLC06_Timsh_MS_Pawns.Guards.DLC06_Pwn_GeneralTurnbull_1`)
+    let tweak = |p: &Props| -> String {
+        let n = s(p, "m_TweaksName");
+        let n = n.rsplit('.').next().unwrap_or("").to_string();
+        if n.eq_ignore_ascii_case("none") {
+            String::new()
+        } else {
+            n
+        }
+    };
+    let deeds = struct_array(pkg, pawn, "m_Deeds")
+        .iter()
+        .map(|e| crate::format::DeedDef {
+            stat: s(e, "m_Stat"),
+            threshold: e.int("m_Threshold").unwrap_or(1).max(1),
+            value: e.int("m_Value").unwrap_or(0),
+            tweak: match e.get("m_TweaksNamePair") {
+                Some(Value::Struct(_, sub)) => tweak(&Props(sub.clone())),
+                _ => String::new(),
+            },
+            excluded: struct_array(pkg, e, "m_ExcludedTweaksNamePairs").iter().map(tweak).filter(|t| !t.is_empty()).collect(),
+        })
+        .collect();
+    crate::format::DarknessDef { levels: i32_array(pkg, pawn, "m_DarknessLevels"), deeds }
 }
 
 fn struct_array(pkg: &Package, props: &Props, name: &str) -> Vec<Props> {
@@ -1244,6 +1273,8 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
     if let Some(p) = startup.find_export("Twk_Pawn_Corvo.Twk_Pawn_Corvo_Release").and_then(|i| props(&startup, i)) {
         let top: Vec<upk::props::Prop> = p.0.iter().filter(|p| !matches!(p.value, Value::Struct(..))).cloned().collect();
         flatten(&startup, &top, "", &mut d.pawn, &mut BTreeMap::new());
+        d.darkness = darkness(&startup, &p);
+        log::info!("gamedata: chaos: {} levels, {} deeds", d.darkness.levels.len(), d.darkness.deeds.len());
         // his breath's sounds (`m_pBreathlessnessIncreaseEvent` / `..DecreaseEvent`: Wwise events
         // by name) as texts `Pawn.<property>`
         for n in ["m_pBreathlessnessIncreaseEvent", "m_pBreathlessnessDecreaseEvent"] {

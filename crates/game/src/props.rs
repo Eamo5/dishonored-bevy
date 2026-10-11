@@ -10,7 +10,7 @@
 use crate::audio::PostEvent;
 use crate::bindings::{hint, Act, Bindings};
 use crate::gadgets::Explosion;
-use crate::gameplay::{HitKind, Noise, NpcStagger, Strikeable, Struck};
+use crate::gameplay::{HitKind, Noise, NoiseKind, NpcStagger, Strikeable, Struck};
 use crate::interact::InteractFocus;
 use crate::level::{GameAssets, InstanceCollider, LevelInfo, LevelInstance, GROUP_NPC, GROUP_PLAYER, GROUP_PROP, GROUP_WORLD};
 use crate::npc::Npc;
@@ -33,11 +33,61 @@ impl Plugin for PropsPlugin {
             .init_resource::<PropKnocks>()
             .init_resource::<PropPhysicsStep>()
             .init_resource::<TankEvents>()
+            .add_message::<PropGust>()
             .add_systems(PostUpdate, scale_prop_physics.before(PhysicsSet::SyncBackend).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, unscale_prop_physics.after(PhysicsSet::Writeback).run_if(in_state(GameState::InGame)))
             .add_systems(OnEnter(GameState::InGame), ((|mut h: ResMut<Held>| *h = Held::default()), setup_props.after(crate::level::LevelSpawnSet)))
             .add_systems(Update, prop_focus.after(crate::interact::FocusSet).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (restore_props, restore_prop_states, restore_held_prop, hold_prop, make_tanks, prop_impacts, prop_hits, tank_misses, sync_props, burst_tanks, prop_events, script_physics).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (restore_props, restore_prop_states, restore_held_prop, hold_prop, make_tanks, prop_impacts, prop_hits, tank_misses, sync_props, burst_tanks, prop_events, script_physics, prop_gusts).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
+    }
+}
+
+/// A Wind Blast's push on the loose props in its cone: from the eye along the aim, how far
+/// and how wide, its force and extra lift (uu).
+#[derive(Message, Clone, Copy)]
+pub struct PropGust {
+    pub eye: Vec3,
+    pub dir: Vec3,
+    pub reach: f32,
+    pub half_angle: f32,
+    pub force: f32,
+    pub up: f32,
+}
+
+/// The original's Wind Blast gathers every actor in its cone, props too (roshan's r614/blink
+/// research): each loose prop is pushed as a body would be, `m_Force` along the aim raised by
+/// `m_ExtraUpForce` near it, times its factor; the heavy ones less.
+fn prop_gusts(mut gusts: MessageReader<PropGust>, mut commands: Commands, props: Query<&Prop>, mut bodies: Query<(&GlobalTransform, &mut Velocity, Option<&ReadMassProperties>)>) {
+    for g in gusts.read() {
+        let flat = g.dir.with_y(0.0).normalize_or_zero();
+        let cos_half = g.half_angle.cos();
+        for prop in &props {
+            let (Some(body), _) = prop.body() else { continue };
+            if prop.hung || prop.is_live() {
+                continue;
+            }
+            let Ok((gt, mut v, mass)) = bodies.get_mut(body) else { continue };
+            let to = gt.translation() - g.eye;
+            let d = to.length();
+            let along = flat.dot(to.with_y(0.0).normalize_or_zero());
+            if d >= g.reach || along <= cos_half {
+                continue;
+            }
+            let near = 1.0 - (d / g.reach).min(1.0);
+            let mut k = near * near;
+            if d > 1.0 {
+                let a = (along - cos_half) / (1.0 - cos_half);
+                k *= a * a;
+            }
+            if k <= 0.0 {
+                continue;
+            }
+            let z = g.dir.y * g.force;
+            let z = if z < 0.0 { z + near * g.up } else { z.max(near * g.up) };
+            let heavy = mass.map(|m| (m.get().mass / 40.0).max(1.0)).unwrap_or(1.0);
+            v.linear += Vec3::new(g.dir.x * g.force, z, g.dir.z * g.force) * k * 0.5 * 0.01 / heavy;
+            commands.entity(body).try_insert((RigidBody::Dynamic, Sleeping { sleeping: false, ..default() }));
+        }
     }
 }
 
@@ -763,7 +813,7 @@ fn prop_impacts(
                     fx.write(SpawnEffect { system: Some(ps), ..SpawnEffect::at("", at) });
                 }
                 if im.noise > 0.0 {
-                    noise.write(Noise { pos: at, radius: im.noise, combat: im.threatening });
+                    noise.write(Noise { pos: at, radius: im.noise, kind: if im.threatening { NoiseKind::Threatening } else { NoiseKind::Anomaly } });
                 }
             }
         }
@@ -784,7 +834,7 @@ fn prop_impacts(
         if let (Some((ne, _)), true) = (body_hit, prop.thrown) {
             stagger.write(NpcStagger { npc: ne, secs: 0.6, parried: false });
             npc_hits.write(crate::gameplay::NpcHit { npc: ne, damage: m.damage, kind: crate::gameplay::HitKind::Impact, from: at });
-            noise.write(Noise { pos: at, radius: 6.0, combat: true });
+            noise.write(Noise { pos: at, radius: 6.0, kind: NoiseKind::Threatening });
         }
         // (settling as the level starts breaks nothing)
         let breaking = if prop.thrown { m.break_speed } else if prop.quiet > 0.0 && prop.settling { f32::INFINITY } else { m.break_speed_drop };
@@ -840,7 +890,7 @@ pub fn break_pieces(commands: &mut Commands, assets: &GameAssets, b: &dhcook::fo
         sfx.write(PostEvent::named(&b.sound, Some(at)));
     }
     if b.noise > 0.0 {
-        noise.write(Noise { pos: at, radius: b.noise, combat: b.threatening });
+        noise.write(Noise { pos: at, radius: b.noise, kind: if b.threatening { NoiseKind::Threatening } else { NoiseKind::Anomaly } });
     }
     if let Some(ps) = b.particle {
         fx.write(SpawnEffect { system: Some(ps), ..SpawnEffect::at("", at + t.rotation * Vec3::from(b.particle_offset)) });

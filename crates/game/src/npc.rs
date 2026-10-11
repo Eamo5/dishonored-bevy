@@ -3,7 +3,7 @@
 //! without them), with perception and a stealth/combat state machine.
 
 use crate::anim::{Animator, CharAnims, ClipId};
-use crate::gameplay::{HitKind, Noise, NpcHit, NpcStagger, PlayerHit, PlayerStats, TimeControl};
+use crate::gameplay::{HitKind, Noise, NoiseKind, NpcHit, NpcStagger, PlayerHit, PlayerStats, TimeControl};
 use crate::level::{GameAssets, LevelInfo, LevelSpawnSet, GROUP_NPC, GROUP_PLAYER, GROUP_PROP, GROUP_WORLD};
 use crate::player::Player;
 use crate::world_light::{LitActor, WorldLighting};
@@ -88,7 +88,9 @@ pub struct ArrivalTimer(pub f32);
 /// Seconds after the level appears before NPCs can perceive the player.
 const ARRIVAL_GRACE: f32 = 3.0;
 /// How many NPCs may be in an attack swing at the same time (others wait their turn).
-const MAX_ATTACKERS: usize = 2;
+/// The most blades at Corvo at once, by difficulty (`DefaultAI.ini` `m_InnerSkirmishCaps`:
+/// easy 1, normal 2, hard and very hard 3).
+const INNER_SKIRMISH_CAPS: [usize; 4] = [1, 2, 3, 3];
 /// Beyond this distance from the player, unaware NPCs move without the character controller.
 const FAR_MOVE: f32 = 25.0;
 
@@ -182,6 +184,9 @@ pub struct Npc {
     /// Seconds into the current melee attack.
     pub attack_t: Option<f32>,
     pub stagger: f32,
+    /// a sleep dart taking hold (seconds left: `DisDamageType_Arrow_Sleep.m_fTimeBeforeSleep`,
+    /// for those in a fight)
+    pub sleep_in: Option<f32>,
     pub stuck: f32,
     pub sidestep: f32,
     pub progress_pos: Vec3,
@@ -244,6 +249,8 @@ pub struct Npc {
     /// feels nothing
     pub blind: bool,
     pub deaf: bool,
+    /// the alarm bell it runs to ring (`security::alarms`)
+    pub alarm_run: Option<Vec3>,
     pub numb: bool,
     /// the scripts keep it alive (`DisSeqAct_LimitPawnMinHealth`)
     pub min_health: f32,
@@ -1222,6 +1229,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         attack_cd: 0.0,
         attack_t: None,
         stagger: 0.0,
+        sleep_in: None,
         stuck: 0.0,
         sidestep: 0.0,
         progress_pos: pos,
@@ -1260,6 +1268,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         no_navmesh_teleport: false,
         blind: false,
         deaf: false,
+        alarm_run: None,
         numb: false,
         min_health: 0.0,
         nav: Default::default(),
@@ -1522,7 +1531,11 @@ fn npc_hits(
     mut stances: ResMut<crate::script_world::SpawnerOverrides>,
     (level, mut vm): (Option<Res<LevelInfo>>, Option<ResMut<crate::kismet::Vm>>),
     (mut takedowns, marks, tc): (MessageWriter<crate::gameplay::PlayerTakedown>, Query<(Option<&HeadHit>, Option<&DropHeight>)>, Res<crate::gameplay::TimeControl>),
+    data: Res<crate::gamedata::Data>,
 ) {
+    // how much sooner a sleep dart takes hold (`SleepDelayReduction`: the Combat Sleep Darts
+    // upgrade)
+    let sleep_cut: f32 = data.0.upgrades.iter().filter(|u| stats.upgrades.contains(&u.id)).flat_map(|u| &u.attributes).filter(|(n, _)| n == "SleepDelayReduction").map(|(_, v)| *v).sum();
     for h in hits.read() {
         let (head, drop) = marks.get(h.npc).map(|(h, d)| (h.is_some(), d.map(|d| d.0))).unwrap_or((false, None));
         if head {
@@ -1530,6 +1543,21 @@ fn npc_hits(
         }
         let Ok((e, mut npc, t)) = npcs.get_mut(h.npc) else { continue };
         if npc.is_down() {
+            // the knocked out can still be killed where they lie (a blade, a bolt, a shot, a
+            // blast, fire, the rats eating them): a kill, no longer a knockout
+            let lethal = matches!(
+                h.kind,
+                HitKind::Sword | HitKind::Bolt | HitKind::Bullet | HitKind::ExplosiveBullet | HitKind::Explosion | HitKind::GrenadeThrowback | HitKind::StickyGrenade | HitKind::ExplosiveBolt | HitKind::SpringRazor | HitKind::Fire | HitKind::Rats | HitKind::ArcMine
+            );
+            if npc.mode == Mode::Unconscious && lethal && h.damage > 0.0 && npc.min_health <= 0.0 {
+                npc.health = 0.0;
+                npc.set_mode(Mode::Dead);
+                stats.knockouts = stats.knockouts.saturating_sub(1);
+                stats.killed(&npc.pawn, !npc.hostile());
+                if h.kind == HitKind::Fire {
+                    commands.entity(e).try_insert(Ashes(-0.9));
+                }
+            }
             continue;
         }
         // (the scripts may spare someone physics' blows: `DisSeqAct_NPCIgnoreRBDamages`)
@@ -1580,17 +1608,24 @@ fn npc_hits(
                 msgs.push(format!("{} rendered unconscious", npc.name));
             }
             HitKind::SleepDart => {
-                npc.set_mode(Mode::Unconscious);
+                // (someone fighting goes under after `m_fTimeBeforeSleep` 1.5 s, unless Corvo
+                // has the Combat Sleep Darts: as roshan's r614/blink research decoded it)
+                let delay = (1.5 - sleep_cut).max(0.0);
+                if npc.mode == Mode::Combat && delay > 0.0 {
+                    npc.sleep_in = Some(npc.sleep_in.map_or(delay, |t| t.min(delay)));
+                } else {
+                    npc.set_mode(Mode::Unconscious);
+                }
                 stats.knockouts += 1;
                 msgs.push("Sleep dart hit");
-                noise.write(Noise { pos, radius: 4.0, combat: false });
+                noise.write(Noise { pos, radius: 3.0, kind: NoiseKind::Anomaly });
             }
             // a stun mine's lightning: asleep, falling limp where they stood
             HitKind::StunMine => {
                 npc.set_mode(Mode::Unconscious);
                 stats.knockouts += 1;
                 commands.entity(e).try_insert(crate::ragdoll::GoLimp::now((pos - h.from).with_y(0.0).normalize_or_zero() * 0.5, None));
-                noise.write(Noise { pos, radius: 4.0, combat: false });
+                noise.write(Noise { pos, radius: 3.0, kind: NoiseKind::Anomaly });
             }
             // chokedust: choking where they stand a while, unharmed; then after whoever threw it
             HitKind::Chokedust => {
@@ -1607,26 +1642,20 @@ fn npc_hits(
                 // `NPCImmolationTime`: they burn, then nothing is left
                 npc.health = 0.0;
                 npc.set_mode(Mode::Dead);
-                stats.kills += 1;
-                if !npc.hostile() {
-                    stats.civilians_killed += 1;
-                }
+                stats.killed(&npc.pawn, !npc.hostile());
                 commands.entity(e).try_insert(Ashes(-0.9));
                 sfx.write(crate::audio::PostEvent::named("Amb_Fire_Alcohol_Immolation", Some(pos + Vec3::Y)));
                 fx.write(crate::particles::SpawnEffect { follow: Some(e), secs: 1.6, ..crate::particles::SpawnEffect::at("immolation", Vec3::ZERO) });
-                noise.write(Noise { pos, radius: 14.0, combat: true });
+                noise.write(Noise { pos, radius: 14.0, kind: NoiseKind::Danger });
             }
             HitKind::Assassinate | HitKind::Fatality | HitKind::WallOfLight => {
                 npc.health = 0.0;
                 npc.set_mode(Mode::Dead);
-                stats.kills += 1;
-                if !npc.hostile() {
-                    stats.civilians_killed += 1;
-                }
+                stats.killed(&npc.pawn, !npc.hostile());
                 if h.kind == HitKind::Assassinate {
                     msgs.push(format!("{} assassinated", npc.name));
                 }
-                noise.write(Noise { pos, radius: 5.0, combat: false });
+                noise.write(Noise { pos, radius: 3.0, kind: NoiseKind::DeathRattle });
             }
             HitKind::ByOthers | HitKind::EnemyExplosion => {
                 // another NPC's blow (or the level's rats): it fights back
@@ -1638,7 +1667,7 @@ fn npc_hits(
                 if npc.health <= 0.0 {
                     npc.set_mode(Mode::Dead);
                 }
-                noise.write(Noise { pos, radius: 14.0, combat: true });
+                noise.write(Noise { pos, radius: 8.0, kind: NoiseKind::Threatening });
             }
             _ => {
                 npc.health = (npc.health - h.damage).max(npc.min_health);
@@ -1654,13 +1683,11 @@ fn npc_hits(
                 }
                 if npc.health <= 0.0 {
                     npc.set_mode(Mode::Dead);
-                    stats.kills += 1;
-                    if !npc.hostile() {
-                        stats.civilians_killed += 1;
-                    }
-                    noise.write(Noise { pos, radius: 14.0, combat: true });
+                    stats.killed(&npc.pawn, !npc.hostile());
+                    noise.write(Noise { pos, radius: 8.0, kind: NoiseKind::Threatening });
+                    noise.write(Noise { pos, radius: 3.0, kind: NoiseKind::DeathRattle });
                 } else {
-                    noise.write(Noise { pos, radius: 16.0, combat: true });
+                    noise.write(Noise { pos, radius: 8.0, kind: NoiseKind::Threatening });
                 }
             }
         }
@@ -1771,8 +1798,8 @@ fn npc_hearing(
                 npc.heard_player += 1;
             }
             if !npc.hostile() {
-                // (the armed stand their ground)
-                if n.combat && !npc.fighter() && npc.may_panic() {
+                // a scary noise sets them running; the armed stand their ground
+                if n.panics() && !npc.fighter() && npc.may_panic() {
                     if npc.can_flee {
                         npc.set_mode(Mode::Flee);
                     }
@@ -1780,19 +1807,23 @@ fn npc_hearing(
                 }
                 continue;
             }
-            // what it hears raises its attention (the original's increases: an anomaly, or
-            // danger), at least to a level; investigating, it goes to look
+            // what it hears raises its attention (the original's increase for the noise's
+            // context: an anomaly, a threat, danger, a death rattle, a cry for help, an alarm),
+            // at least to a level but never to busted: hearing alone can't find Corvo;
+            // investigating, it goes to look
             if let Some(att) = level.as_ref().and_then(|l| attention_of(&npc, &l.scene)) {
                 if npc.alert == Alert::Combat {
                     continue;
                 }
-                let (amount, lvl) = if n.combat { att.heard[2] } else { att.heard[0] };
+                let (amount, lvl) = att.heard[n.kind.slot()];
+                let cap = (att.levels[3][0] - 0.001).min(att.max);
                 let floor = match lvl {
                     0 => 0.0,
                     1..=4 => att.levels[lvl as usize - 1][0],
                     _ => att.max,
-                };
-                npc.awareness = (npc.awareness + amount).max(floor).min(att.max);
+                }
+                .min(cap);
+                npc.awareness = npc.awareness.max((npc.awareness + amount).max(floor).min(cap));
                 npc.last_seen = Some(n.pos);
                 if npc.awareness >= att.levels[2][0] {
                     npc.alert = Alert::Suspicious;
@@ -1801,7 +1832,7 @@ fn npc_hearing(
                 }
                 continue;
             }
-            if n.combat {
+            if n.combat() {
                 if npc.alert != Alert::Combat {
                     npc.alert = Alert::Combat;
                     npc.awareness = npc.awareness.max(0.9);
@@ -1972,7 +2003,9 @@ pub(crate) fn npc_perception(
             let mut rate = 0.0;
             if visible {
                 let closeness = 1.0 - dist / range.max(0.1);
-                rate = att.distance.apply(pvis.value, closeness).max(0.0) * att.see[difficulty];
+                // (clamped to 0..1 before the difficulty's scale: `m_bClampTargetVisibility`, as
+                // roshan's r614/blink research decoded it)
+                rate = att.distance.apply(pvis.value, closeness).clamp(0.0, 1.0) * att.see[difficulty];
             }
             if touching {
                 rate += att.touch;
@@ -2061,6 +2094,7 @@ pub(crate) fn npc_perception(
                             // the mission statistics count each body found once
                             if found.insert(*body) {
                                 stats.bodies_found += 1;
+                                stats.deeds_pending.push(("ePlayerStat_NumCorpsesDiscovered", String::new()));
                                 // the level scripts hear of it (`DisSeqEvent_Corpse` Discovered)
                                 if let Ok(f) = froms.get(*body) {
                                     events.write(crate::interact::Interaction::Corpse { spawner: f.0, what: 2 });
@@ -2114,11 +2148,12 @@ pub(crate) fn npc_brain(
     player: Query<(Entity, &Transform, Option<&crate::combat::Sword>), With<Player>>,
     mut npcs: Query<(Entity, &mut Npc, &Transform), (Without<Player>, Without<crate::possession::Possessed>)>,
     (level, mut npc_hits, ai, mut fled): (Option<Res<LevelInfo>>, MessageWriter<NpcHit>, Res<crate::aiworld::AiWorld>, MessageWriter<crate::aiworld::FleePointReached>),
-    stances: Res<crate::script_world::SpawnerOverrides>,
+    (stances, settings): (Res<crate::script_world::SpawnerOverrides>, Res<crate::settings::Settings>),
     mut grenades: MessageWriter<crate::gadgets::NpcGrenade>,
     (finishing, mut finishers): (Query<(), With<FinisherClip>>, MessageWriter<NpcFinisher>),
 ) {
     let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
+    let max_attackers = INNER_SKIRMISH_CAPS[(settings.difficulty as usize).min(3)];
     if dt_world <= 0.0 && (dt_own <= 0.0 || !npcs.iter().any(|(_, n, _)| n.out_of_bend)) {
         return;
     }
@@ -2153,6 +2188,16 @@ pub(crate) fn npc_brain(
         npc.attack_cd = (npc.attack_cd - dt).max(0.0);
         npc.stagger = (npc.stagger - dt).max(0.0);
         npc.hit_react = (npc.hit_react - dt).max(0.0);
+        // a sleep dart's drug taking hold
+        if let Some(t) = npc.sleep_in.as_mut() {
+            *t -= dt;
+            if *t <= 0.0 {
+                npc.sleep_in = None;
+                if !npc.is_down() {
+                    npc.set_mode(Mode::Unconscious);
+                }
+            }
+        }
         if npc.is_down() || npc.mode == Mode::Choked {
             npc.target = None;
             continue;
@@ -2210,7 +2255,7 @@ pub(crate) fn npc_brain(
                     if t_att < 0.55 && t_new >= 0.55 && d < 2.3 {
                         let damage = npc.arms.melee;
                         npc_hits.write(NpcHit { npc: npc.foe.unwrap(), damage, kind: HitKind::ByOthers, from: pos });
-                        noise.write(Noise { pos, radius: 12.0, combat: true });
+                        noise.write(Noise { pos, radius: 8.0, kind: NoiseKind::Threatening });
                     }
                     npc.attack_t = if t_new > 0.95 { None } else { Some(t_new) };
                 } else if d < 2.0 && npc.attack_cd <= 0.0 && npc.stagger <= 0.0 {
@@ -2244,6 +2289,13 @@ pub(crate) fn npc_brain(
                 npc.bark_req = (npc.bark_req.0.wrapping_add(1), "PATROL_PERSONAL_SPACE");
                 hit_writer.write(PlayerHit { npc: e, from: pos, damage: 0.0, kick: false, big: false, push: true });
             }
+        }
+        // on its way to ring an alarm bell: nothing else (the bell's slot, Alert, is above
+        // Combat's)
+        if let Some(bell) = npc.alarm_run {
+            npc.target = Some(bell);
+            npc.attack_t = None;
+            continue;
         }
         // what caught its eye (the turn-to-face level): it stops and turns to look
         if npc.attn_level == 2 && npc.alert == Alert::Unaware && matches!(npc.mode, Mode::Idle | Mode::Patrol | Mode::Return) {
@@ -2293,7 +2345,14 @@ pub(crate) fn npc_brain(
                 }
             }
             Mode::Search => {
-                if npc.mode_timer > 10.0 + (npc.alert == Alert::Combat) as u8 as f32 * 6.0 + npc.watched.len() as f32 * 4.0 {
+                // the search lasts while its attention holds above the Investigate stop (out
+                // of sight it leaks: about 12 s unsuspecting, half a minute and more suspecting,
+                // as roshan's r614/blink research measured), its crumbs' worth at most
+                let given_up = match level.as_ref().and_then(|l| attention_of(&npc, &l.scene)) {
+                    Some(a) => npc.mode_timer > 3.0 && (npc.awareness < a.levels[2][1] || npc.mode_timer > 40.0 + npc.watched.len() as f32 * 4.0),
+                    None => npc.mode_timer > 10.0 + (npc.alert == Alert::Combat) as u8 as f32 * 6.0 + npc.watched.len() as f32 * 4.0,
+                };
+                if given_up {
                     npc.alert = Alert::Unaware;
                     npc.awareness = npc.awareness.min(0.2);
                     npc.saw_body = false;
@@ -2445,7 +2504,10 @@ pub(crate) fn npc_brain(
                     }
                     npc.target = npc.last_seen;
                 }
-                if npc.mode_timer > 20.0 {
+                // out of sight its attention leaks; below Busted's stop it has lost him
+                // (`CombatToSearch`, as roshan's r614/blink research decoded it)
+                let lost = !npc.sees_player && npc.mode_timer > 2.0 && level.as_ref().and_then(|l| attention_of(&npc, &l.scene)).is_some_and(|a| npc.awareness < a.levels[3][1]);
+                if lost || npc.mode_timer > 20.0 {
                     npc.set_mode(Mode::Search);
                     continue;
                 }
@@ -2488,7 +2550,7 @@ pub(crate) fn npc_brain(
                         let vel = crate::gadgets::aim_throw(from, ppos - Vec3::Y * 0.8, g.speed);
                         info!("{} throws a grenade ({}) {d:.1} m away", npc.name, g.kind.trim_start_matches("DisTweaks_"));
                         grenades.write(crate::gadgets::NpcGrenade { owner: e, from, vel, fuse: g.fuse, blast: g.blast.clone() });
-                        noise.write(Noise { pos, radius: 20.0, combat: true });
+                        noise.write(Noise { pos, radius: 20.0, kind: NoiseKind::Threatening });
                         if g.jump > 0.0 {
                             // (`m_fJumpClearance`)
                             npc.retreat = Some((pos - toward * g.jump, 0.7));
@@ -2521,7 +2583,7 @@ pub(crate) fn npc_brain(
                             hit_writer.write(PlayerHit { npc: e, from: pos, damage: npc.arms.ranged, kick: false, big: false, push: false });
                         }
                         shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: npc.ranged >= 2 });
-                        noise.write(Noise { pos, radius: 40.0, combat: true });
+                        noise.write(Noise { pos, radius: 40.0, kind: NoiseKind::Danger });
                     }
                     if npc.ranged == 2 {
                         // tallboys keep their distance and shoot
@@ -2612,13 +2674,13 @@ pub(crate) fn npc_brain(
                             if to.length() < reach && (ppos.y - pos.y).abs() < 1.5 && in_front {
                                 hit_writer.write(PlayerHit { npc: e, from: pos, damage: if kick { 0.0 } else { npc.arms.melee }, kick, big, push: false });
                             }
-                            noise.write(Noise { pos, radius: 12.0, combat: true });
+                            noise.write(Noise { pos, radius: 8.0, kind: NoiseKind::Threatening });
                         }
                         npc.attack_t = if t_new > len { None } else { Some(t_new) };
                         if npc.attack_t.is_none() {
                             npc.swing = None;
                         }
-                    } else if npc.attack_cd <= 0.0 && npc.stagger <= 0.0 && npc.sees_player && attackers < MAX_ATTACKERS && npc.may_melee() {
+                    } else if npc.attack_cd <= 0.0 && npc.stagger <= 0.0 && npc.sees_player && attackers < max_attackers && npc.may_melee() {
                         // the move for the distance and its facing (its blade's
                         // `DisTweaks_NPCAttackShort` / `Medium` / `Long`), a block answered with a
                         // kick (`DisTweaks_NPCBash`); without them, a blow at arm's length
@@ -2754,6 +2816,7 @@ fn npc_move(
         }
         let pos = t.translation;
         let speed = match npc.mode {
+            _ if npc.alarm_run.is_some() => npc.gait[2],
             Mode::Combat | Mode::Flee => npc.gait[2],
             Mode::Investigate | Mode::Search => {
                 if npc.alert == Alert::Combat {

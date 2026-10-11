@@ -17,6 +17,14 @@ locally from your own installation.
 - Rust (stable) and a GPU with BC texture compression support (any desktop GPU).
 - Optional: ffmpeg on the path (or `DH_FFMPEG`) to convert the Bink movies (the intro, the
   loading screens' loops, the title card, the credits); without it they are left out.
+- **A modded install.** Mods installed with TFC Installer keep each file they replace in
+  `TFCInstallerBackups\<n>\`.
+  - Texture packs (sets that left `*.tfcInstalled`, such as the HD texture packs) are used as
+    installed.
+  - For any package another mod replaced (for example a "patches" mod that rewrote the powers'
+    tweaks, throwables and level scripts), the cooker reads the copy from before that mod
+    (`upk::original_path`). So the game's values are the shipped game's, with HD textures.
+  - `DH_MODDED=1` cooks the install as it is.
 
 ## Quick start
 
@@ -1172,6 +1180,18 @@ against the install's own data where it carries them, then implemented independe
   - A bullet does the pistol's `RangedDamage` plus its own `m_fDamage` (10 + 20).
   - Its range bands count from where it starts, 1.5 m ahead of the eye.
   - It goes through the first person: the next in line takes `m_fPostPiercingDamageRatio` (half).
+- **Bend Time** from its tweak, per level. Level 1 runs 12 s with the world at 0.15 and Corvo at
+  0.85; level 2 runs 8 s with the world stopped and Corvo at 0.9. Both come in over
+  `m_fTimeDilationWarmupTime` (0.15 s) and go out over `..CooldownTime` (0.25 s). Characters
+  out of bent time (Daud's assassins with Arcane Bond II) keep Corvo's pace.
+- **Wind Blast** reaches its `m_Distance` (30 m) within its 135° cone with the factor
+  k = (1 − d/R)² × ((cos − cos½)/(1 − cos½))². Its push is `m_Force` along the aim, its height
+  raised to `m_ExtraUpForce` × (1 − d/R), times k; a body flies at half that momentum, at least
+  4 m/s across. Its damage is `m_Damage` × k, plus `m_HitWallAdditionalDamage` (100) for one
+  slammed into a wall. Doors take the same factor.
+  - It starts at the cast clip's `DisNotify_WindBlast`, 0.27 s in. It gathers its targets once, then
+    its front (`m_Speed`, 50 m/s) reaches each in turn.
+  - Loose props in the cone are blown about too, the heavy ones less.
 - **Possession.** Anyone not choked can be possessed (`Twk_Possessable_BaseNPC.m_AwarenessSettings`),
   combat included. The target is chosen with the angle weighted ten times the distance, plus its
   priority: combatants over civilians over animals.
@@ -1181,12 +1201,68 @@ against the install's own data where it carries them, then implemented independe
 - **Walls of light.** One shocks Corvo for its `m_Damage` (100) as he touches it, rather than
   killing him outright, so health upgrades can survive it. While Bend Time stops the world it can be
   walked through.
-- **Autosaves.** A level script's autosave is denied while Corvo is fighting, unless it is a
-  mission's start or `m_bEvenInCombat`.
+- **Autosaves.**
+  - A level script's autosave is denied while Corvo is fighting, unless it is a mission's start or
+    `m_bEvenInCombat`.
+  - Autosaves take two slots in turn and never overwrite the newer one. A mission's start save
+    (`m_bMissionStart`) has its own slot per mission.
+  - An autosave waits until saving is allowed, rather than failing.
+  - Arriving in a map autosaves, except when loading a save; the trials keep no saves.
 - **Physics volumes** (`zones.rs`). A `PhysicsVolume`'s pain (`bPainCausing`: `DamagePerSec` every
   `PainInterval`, and on entry) and push (`ZoneVelocity`: all of it falling, a little walking) now
   apply. These are Boyle's spiked fences, which hurt and shove Corvo off. The volume he is in is the
   highest `Priority` one around his centre.
+- **Chaos** is the original's score (`DisDarknessManager`), replacing a guess from the share of
+  people killed.
+  - Deeds raise the score. Each of the player tweak's `m_Deeds` counts a statistic: kills of
+    victims whose tweak lineage holds its tweak and none of its exclusions, alarms rung, or bodies
+    found the first time. At its threshold it adds its points and starts again.
+  - Corvo's deeds: each civilian (not the weepers) +6, every fourth guard, thug, overseer, assassin,
+    tallboy or weeper +6, every fifth alarm or body found +6. Daud has his own 14 deeds and steps.
+  - The level is the last of `m_DarknessLevels` the score reaches (0, 12, 48, 72, 96...). A mission
+    is high chaos at its `m_MissionChaosThreshold` level. The scripts' `DisSeqAct_AddDarkness` adds
+    points, never below 0. Mission end clears the deed counters and keeps the score.
+  - `DisSeqVar_Darkness` reads the score, `DisSeqVar_DarknessLevel` the level.
+  - Dialogue's `DisConv_CompareDarknessLevel` now branches (same / lower / higher), inside
+    conversations too: the Pub's and the Streets' chaos lines.
+- **Noises carry the original's loudness and context.**
+  - Running steps carry 6 m, sprinting 12 m, landing 4 m (a big fall 8 m); sneaking and crouched
+    landings are silent, and so are running and sprinting with the Silent Movement upgrades.
+  - Blades meeting and blows carry 8 m (a threat); the pistol 60 m and its bullet's impact 30 m
+    (danger); a grenade 25 m; a death rattle 3 m. The crossbow makes no noise firing.
+  - A guard's attention rises by the context's own amount (anomaly, threat, danger, death rattle,
+    help, alarm), never to busted: hearing alone can't find Corvo.
+  - Civilians panic at anything but an anomaly.
+- **The alarm bell.** A guard who has found Corvo, within `m_fNPCGoToAlarmCloseness` of a bell,
+  runs to it (the nearest of them; not with Corvo on him) and rings it after `m_fWaitTimeBeforeRing`.
+  - Its noise (60 m, an alarm) goes out after `m_fAlarmRingDelayBeforeAINoise` (2.5 s).
+  - It rings while anyone still hunts him, then every bell waits 10 s.
+  - Its spawners far enough from Corvo (`m_fSpawnerMinDistFromPlayer`) come first.
+- **Losing Corvo.** A guard in a fight who can't see him gives up for a search when its attention
+  leaks below busted's stop. A search lasts while its attention holds above investigating's stop
+  (a dozen seconds unsuspecting, half a minute and more suspecting), not a fixed time.
+- **Attackers.** At most `m_InnerSkirmishCaps` blades come at Corvo at once: 1 on easy, 2 on
+  normal, 3 on hard and very hard.
+- **Assassinations.**
+  - An assassination reaches 2.75 m and comes from any side. The target's awareness must be one the
+    table allows (unaware, surprised, suspicious, begging): not fighting him, fleeing or choked, and
+    not running.
+  - A drop assassination needs only a fall: no speed floor, the target within 3.5 m below, checked
+    every moment the button is held.
+- **The knocked out can be killed** where they lie, by a blade, bolt, shot, blast, fire or the
+  rats, and it counts as a kill. Rats eat knocked-out bodies too.
+- **Armour.** The Improved Armor upgrade takes its whole `DamageReduction` (5) off each blow, shot
+  or blast, never below 1. Bites, electricity and the plague go round it.
+- **The guns load and reload.**
+  - The pistol's magazine holds `1 + MagazineBonus` rounds (up to 4 with the magazine upgrades);
+    the crossbow holds one bolt. Another ammunition must be loaded first.
+  - Emptied, a gun reloads after its fire action (0.4 s), playing the original's clips and sound:
+    the pistol in 0.426 + 0.75 / `ReloadSpeed` + 0.302 s, the crossbow in 1.3 s.
+  - `FastReload` replaces that with its own quick action: the pistol's second upgrade 1 s, the
+    crossbow's 0.3 s.
+- **The slide.** Crouching while sprinting at 4 m/s or more slides. The speed eases to the
+  sneaking speed over 1.1 s along the way it began. It ends early if that way turns more than 25°,
+  or when let go after 0.55 s.
 
 ## Parity audit status
 
