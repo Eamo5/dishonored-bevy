@@ -2452,6 +2452,17 @@ impl<'a> Cooker<'a> {
             || !ch.bool("UseDirectLightMap").unwrap_or(false) && kind != LightKind::Sky;
         let index = self.scene.lights.len() as u32;
         let dominant = cls.starts_with("Dominant") && kind != LightKind::Directional;
+        // (lights for characters only leave the static channel off: `LightingChannels.Static`)
+        let static_channel = match ch.get("LightingChannels") {
+            Some(Value::Struct(_, r)) => Props(r.clone()).bool("Static").unwrap_or(true),
+            _ => true,
+        };
+        let live = cls.starts_with("Dominant")
+            || matches!(kind, LightKind::Sky | LightKind::Directional)
+            || actor_class.contains("Movable")
+            || actor_class.contains("Toggleable")
+            || ch.bool("bForceDynamicLight").unwrap_or(false)
+            || !static_channel;
         if dominant {
             if let Some(Value::Guid(g)) = ch.get("LightGuid") {
                 self.light_guids.insert(*g, index);
@@ -2472,6 +2483,7 @@ impl<'a> Cooker<'a> {
             shadows: ch.bool("CastShadows").unwrap_or(true) && ch.bool("CastDynamicShadows").unwrap_or(true),
             enabled,
             dynamic,
+            live,
             actor: actor.name().to_string(),
             shafts: ch.bool("bRenderLightShafts").unwrap_or(false).then(|| {
                 let t = ch.color("BloomTint").unwrap_or([255, 255, 255, 255]);

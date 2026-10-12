@@ -9,7 +9,7 @@ use std::path::Path;
 // 103: retain unmatched-rig timelines and zero-track animation sequences.
 // 121: props' muzzles; the contact system's impact effects (`contact_fx`).
 // 122: Blink's target markers (`blink_ground`, `blink_mantle`, `blink_fall` effects).
-// 123: the characters' clips' effects and plague coughs; plague carriers.
+// 123: the characters' clips' effects and plague coughs; plague carriers; lights' `live`.
 pub const SCENE_VERSION: u32 = 123;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -1660,6 +1660,11 @@ pub struct Light {
     /// its light shafts (`bRenderLightShafts`)
     #[serde(default)]
     pub shafts: Option<LightShafts>,
+    /// it lights characters as they go (their light environments) rather than through the
+    /// precomputed light volume: a sky, directional, dominant, movable or toggleable light, or
+    /// one for characters only (`LightingChannels.Static` off)
+    #[serde(default)]
+    pub live: bool,
 }
 
 /// A light's shafts (`LightComponent`'s): how far the occlusion reaches (m), the bloom's scale,

@@ -425,7 +425,15 @@ fullscreen display, vertical sync and the crosshair.
   (`Twk_PlayerVisibility`: his light value normalised over the darkest and brightest of the
   scripts' `DisSeqAct_SetPlayerVisSettings`, the `DisStealthVolume` he stands in or the map's
   `m_pMapPlayerVisSettings`, plus his speed; swimming under water hides) plus what nearness
-  adds (`m_DistanceValueTuning`), scaled by difficulty; out of sight it leaks away. Its level
+  adds (`m_DistanceValueTuning`), scaled by difficulty; out of sight it leaks away. His light
+  value is read as the original's visibility component reads his light environment, measured
+  on the original by roshan's r614/blink research: `(L / 4 pi)^(1/2.2)`. L is the light volume's
+  baked light where he stands (its ambient and directional luminance, which carries the static
+  lights) plus each live light's brightness x luminance x falloff. Live lights are the sky
+  (twice its brightness), the directional light where it reaches him, and the dominant, movable,
+  toggleable or characters-only (`LightingChannels.Static` off) points and spots. On Boyle's
+  street the baked share matches blink's measurement (0.269 at one point); the totals come out
+  0.43 / 0.37 / 0.25 where the original reads 0.59 / 0.31 / 0.21. `DH_VIS_LOG` logs it. Its level
   follows the tweak's thresholds: the head turns to him, the body turns to face him, the
   character investigates, then he's busted. What it hears raises attention by the tweak's
   increases (an anomaly, danger). Sneaking, the HUD effects movie's black shroud darkens the screen's edges
