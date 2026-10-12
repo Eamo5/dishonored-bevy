@@ -8,7 +8,8 @@ use std::path::Path;
 
 // 103: retain unmatched-rig timelines and zero-track animation sequences.
 // 121: props' muzzles; the contact system's impact effects (`contact_fx`).
-pub const SCENE_VERSION: u32 = 121;
+// 122: Blink's target markers (`blink_ground`, `blink_mantle`, `blink_fall` effects).
+pub const SCENE_VERSION: u32 = 122;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {

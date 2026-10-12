@@ -6294,6 +6294,11 @@ impl<'a> Cooker<'a> {
             ("blood_lunge", "Vfx_PhysMat.Blood.Fatalities.Pfx_BloodLunge"),
             ("possess_target", "Vfx_GamePlay.Possession.PossesTarget_Human_01"),
             ("mana_empty", "Vfx_GamePlay.Powers.Ps_Mana_Empty"),
+            // Blink's target, as `Twk_Blink` marks it: on the ground (`m_pGroundPS`), a ledge
+            // it will climb (`m_pMantlePS`), the air it will fall from (`m_pLowFallPS`)
+            ("blink_ground", "Vfx_GamePlay.Blink.Blink_Ground_01"),
+            ("blink_mantle", "Vfx_GamePlay.Blink.Blink_Mantle_01"),
+            ("blink_fall", "Vfx_GamePlay.Blink.Blink_Fall_01"),
             ("water_projectile", "Vfx_PhysMat.Water.water_projectile"),
             ("krust_spew", "Vfx_GamePlay.RiverKrust.Ps_RiverKrust_Spew"),
             ("krust_death", "Vfx_GamePlay.RiverKrust.Ps_RiverKrust_Death"),

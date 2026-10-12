@@ -92,7 +92,9 @@ fullscreen display, vertical sync and the crosshair.
 
 ## What's in
 
-- **Powers** (levels, ranges, durations from the original tweaks): Blink, Dark Vision, Bend
+- **Powers** (levels, ranges, durations from the original tweaks): Blink (its target marked as
+  `Twk_Blink` marks it: `Blink_Ground_01` on the ground, `Blink_Mantle_01` on a ledge it will
+  climb, `Blink_Fall_01` in the air it will fall from), Dark Vision, Bend
   Time, Wind Blast, Possession (animals, and unaware people at level 2; inside a wolfhound,
   a swarm's rat or a fish Corvo has its body, `DisTweaks_Possessable`'s size and speeds: a rat
   keeps to the surface of water, a fish swims anywhere in its water without breathing; a river

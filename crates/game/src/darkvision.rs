@@ -762,11 +762,9 @@ pub fn update_dark_vision(
     // the characters' sight: a cone from the eyes, turning with them (red eyes in a fight)
     let now = time.elapsed_secs();
     for (tag, mut em) in &mut cones {
-        let keep = match (sighted.get(&tag.0), lit.get(&tag.0)) {
-            (Some(&red), Some(&(was, _))) => red == was,
-            _ => false,
-        };
-        if !keep {
+        // (its own cones only: other tagged effects, Blink's marker, are another's)
+        let Some(&(was, _)) = lit.get(&tag.0) else { continue };
+        if sighted.get(&tag.0) != Some(&was) {
             em.stop();
         }
     }

@@ -308,6 +308,9 @@ pub struct Powers {
     /// Corvo's velocity as a Blink begins, his again as it ends; whether it ends crouched
     pub blink_vel: Vec3,
     pub blink_crouch: bool,
+    /// the landing's kind (its marker), and the marker shown
+    pub blink_spot: Option<BlinkSpot>,
+    pub blink_shown: Option<BlinkSpot>,
 }
 
 /// A Wind Blast under way: since the cast (s), from where and which way, its level; who it
@@ -349,6 +352,8 @@ impl Default for Powers {
             gusts: Vec::new(),
             blink_vel: Vec3::ZERO,
             blink_crouch: false,
+            blink_spot: None,
+            blink_shown: None,
         }
     }
 }
@@ -699,23 +704,9 @@ fn reset_powers(mut p: ResMut<Powers>, stats: Res<PlayerStats>, data: Res<Data>)
     p.selected = shortcuts(&stats, data.is_daud()).into_iter().find(|p| p.key().is_some()).unwrap_or(Power::Empty);
 }
 
-fn spawn_blink_marker(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>) {
-    let mat = mats.add(StandardMaterial {
-        base_color: Color::srgba(0.4, 0.8, 1.0, 0.35),
-        emissive: LinearRgba::rgb(0.6, 2.5, 4.0),
-        alpha_mode: AlphaMode::Add,
-        unlit: true,
-        ..default()
-    });
-    commands.spawn((
-        BlinkMarker,
-        Mesh3d(meshes.add(Capsule3d::new(0.22, 1.2))),
-        MeshMaterial3d(mat),
-        Transform::default(),
-        Visibility::Hidden,
-        bevy::light::NotShadowCaster,
-        DespawnOnExit(GameState::InGame),
-    ));
+/// Blink's target: where its marker's effect stands (`BlinkSpot::effect`).
+fn spawn_blink_marker(mut commands: Commands) {
+    commands.spawn((BlinkMarker, Transform::default(), Visibility::Hidden, DespawnOnExit(GameState::InGame)));
 }
 
 fn select_power(
@@ -775,7 +766,27 @@ fn select_power(
 }
 
 /// Compute where Blink would put the player (capsule centre), including ledge grabs.
-fn blink_destination(ctx: &RapierContext, player: Entity, eye: Vec3, dir: Vec3, range: f32, vert: f32) -> Option<(Vec3, bool)> {
+/// Where a Blink lands, as its marker shows it: on the ground, on a ledge it climbs, or in
+/// the air it falls from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BlinkSpot {
+    Ground,
+    Ledge,
+    Fall,
+}
+
+impl BlinkSpot {
+    /// The marker's effect (`Twk_Blink`'s `m_pGroundPS`, `m_pMantlePS`, `m_pLowFallPS`).
+    fn effect(self) -> &'static str {
+        match self {
+            BlinkSpot::Ground => "blink_ground",
+            BlinkSpot::Ledge => "blink_mantle",
+            BlinkSpot::Fall => "blink_fall",
+        }
+    }
+}
+
+fn blink_destination(ctx: &RapierContext, player: Entity, eye: Vec3, dir: Vec3, range: f32, vert: f32) -> Option<(Vec3, bool, BlinkSpot)> {
     let filter = QueryFilter::default().exclude_collider(player).groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP | GROUP_NPC));
     // upward blinks reach less far (the original's vertical limit)
     let range = if dir.y > 0.0 { range.min(vert / dir.y.max(1e-3)) } else { range };
@@ -835,11 +846,22 @@ fn blink_destination(ctx: &RapierContext, player: Entity, eye: Vec3, dir: Vec3, 
                 b3 = true;
                 false
             });
-            return (!b3).then_some((low, true));
+            return (!b3).then_some((low, true, spot_of(ctx, low, ledge.is_some(), filter)));
         }
         dest = up;
     }
-    Some((dest, false))
+    Some((dest, false, spot_of(ctx, dest, ledge.is_some(), filter)))
+}
+
+/// The kind of a Blink's landing: a ledge, else ground under its feet, else the air.
+fn spot_of(ctx: &RapierContext, dest: Vec3, ledge: bool, filter: QueryFilter) -> BlinkSpot {
+    if ledge {
+        BlinkSpot::Ledge
+    } else if ctx.cast_ray(dest, Vec3::NEG_Y, STAND_HALF + RADIUS + 0.35, true, filter).is_some() {
+        BlinkSpot::Ground
+    } else {
+        BlinkSpot::Fall
+    }
 }
 
 /// Unreal units to metres.
@@ -858,7 +880,7 @@ fn use_power(
     (mut hits, mut noise, mut sfx, mut used, mut world_hits): (MessageWriter<NpcHit>, MessageWriter<Noise>, MessageWriter<PostEvent>, MessageWriter<PowerUsed>, MessageWriter<WorldDamage>),
     mut player: Query<(Entity, &Transform, &mut Player)>,
     (cam, surfaces, strikeables, mut struck): (Query<&GlobalTransform, With<PlayerCamera>>, Query<&ColliderSurfaces>, Query<&crate::gameplay::Strikeable>, MessageWriter<crate::gameplay::Struck>),
-    mut marker: Query<(&mut Transform, &mut Visibility), (With<BlinkMarker>, Without<Player>)>,
+    mut marker: Query<(Entity, &mut Transform, &mut Visibility), (With<BlinkMarker>, Without<Player>)>,
     npcs: Query<(Entity, &Transform, &Npc), (Without<Player>, Without<BlinkMarker>)>,
     (mut possession, mut start_possess, hosts, possess_overrides): (
         ResMut<crate::possession::Possession>,
@@ -867,7 +889,7 @@ fn use_power(
         Res<crate::possession::PossessOverrides>,
     ),
     (mut swarm, mut gadget, mut blast, mut kill_cams): (MessageWriter<crate::swarm::SummonSwarm>, MessageWriter<crate::gadgets::UseGadget>, MessageWriter<crate::gadgets::Explosion>, MessageWriter<crate::killcam::StartKillCam>),
-    (mut aim, held, paused, mut summon, nav, mut fx, muzzles): (
+    (mut aim, held, paused, mut summon, nav, mut fx, muzzles, mut tagged): (
         ResMut<crate::aim::Aim>,
         Res<crate::props::Held>,
         Res<crate::hud::Paused>,
@@ -875,13 +897,14 @@ fn use_power(
         Option<Res<crate::navmesh::NavGrid>>,
         MessageWriter<crate::particles::SpawnEffect>,
         Query<(Entity, &GlobalTransform, &crate::arms::Muzzle)>,
+        Query<(&crate::particles::EffectTag, &mut crate::particles::ParticleEmitter)>,
     ),
 ) {
     if paused.0 {
         // Menu mouse releases must not spend mana or queue a Blink on resume.
         powers.aiming = false;
         powers.blink_target = None;
-        if let Ok((_, mut visibility)) = marker.single_mut() { *visibility = Visibility::Hidden; }
+        if let Ok((_, _, mut visibility)) = marker.single_mut() { *visibility = Visibility::Hidden; }
         return;
     }
     let dt = time.delta_secs();
@@ -938,16 +961,40 @@ fn use_power(
         let dest = blink_destination(&ctx, pe, eye, dir, blink_range, blink_vert);
         powers.blink_target = dest.map(|d| d.0);
         powers.blink_crouch = dest.is_some_and(|d| d.1);
+        powers.blink_spot = dest.map(|d| d.2);
     } else if sel == Power::Blink && can_act && mouse.just_pressed(MouseButton::Right) && stats.mana < Power::Blink.mana(&data) {
         out_of_mana(&mut powers, &mut sfx, &mut msgs);
     }
-    if let Ok((mut mt, mut mv)) = marker.single_mut() {
-        match (powers.aiming && sel == Power::Blink, powers.blink_target) {
+    if let Ok((me, mut mt, mut mv)) = marker.single_mut() {
+        // the marker's effect for the landing (the ground, a ledge, the air), carried by it
+        let want = match (powers.aiming && sel == Power::Blink, powers.blink_target) {
             (true, Some(t)) => {
                 *mv = Visibility::Inherited;
-                mt.translation = t;
+                // (at its feet)
+                mt.translation = t - Vec3::Y * (STAND_HALF + RADIUS);
+                powers.blink_spot
             }
-            _ => *mv = Visibility::Hidden,
+            _ => {
+                *mv = Visibility::Hidden;
+                None
+            }
+        };
+        if want != powers.blink_shown {
+            if std::env::var("DH_BLINK_LOG").is_ok() {
+                info!("blink marker: {:?} at {:.2}", want, mt.translation);
+            }
+            for (tag, mut em) in &mut tagged {
+                if tag.0 == me {
+                    em.stop();
+                }
+            }
+            if let Some(spot) = want {
+                // (a map without the ledge's marker shows the ground's)
+                let has = |n: &str| level_info.as_ref().is_some_and(|l| l.scene.effects.iter().any(|e| e.0 == n));
+                let name = if has(spot.effect()) { spot.effect() } else { BlinkSpot::Ground.effect() };
+                fx.write(crate::particles::SpawnEffect { follow: Some(me), tag: Some(me), secs: 600.0, ..crate::particles::SpawnEffect::at(name, Vec3::ZERO) });
+            }
+            powers.blink_shown = want;
         }
     }
     let cost = sel.mana(&data);

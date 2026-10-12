@@ -997,7 +997,8 @@ fn simulate(
         for (_, em) in &emitters {
             let pos = em.xf.transform_point3(Vec3::ZERO);
             let d = pos.distance(cam.translation());
-            if d > 15.0 {
+            // (`DH_PFX_ALL`: the gameplay effects however far)
+            if d > 15.0 && !(em.index == u32::MAX && std::env::var("DH_PFX_ALL").is_ok()) {
                 continue;
             }
             let Some(sys) = data.scene.particle_systems.get(em.system as usize) else { continue };
@@ -1150,6 +1151,11 @@ fn simulate(
         let pos = em.xf.transform_point3(Vec3::ZERO);
         let near = em.active && pos.distance_squared(eye) < em.range * em.range;
         if !near {
+            // (a gameplay effect isn't put to sleep and warmed up again: it plays from its start,
+            // as a marker spawned before its carrier's place is known must)
+            if em.index == u32::MAX {
+                continue;
+            }
             if em.awake {
                 em.awake = false;
                 for st in &mut em.emitters {
