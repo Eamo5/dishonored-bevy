@@ -62,7 +62,7 @@ fn cam_at(
     }
     let Some((name, d, side)) = cam_at.0.as_ref() else { return };
     // (the one speaking, among those of that name)
-    let Some((npc, rig, nt, _)) = npcs.iter().filter(|(n, _, _, _)| n.name.contains(name.as_str()) || n.pawn.contains(name.as_str())).max_by_key(|(_, _, _, speaking)| *speaking) else { return };
+    let Some((npc, rig, nt, _)) = npcs.iter().filter(|(n, _, _, _)| n.name.contains(name.as_str()) || n.pawn.contains(name.as_str())).max_by_key(|(n, _, _, speaking)| (*speaking, n.aim.is_some() || n.gun_hold > 0.0)) else { return };
     let head = rig.joint("head_jnt").and_then(|j| joints.get(j).ok()).map(|g| g.translation()).unwrap_or(nt.translation() + Vec3::Y * 1.6);
     // (from where Corvo stands: whom they speak to)
     let fwd = player.single().ok().map(|p| (p.translation + Vec3::Y * 0.7 - head).with_y(0.0).normalize_or_zero()).filter(|v| *v != Vec3::ZERO).unwrap_or(npc.forward());
@@ -817,6 +817,18 @@ fn run_script(
                 });
             }
         }
+        "stream" => {
+            // (tests) stream NAME [out]: a streamed sublevel loads (or goes)
+            let name = cmd.get(1).cloned().unwrap_or_default();
+            let out = cmd.get(2).is_some_and(|s| s == "out");
+            if let Some(vm) = vm.as_mut() {
+                if out {
+                    vm.unload_level(&name);
+                } else {
+                    vm.load_level(&name);
+                }
+            }
+        }
         "npchere" => {
             // (tests) npchere [D]: the nearest standing hostile character is moved D m (default
             // 1.5) before Corvo, on his floor
@@ -1390,25 +1402,31 @@ fn run_script(
                     _ => *pos + *fwd * cmd.get(2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(3.0),
                 }
                 .with_y(pos.y);
-                // (further than 3 m before it: the furthest spot up to there with a floor, room to
-                // stand and its sight of him)
-                let far = cmd.get(2).and_then(|s| s.parse::<f32>().ok()).filter(|d| cmd[0] == "front" && *d > 3.0);
+                // (further than 3 m before or behind it: the furthest spot up to there with a
+                // floor, room to stand and a clear line to it)
+                let far = cmd.get(2).and_then(|s| s.parse::<f32>().ok()).filter(|d| matches!(cmd[0].as_str(), "front" | "behind") && *d > 3.0);
+                let way = if cmd[0] == "behind" { -*fwd } else { *fwd };
                 if let (Some(far), Ok(ctx), Ok(pe)) = (far, rapier.single(), player_ent.single()) {
                     let world = bevy_rapier3d::prelude::QueryFilter::default().exclude_collider(pe).exclude_sensors().groups(bevy_rapier3d::prelude::CollisionGroups::new(bevy_rapier3d::prelude::Group::ALL, crate::level::GROUP_WORLD | crate::level::GROUP_PROP));
-                    let body = bevy_rapier3d::prelude::Collider::capsule_y(crate::player::STAND_HALF, crate::player::RADIUS);
+                    let body = bevy_rapier3d::prelude::Collider::capsule_y(crate::player::STAND_HALF, crate::player::RADIUS * 0.9);
                     let eye = *pos + Vec3::Y * 0.72;
+                    let log = std::env::var("DH_FRONT_LOG").is_ok();
                     let mut d = far;
                     while d >= 3.0 {
-                        let c = *pos + *fwd * d + Vec3::Y * 1.0;
+                        let c = *pos + way * d + Vec3::Y * 1.0;
                         if let Some((_, toi)) = ctx.cast_ray(c, Vec3::NEG_Y, 3.0, true, world) {
                             let stand = c - Vec3::Y * (toi - crate::player::STAND_HALF - crate::player::RADIUS - 0.04);
                             let mut blocked = false;
-                            ctx.intersect_shape(stand, Quat::IDENTITY, &*body.raw, world, |_| {
+                            ctx.intersect_shape(stand + Vec3::Y * 0.1, Quat::IDENTITY, &*body.raw, world, |_| {
                                 blocked = true;
                                 false
                             });
                             let to = stand + Vec3::Y * 0.6 - eye;
-                            if !blocked && toi > 0.05 && ctx.cast_ray(eye, to.normalize_or_zero(), to.length(), true, world).is_none() {
+                            let seen = ctx.cast_ray(eye, to.normalize_or_zero(), to.length(), true, world).is_none();
+                            if log {
+                                info!("script: {d:.1} m: floor {toi:.2} below, blocked {blocked}, seen {seen}");
+                            }
+                            if !blocked && toi > 0.05 && seen {
                                 at = stand;
                                 break;
                             }

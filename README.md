@@ -765,7 +765,7 @@ fullscreen display, vertical sync and the crosshair.
   `..Right90`). Script `spawn NAME` starts a level-script spawner (a kennel's hounds).
 - **Rats underfoot** (`DisBehaviorRatStomp`, `DisTweaks_NPCStomp` 2.5 m): people stamp on the rats that come near (their `..StompRat` clips and "rat" attack bark), killing those still under the heel.
 - **Wall of light eyes**: the eye above each wall (`DisDetectionEye`) shows what it sees in its detection cylinder with its tweak's materials: white with nobody about, red at someone the wall would burn (with its detection sound), blue at someone it lets pass, dark when unpowered. A device's receptacle is the nearest of its name (sublevels reuse actor names). Script: `wall [D]`.
-- **Tripwire traps**: the wires strung across passages (`DisTripwire`) snap when Corvo walks into them (jumping, Blinking or a small creature passes) and raise their `DisSeqEvent_Tripwire`; the level scripts fire the launchers (`DisSeqAct_ActivateProjectileLauncher`), which shoot at their target point on their sequence's fire notify: the whiskey launcher's explosive arrow bursts on what it strikes (`TrapArrowExplosion_twk`), the bolt launcher's bolt wounds. A launcher not yet fired can be disarmed for its ammunition (`m_HarvestedAmmo`: an incendiary bolt or a bolt). Sprung and disarmed traps, and broken or moved props, are kept in saves. Script: `trap [wire|launcher] [D]`; `DH_TRAP_LOG`.
+- **Tripwire traps**: the wires strung across passages (`DisTripwire`) snap when Corvo walks into them (jumping, Blinking or a small creature passes) and raise their `DisSeqEvent_Tripwire`; the level scripts fire the launchers (`DisSeqAct_ActivateProjectileLauncher`), which shoot at their target point on their sequence's fire notify: the whiskey launcher's explosive arrow bursts on what it strikes (`TrapArrowExplosion_twk`), the bolt launcher's bolt wounds. A launcher not yet fired can be disarmed for its ammunition (`m_HarvestedAmmo`: an incendiary bolt or a bolt). Sprung and disarmed traps, and broken or moved props, are kept in saves. A trap belongs to its sublevel: until a streamed sublevel loads (the trials' later rounds, say) its traps aren't there, hidden and inert, and they go when it streams out. Script: `trap [wire|launcher] [D]`, `stream NAME [out]`; `DH_TRAP_LOG`.
 - **Music boxes**: a musical Overseer fighting Corvo plays the protective tune, and so do the
   levels' tune sources (`DisProtectionTuneSource`): within 6 m the world sways, within 4 m
   Corvo's powers fail (`DisTweaks_Tune_Protection` radii and sounds, cooked from the music
@@ -1319,6 +1319,12 @@ against the install's own data where it carries them, then implemented independe
 - **Guards with pistols** aim before they shoot: the shot comes 0.75-1.25 s after they start, and
   they give up once he is out of sight for a moment. Within reach of their blades they only start
   from a standstill.
+  - The officers' pistol (`Twk_Inv_PistolEliteGuard`'s `Wpn_EliteGun`) hangs in its holster
+    across the chest (`HolsterGun`). To shoot they draw it into the left hand (`Sword_Gun_Draw`,
+    0.67 s), aim (`Sword_Gun_Idle`), fire (`Sword_Gun_Fire`, 1 s) and put it back
+    (`Sword_Gun_Undraw`, 1 s), standing for the shot; with the next shot at Corvo out of reach
+    due, the gun stays up. Moving, struck or downed, it goes straight back. `DH_GUN_LOG` logs
+    its steps.
 - **Tripwires** are snapped by anyone walking into them, guards too. Launchers fire at once,
   straight at their target.
 - **The interface.** The health and mana gauges show for 8 s after a change; a keyhole needs Use
@@ -1849,12 +1855,12 @@ DH_SCRIPT="wait 2; behind lone; attack; wait 1; log; shot kill; exit" ./target/r
 Commands: `wait S`, `goto X Y Z [S]` (walk there over the level's navmesh, using, swinging at
 or jumping onto what holds it up; `DH_GOTO_LOG`), `gototask [N] [S]` (to the N-th objective marker), `tp/fly X Y Z YAW PITCH`, `look YAW PITCH`, `lookat X Y Z`, `walk S`,
 `attack`, `block S`, `key K`, `hold K S`, `rmb`, `rmbhold S`, `mmbhold S`, `behind [N|lone]`,
-`front N|NAME [D]` (D m before a character: beyond 3 m, the furthest spot with a floor and its
-sight), `ledge [LOW] [HIGH] [crouch]` (before the nearest edge Corvo could mantle onto, LOW-HIGH m
+`front N|NAME [D]` / `behind N|NAME [D]` (D m before or behind a character: beyond 3 m, the
+furthest spot with a floor and a clear line to it), `ledge [LOW] [HIGH] [crouch]` (before the nearest edge Corvo could mantle onto, LOW-HIGH m
 high; `crouch`, only one he'd arrive crouched on; `DH_MANTLE_LOG` logs what blocks a mantle's
 top), `pos` (his position, velocity, footing), `pistol [NAME]` (the nearest hostile character
 carries a pistol and turns on him), `npchere [D]` (the nearest hostile character moved D m
-before him), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `runes N`,
+before him), `stream NAME [out]` (a streamed sublevel loads, or goes), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `runes N`,
 `charms N`, `mana`, `ammo TYPE N` (0 bullets .. 6 grenades, 7 sticky), `fx EFFECT [DIST]`,
 `remote EVENT` (a level-script remote event, e.g. `ChangeLvl_fromStreets1_toHub`), `chaos N`,
 `ko [NAME]` (a sleep dart into the nearest, or the nearest whose name or pawn holds NAME),

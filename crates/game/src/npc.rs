@@ -204,6 +204,10 @@ pub struct Npc {
     pub shoot_cd: f32,
     /// its pistol being aimed: seconds to the shot, seconds Corvo has been out of its sight
     pub aim: Option<(f32, f32)>,
+    /// the pistol shots it has fired (its animation follows them)
+    pub shots: u32,
+    /// seconds it stands after a pistol shot, for the shot and putting the gun away
+    pub gun_hold: f32,
     /// an NPC of an enemy faction it is fighting (`DisTweaks_Faction.m_EnemyFactions`), and
     /// when it next looks for one
     pub foe: Option<Entity>,
@@ -1381,6 +1385,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         ranged,
         shoot_cd: 2.0,
         aim: None,
+        shots: 0,
+        gun_hold: 0.0,
         foe: None,
         feud_scan: rand::random::<f32>(),
         grab: None,
@@ -1528,6 +1534,22 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
             }
         }
     }
+    // its pistol on the hip, drawn into the left hand to shoot (the officers'
+    // `Twk_Inv_PistolEliteGuard`: `Wpn_EliteGun` on `HolsterGun`, then `LeftHandWpn`)
+    let gun_hand = socket("LeftHandWpn", &["handAttachment_L_jnt", "hand_L_jnt"], Transform::IDENTITY);
+    let gun_holster = socket("HolsterGun", &[], Transform::IDENTITY);
+    let mut gun = Vec::new();
+    if ranged == 1 {
+        if let (Some((j, at)), Some(parts)) = (gun_holster.or(gun_hand), assets.props.get("elite_gun")) {
+            for (mesh, mat) in &parts.parts {
+                let mut ec = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), at));
+                mat.apply(&mut ec);
+                let g = ec.id();
+                commands.entity(j).add_child(g);
+                gun.push(g);
+            }
+        }
+    }
     // what it carries on its sockets (a tallboy's whale oil tanks and shields); the breakable
     // ones can be struck (a tank, burst by a bullet or a bolt)
     let mut breakable_parts = Vec::new();
@@ -1634,6 +1656,13 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 act_seen: 0,
                 marks: std::sync::Arc::new(lib.marks(scene)),
                 blade,
+                gun,
+                gun_hand,
+                gun_holster,
+                gun_phase: GunPhase::Away,
+                gun_t: 0.0,
+                gun_out: false,
+                shots_seen: 0,
                 ragdoll: ty.and_then(|t| t.ragdoll).and_then(|r| scene.ragdolls.get(r as usize)).is_some_and(|r| r.bodies.iter().filter(|b| bones.iter().any(|x| x.name.eq_ignore_ascii_case(&b.bone))).count() >= 2),
             },
         ));
@@ -2735,6 +2764,21 @@ pub(crate) fn npc_brain(
                     // and, Corvo within its blade's reach, only from a standstill (as roshan's
                     // r614/blink research decoded it)
                     let mut aimed = false;
+                    // (just fired: it stands for the shot and to put the gun away, unless Corvo
+                    // comes at it or it is struck, or its next shot at him out of reach is due:
+                    // the gun kept up)
+                    if npc.ranged == 1 && npc.gun_hold > 0.0 {
+                        npc.gun_hold -= dt;
+                        let again = npc.shoot_cd <= 0.0 && unreachable && npc.sees_player;
+                        if d > 2.0 && npc.stagger <= 0.0 && npc.attack_t.is_none() && !again {
+                            npc.target = None;
+                            if to.with_y(0.0).length() > 0.1 {
+                                npc.yaw = (-to.x).atan2(-to.z);
+                            }
+                            continue;
+                        }
+                        npc.gun_hold = 0.0;
+                    }
                     if npc.ranged == 1 {
                         if let Some((left, unseen)) = npc.aim {
                             let unseen = if npc.sees_player { 0.0 } else { unseen + dt };
@@ -2780,6 +2824,13 @@ pub(crate) fn npc_brain(
                         }
                         info!("{} shoots {d:.1} m ({})", npc.name, if hit { "hit" } else { "miss" });
                         shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: npc.ranged >= 2 });
+                        npc.shots += 1;
+                        if npc.ranged == 1 {
+                            npc.gun_hold = GUN_HOLD;
+                            npc.target = None;
+                            noise.write(Noise { pos, radius: 40.0, kind: NoiseKind::Danger });
+                            continue;
+                        }
                         noise.write(Noise { pos, radius: 40.0, kind: NoiseKind::Danger });
                     }
                     if npc.ranged == 2 {
@@ -3321,6 +3372,9 @@ pub struct NpcClips {
     grab_miss: Option<ClipId>,
     /// killed from above, by side (front, back, left, right)
     drop_killed: [Option<ClipId>; 4],
+    /// the pistol drawn, aimed, fired and put away (`Npc_EliteGuard_Gun_as`: `Sword_Gun_Draw`,
+    /// `Sword_Gun_Idle`, `Sword_Gun_Fire`, `Sword_Gun_Undraw`)
+    gun: [Option<ClipId>; 4],
 }
 
 impl NpcClips {
@@ -3425,6 +3479,7 @@ impl NpcClips {
                 lib.find("Generic_Assassination_DropLeft_Slave"),
                 lib.find("Generic_Assassination_DropRight_Slave"),
             ],
+            gun: [lib.find("Sword_Gun_Draw"), lib.find("Sword_Gun_Idle"), lib.find("Sword_Gun_Fire"), lib.find("Sword_Gun_Undraw")],
         };
         (c.idle.is_some() && c.walk.is_some()).then_some(c)
     }
@@ -3460,6 +3515,38 @@ pub struct NpcAnim {
     blade: Option<[Vec3; 2]>,
     /// it has a ragdoll (its pawn's physics asset)
     pub(crate) ragdoll: bool,
+    /// its pistol's parts, the left hand and the hip they hang from, and where its drawing is
+    gun: Vec<Entity>,
+    gun_hand: Option<(Entity, Transform)>,
+    gun_holster: Option<(Entity, Transform)>,
+    gun_phase: GunPhase,
+    gun_t: f32,
+    gun_out: bool,
+    shots_seen: u32,
+}
+
+/// How long a character stands after its pistol shot (`Sword_Gun_Fire` 1 s, then `Sword_Gun_Undraw`
+/// 1 s).
+const GUN_HOLD: f32 = 2.0;
+
+/// Where a character's pistol is: on its hip, coming out, aimed, firing, going back.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+enum GunPhase {
+    #[default]
+    Away,
+    Drawing,
+    Aiming,
+    Firing,
+    Holstering,
+}
+
+/// A weapon's parts hung from a joint (its socket's offset).
+fn hang(commands: &mut Commands, parts: &[Entity], at: Option<(Entity, Transform)>) {
+    if let Some((j, t)) = at {
+        for &p in parts {
+            commands.entity(p).try_insert((t, ChildOf(j)));
+        }
+    }
 }
 
 /// A character's sword fallen from its hand as it went down (its clip's `DisNotify_DropItem`):
@@ -3813,6 +3900,95 @@ fn npc_select_anim(
             continue;
         }
         st.attacking = false;
+
+        // the pistol: drawn into the left hand to aim (`Sword_Gun_Draw`, then `Sword_Gun_Idle`),
+        // fired (`Sword_Gun_Fire`), put back on the hip (`Sword_Gun_Undraw`); moving, hurt or
+        // down, it goes straight back
+        if npc.ranged == 1 && clips.gun[1].is_some() {
+            let [draw, idle, fire, undraw] = clips.gun;
+            let shot = npc.shots != st.shots_seen;
+            st.shots_seen = npc.shots;
+            st.gun_t += dt;
+            let span = |c: Option<ClipId>, k: f32| c.map(|c| lib.duration(c) * k).unwrap_or(0.0);
+            let broken = !shot && ((npc.velocity.with_y(0.0).length() > 0.5 && npc.gun_hold <= 0.0) || npc.hit_react > st.hit_seen + 1e-3 || npc.stagger > 0.0);
+            let mut to = st.gun_phase;
+            if broken {
+                to = GunPhase::Away;
+            } else if shot {
+                if let Some(c) = fire {
+                    anim.restart(c, false, 1.0, 0.05);
+                }
+                to = GunPhase::Firing;
+            } else {
+                match st.gun_phase {
+                    // (still in the hand: straight back to aiming)
+                    GunPhase::Holstering if npc.aim.is_some() && st.gun_out && idle.is_some() => {
+                        if let Some(c) = idle {
+                            anim.play(c, true, 1.0, 0.15);
+                        }
+                        to = GunPhase::Aiming;
+                    }
+                    GunPhase::Away | GunPhase::Holstering if npc.aim.is_some() => {
+                        match draw {
+                            Some(c) => anim.restart(c, false, 1.0, 0.15),
+                            None => {
+                                if let Some(c) = idle {
+                                    anim.play(c, true, 1.0, 0.15);
+                                }
+                            }
+                        }
+                        to = GunPhase::Drawing;
+                    }
+                    GunPhase::Drawing if draw.is_none() || anim.finished() => {
+                        if let Some(c) = idle {
+                            anim.play(c, true, 1.0, 0.1);
+                        }
+                        to = GunPhase::Aiming;
+                    }
+                    GunPhase::Aiming | GunPhase::Firing if npc.aim.is_none() && (st.gun_phase == GunPhase::Aiming || anim.finished()) => {
+                        match undraw {
+                            Some(c) => {
+                                anim.restart(c, false, 1.0, 0.1);
+                                to = GunPhase::Holstering;
+                            }
+                            None => to = GunPhase::Away,
+                        }
+                    }
+                    GunPhase::Firing if anim.finished() => {
+                        if let Some(c) = idle {
+                            anim.play(c, true, 1.0, 0.1);
+                        }
+                        to = GunPhase::Aiming;
+                    }
+                    GunPhase::Holstering if anim.finished() => to = GunPhase::Away,
+                    _ => {}
+                }
+            }
+            if to != st.gun_phase {
+                if std::env::var("DH_GUN_LOG").is_ok() {
+                    info!("gun: {} {:?} -> {to:?} (aim {:?}, shot {shot}, broken {broken}: v {:.2} react {:.2}/{:.2} stagger {:.2}, hold {:.2})", npc.name, st.gun_phase, npc.aim.map(|a| a.0), npc.velocity.with_y(0.0).length(), npc.hit_react, st.hit_seen, npc.stagger, npc.gun_hold);
+                }
+                st.gun_phase = to;
+                st.gun_t = 0.0;
+            }
+            // the gun in the hand from partway through the draw until partway through putting it back
+            let out = match st.gun_phase {
+                GunPhase::Away => false,
+                GunPhase::Drawing => st.gun_t >= span(draw, 0.35),
+                GunPhase::Holstering => st.gun_t < span(undraw, 0.6),
+                _ => true,
+            };
+            if out != st.gun_out {
+                st.gun_out = out;
+                let at = if out { st.gun_hand } else { st.gun_holster.or(st.gun_hand) };
+                hang(&mut commands, &st.gun, at);
+            }
+            if st.gun_phase != GunPhase::Away {
+                st.last_mode = npc.mode;
+                st.last_alert = npc.alert;
+                continue;
+            }
+        }
 
         // reactions
         if npc.hit_react > st.hit_seen + 1e-3 {

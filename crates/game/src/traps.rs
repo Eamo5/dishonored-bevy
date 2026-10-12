@@ -34,7 +34,7 @@ impl Plugin for TrapsPlugin {
         app.init_resource::<TrapLog>().init_resource::<TrapRestore>()
             .add_systems(OnEnter(GameState::InGame), spawn_traps.after(crate::level::LevelSpawnSet))
             .add_systems(Update, disarm_focus.after(crate::interact::FocusSet).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (restore_traps.after(crate::save::restore_npcs), restore_trap_state, trap_clocks, trip_wires, launch, fly_darts).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (restore_traps.after(crate::save::restore_npcs), restore_trap_state, trap_presence, trap_clocks, trip_wires, launch, fly_darts).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -65,6 +65,8 @@ pub struct TrapPart {
     /// its sockets: (name, joint, offset from the joint)
     sockets: Vec<(String, Entity, Transform)>,
     collider: Option<Entity>,
+    /// its streamed sublevel isn't loaded: it isn't there (hidden, nothing trips or fires it)
+    away: bool,
 }
 
 impl TrapPart {
@@ -73,7 +75,7 @@ impl TrapPart {
         (!self.launcher).then_some(self.wire)
     }
     pub fn describe(&self) -> String {
-        format!("#{} {} sprung {} disarmed {}", self.index, if self.launcher { "launcher" } else { "wire" }, self.sprung, self.disarmed)
+        format!("#{} {} sprung {} disarmed {}{}", self.index, if self.launcher { "launcher" } else { "wire" }, self.sprung, self.disarmed, if self.away { " (its sublevel out)" } else { "" })
     }
     fn socket(&self, name: &str, globals: &Query<&GlobalTransform>) -> Option<GlobalTransform> {
         let (_, j, at) = self.sockets.iter().find(|s| s.0.eq_ignore_ascii_case(name))?;
@@ -229,7 +231,7 @@ fn spawn_trap(commands: &mut Commands, vis: &crate::level::NpcVisual, def: &Trap
         Some(c)
     } else { None };
     let mut ec = commands.entity(root);
-    ec.insert(TrapPart { index, launcher: def.launcher, sprung: false, disarmed: false, firing: None, wire, sockets, collider });
+    ec.insert(TrapPart { index, launcher: def.launcher, sprung: false, disarmed: false, firing: None, wire, sockets, collider, away: false });
     if let Some(lib) = vis.anims.clone() {
         ec.insert(Animator::new(lib, &vis.skeleton, joints));
     }
@@ -295,7 +297,7 @@ fn trip_wires(
     }
     for (mut t, a) in &mut traps {
         let Some(def) = level.scene.traps.get(t.index as usize) else { continue };
-        if def.launcher || t.sprung || t.disarmed {
+        if def.launcher || t.sprung || t.disarmed || t.away {
             continue;
         }
         let Some(&(lo, _, _)) = bodies.iter().find(|(lo, hi, r)| crate::krust::segment_distance(t.wire.0, t.wire.1, *lo, *hi) <= *r) else { continue };
@@ -309,6 +311,33 @@ fn trip_wires(
             play(&mut a, &def.fire_anim, false);
         }
         used.write(Interaction::Tripwire(t.index));
+    }
+}
+
+/// A trap of a streamed sublevel that isn't loaded isn't there yet (or any more): hidden, its
+/// tripod's collider off, nothing tripping, firing or disarming it, as in the original, where
+/// the sublevel's actors come and go with it.
+fn trap_presence(
+    mut commands: Commands,
+    level: Option<Res<LevelInfo>>,
+    vm: Option<Res<crate::kismet::Vm>>,
+    mut traps: Query<(&mut TrapPart, &mut Visibility)>,
+) {
+    let (Some(level), Some(vm)) = (level, vm) else { return };
+    for (mut t, mut vis) in &mut traps {
+        let away = level.scene.levels.iter().any(|l| l.streamed && t.index >= l.traps.0 && t.index < l.traps.1 && vm.level_out(&l.name));
+        if away == t.away {
+            continue;
+        }
+        t.away = away;
+        *vis = if away { Visibility::Hidden } else { Visibility::Inherited };
+        if let Some(c) = t.collider {
+            if away {
+                commands.entity(c).insert(ColliderDisabled);
+            } else {
+                commands.entity(c).remove::<ColliderDisabled>();
+            }
+        }
     }
 }
 
@@ -339,7 +368,7 @@ fn launch(
         if !def.launcher {
             continue;
         }
-        if orders.contains(&t.index) && !t.sprung && !t.disarmed && t.firing.is_none() {
+        if orders.contains(&t.index) && !t.sprung && !t.disarmed && !t.away && t.firing.is_none() {
             t.firing = Some((0.0, false));
             t.sprung = true;
             log.state.insert(t.index, 1);
@@ -505,7 +534,7 @@ mod projectile_tests {
         anim.restart(lib.find("Fire").unwrap(), false, 0.75, 0.0);
         anim.seek(0.4);
         let part = TrapPart { index: 0, launcher: true, sprung: true, disarmed: false,
-            firing: Some((0.5, true)), wire: (Vec3::ZERO, Vec3::ZERO), sockets: vec![], collider: None };
+            firing: Some((0.5, true)), wire: (Vec3::ZERO, Vec3::ZERO), sockets: vec![], collider: None, away: false };
         let dart = Dart { trap: 0, source: None, vel: Vec3::X * 8.0, gravity: 1.5, life: 2.0 };
         let position = Transform::from_xyz(4.0, 2.0, 1.0);
         let saved = TrapsSave::capture([(&part, Some(&anim))], [(&dart, &position)]);
@@ -553,7 +582,7 @@ mod projectile_tests {
         let skeleton = dhcook::format::SkeletonDef::default();
         let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![]));
         let trap = app.world_mut().spawn((TrapPart { index: 0, launcher: true, sprung: true, disarmed: false,
-            firing: Some((0.0, false)), wire: (Vec3::ZERO, Vec3::ZERO), sockets: vec![], collider: None },
+            firing: Some((0.0, false)), wire: (Vec3::ZERO, Vec3::ZERO), sockets: vec![], collider: None, away: false },
             Transform::default(), Animator::new(lib, &skeleton, vec![]))).id();
         app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(100));
         app.update();
@@ -583,7 +612,7 @@ mod projectile_tests {
         app.world_mut().spawn((PlayerCamera, Transform::from_xyz(0.0, 0.4, 1.5)));
         let collider = app.world_mut().spawn((Collider::cuboid(0.3, 0.35, 0.3), Transform::from_xyz(0.0, 0.35, 0.0), CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
         let trap = app.world_mut().spawn((TrapPart { index: 0, launcher: true, sprung: false, disarmed: false,
-            firing: None, wire: (Vec3::ZERO, Vec3::ZERO), sockets: vec![], collider: Some(collider) }, Transform::default())).id();
+            firing: None, wire: (Vec3::ZERO, Vec3::ZERO), sockets: vec![], collider: Some(collider), away: false }, Transform::default())).id();
         let key = app.world().resource::<Bindings>().key(Act::Use);
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
         app.update();
@@ -688,7 +717,7 @@ fn disarm_focus(
             let launcher = level.scene.traps.get(t.index as usize).is_some_and(|d| d.launcher);
             let to = tf.translation + Vec3::Y * 0.4 - eye;
             let distance = to.length();
-            if !launcher || t.sprung || t.disarmed || distance >= REACH || to.normalize_or_zero().dot(fwd) <= 0.8 { return false; }
+            if !launcher || t.sprung || t.disarmed || t.away || distance >= REACH || to.normalize_or_zero().dot(fwd) <= 0.8 { return false; }
             let filter = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
             let filter = t.collider.map(|e| filter.exclude_collider(e)).unwrap_or(filter);
             ctx.cast_ray(eye, to / distance, distance, true, filter).is_none()

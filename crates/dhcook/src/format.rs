@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::Path;
 
 // 103: retain unmatched-rig timelines and zero-track animation sequences.
-pub const SCENE_VERSION: u32 = 115;
+pub const SCENE_VERSION: u32 = 117;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -356,6 +356,9 @@ pub struct LevelRange {
     /// its volumes (`scene.volumes`: water, blocking, triggers)
     #[serde(default)]
     pub volumes: (u32, u32),
+    /// its tripwires and launchers (`scene.traps`)
+    #[serde(default)]
+    pub traps: (u32, u32),
 }
 
 /// Kismet sequence graphs: ops (events, actions, conditions, sub-sequences) and variables,

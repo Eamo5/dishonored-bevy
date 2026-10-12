@@ -392,7 +392,7 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
     let streamed = kismet_streamed_levels(&persistent);
     for (i, p) in levels.iter().enumerate() {
         progress(0.05 + 0.35 * i as f32 / n as f32, &format!("Reading level {}", p.name));
-        let before = (c.scene.instances.len() as u32, c.scene.spawners.len() as u32, c.scene.pickups.len() as u32, c.scene.volumes.len() as u32);
+        let before = (c.scene.instances.len() as u32, c.scene.spawners.len() as u32, c.scene.pickups.len() as u32, c.scene.volumes.len() as u32, c.scene.traps.len() as u32);
         if let Err(e) = c.process_level(p) {
             log::warn!("level {} failed: {e:#}", p.name);
         }
@@ -404,6 +404,7 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
             pickups: (before.2, c.scene.pickups.len() as u32),
             ops: (0, 0),
             volumes: (before.3, c.scene.volumes.len() as u32),
+            traps: (before.4, c.scene.traps.len() as u32),
         });
     }
     // Daud's summoned assassins on The Knife of Dunwall's maps
@@ -6310,6 +6311,8 @@ impl<'a> Cooker<'a> {
             ("crossbow", "Crossbows.crossbow_01"),
             ("pistol", "CorvoGuns.CorvoGun_01"),
             ("elite_sword", "Wpn_EliteSword.Wpn_EliteSword"),
+            // (the officers' pistol: `Twk_Inv_PistolEliteGuard`'s `m_pEquippedMesh`)
+            ("elite_gun", "Wpn_EliteGun.EliteGun"),
             ("city_sword", "Wpn_CitySword.Wpn_CitySword"),
             ("thug_sword", "ThugSword.ThugSword"),
             ("overseer_sword", "OverseerSword.OverseerSword"),
