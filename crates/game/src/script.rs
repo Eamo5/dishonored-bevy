@@ -453,6 +453,13 @@ fn run_script(
             p.noclip = cmd[0] == "fly";
             info!("script: {} to {}", cmd[0], t.translation);
         }
+        "rise" => {
+            // (tests) rise D: Corvo lifted D m where he stands, held there (as `fly`)
+            t.translation.y += f(1);
+            p.velocity = Vec3::ZERO;
+            p.noclip = true;
+            info!("script: rise to {:.2}", t.translation);
+        }
         "givepower" => {
             // givepower <Blink|DarkVision|...|Vitality|...> [level]
             if let Some(name) = cmd.get(1) {

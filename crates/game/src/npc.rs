@@ -2801,7 +2801,7 @@ pub(crate) fn npc_brain(
                     let ready = npc.shoot_cd <= 0.0 && npc.sees_player && npc.attack_t.is_none() && d > 2.5 && d < 30.0 && npc.stagger <= 0.0;
                     if npc.ranged == 1 && ready && !aimed && (unreachable || npc.velocity.with_y(0.0).length() < 0.3) {
                         npc.aim = Some((0.75 + rand::random::<f32>() * 0.5, 0.0));
-                        info!("{} aims its pistol {d:.1} m away", npc.name);
+                        info!("{} aims its pistol {d:.1} m away (from {pos:.2}, facing {:.2})", npc.name, npc.yaw);
                         npc.target = None;
                         continue;
                     }
@@ -3375,6 +3375,8 @@ pub struct NpcClips {
     /// the pistol drawn, aimed, fired and put away (`Npc_EliteGuard_Gun_as`: `Sword_Gun_Draw`,
     /// `Sword_Gun_Idle`, `Sword_Gun_Fire`, `Sword_Gun_Undraw`)
     gun: [Option<ClipId>; 4],
+    /// its aim offsets (`ADD_Sword_Gun_AimIdle_*`): up, centre and down rows, left to right
+    gun_aim: [Option<ClipId>; 9],
 }
 
 impl NpcClips {
@@ -3480,6 +3482,7 @@ impl NpcClips {
                 lib.find("Generic_Assassination_DropRight_Slave"),
             ],
             gun: [lib.find("Sword_Gun_Draw"), lib.find("Sword_Gun_Idle"), lib.find("Sword_Gun_Fire"), lib.find("Sword_Gun_Undraw")],
+            gun_aim: ["UpLeft", "Up", "UpRight", "CenterLeft", "Center", "CenterRight", "DownLeft", "Down", "DownRight"].map(|d| lib.find(&format!("ADD_Sword_Gun_AimIdle_{d}"))),
         };
         (c.idle.is_some() && c.walk.is_some()).then_some(c)
     }
@@ -3982,6 +3985,26 @@ fn npc_select_anim(
                 st.gun_out = out;
                 let at = if out { st.gun_hand } else { st.gun_holster.or(st.gun_hand) };
                 hang(&mut commands, &st.gun, at);
+            }
+            // aimed and firing, the arm follows Corvo (the aim offsets blended by where he is
+            // off its facing: across 90 degrees each way, up and down)
+            anim.additive.clear();
+            if matches!(st.gun_phase, GunPhase::Aiming | GunPhase::Firing) {
+                let to = (ppos + Vec3::Y * 0.6 - (t.translation + Vec3::Y * 0.72)).normalize_or_zero();
+                let fwd = npc.forward();
+                let side = fwd.cross(Vec3::Y).normalize_or_zero();
+                let x = to.with_y(0.0).normalize_or_zero().dot(side).clamp(-1.0, 1.0).asin() / std::f32::consts::FRAC_PI_2;
+                let y = to.y.clamp(-1.0, 1.0).asin() / std::f32::consts::FRAC_PI_2;
+                let split = |v: f32| if v < 0.0 { [-v, 1.0 + v, 0.0] } else { [0.0, 1.0 - v, v] };
+                let (cols, rows) = (split(x.clamp(-1.0, 1.0)), split(-y.clamp(-1.0, 1.0)));
+                for (i, c) in clips.gun_aim.iter().enumerate() {
+                    if let Some(c) = c {
+                        let w = rows[i / 3] * cols[i % 3];
+                        if w > 1e-3 {
+                            anim.additive.push((*c, 0.0, w));
+                        }
+                    }
+                }
             }
             if st.gun_phase != GunPhase::Away {
                 st.last_mode = npc.mode;

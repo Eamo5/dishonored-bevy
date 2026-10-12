@@ -320,6 +320,9 @@ pub struct Animator {
     /// play animation sound notifies (off for silent rigs)
     pub sounds: bool,
     pending: Vec<String>,
+    /// additive clips laid over the pose each frame (an aim offset): clip, time, weight
+    pub additive: Vec<(ClipId, f32, f32)>,
+    deltas: Vec<(usize, Quat, Vec3)>,
 }
 
 impl Animator {
@@ -344,6 +347,8 @@ impl Animator {
             frozen: false,
             sounds: true,
             pending: Vec::new(),
+            additive: Vec::new(),
+            deltas: Vec::new(),
         }
     }
 
@@ -551,6 +556,24 @@ fn pose_animators(
         }
         a.pose();
         let a = a.into_inner();
+        // the additive layer (UE3's additive blending: each joint's rotation after the pose's,
+        // its translation added)
+        if !a.additive.is_empty() {
+            a.deltas.clear();
+            for &(clip, t, w) in &a.additive {
+                if w > 1e-3 {
+                    a.lib.additive(clip, t, w, &mut a.deltas);
+                }
+            }
+            // (UE3's `FBoneAtom::Accumulate`: the delta after the pose, `Delta * Base`, undoing
+            // its making as `Target * Ref^-1`; the cooker's axis swap keeps products' order)
+            for &(j, q, t) in &a.deltas {
+                if j < a.rot.len() {
+                    a.rot[j] = q * a.rot[j];
+                    a.trans[j] += t;
+                }
+            }
+        }
         for (i, &e) in a.joints.iter().enumerate() {
             if let Ok(mut t) = transforms.get_mut(e) {
                 if t.rotation != a.rot[i] || t.translation != a.trans[i] {

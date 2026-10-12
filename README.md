@@ -1323,8 +1323,10 @@ against the install's own data where it carries them, then implemented independe
     across the chest (`HolsterGun`). To shoot they draw it into the left hand (`Sword_Gun_Draw`,
     0.67 s), aim (`Sword_Gun_Idle`), fire (`Sword_Gun_Fire`, 1 s) and put it back
     (`Sword_Gun_Undraw`, 1 s), standing for the shot; with the next shot at Corvo out of reach
-    due, the gun stays up. Moving, struck or downed, it goes straight back. `DH_GUN_LOG` logs
-    its steps.
+    due, the gun stays up. Moving, struck or downed, it goes straight back. Aimed and firing,
+    the arm follows Corvo: the nine aim offsets (`ADD_Sword_Gun_AimIdle_*`, additive clips) are
+    blended by where he is off its facing, 90 degrees each way, and laid over the pose as UE3
+    does (each delta after the pose's rotation). `DH_GUN_LOG` logs its steps.
 - **Tripwires** are snapped by anyone walking into them, guards too. Launchers fire at once,
   straight at their target.
 - **The interface.** The health and mana gauges show for 8 s after a change; a keyhole needs Use
@@ -1860,7 +1862,7 @@ furthest spot with a floor and a clear line to it), `ledge [LOW] [HIGH] [crouch]
 high; `crouch`, only one he'd arrive crouched on; `DH_MANTLE_LOG` logs what blocks a mantle's
 top), `pos` (his position, velocity, footing), `pistol [NAME]` (the nearest hostile character
 carries a pistol and turns on him), `npchere [D]` (the nearest hostile character moved D m
-before him), `stream NAME [out]` (a streamed sublevel loads, or goes), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `runes N`,
+before him), `stream NAME [out]` (a streamed sublevel loads, or goes), `rise D` (Corvo lifted D m and held there), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `runes N`,
 `charms N`, `mana`, `ammo TYPE N` (0 bullets .. 6 grenades, 7 sticky), `fx EFFECT [DIST]`,
 `remote EVENT` (a level-script remote event, e.g. `ChangeLvl_fromStreets1_toHub`), `chaos N`,
 `ko [NAME]` (a sleep dart into the nearest, or the nearest whose name or pawn holds NAME),
