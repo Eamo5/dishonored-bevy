@@ -1322,6 +1322,11 @@ against the install's own data where it carries them, then implemented independe
   2.5-30 m, 25 degrees, every 1-2 s either way (it had been 10-20 s within reach). A tallboy's
   bow: 4-45 m, 40 degrees, every 1-3 s. An assassin's wrist bow: 2.5-30 m, 25 degrees, 3-6 s
   (2-5 s out of reach). Accuracy falls from `m_MaxAccuracy` to `m_MinAccuracy` across the reach.
+- **Taunts.** A guard whose weapon has a taunt (`DisTweaks_NPCTaunt`: an officer's, 6.5-30 m,
+  within 45 degrees, every 45-60 s and 20-30 s with Corvo out of reach) plays one of its
+  `Sword_TauntA/B/C` gestures at him and stands for it; the clip cues its line
+  (`COMBAT_TAUNT_WITH_GESTURE`), so that line no longer comes as a random bark. A taunt due waits
+  for the pistol to be put away.
 - **Striking under a hideout.** With Corvo under a table or a bed (`DisHideoutVolume`), a guard who
   saw him go there comes to its way in (`DisHideoutAccessPoint`) and strikes under it. With the
   blade it plays `Sword_Attack_UnderTable` (`DisTweaks_NPCAttackUnder`): every stab its clip

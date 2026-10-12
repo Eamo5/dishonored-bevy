@@ -3436,6 +3436,29 @@ impl<'a> Cooker<'a> {
         Some(fire)
     }
 
+    /// A weapon's taunt (its `DisTweaks_NPCTaunt`): when, how far and how often.
+    fn taunt_context(&mut self, w: &Obj) -> Option<FireContext> {
+        let c = self.npc_contexts(w).into_iter().find(|c| c.class() == "DisTweaks_NPCTaunt")?;
+        if matches!(self.tweak_prop(&c, "m_bDisabled", 0, 0), Some((_, Value::Bool(true)))) {
+            return None;
+        }
+        let f = |s: &mut Self, n: &str, d: f32| s.tweak_float(&c, n, 0).unwrap_or(d);
+        let ranged = |s: &mut Self, n: &str, d: [f32; 2]| match s.tweak_prop(&c, n, 0, 0) {
+            Some((_, Value::Struct(_, r))) => {
+                let p = Props(r);
+                [p.float("m_fMinValue").unwrap_or(d[0]), p.float("m_fMaxValue").unwrap_or(d[1])]
+            }
+            _ => d,
+        };
+        let cooldown = ranged(self, "m_ContextCooldown", [45.0, 60.0]);
+        Some(FireContext {
+            range: [f(self, "m_fMinContextRange", 650.0) * UNIT, f(self, "m_fMaxContextRange", 3000.0) * UNIT, f(self, "m_fIdealContextRange", 1250.0) * UNIT],
+            angle: f(self, "m_fAllowedAngle", 45.0),
+            cooldown,
+            cooldown_unreachable: ranged(self, "m_ContextCooldownWhenUnreachable", cooldown),
+        })
+    }
+
     /// A grenade weapon's throws (its NPC contexts that throw, as enabled).
     fn grenade_throws(&mut self, w: &Obj) -> Vec<GrenadeThrow> {
         let mut out = Vec::new();
@@ -3543,6 +3566,9 @@ impl<'a> Cooker<'a> {
             }
             if st.fire.is_none() {
                 st.fire = self.fire_context(&w);
+            }
+            if st.taunt.is_none() {
+                st.taunt = self.taunt_context(&w);
             }
             if st.melee.is_empty() && matches!(w.class().as_str(), "DisTweaks_WepSword" | "DisTweaks_WepSwordOfAssassin" | "DisTweaks_Item_WolfhoundBite") {
                 st.melee = self.melee_moves(&w);

@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::Path;
 
 // 103: retain unmatched-rig timelines and zero-track animation sequences.
-pub const SCENE_VERSION: u32 = 119;
+pub const SCENE_VERSION: u32 = 120;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -925,6 +925,9 @@ pub struct NpcStats {
     /// how its firearm or bow shoots (its `DisTweaks_NPCFireGun` / `DisTweaks_NPCFireBow`)
     #[serde(default)]
     pub fire: Option<FireContext>,
+    /// when it taunts Corvo (its weapon's `DisTweaks_NPCTaunt`: reach, angle, cooldowns)
+    #[serde(default)]
+    pub taunt: Option<FireContext>,
 }
 
 /// A firearm's or bow's shooting context (`DisTweaks_NPCFireGun`, `DisTweaks_NPCFireBow`): its

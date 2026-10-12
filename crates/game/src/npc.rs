@@ -210,6 +210,9 @@ pub struct Npc {
     pub gun_hold: f32,
     /// until it strikes under a hideout again, with its blade and with its pistol
     pub under_cd: [f32; 2],
+    /// until it may taunt again, and how long its taunt holds it
+    pub taunt_cd: f32,
+    pub taunt_hold: f32,
     /// an NPC of an enemy faction it is fighting (`DisTweaks_Faction.m_EnemyFactions`), and
     /// when it next looks for one
     pub foe: Option<Entity>,
@@ -330,11 +333,13 @@ pub struct Arms {
     pub tunes: Option<dhcook::format::NpcTunes>,
     /// how its firearm or bow shoots (its fire context)
     pub fire: Option<dhcook::format::FireContext>,
+    /// when it taunts (its taunt context)
+    pub taunt: Option<dhcook::format::FireContext>,
 }
 
 impl Default for Arms {
     fn default() -> Self {
-        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None }
+        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None }
     }
 }
 
@@ -448,6 +453,7 @@ impl Arms {
         a.moves = st.melee.clone();
         a.tunes = st.tunes.clone();
         a.fire = st.fire.clone();
+        a.taunt = st.taunt.clone();
         a
     }
 }
@@ -1399,6 +1405,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         shots: 0,
         gun_hold: 0.0,
         under_cd: [0.0; 2],
+        taunt_cd: 5.0 + rand::random::<f32>() * 10.0,
+        taunt_hold: 0.0,
         foe: None,
         feud_scan: rand::random::<f32>(),
         grab: None,
@@ -2805,6 +2813,36 @@ pub(crate) fn npc_brain(
                         continue;
                     }
                 }
+                // taunting (its weapon's `DisTweaks_NPCTaunt`: Corvo seen within its reach and angle,
+                // every 45-60 s, 20-30 s out of reach): a gesture with its line, standing for it,
+                // unless he comes at it or it is struck
+                npc.taunt_cd -= dt;
+                if npc.taunt_hold > 0.0 {
+                    npc.taunt_hold -= dt;
+                    if d > 2.5 && npc.stagger <= 0.0 && npc.hit_react <= 0.0 {
+                        npc.target = None;
+                        let to = (ppos - pos).with_y(0.0);
+                        if to.length() > 0.1 {
+                            npc.yaw = (-to.x).atan2(-to.z);
+                        }
+                        continue;
+                    }
+                    npc.taunt_hold = 0.0;
+                }
+                if let Some(tc) = npc.arms.taunt.clone().filter(|_| npc.taunt_cd <= 0.0 && npc.sees_player && npc.attack_t.is_none() && npc.aim.is_none() && npc.gun_hold <= 0.0 && npc.stagger <= 0.0) {
+                    let to = (ppos - pos).with_y(0.0);
+                    let facing = to.normalize_or_zero().dot(npc.forward()) > tc.angle.to_radians().cos();
+                    if facing && d > tc.range[0] && d < tc.range[1] {
+                        let unreachable = (ppos.y - pos.y).abs() > 1.6;
+                        let cd = if unreachable { tc.cooldown_unreachable } else { tc.cooldown };
+                        npc.taunt_cd = cd[0] + rand::random::<f32>() * (cd[1] - cd[0]).max(0.0);
+                        npc.taunt_hold = TAUNT_HOLD;
+                        npc.gesture(12);
+                        npc.target = None;
+                        info!("{} taunts Corvo {d:.1} m away", npc.name);
+                        continue;
+                    }
+                }
                 // shooting (its fire context, `DisTweaks_NPCFireGun` / `DisTweaks_NPCFireBow`: its
                 // reach, within its allowed angle of where it faces, its cooldowns at Corvo within
                 // reach and out of it; without one, 2.5-30 m, 25 degrees, 10-20 s and 1-2 s, the
@@ -2831,7 +2869,9 @@ pub(crate) fn npc_brain(
                     // the gun kept up)
                     if npc.ranged == 1 && npc.gun_hold > 0.0 {
                         npc.gun_hold -= dt;
-                        let again = npc.shoot_cd <= 0.0 && unreachable && npc.sees_player;
+                        // (a taunt due waits for the gun to be put away)
+                        let taunt_due = npc.taunt_cd <= 0.0 && npc.arms.taunt.is_some();
+                        let again = npc.shoot_cd <= 0.0 && unreachable && npc.sees_player && !taunt_due;
                         if d > 2.0 && npc.stagger <= 0.0 && npc.attack_t.is_none() && !again {
                             npc.target = None;
                             if to.with_y(0.0).length() > 0.1 {
@@ -3449,6 +3489,8 @@ pub struct NpcClips {
     gun: [Option<ClipId>; 4],
     /// striking under a table, with the blade and with the pistol
     under: [Option<ClipId>; 2],
+    /// its taunts (each cueing its line, `COMBAT_TAUNT_WITH_GESTURE`)
+    taunt: Vec<ClipId>,
     /// its aim offsets (`ADD_Sword_Gun_AimIdle_*`): up, centre and down rows, left to right
     gun_aim: [Option<ClipId>; 9],
 }
@@ -3557,6 +3599,7 @@ impl NpcClips {
             ],
             gun: [lib.find("Sword_Gun_Draw"), lib.find("Sword_Gun_Idle"), lib.find("Sword_Gun_Fire"), lib.find("Sword_Gun_Undraw")],
             under: [lib.find("Sword_Attack_UnderTable"), lib.find("Sword_Gun_AttackUnderTable")],
+            taunt: lib.all(&["Sword_TauntA", "Sword_TauntB", "Sword_TauntC"]),
             gun_aim: ["UpLeft", "Up", "UpRight", "CenterLeft", "Center", "CenterRight", "DownLeft", "Down", "DownRight"].map(|d| lib.find(&format!("ADD_Sword_Gun_AimIdle_{d}"))),
         };
         (c.idle.is_some() && c.walk.is_some()).then_some(c)
@@ -3606,6 +3649,9 @@ pub struct NpcAnim {
 /// The pause before a blade strikes under a hideout again, after its strike's clip (s:
 /// `DisTweaks_NPCAttackUnder` sets no cooldown of its own): base and spread.
 const UNDER_SWORD: (f32, f32) = (1.0, 1.0);
+
+/// How long a taunt holds a character (s: its gestures, `Sword_TauntA/B/C`, run 2.4-3.0 s).
+const TAUNT_HOLD: f32 = 2.7;
 
 /// How long a character stands after its pistol shot (`Sword_Gun_Fire` 1 s, then `Sword_Gun_Undraw`
 /// 1 s).
@@ -4139,6 +4185,7 @@ fn npc_select_anim(
                 9 => &clips.ambush[0],
                 10 => &clips.ambush[2],
                 11 => &clips.ambush[3],
+                12 => &clips.taunt,
                 _ => &clips.push,
             };
             if let Some(c) = pick(pool) {

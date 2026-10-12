@@ -176,7 +176,8 @@ fn npc_barks(
         } else if !down && st.next_chatter <= 0.0 {
             st.next_chatter = if npc.alert == Alert::Combat { 6.0 + rand::random::<f32>() * 8.0 } else { 15.0 + rand::random::<f32>() * 30.0 };
             want = match npc.alert {
-                Alert::Combat if npc.mode == Mode::Combat => Some((&["COMBAT_ATTACK", "COMBAT_TAUNT_WITH_GESTURE", "COMBAT_THREAT_VERSUS"], false)),
+                // (the taunt's line comes with its gesture, cued by its clip)
+                Alert::Combat if npc.mode == Mode::Combat => Some((&["COMBAT_ATTACK", "COMBAT_THREAT_VERSUS"], false)),
                 Alert::Unaware if d < 12.0 => Some((&["SUSPICIONLEVEL"], false)),
                 _ => None,
             };
