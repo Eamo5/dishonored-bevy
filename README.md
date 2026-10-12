@@ -1218,6 +1218,10 @@ against the install's own data where it carries them, then implemented independe
   800 uu/s `JumpZ` rises 1.07 m and lands after 0.533 s. A fall hurts from
   `MaxSpeedBeforeFallingDamage` (22.5 m/s) and kills at `MaxSpeedBeforeFallingDeath` (29 m/s), in
   proportion between (Agility raises both). Agility's power jump uses the original numbers unscaled.
+  Touching down after a jump or fall plays the arms' landing (`DisTweaks_PlayerPawn_NavigationActions`):
+  `Sword_Ready_JumpLandSmall`, crouched `Sword_Sneak_JumpLandSmall`, and past
+  `m_fFall_Stun_Vel` (22 m/s) the hard `Generic_JumpLandBig`. None stops him moving (as roshan's
+  r614/blink research found).
 - **Melee defence.** A blow from behind Corvo's view does half damage
   (`m_fOffscreenMeleeDamageReduction` 0.5, at least 1). A tap parry forces a plain block for 0.3 s,
   with no second parry until it ends.

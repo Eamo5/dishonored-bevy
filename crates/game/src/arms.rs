@@ -89,6 +89,11 @@ struct ArmClips {
     sneak_walk: Option<ClipId>,
     sneak_run: Option<ClipId>,
     jump: Option<ClipId>,
+    /// landing (`DisTweaks_PlayerPawn_NavigationActions`: `m_Action_JumpLandSmall_Ready` /
+    /// `_Sneak`, and `m_Action_JumpLandBig` past `m_fFall_Stun_Vel`)
+    land: Option<ClipId>,
+    land_sneak: Option<ClipId>,
+    land_big: Option<ClipId>,
     attack_right: Vec<ClipId>,
     attack_left: Vec<ClipId>,
     sneak_attack: Option<ClipId>,
@@ -160,6 +165,9 @@ impl ArmClips {
             sneak_walk: lib.find("Sword_Sneak_Walk"),
             sneak_run: lib.find("Sword_Sneak_Run"),
             jump: lib.find("Sword_Ready_Jump"),
+            land: lib.find("Sword_Ready_JumpLandSmall"),
+            land_sneak: lib.find("Sword_Sneak_JumpLandSmall"),
+            land_big: lib.find("Generic_JumpLandBig"),
             attack_right: lib.all(&["Sword_Ready_AttackRight_A_Big", "Sword_Ready_AttackRight_B_Big"]),
             attack_left: lib.all(&["Sword_Ready_AttackLeft_A_Big", "Sword_Ready_AttackLeft_B_Big"]),
             sneak_attack: lib.find("Sword_Sneak_Attack_Small"),
@@ -228,6 +236,8 @@ struct ArmsAnim {
     choking: bool,
     grabbed: bool,
     oneshot: bool,
+    /// in the air long enough that touching down is a landing
+    airborne: bool,
     parry_flash: f32,
     damage_flash: f32,
     cast_seq: u32,
@@ -431,6 +441,7 @@ fn spawn_arms(
                 choking: false,
                 grabbed: false,
                 oneshot: false,
+                airborne: false,
                 parry_flash: 0.0,
                 damage_flash: 0.0,
                 cast_seq: powers.as_ref().map(|p| p.cast_seq).unwrap_or(0),
@@ -756,6 +767,26 @@ fn animate_arms(
     }
     st.parry_flash = sword.parry_flash;
     st.damage_flash = stats.damage_flash;
+    // touching down: the landing for how hard and how he stands (a hard one past
+    // `StatePlayerMasterFalling.m_fFall_Stun_Vel`, 2200 uu/s), as roshan's r614/blink research
+    // decoded the landing's actions
+    let mut landed = false;
+    if !p.grounded && p.air_time > 0.25 {
+        st.airborne = true;
+    } else if p.grounded && st.airborne {
+        st.airborne = false;
+        landed = true;
+    }
+    if !base_busy && landed {
+        let cl = if p.fall_speed > FALL_STUN { c.land_big.or(c.land) } else if p.crouched { c.land_sneak.or(c.land) } else { c.land };
+        if let Some(cl) = cl {
+            if std::env::var("DH_BOB_LOG").is_ok() {
+                info!("arms: landing at {:.1} m/s ({})", p.fall_speed, if p.fall_speed > FALL_STUN { "hard" } else if p.crouched { "sneaking" } else { "soft" });
+            }
+            anim.restart(cl, false, 1.0, 0.08);
+            st.oneshot = true;
+        }
+    }
     if !base_busy {
         if st.oneshot && !anim.finished() {
             // let the one-shot play out
@@ -1027,6 +1058,9 @@ fn align_arms(
         t.translation = tr;
     }
 }
+
+/// A landing this fast (m/s) is a hard one (`StatePlayerMasterFalling.m_fFall_Stun_Vel`, 2200 uu/s).
+const FALL_STUN: f32 = 22.0;
 
 /// The most the bob moves the view (m).
 const BOB_MAX: f32 = 0.25;
