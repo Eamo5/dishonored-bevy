@@ -213,6 +213,16 @@ fullscreen display, vertical sync and the crosshair.
   as it opens), so the shot lands within them; each shot kicks the view up
   (`m_fCamRecoilOnFire` less `Attribute_RecoilReduction`) and it settles. The reticles' brackets
   also take the crosshair state (empty, over an enemy) as `SetCrosshairState` sets them.
+- **What the guns and blades show** (`impacts.rs`): the pistol's flash at its muzzle (the gun's
+  `Spitfire` socket, `DisTweaks_FirePistol.m_MuzzleSocketName`; `Ps_PlayerPistol_StdMuzzle_01`
+  drawn with the hands) and its tracer off from there (`Ps_Pistol_StdTracer_01`); the crossbow's
+  at its `Ps_Muzzle_Socket` (`Ps_CrossBowMuzzle`); a burning bolt's trail
+  (`Flare_Bolt_Trail`), a thrown grenade's (`Ps_Grenade_Trail`) and chokedust's. Where a
+  bullet, bolt, sleep dart or burning bolt strikes, the contact system's particles for it on
+  that surface (`Dis_ContactSystem`'s intersections, cooked as `contact_fx`: splinters off
+  wood, sparks off metal and stone, a splash in water, blood from a body; the plain
+  environment's where a surface has none of its own), turned out of the surface; blades meeting
+  in a block or parry spark (its sword on sword).
 - **Head bob** (`arms.rs`): the original's `DisAnimNodeBlendByHeadBob` — as Corvo walks, runs,
   sprints or sneaks, `Ply_Head_Locomotion_as`' additive head clips for the pace
   (`ADD_Head_<Walk|Run|Sprint|Sneak><N|S|W|E>`, blended by the way he goes, in step with his

@@ -93,6 +93,23 @@ pub fn impact_surface(surface: u8) -> &'static str {
     }
 }
 
+/// Cast a ray and report what it hit, how far, the surface there and its normal.
+pub fn ray_surface_normal(ctx: &RapierContext, surfaces: &Query<&ColliderSurfaces>, from: Vec3, dir: Vec3, max: f32, filter: QueryFilter) -> Option<(Entity, f32, u8, Vec3)> {
+    let (e, hit) = ctx.cast_ray_and_get_normal(from, dir, max, true, filter)?;
+    let surface = surfaces
+        .get(e)
+        .ok()
+        .and_then(|s| match hit.feature {
+            FeatureId::Face(i) => {
+                let n = s.tris.len().max(1);
+                s.tris.get(i as usize % n).and_then(|&sec| s.sections.get(sec as usize).copied())
+            }
+            _ => None,
+        })
+        .unwrap_or(0);
+    Some((e, hit.time_of_impact, surface, hit.normal))
+}
+
 /// Cast a ray and report what it hit, how far, and the surface there.
 pub fn ray_surface(ctx: &RapierContext, surfaces: &Query<&ColliderSurfaces>, from: Vec3, dir: Vec3, max: f32, filter: QueryFilter) -> Option<(Entity, f32, u8)> {
     let (e, hit) = ctx.cast_ray_and_get_normal(from, dir, max, true, filter)?;

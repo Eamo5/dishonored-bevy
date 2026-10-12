@@ -3183,7 +3183,7 @@ impl<'a> Cooker<'a> {
             let prop = format!("att:{}", tw.path());
             if !self.scene.props.iter().any(|p| p.name == prop) {
                 let Ok(Some((mesh, materials))) = self.cook_mesh(&mesh_obj) else { continue };
-                self.scene.props.push(PropDef { name: prop.clone(), mesh, materials, blade: None });
+                self.scene.props.push(PropDef { name: prop.clone(), mesh, materials, blade: None, muzzle: None });
             }
             // (damage types: class names)
             let types = |c: &Chain, name: &str| -> Vec<String> {
@@ -3219,7 +3219,7 @@ impl<'a> Cooker<'a> {
             let prop = format!("acc:{}", mesh.path());
             if !c.scene.props.iter().any(|p| p.name == prop) {
                 let Ok(Some((m, materials))) = c.cook_mesh(mesh) else { return None };
-                c.scene.props.push(PropDef { name: prop.clone(), mesh: m, materials, blade: None });
+                c.scene.props.push(PropDef { name: prop.clone(), mesh: m, materials, blade: None, muzzle: None });
             }
             Some(prop)
         };
@@ -5407,6 +5407,36 @@ impl<'a> Cooker<'a> {
         (out.system != u32::MAX).then_some(out)
     }
 
+    /// The contact system's impact effects for what the player and the characters shoot and
+    /// strike with (bullets, bolts and darts, swords): each intersection's particle system, by
+    /// what strikes and what is struck.
+    fn contact_fx(&mut self) -> Vec<(String, String, u32)> {
+        const STRIKERS: &[&str] = &["Bullet", "BulletExplosive", "Arrow", "Arrow_Sleep", "Arrow_Flare", "Sword"];
+        let Some(cs) = self.assets.find("Phy_ContactSystem.ContactSystem.Dis_ContactSystem") else { return Vec::new() };
+        let Ok(props) = cs.props() else { return Vec::new() };
+        let Some((count, offset, size)) = props.array("m_Intersections") else { return Vec::new() };
+        let pkg = cs.pkg.clone();
+        let name = |o: Option<i32>| o.filter(|o| *o != 0).map(|o| pkg.obj_path(o)).map(|p| p.rsplit('.').next().unwrap_or(&p).trim_start_matches("DisContactType_").to_string()).unwrap_or_default();
+        let mut out = Vec::new();
+        for it in parse_struct_array(&pkg, offset, size, count).unwrap_or_default() {
+            let (striker, struck) = (name(it.object("m_pStriker")), name(it.object("m_pStruck")));
+            if !STRIKERS.contains(&striker.as_str()) || struck.is_empty() {
+                continue;
+            }
+            let Some((c, o, s)) = it.array("m_SubIntersections") else { continue };
+            for sub in parse_struct_array(&pkg, o, s, c).unwrap_or_default() {
+                if name(sub.object("m_pClass")) != "DisContactSub_Particle" {
+                    continue;
+                }
+                let Some(obj) = sub.object("m_pSubIntersectObj").filter(|o| *o != 0).and_then(|o| self.assets.resolve(&pkg, o)) else { continue };
+                if let Some(id) = self.chain(&obj).obj(self.assets, "m_pParticleTemplate").and_then(|ps| self.particle_system(&ps)) {
+                    out.push((striker.clone(), struck.clone(), id));
+                }
+            }
+        }
+        out
+    }
+
     /// `NPC_Common.SeveredLimbsInfo.SLInfo_Default`: each break bone's blood when the limb is
     /// severed (`m_bUseWhenSevered`), and `m_CameraEffectEmitterInfoWhenSevered`'s lens effect.
     fn severed_limbs(&mut self) -> Option<SeveredLimbs> {
@@ -6441,10 +6471,16 @@ impl<'a> Cooker<'a> {
             self.scene.meshes.push(MeshRef { name: obj.path(), file, min, max, simple: Vec::new(), ..Default::default() });
             // (a sword: its blade's ends, what its swings' trails span)
             let blade = keyhole_socket(&obj, "BladeExtent_BL").zip(keyhole_socket(&obj, "BladeExtent_UR")).map(|(a, b)| [a.to_array(), b.to_array()]);
-            self.scene.props.push(PropDef { name: name.to_string(), mesh, materials, blade });
+            // (a gun: its muzzle, where its flash plays)
+            let muzzle = ["Spitfire", "Ps_Muzzle_Socket"].iter().find_map(|s| socket_frame(&obj, s)).map(|(p, r)| {
+                let (p, r) = (p.to_array(), r.to_array());
+                [p[0], p[1], p[2], r[0], r[1], r[2], r[3]]
+            });
+            self.scene.props.push(PropDef { name: name.to_string(), mesh, materials, blade, muzzle });
         }
         // a blade in flesh: its blood (the contact system's sword against a body)
         self.scene.blade_blood = self.blade_blood();
+        self.scene.contact_fx = self.contact_fx();
         self.scene.severed_limbs = self.severed_limbs();
         // the first-person arms: a skinned rig exposed as the "player_arms" character type
         // (Corvo's; Daud's on The Knife of Dunwall's maps: his pawn's `m_pSkeletalMesh`, his
@@ -7444,6 +7480,11 @@ fn noise_meters(cooked: &Path, n: &str) -> f32 {
 /// A skeletal mesh's socket in mesh space, through its bind pose (a door's keyhole, a tap's
 /// spout).
 fn keyhole_socket(mesh: &Obj, name: &str) -> Option<Vec3> {
+    socket_frame(mesh, name).map(|(p, _)| p)
+}
+
+/// A mesh socket's place and turn in the mesh's frame (its bone's bind pose, then its own).
+fn socket_frame(mesh: &Obj, name: &str) -> Option<(Vec3, glam::Quat)> {
     let sockets = mesh_sockets(mesh);
     let socket = sockets.iter().find(|s| s.name.eq_ignore_ascii_case(name))?;
     let data = skeletal::read_skeletal_mesh(&mesh.pkg, mesh.idx).ok()?;
@@ -7455,7 +7496,9 @@ fn keyhole_socket(mesh: &Obj, name: &str) -> Option<Vec3> {
         model.push(m);
     }
     let i = bones.iter().position(|b| b.name.eq_ignore_ascii_case(&socket.bone))?;
-    Some(model[i].transform_point3(Vec3::from(socket.translation)))
+    let m = model[i] * Mat4::from_rotation_translation(glam::Quat::from_array(socket.rotation).normalize(), Vec3::from(socket.translation));
+    let (_, r, t) = m.to_scale_rotation_translation();
+    Some((t, r))
 }
 
 fn mesh_sockets(mesh: &Obj) -> Vec<SocketDef> {

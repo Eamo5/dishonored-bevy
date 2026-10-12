@@ -51,6 +51,11 @@ const IK_OFFSET: Vec3 = Vec3::new(0.0, 0.0, -0.08);
 #[derive(Component)]
 pub struct ArmsRoot;
 
+/// A gun's muzzle in Corvo's hand (the pistol's `Spitfire`, the crossbow's
+/// `Ps_Muzzle_Socket`): where its flash plays, its tracer leaves from.
+#[derive(Component)]
+pub struct Muzzle(pub Power);
+
 #[derive(Component)]
 struct ArmRig {
     joints: Vec<Entity>,
@@ -385,6 +390,10 @@ fn spawn_arms(
                     let mut m = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), NotShadowCaster, RenderLayers::layer(VIEW_LAYER)));
                     mat.apply(&mut m);
                     let m = m.id();
+                    commands.entity(holder).add_child(m);
+                }
+                if let Some(at) = parts.muzzle {
+                    let m = commands.spawn((Muzzle(power), at, Visibility::Inherited)).id();
                     commands.entity(holder).add_child(m);
                 }
                 commands.entity(hand).add_child(holder);
@@ -929,6 +938,12 @@ fn align_arms(
 ) {
     for (mut t, anim, mut st, rig, vis) in &mut arms {
         let a = anim.model(rig.camera);
+        if std::env::var("DH_CAMBONE_LOG").is_ok() {
+            let b = anim.bind_model(rig.camera);
+            let d = b.rotation.inverse() * a.rotation;
+            let (ax, ang) = d.to_axis_angle();
+            info!("camera bone: turned {:.1} deg about {ax:.2}, moved {:.3}", ang.to_degrees(), a.translation.distance(b.translation));
+        }
         let eye = st.eye.compute_affine();
         let p = player.single().ok();
         let on = *vis != Visibility::Hidden && !cine.on;

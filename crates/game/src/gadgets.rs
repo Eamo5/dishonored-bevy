@@ -535,6 +535,7 @@ fn use_gadget(
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     data: Res<crate::gamedata::Data>,
+    mut fx: MessageWriter<SpawnEffect>,
 ) {
     for u in uses.read() {
         let key = match u.gadget {
@@ -602,6 +603,10 @@ fn use_gadget(
                     DespawnOnExit(GameState::InGame),
                 ));
                 model(&mut ec, if choke { "chokedust" } else { "grenade" }, Sphere::new(0.06).into());
+                // (thrown, it trails: `Ps_Grenade_Trail`, chokedust's own)
+                if fuse > 0.0 {
+                    fx.write(SpawnEffect { follow: Some(ec.id()), secs: fuse, ..SpawnEffect::at(if choke { "chokedust_trail" } else { "grenade_trail" }, Vec3::ZERO) });
+                }
             }
             Gadget::SpringRazor | Gadget::ArcMine | Gadget::StunMine => {
                 let mine = match u.gadget {

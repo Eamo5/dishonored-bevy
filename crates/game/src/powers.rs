@@ -867,7 +867,15 @@ fn use_power(
         Res<crate::possession::PossessOverrides>,
     ),
     (mut swarm, mut gadget, mut blast, mut kill_cams): (MessageWriter<crate::swarm::SummonSwarm>, MessageWriter<crate::gadgets::UseGadget>, MessageWriter<crate::gadgets::Explosion>, MessageWriter<crate::killcam::StartKillCam>),
-    (mut aim, held, paused, mut summon, nav): (ResMut<crate::aim::Aim>, Res<crate::props::Held>, Res<crate::hud::Paused>, MessageWriter<crate::summon::Summon>, Option<Res<crate::navmesh::NavGrid>>),
+    (mut aim, held, paused, mut summon, nav, mut fx, muzzles): (
+        ResMut<crate::aim::Aim>,
+        Res<crate::props::Held>,
+        Res<crate::hud::Paused>,
+        MessageWriter<crate::summon::Summon>,
+        Option<Res<crate::navmesh::NavGrid>>,
+        MessageWriter<crate::particles::SpawnEffect>,
+        Query<(Entity, &GlobalTransform, &crate::arms::Muzzle)>,
+    ),
 ) {
     if paused.0 {
         // Menu mouse releases must not spend mana or queue a Blink on resume.
@@ -1190,6 +1198,10 @@ fn use_power(
             powers.cooldown = FIRE_ACTION;
             spend_round(&mut powers, &data, &stats, sel, held);
             sfx.write(PostEvent::named("Snd_Crossbow_P_Fire", None));
+            // (its flash at the crossbow's muzzle, drawn with the hands)
+            if let Some((m, _, _)) = muzzles.iter().find(|(_, _, m)| m.0 == Power::Crossbow) {
+                fx.write(crate::particles::SpawnEffect { follow: Some(m), turn: true, view: true, secs: 0.5, ..crate::particles::SpawnEffect::at("crossbow_muzzle", Vec3::ZERO) });
+            }
             // (the bolt strays within the aim's cone; the view kicks)
             let dir = aim.scatter(dir);
             aim.fire(&data, &stats, sel);
@@ -1214,6 +1226,10 @@ fn use_power(
                 DespawnOnExit(GameState::InGame),
             ));
             projectile_model(&mut e, assets.as_deref(), kind);
+            // (an incendiary bolt trails its fire, `Flare_Bolt_Trail`)
+            if kind == HitKind::Fire {
+                fx.write(crate::particles::SpawnEffect { follow: Some(e.id()), secs: 6.0, ..crate::particles::SpawnEffect::at("flare_trail", Vec3::ZERO) });
+            }
             if let Some(npc) = lethal {
                 kill_cams.write(crate::killcam::StartKillCam { bolt: e.id(), npc });
             }
@@ -1237,9 +1253,23 @@ fn use_power(
             spend_round(&mut powers, &data, &stats, sel, held);
             let dir = aim.scatter(dir);
             aim.fire(&data, &stats, sel);
+            // its flash at the pistol's muzzle (drawn with the hands), its tracer off from there
+            // (`Ps_PlayerPistol_StdMuzzle_01`, `Ps_Pistol_StdTracer_01`)
             let filter = QueryFilter::default().exclude_collider(pe).groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_NPC | GROUP_PROP));
-            if let Some((hit, toi, surface)) = ray_surface(&ctx, &surfaces, eye, dir, 80.0, filter) {
+            let shot = crate::footsteps::ray_surface_normal(&ctx, &surfaces, eye, dir, 80.0, filter);
+            if let Some((m, mt, _)) = muzzles.iter().find(|(_, _, m)| m.0 == Power::Pistol) {
+                fx.write(crate::particles::SpawnEffect { follow: Some(m), turn: true, view: true, secs: 2.5, ..crate::particles::SpawnEffect::at("pistol_muzzle", Vec3::ZERO) });
+                // (the tracer's beam: from the muzzle to where the shot ends)
+                let end = eye + dir * shot.map_or(80.0, |s| s.1);
+                fx.write(crate::particles::SpawnEffect { beam_to: Some(end), rot: Quat::from_rotation_arc(Vec3::X, dir), secs: 0.6, ..crate::particles::SpawnEffect::at("pistol_tracer", mt.translation()) });
+            }
+            if let Some((hit, toi, surface, normal)) = shot {
                 let at = eye + dir * toi;
+                // what it strikes shows it (`Dis_ContactSystem`: splinters, sparks, blood)
+                if let Some(level) = level_info.as_ref() {
+                    let what = if npcs.get(hit).is_ok() { "Body" } else { crate::impacts::struck(surface) };
+                    crate::impacts::spawn(&mut fx, &level.scene, crate::impacts::BULLET, what, at, if what == "Body" { -dir } else { normal });
+                }
                 if explosive {
                     // `Twk_Proj_Bullet_Explosive`: 500 uu reach, 200 uu full, 50 damage
                     blast.write(crate::gadgets::Explosion { at: at - dir * 0.2, radius: 5.0, full: 2.0, damage: 50.0, effect: "explosive_bullet", player: None, kind: HitKind::ExplosiveBullet });
@@ -1476,6 +1506,7 @@ fn update_projectiles(
     (strikeables, mut struck, mut world_hits): (Query<&crate::gameplay::Strikeable>, MessageWriter<crate::gameplay::Struck>, MessageWriter<WorldDamage>),
     globals: Query<&GlobalTransform>,
     mut blasts: MessageWriter<crate::gadgets::Explosion>,
+    (mut fx, level): (MessageWriter<crate::particles::SpawnEffect>, Option<Res<crate::level::LevelInfo>>),
 ) {
     let dt = time.delta_secs() * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
@@ -1534,11 +1565,22 @@ fn update_projectiles(
         if let Some(pe) = pe {
             filter = filter.exclude_collider(pe);
         }
-        if let Some((hit, toi, surface)) = ray_surface(&ctx, &surfaces, t.translation, step / len, len, filter) {
+        if let Some((hit, toi, surface, normal)) = crate::footsteps::ray_surface_normal(&ctx, &surfaces, t.translation, step / len, len, filter) {
             t.translation += step / len * toi;
             pr.stuck = true;
             pr.life = pr.life.min(5.0);
             let what = if npcs.get(hit).is_ok() { "Body" } else { impact_surface(surface) };
+            // what it strikes shows it (`Dis_ContactSystem`: a bolt's, a dart's, a burning one's)
+            if let Some(level) = level.as_ref() {
+                let striker = match pr.kind {
+                    HitKind::SleepDart => crate::impacts::ARROW_SLEEP,
+                    HitKind::Fire => crate::impacts::ARROW_FLARE,
+                    _ => crate::impacts::ARROW,
+                };
+                let body = npcs.get(hit).is_ok();
+                let struck = if body { "Body" } else { crate::impacts::struck(surface) };
+                crate::impacts::spawn(&mut fx, &level.scene, striker, struck, t.translation, if body { -step / len } else { normal });
+            }
             if pr.kind == HitKind::Bolt {
                 pr.recoverable = data.pawn("arrow.m_bCanRecoverAmmoInEnvironment", 1.0) > 0.0;
             }
@@ -1730,7 +1772,7 @@ mod projectile_tests {
         let mut app = App::new();
         app.init_resource::<Time>().init_resource::<Attrs>().init_resource::<Data>()
             .insert_resource(TimeControl { bend_remaining: 10.0, world_dilation: 0.0, ..default() })
-            .add_message::<NpcHit>().add_message::<PostEvent>().add_message::<crate::gameplay::Struck>().add_message::<WorldDamage>().add_message::<crate::gadgets::Explosion>()
+            .add_message::<NpcHit>().add_message::<PostEvent>().add_message::<crate::gameplay::Struck>().add_message::<WorldDamage>().add_message::<crate::gadgets::Explosion>().add_message::<crate::particles::SpawnEffect>()
             .add_systems(Update, update_projectiles);
         app.world_mut().spawn((DefaultRapierContext, RapierContextSimulation::default()));
         let e = app.world_mut().spawn((Projectile { vel: Vec3::X * 10.0, kind: HitKind::Bolt, life: 10.0, stuck: false, recoverable: true, attachment: None }, Transform::IDENTITY)).id();

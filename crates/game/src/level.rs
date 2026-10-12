@@ -445,6 +445,8 @@ pub struct VisualParts {
     pub mats: Vec<(bool, u32)>,
     /// for the first-person view model (foreground: own field of view, never clipped)
     pub view_parts: Vec<(Handle<Mesh>, PartMat)>,
+    /// a gun's muzzle in its mesh's frame (`PropDef::muzzle`)
+    pub muzzle: Option<Transform>,
     /// each part's section of its mesh
     pub sections: Vec<usize>,
 }
@@ -1652,7 +1654,8 @@ fn spawn_level(
         }));
     }
     for p in &scene.props {
-        let parts = build_parts(Some(p.mesh), &p.materials, &mut mb, &mut mesh_assets, &mut image_assets, &mut mat_assets, &mut sky_assets);
+        let mut parts = build_parts(Some(p.mesh), &p.materials, &mut mb, &mut mesh_assets, &mut image_assets, &mut mat_assets, &mut sky_assets);
+        parts.muzzle = p.muzzle.map(|m| Transform::from_xyz(m[0], m[1], m[2]).with_rotation(Quat::from_xyzw(m[3], m[4], m[5], m[6]).normalize()));
         game_assets.props.insert(p.name.clone(), parts);
     }
     // the watch towers' beams (`watchtower`)

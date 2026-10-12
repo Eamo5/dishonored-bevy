@@ -450,7 +450,14 @@ fn sword_input(
     mut npcs: Query<(Entity, &mut Npc, &Transform), Without<Player>>,
     (mut grabbed_q, carry, mut commands): (Query<&mut crate::npc::Grabbed>, Res<crate::carry::Carry>, Commands),
     (strikeables, mut struck, held, mut world_hits): (Query<(&crate::gameplay::Strikeable, &GlobalTransform)>, MessageWriter<crate::gameplay::Struck>, Res<crate::props::Held>, MessageWriter<crate::worlddamage::WorldDamage>),
-    (mut versus, rigs, settings, data): (ResMut<Versus>, Query<&crate::anim::Animator, With<Npc>>, Res<crate::settings::Settings>, Res<crate::gamedata::Data>),
+    (mut versus, rigs, settings, data, mut fx, level): (
+        ResMut<Versus>,
+        Query<&crate::anim::Animator, With<Npc>>,
+        Res<crate::settings::Settings>,
+        Res<crate::gamedata::Data>,
+        MessageWriter<crate::particles::SpawnEffect>,
+        Option<Res<crate::level::LevelInfo>>,
+    ),
 ) {
     if paused.0 { return; }
     let Ok((pe, pt, mut p, mut sword)) = player.single_mut() else { return };
@@ -656,6 +663,11 @@ fn sword_input(
                     }
                     noise.write(Noise { pos: nt.translation, radius: 8.0, kind: NoiseKind::Threatening });
                     sfx.write(crate::audio::PostEvent::named("Snd_Imp_Sword_vs_Sword_ak", Some(nt.translation + Vec3::Y)));
+                    // (the blades' sparks where they meet, `Dis_ContactSystem`'s sword on sword)
+                    if let Some(level) = level.as_ref() {
+                        let to = (nt.translation - pt.translation).with_y(0.0).normalize_or_zero();
+                        crate::impacts::spawn(&mut fx, &level.scene, crate::impacts::SWORD, "Sword", pt.translation + Vec3::Y * 1.45 + to * 0.7, -to);
+                    }
                     sword.recoil = 0.3;
                     msgs.push("Blocked");
                 } else {
@@ -937,6 +949,7 @@ fn receive_hits(
     mut sfx: MessageWriter<crate::audio::PostEvent>,
     (mut versus, mut npcs, cam): (ResMut<Versus>, Query<(&mut Npc, &Transform), Without<Player>>, Query<&GlobalTransform, With<PlayerCamera>>),
     attrs: Res<crate::gamedata::Attrs>,
+    (mut fx, level): (MessageWriter<crate::particles::SpawnEffect>, Option<Res<crate::level::LevelInfo>>),
 ) {
     use crate::audio::PostEvent;
     let Ok((pt, mut p, mut sword)) = player.single_mut() else { return };
@@ -984,6 +997,10 @@ fn receive_hits(
         if sword.blocking && facing && !h.unblockable {
             noise.write(Noise { pos: pt.translation, radius: 8.0, kind: NoiseKind::Threatening });
             sfx.write(PostEvent::named("Snd_Imp_Sword_vs_Sword_ak", None));
+            // (the blades' sparks where they meet)
+            if let Some(level) = level.as_ref() {
+                crate::impacts::spawn(&mut fx, &level.scene, crate::impacts::SWORD, "Sword", pt.translation + Vec3::Y * 1.45 + to_npc * 0.7, -to_npc);
+            }
             // (a tap parry forces a plain block for 0.3 s after: `DishonoredPlayerPawn`'s
             // block handler, as roshan's r614/blink research reads it)
             if sword.block_t < 0.2 && sword.forced_block <= 0.0 {

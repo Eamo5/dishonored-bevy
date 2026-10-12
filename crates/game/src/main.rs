@@ -123,6 +123,7 @@ mod location;
 mod crosshair;
 mod intwindow;
 mod hudtext;
+mod impacts;
 mod objnotify;
 mod oxygen;
 mod playerstate;

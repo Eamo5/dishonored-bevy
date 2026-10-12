@@ -7,7 +7,8 @@ use std::io::Write;
 use std::path::Path;
 
 // 103: retain unmatched-rig timelines and zero-track animation sequences.
-pub const SCENE_VERSION: u32 = 120;
+// 121: props' muzzles; the contact system's impact effects (`contact_fx`).
+pub const SCENE_VERSION: u32 = 121;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -172,6 +173,11 @@ pub struct Scene {
     /// and the blood on the lens with how near (m) and how likely
     #[serde(default)]
     pub blade_blood: Option<BladeBlood>,
+    /// the contact system's impact effects: what strikes (`DisContactType_Bullet`, `_Arrow`...,
+    /// its name less the prefix), what it strikes (`Env_Stone`, `Body`, `Environment`...) and
+    /// the particle system spawned there
+    #[serde(default)]
+    pub contact_fx: Vec<(String, String, u32)>,
     /// the characters' clips that sever a limb (`DishonoredNotify_SeverLimb`: the beheading
     /// finishers)
     #[serde(default)]
@@ -720,6 +726,11 @@ pub struct PropDef {
     /// its swings' trails span)
     #[serde(default)]
     pub blade: Option<[[f32; 3]; 2]>,
+    /// a gun's muzzle in the mesh's frame (the pistol's `Spitfire`, `DisTweaks_FirePistol`'s
+    /// `m_MuzzleSocketName`; the crossbow's `Ps_Muzzle_Socket`): its flash's place (x, y, z)
+    /// and turn (a quaternion: x, y, z, w)
+    #[serde(default)]
+    pub muzzle: Option<[f32; 7]>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
