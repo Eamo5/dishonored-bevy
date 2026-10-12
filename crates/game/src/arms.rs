@@ -1035,17 +1035,26 @@ fn align_arms(
             }
         }
         let root = match cam.single_mut() {
-            Ok(mut ct) if on && !deltas.is_empty() => {
-                // the view's sway: camera_jnt with the bob against without it, in the camera's frame
-                let rest = a;
-                let bobbed = anim.model_with(rig.camera, &deltas);
-                let off = eye * rest.compute_affine().inverse() * bobbed.compute_affine() * eye.inverse();
-                let (_, orot, otr) = off.to_scale_rotation_translation();
-                let amount = settings.head_bob.clamp(0.0, 1.0);
-                if std::env::var("DH_BOB_LOG").is_ok() {
-                    info!("bob: off {:.3} {:.3} {:.3} turn {:.2} deg", otr.x, otr.y, otr.z, orot.to_axis_angle().1.to_degrees());
+            Ok(mut ct) if on => {
+                // the view on the camera bone, as the original's camera has it (roshan's
+                // r614/blink research decoded it): where the animated camera_jnt is, with
+                // `DishonoredPlayerCamera.m_RollAmount` of its turn from its rest pose; the arms
+                // keep to the body
+                let rest = anim.bind_model(rig.camera);
+                let moved = eye * rest.compute_affine().inverse() * a.compute_affine() * eye.inverse();
+                let (_, mrot, mtr) = moved.to_scale_rotation_translation();
+                let mut off = bevy::math::Affine3A::from_rotation_translation(Quat::IDENTITY.slerp(mrot, ROLL_AMOUNT), mtr);
+                if !deltas.is_empty() {
+                    // the view's sway: camera_jnt with the bob against without it, in the camera's frame
+                    let bobbed = anim.model_with(rig.camera, &deltas);
+                    let bob = eye * a.compute_affine().inverse() * bobbed.compute_affine() * eye.inverse();
+                    let (_, orot, otr) = bob.to_scale_rotation_translation();
+                    let amount = settings.head_bob.clamp(0.0, 1.0);
+                    if std::env::var("DH_BOB_LOG").is_ok() {
+                        info!("bob: off {:.3} {:.3} {:.3} turn {:.2} deg", otr.x, otr.y, otr.z, orot.to_axis_angle().1.to_degrees());
+                    }
+                    off = off * bevy::math::Affine3A::from_rotation_translation(Quat::IDENTITY.slerp(orot, amount), otr.clamp_length_max(BOB_MAX) * amount);
                 }
-                let off = bevy::math::Affine3A::from_rotation_translation(Quat::IDENTITY.slerp(orot, amount), otr.clamp_length_max(BOB_MAX) * amount);
                 let (_, cr, ctr) = (ct.compute_affine() * off).to_scale_rotation_translation();
                 ct.rotation = cr;
                 ct.translation = ctr;
@@ -1058,6 +1067,9 @@ fn align_arms(
         t.translation = tr;
     }
 }
+
+/// How much of the camera bone's turn the view takes (`DishonoredPlayerCamera.m_RollAmount`).
+const ROLL_AMOUNT: f32 = 0.7;
 
 /// A landing this fast (m/s) is a hard one (`StatePlayerMasterFalling.m_fFall_Stun_Vel`, 2200 uu/s).
 const FALL_STUN: f32 = 22.0;

@@ -232,6 +232,10 @@ fullscreen display, vertical sync and the crosshair.
   (`ADD_Head_<Walk|Run|Sprint|Sneak><N|S|W|E>`, blended by the way he goes, in step with his
   stride; `ADD_Head_Mantle_Low` through a mantle, `ADD_Head_Rope_Climb` on a chain) move
   camera_jnt and the view goes with it, scaled by `Head Bob Amount`; his arms keep to his body.
+  The arms' own clips move the view the same way, as the original's camera has it (roshan's
+  r614/blink research decoded it): it sits where the animated camera_jnt is and takes
+  `DishonoredPlayerCamera.m_RollAmount` (0.7) of its turn from its rest pose. The clips seen so
+  far move it little (about 4 cm in the idle, 5 cm through a mantle).
 - **Beheadings and severed limbs** (`gore.rs`): a finisher is a beheading now and then
   (`m_HeadChop`, `m_fBeheadRandomChance` 25%: `Sword_Ready_Fatality_Behead_A/B_Master` with the
   victim's `Generic_Fatality_Behead_*_Slave`); the victim's clip cuts at its
