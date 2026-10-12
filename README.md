@@ -279,7 +279,10 @@ fullscreen display, vertical sync and the crosshair.
   panner that sets a world sound among the speakers by its direction from the listener (pairwise
   constant power between the speakers about it, as Wwise's 3D positioning: the front pair and
   the surrounds), spreading over them all within 1.5 m, and plays a screen sound on the front
-  pair; changing it reopens the output and starts again what was sounding. Pausing the game
+  pair; changing it reopens the output and starts again what was sounding. Spoken lines duck
+  one another as the original's conversation manager has them (roshan's r614/blink research):
+  the dominant line (the nearest within 40 % of its reach; one heard everywhere above all) keeps
+  its volume and the others fall to 30 %, blended at 5 a second. Pausing the game
   pauses what was sounding (the original's `Pause_All` / `Resume_All`).
 - **The painterly debug branch** (`kuwahara.rs`): the post-process graph's `KOKuwa` /
   `KuwaHalfRes` / `KuwaFullRes` nodes, which the original shows only on its debug exec `KUWA`

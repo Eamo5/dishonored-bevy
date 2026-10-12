@@ -353,6 +353,12 @@ pub struct Emitter {
     curves: Arc<Vec<RtpcCurve>>,
 }
 
+/// Dialogue's ducking: the share of its reach within which a line can be the dominant one, the
+/// others' volume, and how fast they blend (a second's worth).
+const DOMINANT_REACH: f32 = 0.4;
+const NON_DOMINANT: f32 = 0.3;
+const DUCK_BLEND: f32 = 5.0;
+
 /// Music crossfade length (seconds).
 const FADE: f32 = 1.5;
 
@@ -679,8 +685,8 @@ fn attenuate(
     tc: Res<crate::gameplay::TimeControl>,
     out: Res<Output>,
     listener: Query<&GlobalTransform, With<SpatialListener>>,
-    voices: Query<(&Transform, &Emitter, &Voice)>,
-    (time, mut log_t): (Res<Time>, Local<f32>),
+    voices: Query<(Entity, &Transform, &Emitter, &Voice)>,
+    (time, mut log_t, mut ducks): (Res<Time>, Local<f32>, Local<HashMap<Entity, f32>>),
     (rooms, movies): (Res<crate::audiorooms::AudioRooms>, Res<crate::movie::Movies>),
 ) {
     let Ok(l) = listener.single() else { return };
@@ -704,13 +710,27 @@ fn attenuate(
     };
     // (the ways through the doorways from where Corvo hears, once for all the sounds)
     let field = rooms.field(ear, false);
-    for (t, em, voice) in &voices {
+    // dialogue: the dominant line (the nearest within 40 % of its reach; one heard everywhere
+    // above all) keeps its volume, the others' fall to 30 %, blended at 5 a second
+    // (`DisConvGlobalMan`'s `m_fDominantMaxDistance_Percent`, `m_fNonDominantVolumeScale`,
+    // `m_fAudioDuckBlendSpeed`, as roshan's r614/blink research decoded them)
+    let dominance = |t: &Transform, em: &Emitter| if em.positional { 1.0 - t.translation.distance(ear) / (DOMINANT_REACH * em.reach).max(0.1) } else { 1.0 };
+    let dominant = voices.iter().filter(|(_, _, em, _)| em.voice).map(|(e, t, em, _)| (e, dominance(t, em))).filter(|(_, d)| *d > 1e-8).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(e, _)| e);
+    ducks.retain(|e, _| voices.contains(*e));
+    let blend = DUCK_BLEND * time.delta_secs();
+    for (e, t, em, voice) in &voices {
         let cat = if em.music { music_volume } else if em.voice { settings.voice_volume } else { settings.sfx_volume };
         let (g, speed) = mods(em);
         if log && ((g - 1.0).abs() > 1e-3 || (speed - 1.0).abs() > 1e-3) {
             info!("rtpc: {} gain {g:.3} speed {speed:.3}", event_name(em.event));
         }
         let mut v = em.gain * g * em.fade.clamp(0.0, 1.0) * cat * settings.master_volume;
+        if em.voice {
+            let to = if dominant.is_none_or(|d| d == e) { 1.0 } else { NON_DOMINANT };
+            let duck = ducks.entry(e).or_insert(to);
+            *duck += (to - *duck).clamp(-blend, blend);
+            v *= *duck;
+        }
         if em.positional {
             // (from another room: the way through the doorways, from the first of them,
             // muffled by each)
