@@ -347,26 +347,23 @@ fn nearest_target<'a>(
     min_dot: f32,
     npcs: impl Iterator<Item = (Entity, &'a Npc, &'a Transform)>,
 ) -> Option<(Entity, f32)> {
-    let mut best: Option<(Entity, f32)> = None;
-    for (e, npc, t) in npcs {
-        if npc.is_down() {
-            continue;
-        }
-        let to = t.translation + Vec3::Y * 0.3 - eye;
-        let d = to.length();
-        if d > range {
-            continue;
-        }
-        let flat = to.with_y(0.0).normalize_or_zero();
-        let f = fwd.with_y(0.0).normalize_or_zero();
-        if flat.dot(f) < min_dot && d > 0.8 {
-            continue;
-        }
-        if best.map(|b| d < b.1).unwrap_or(true) {
-            best = Some((e, d));
-        }
-    }
-    best
+    targets_within(eye, fwd, range, min_dot, npcs).first().copied()
+}
+
+/// Everyone standing within `range` of the eye and before it (`min_dot` off the view), the
+/// nearest first.
+fn targets_within<'a>(eye: Vec3, fwd: Vec3, range: f32, min_dot: f32, npcs: impl Iterator<Item = (Entity, &'a Npc, &'a Transform)>) -> Vec<(Entity, f32)> {
+    let f = fwd.with_y(0.0).normalize_or_zero();
+    let mut out: Vec<(Entity, f32)> = npcs
+        .filter(|(_, npc, _)| !npc.is_down())
+        .filter_map(|(e, _, t)| {
+            let to = t.translation + Vec3::Y * 0.3 - eye;
+            let d = to.length();
+            (d <= range && (to.with_y(0.0).normalize_or_zero().dot(f) >= min_dot || d <= 0.8)).then_some((e, d))
+        })
+        .collect();
+    out.sort_by(|a, b| a.1.total_cmp(&b.1));
+    out
 }
 
 /// A finisher's pair for a blow from before the victim (`DisTweaks_Fatality`): its own dramatic
@@ -625,7 +622,11 @@ fn sword_input(
             let ahead = p.velocity.with_y(0.0).dot(fwd.with_y(0.0).normalize_or_zero()).max(0.0);
             let reach = 2.1 * (1.0 + 0.35 * (ahead / attrs.sprint.max(0.1)).clamp(0.0, 1.0));
             let reach = (reach * reach + 0.25).sqrt();
-            if let Some((e, _)) = nearest_target(eye, fwd, reach, 0.55, npcs.iter()) {
+            // (the blade's sweep meets everyone in its reach, each once a swing: the nearest takes
+            // the blow as chosen, the others its cut, `m_AlreadyHitActors`, as roshan's
+            // r614/blink research decoded it)
+            let swept = targets_within(eye, fwd, reach, 0.55, npcs.iter());
+            if let Some(&(e, _)) = swept.first() {
                 let (_, mut npc, nt) = npcs.get_mut(e).unwrap();
                 let to_player = (pt.translation - nt.translation).with_y(0.0).normalize_or_zero();
                 let behind = npc.forward().dot(to_player) < -0.2;
@@ -673,6 +674,17 @@ fn sword_input(
                 } else {
                     npc.parries = 0;
                     hits.write(NpcHit { npc: e, damage: attrs.sword_damage, kind: HitKind::Sword, from: pt.translation });
+                }
+                for &(o, _) in swept.iter().skip(1) {
+                    let Ok((_, mut other, ot)) = npcs.get_mut(o) else { continue };
+                    if other.mode == Mode::Combat && other.sees_player && other.attack_t.is_none() && other.stagger <= 0.0 && rand::random::<f32>() < other.parry_chance() {
+                        other.parries += 1;
+                        other.gesture(1);
+                        sfx.write(crate::audio::PostEvent::named("Snd_Imp_Sword_vs_Sword_ak", Some(ot.translation + Vec3::Y)));
+                        continue;
+                    }
+                    other.parries = 0;
+                    hits.write(NpcHit { npc: o, damage: attrs.sword_damage, kind: HitKind::Sword, from: pt.translation });
                 }
             } else if let Some(e) = npcs
                 .iter()

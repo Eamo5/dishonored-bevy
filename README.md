@@ -1274,6 +1274,16 @@ against the install's own data where it carries them, then implemented independe
 - **Losing Corvo.** A guard in a fight who can't see him gives up for a search when its attention
   leaks below busted's stop. A search lasts while its attention holds above investigating's stop
   (a dozen seconds unsuspecting, half a minute and more suspecting), not a fixed time.
+- **Searching.** An investigating or searching guard runs to danger, a cry for help, an alarm, a
+  death rattle, a body or a sighting (`TweaksBehavior_Search_Default`'s `m_bShouldRun`) and
+  walks to the rest, at 0.8 of its pace (`SearchSword` / `SearchEmpty`).
+- **A fight spreads.** A guard starting to fight carries to its allies within
+  `m_fGroupDistance` (10 m): those who see it join it (`SeeAllyCombat` may reach busted); the
+  others' attention rises by 1, at least to investigating but never busted
+  (`AllyCombatTarget`), and they come to look.
+- **The blade's sweep.** Corvo's swing meets everyone in its reach, each once
+  (`m_AlreadyHitActors`): the nearest takes the blow as chosen (an assassination, a finisher,
+  the blades locking, a parry or the cut), the others its cut, unless they parry it.
 - **Attackers.** At most `m_InnerSkirmishCaps` blades come at Corvo at once: 1 on easy, 2 on
   normal, 3 on hard and very hard.
   - Each fighter strikes in flurries of 2-3 blows, then recovers its stamina for 4-5 s

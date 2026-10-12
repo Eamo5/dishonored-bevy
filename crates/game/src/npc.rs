@@ -213,6 +213,9 @@ pub struct Npc {
     /// until it may taunt again, and how long its taunt holds it
     pub taunt_cd: f32,
     pub taunt_hold: f32,
+    /// investigating or searching at a run (`TweaksBehavior_Search_Default`'s `m_bShouldRun`:
+    /// danger, help, alarm and death-rattle noises, corpses, sightings), else at a walk
+    pub search_run: bool,
     /// an NPC of an enemy faction it is fighting (`DisTweaks_Faction.m_EnemyFactions`), and
     /// when it next looks for one
     pub foe: Option<Entity>,
@@ -1407,6 +1410,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         under_cd: [0.0; 2],
         taunt_cd: 5.0 + rand::random::<f32>() * 10.0,
         taunt_hold: 0.0,
+        search_run: false,
         foe: None,
         feud_scan: rand::random::<f32>(),
         grab: None,
@@ -2040,6 +2044,9 @@ fn npc_hearing(
                 if npc.awareness >= att.levels[2][0] {
                     npc.alert = Alert::Suspicious;
                     npc.target = Some(n.pos);
+                    if npc.mode != Mode::Investigate || runs_to(n.kind) {
+                        npc.search_run = runs_to(n.kind);
+                    }
                     npc.set_mode(Mode::Investigate);
                 }
                 continue;
@@ -2056,6 +2063,7 @@ fn npc_hearing(
                 npc.awareness = npc.awareness.max(0.4);
                 npc.target = Some(n.pos);
                 npc.last_seen = Some(n.pos);
+                npc.search_run = runs_to(n.kind);
                 npc.set_mode(Mode::Investigate);
             }
         }
@@ -2241,6 +2249,8 @@ pub(crate) fn npc_perception(
                 } else if npc.attn_level >= 3 && npc.alert == Alert::Unaware {
                     npc.alert = Alert::Suspicious;
                     npc.target = npc.last_seen;
+                    // (a sighting: it runs to look)
+                    npc.search_run = true;
                     npc.set_mode(Mode::Investigate);
                 }
             } else if visible && dist < 10.0 && npc.mode != Mode::Flee && stats.health < stats.max_health && !npc.fighter() && npc.may_panic() && !dhcook::format::is_player_faction(&npc.faction) {
@@ -2316,6 +2326,8 @@ pub(crate) fn npc_perception(
                             npc.awareness = npc.awareness.max(0.6);
                             npc.target = Some(*b);
                             npc.last_seen = Some(*b);
+                            // (a body: it runs to it)
+                            npc.search_run = true;
                             npc.set_mode(Mode::Investigate);
                             break;
                         }
@@ -3118,18 +3130,54 @@ pub(crate) fn npc_brain(
         }
     }
     if !alerts.is_empty() {
+        // an ally starting to fight, within the group distance
+        // (`DishonoredGlobalAIManager.m_fGroupDistance` 1000 uu): one that sees it joins the
+        // fight (`SeeAllyCombat` may reach busted); the others' attention rises
+        // (`AllyCombatTarget`: +1.0, at least to investigating, never busted: they go to look),
+        // as roshan's r614/blink research decoded it
+        let ctx = rapier.single().ok();
+        let world = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
         for (_, mut npc, t) in &mut npcs {
             if npc.is_down() || !npc.hostile() || npc.alert == Alert::Combat {
                 continue;
             }
-            if alerts.iter().any(|(p, _)| p.distance(t.translation) < 15.0) {
+            let Some(&(at, foe)) = alerts.iter().find(|(p, _)| p.distance(t.translation) < GROUP_DISTANCE) else { continue };
+            let sight = level.as_ref().and_then(|l| npc.npc_type.and_then(|ty| l.scene.npc_types.get(ty as usize))).and_then(|ty| ty.sight.clone());
+            let eye = t.translation + Vec3::Y * 0.7;
+            let to = at + Vec3::Y * 0.7 - eye;
+            let d = to.length();
+            let in_view = sight.as_ref().is_none_or(|s| vision_range(s, npc.forward(), to / d.max(1e-3), d, false).is_some());
+            let clear = ctx.as_ref().is_some_and(|c| c.cast_ray(eye, to / d.max(1e-3), (d - 0.4).max(0.0), true, world).is_none());
+            if in_view && clear {
                 npc.alert = Alert::Combat;
                 npc.awareness = 1.0;
-                npc.last_seen = Some(alerts[0].1);
+                npc.last_seen = Some(foe);
                 npc.set_mode(Mode::Combat);
+            } else if let Some(att) = level.as_ref().and_then(|l| attention_of(&npc, &l.scene)) {
+                let cap = (att.levels[3][0] - 0.001).min(att.max);
+                npc.awareness = npc.awareness.max((npc.awareness + 1.0).max(att.levels[2][0]).min(cap));
+                npc.last_seen = Some(at);
+                if npc.mode != Mode::Investigate {
+                    npc.alert = Alert::Suspicious;
+                    npc.target = Some(at);
+                    npc.search_run = false;
+                    npc.set_mode(Mode::Investigate);
+                }
             }
         }
     }
+}
+
+/// How far an ally's fight carries (`DishonoredGlobalAIManager.m_fGroupDistance`, 1000 uu).
+const GROUP_DISTANCE: f32 = 10.0;
+
+/// The search's locomotion modifier (`SearchSword`, `SearchEmpty`).
+const SEARCH_SPEED: f32 = 0.8;
+
+/// Whether a noise sends a searcher running (`m_SearchFromNoiseTweaks[4..7].m_bShouldRun`:
+/// danger, death rattles, cries for help, alarms).
+fn runs_to(kind: NoiseKind) -> bool {
+    matches!(kind, NoiseKind::Danger | NoiseKind::DeathRattle | NoiseKind::Help | NoiseKind::Alarm)
 }
 
 /// Steering + kinematic movement.
@@ -3184,11 +3232,15 @@ fn npc_move(
         let speed = match npc.mode {
             _ if npc.alarm_run.is_some() => npc.gait[2],
             Mode::Combat | Mode::Flee => npc.gait[2],
+            // searching, its walk or run slowed (`SearchSword` / `SearchEmpty`: x 0.8), as roshan's
+            // r614/blink research read the locomotion modifiers
             Mode::Investigate | Mode::Search => {
                 if npc.alert == Alert::Combat {
                     npc.gait[1] * 1.3
+                } else if npc.search_run {
+                    npc.gait[2] * SEARCH_SPEED
                 } else {
-                    npc.gait[1]
+                    npc.gait[1] * SEARCH_SPEED
                 }
             }
             _ => npc.gait[0],
