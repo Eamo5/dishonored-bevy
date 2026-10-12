@@ -52,6 +52,12 @@ pub struct BarkState {
     cried: bool,
     /// seconds since it last spoke
     since: f32,
+    /// what it was doing, burning, heading for a bell, a grenade by it (for the hooks of
+    /// their changes)
+    mode: Mode,
+    burning: bool,
+    alarm: bool,
+    grenade: bool,
 }
 
 /// Global pacing: one voice at a time near the player.
@@ -75,12 +81,15 @@ fn npc_barks(
     mut out: MessageWriter<PostEvent>,
     mut subs: MessageWriter<Subtitle>,
     data: Res<crate::gamedata::Data>,
+    (mut used, burning, grenades): (MessageReader<crate::powers::PowerUsed>, Query<(), With<crate::powers::Ignite>>, Query<&Transform, With<crate::gadgets::Grenade>>),
 ) {
     let Some(level) = level else { return };
     let Ok(pt) = player.single() else { return };
     let dt = time.delta_secs();
     clock.busy = (clock.busy - dt).max(0.0);
     let log = std::env::var("DH_AUDIO_LOG").is_ok();
+    // a power Corvo used this frame (Blink: he vanishes from where they saw him)
+    let magic = used.read().last().map(|u| u.0);
     for (e, npc, t, state, anim, clips) in &mut npcs {
         let Some(mut st) = state else {
             commands.entity(e).try_insert(BarkState {
@@ -95,6 +104,10 @@ fn npc_barks(
                 dying: None,
                 cried: false,
                 since: 10.0,
+                mode: npc.mode,
+                burning: false,
+                alarm: false,
+                grenade: false,
             });
             continue;
         };
@@ -161,6 +174,28 @@ fn npc_barks(
         } else if !down && npc.health < st.health - 0.5 {
             let big = st.health - npc.health >= npc.arms.big_hit;
             want = Some((if big { &["COMBAT_OUCH_BIG", "COMBAT_OUCH_SMALL"] } else { &["COMBAT_OUCH_SMALL", "COMBAT_OUCH_BIG"] }, true));
+        } else if !down && burning.contains(e) && !st.burning {
+            // set alight (`COMBAT_IMMOLATED`)
+            want = Some((&["COMBAT_IMMOLATED"], true));
+        } else if !down && npc.mode == Mode::Flee && st.mode != Mode::Flee {
+            // a civilian starting to run (`PANIC_START`, `FLEEING`)
+            want = Some((&["PANIC_START", "FLEEING"], true));
+        } else if !down && npc.alarm_run.is_some() && !st.alarm {
+            // off to ring the alarm (`ALARM_GO_TO_RING_ALARM`)
+            want = Some((&["ALARM_GO_TO_RING_ALARM", "ALARM_HEAR_AND_RESPOND"], true));
+        } else if !down && npc.hostile() && !st.grenade && grenades.iter().any(|g| g.translation.distance(t.translation) < 5.0) {
+            // a grenade by it (`ESCAPE_IMPENDING_EXPLOSION`)
+            want = Some((&["ESCAPE_IMPENDING_EXPLOSION"], true));
+        } else if !down && npc.hostile() && npc.sees_player && magic.is_some() {
+            // Corvo's magic before its eyes: gone from where it saw him, else a power seen
+            // (`MAGIC_DISAPPEARED`, `WITNESSEDMAGIC`)
+            want = Some(if magic == Some(crate::powers::Power::Blink) { (&["MAGIC_DISAPPEARED", "WITNESSEDMAGIC"], true) } else { (&["WITNESSEDMAGIC"], true) });
+        } else if !down && npc.alert == Alert::Combat && st.alert == Alert::Combat && npc.mode == Mode::Combat && matches!(st.mode, Mode::Search | Mode::Investigate) {
+            // found again while searching (`SEARCH_FIND_ENEMY`)
+            want = Some((&["SEARCH_FIND_ENEMY", "COMBAT_THREAT"], true));
+        } else if !down && npc.alert == Alert::Suspicious && st.alert == Alert::Suspicious && npc.mode == Mode::Investigate && st.mode != Mode::Investigate {
+            // off to look again (`INVESTIGATE`, `NOTICE`)
+            want = Some((&["INVESTIGATE", "NOTICE"], false));
         } else if !down && npc.alert != st.alert {
             want = match (st.alert, npc.alert) {
                 (Alert::Unaware, Alert::Suspicious) => Some((&["NOTICE_SUSPICIOUS_ACTIVITY", "SUSPICIONDIST", "ATTENTION_TRACKTARGET_BEGIN"], false)),
@@ -185,6 +220,10 @@ fn npc_barks(
         st.alert = npc.alert;
         st.down = down;
         st.health = npc.health;
+        st.mode = npc.mode;
+        st.burning = burning.contains(e);
+        st.alarm = npc.alarm_run.is_some();
+        st.grenade = grenades.iter().any(|g| g.translation.distance(t.translation) < 5.0);
         let Some((hooks, urgent)) = want else { continue };
         if d > HEAR || (!urgent && (st.quiet > 0.0 || clock.busy > 0.0)) {
             continue;

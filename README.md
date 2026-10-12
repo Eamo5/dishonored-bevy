@@ -698,6 +698,12 @@ fullscreen display, vertical sync and the crosshair.
   gesture, the confusion after possession, a weeper's moan, the hurt) speak the voice's matching
   hook as the clip reaches them. A death waits for its clip's cry (else cries shortly after),
   once.
+- **What the characters say as things change** (`barks.rs`, their voices' dialog hooks): besides
+  noticing, threatening, losing Corvo, hurting, dying and victory, a civilian starting to run
+  says its `PANIC_START` (`FLEEING`), a guard set alight `COMBAT_IMMOLATED`, off to a bell
+  `ALARM_GO_TO_RING_ALARM`, a grenade by it `ESCAPE_IMPENDING_EXPLOSION`, Corvo's magic before
+  its eyes `WITNESSEDMAGIC` (Blink: `MAGIC_DISAPPEARED`), finding him again in a search
+  `SEARCH_FIND_ENEMY`, and going to look again `INVESTIGATE` (`NOTICE`).
 - **Finishers** (`DisTweaks_Fatality`): a sword blow that kills, the counter after a parry and
   the Blood Thirst strike play the original paired finishers (`Sword_Ready_Fatality_<Front |
   FastFront | SmallFront_<Side>>_*_Master` with `Generic_Fatality_..._Slave`, a target's
@@ -1271,9 +1277,13 @@ against the install's own data where it carries them, then implemented independe
     (danger); a grenade 25 m; a death rattle 3 m. The crossbow makes no noise firing.
   - A guard's attention rises by the context's own amount (anomaly, threat, danger, death rattle,
     help, alarm), never to busted: hearing alone can't find Corvo.
-  - Civilians panic only at the noises their brain's panic behaviour lists (`m_HearNoise`'s
-    `m_ScaryNoises`, cooked per character). Every shipped civilian brain lists alarm bells, cries for
-    help and death rattles, so gunfire and sword fights alone don't set them running.
+  - Civilians panic at the noises their brain's panic behaviour lists (`m_HearNoise`'s
+    `m_ScaryNoises`, cooked per character: every shipped civilian brain lists alarm bells, cries
+    for help and death rattles), and at the rest of `TweaksBehavior_Panic_Civilian`'s triggers as
+    roshan's r614/blink research listed them: a body in their sight (a corpse, a death), a guard
+    fighting in their sight within the group distance (10 m), another civilian panicking within
+    it (seen or not), and being struck. One starting to run cries for help (a 15 m call the
+    guards hear).
 - **The alarm bell.** A guard who has found Corvo, within `m_fNPCGoToAlarmCloseness` of a bell,
   runs to it (the nearest of them; not with Corvo on him) and rings it after `m_fWaitTimeBeforeRing`.
   - Its noise (60 m, an alarm) goes out after `m_fAlarmRingDelayBeforeAINoise` (2.5 s).

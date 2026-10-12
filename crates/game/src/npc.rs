@@ -1896,6 +1896,11 @@ fn npc_hits(
                     npc.last_seen = Some(h.from);
                     npc.set_mode(Mode::Combat);
                 }
+                // a civilian struck panics (`TweaksBehavior_Panic_Civilian`: attacked)
+                if npc.health > 0.0 && civilian_may_panic(&npc) {
+                    npc.last_seen = Some(h.from);
+                    npc.set_mode(Mode::Flee);
+                }
                 if npc.health <= 0.0 {
                     npc.set_mode(Mode::Dead);
                     stats.killed(&npc.pawn, !npc.hostile());
@@ -2161,6 +2166,9 @@ pub(crate) fn npc_perception(
     let difficulty = settings.difficulty.min(3) as usize;
     let log = std::env::var("DH_ATTN_LOG").is_ok();
     let body_positions: Vec<(Entity, Vec3)> = npcs.iter().filter(|(_, n, _)| n.is_down() && !n.corpse).map(|(e, _, t)| (e, t.translation)).collect();
+    // (for the civilians: the guards fighting, the others panicking)
+    let fighting: Vec<Vec3> = npcs.iter().filter(|(_, n, _)| n.mode == Mode::Combat && n.hostile() && !n.is_down()).map(|(_, _, t)| t.translation).collect();
+    let panicking: Vec<Vec3> = npcs.iter().filter(|(_, n, _)| n.mode == Mode::Flee && !n.fighter() && !n.is_down()).map(|(_, _, t)| t.translation).collect();
     let mut newly_detected = false;
     for (e, mut npc, t) in &mut npcs {
         if npc.is_down() || npc.kind == Kind::Story || npc.mode == Mode::Choked || stats.dead || hidden || Some(e) == possession.host || npc.blind {
@@ -2253,11 +2261,6 @@ pub(crate) fn npc_perception(
                     npc.search_run = true;
                     npc.set_mode(Mode::Investigate);
                 }
-            } else if visible && dist < 10.0 && npc.mode != Mode::Flee && stats.health < stats.max_health && !npc.fighter() && npc.may_panic() && !dhcook::format::is_player_faction(&npc.faction) {
-                // civilians flee from an armed, bloodied stranger (not his own people)
-                if npc.can_flee {
-                        npc.set_mode(Mode::Flee);
-                    }
             }
             // what it heard rises to investigating (`npc_hearing`)
             if npc.hostile() && !visible && npc.attn_level >= 3 && npc.alert == Alert::Unaware {
@@ -2277,10 +2280,6 @@ pub(crate) fn npc_perception(
                     rate += 1.5;
                 }
                 npc.awareness = (npc.awareness + rate * dt).min(1.0);
-            } else if dist < 10.0 && npc.mode != Mode::Flee && stats.health < stats.max_health && !npc.fighter() && !dhcook::format::is_player_faction(&npc.faction) {
-                if npc.can_flee {
-                        npc.set_mode(Mode::Flee);
-                    }
             }
         } else {
             let decay = match npc.alert {
@@ -2333,6 +2332,30 @@ pub(crate) fn npc_perception(
                         }
                     }
                 }
+            }
+        } else if civilian_may_panic(&npc) {
+            // a civilian panics (`TweaksBehavior_Panic_Civilian`, as roshan's r614/blink research
+            // listed its triggers): a body in its sight (`WitnessCorpse`, `WitnessDeath`), a guard
+            // fighting in its sight within the group distance (`WitnessAllyCombat`), another
+            // panicking within it, seen or not (`WitnessAllyPanic`)
+            let pos = t.translation;
+            let in_sight = |b: Vec3| {
+                let d = b.distance(eye);
+                d < 14.0 && (b - eye).normalize_or_zero().dot(fwd) > 0.5 && {
+                    let dir = (b + Vec3::Y * 0.2 - eye).normalize_or_zero();
+                    let filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+                    ctx.cast_ray(eye, dir, d - 0.3, true, filter).is_none()
+                }
+            };
+            let why = body_positions
+                .iter()
+                .map(|(_, b)| *b)
+                .find(|b| in_sight(*b))
+                .or_else(|| fighting.iter().copied().find(|f| f.distance(pos) < GROUP_DISTANCE && in_sight(*f + Vec3::Y * 0.5)))
+                .or_else(|| panicking.iter().copied().find(|f| f.distance(pos) < GROUP_DISTANCE && f.distance(pos) > 0.05));
+            if let Some(from) = why {
+                npc.last_seen = Some(from);
+                npc.set_mode(Mode::Flee);
             }
         }
     }
@@ -2625,6 +2648,11 @@ pub(crate) fn npc_brain(
             }
             Mode::Flee => {
                 let from = npc.last_seen.unwrap_or(ppos);
+                // a civilian starting to run cries for help: a 15 m call the guards hear (the
+                // panic's help bark at `Loudness2`)
+                if npc.mode_timer < dt * 1.5 && !npc.fighter() {
+                    noise.write(Noise { pos, radius: 15.0, kind: NoiseKind::Help });
+                }
                 // its squad's flee point away from the danger, and on along their chain
                 if npc.flee_to.is_none() && npc.mode_timer < dt * 1.5 {
                     npc.flee_to = ai.flee_target(&npc.squad, pos, from);
@@ -3173,6 +3201,12 @@ const GROUP_DISTANCE: f32 = 10.0;
 
 /// The search's locomotion modifier (`SearchSword`, `SearchEmpty`).
 const SEARCH_SPEED: f32 = 0.8;
+
+/// A civilian that may panic now: unarmed, not barred from it, able to run, not already
+/// running, not of Corvo's own people.
+fn civilian_may_panic(npc: &Npc) -> bool {
+    !npc.hostile() && !npc.fighter() && npc.may_panic() && npc.can_flee && npc.mode != Mode::Flee && !npc.is_down() && !dhcook::format::is_player_faction(&npc.faction)
+}
 
 /// Whether a noise sends a searcher running (`m_SearchFromNoiseTweaks[4..7].m_bShouldRun`:
 /// danger, death rattles, cries for help, alarms).
