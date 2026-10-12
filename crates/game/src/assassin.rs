@@ -120,7 +120,7 @@ fn whaler_powers(
                         npc.yaw = flat.x.atan2(flat.z);
                     }
                     npc.attack_t = Some(0.0);
-                    npc.swing = Some(crate::npc::Swing { kind: crate::npc::MoveKind::Short, big: true, len: 0.9, hit: 0.3, reach: COUP_RANGE, lunge: 0.0, no_versus: true });
+                    npc.swing = Some(crate::npc::Swing { kind: crate::npc::MoveKind::Short, big: true, len: 0.9, hit: 0.3, reach: COUP_RANGE, lunge: 0.0, no_versus: true, more: Vec::new() });
                     npc.bark_req = (npc.bark_req.0.wrapping_add(1), "COMBAT_BIG_ATTACK");
                     info!("whaler {} strikes the pulled Corvo ({d:.1} m)", npc.name);
                 }

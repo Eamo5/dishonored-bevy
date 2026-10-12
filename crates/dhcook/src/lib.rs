@@ -3414,6 +3414,28 @@ impl<'a> Cooker<'a> {
         found.then_some(t)
     }
 
+    /// A firearm's or bow's shooting context (its `DisTweaks_NPCFireGun` or `DisTweaks_NPCFireBow`).
+    fn fire_context(&mut self, w: &Obj) -> Option<FireContext> {
+        let c = self.npc_contexts(w).into_iter().find(|c| matches!(c.class().as_str(), "DisTweaks_NPCFireGun" | "DisTweaks_NPCFireBow"))?;
+        let f = |s: &mut Self, n: &str, d: f32| s.tweak_float(&c, n, 0).unwrap_or(d);
+        let ranged = |s: &mut Self, n: &str, d: [f32; 2]| match s.tweak_prop(&c, n, 0, 0) {
+            Some((_, Value::Struct(_, r))) => {
+                let p = Props(r);
+                [p.float("m_fMinValue").unwrap_or(d[0]), p.float("m_fMaxValue").unwrap_or(d[1])]
+            }
+            _ => d,
+        };
+        let cooldown = ranged(self, "m_ContextCooldown", [10.0, 20.0]);
+        let fire = FireContext {
+            range: [f(self, "m_fMinContextRange", 250.0) * UNIT, f(self, "m_fMaxContextRange", 3000.0) * UNIT, f(self, "m_fIdealContextRange", 650.0) * UNIT],
+            angle: f(self, "m_fAllowedAngle", 25.0),
+            cooldown,
+            cooldown_unreachable: ranged(self, "m_ContextCooldownWhenUnreachable", cooldown),
+        };
+        log::debug!("npc fire {}: {fire:?}", w.name());
+        Some(fire)
+    }
+
     /// A grenade weapon's throws (its NPC contexts that throw, as enabled).
     fn grenade_throws(&mut self, w: &Obj) -> Vec<GrenadeThrow> {
         let mut out = Vec::new();
@@ -3518,6 +3540,9 @@ impl<'a> Cooker<'a> {
             }
             if w.class() == "DisTweaks_WepMusicBox" {
                 st.tunes = self.music_box_tunes(&w);
+            }
+            if st.fire.is_none() {
+                st.fire = self.fire_context(&w);
             }
             if st.melee.is_empty() && matches!(w.class().as_str(), "DisTweaks_WepSword" | "DisTweaks_WepSwordOfAssassin" | "DisTweaks_Item_WolfhoundBite") {
                 st.melee = self.melee_moves(&w);
@@ -5420,7 +5445,13 @@ impl<'a> Cooker<'a> {
                 let (t, d) = (at.unwrap_or_else(|| n.float("Time").unwrap_or(0.0)), n.float("Duration").unwrap_or(0.0));
                 match seq.pkg.class_name(no).as_str() {
                     "DisNotify_Trails" if d > 0.0 => m.trails.push((t, d)),
-                    "DishonoredNotify_AttackZone" if m.zone.is_none() => m.zone = Some((t, d)),
+                    "DishonoredNotify_AttackZone" => {
+                        m.zones.push((t, d));
+                        if m.zone.is_none() {
+                            m.zone = Some((t, d));
+                        }
+                    }
+                    "DishonoredNotify_FireProjectile" => m.fires.push(t),
                     "DishonoredNotify_AttackInterruptable" if m.interruptible == 0.0 => m.interruptible = t,
                     "DisNotify_DropItem" => m.drops.push(t),
                     "DishonoredNotify_Ragdoll" if m.ragdoll.is_none() => m.ragdoll = Some(t),
@@ -5451,7 +5482,7 @@ impl<'a> Cooker<'a> {
             }
             m.feet.sort_by(|a, b| a.0.total_cmp(&b.0));
             m.hooks.sort_by(|a, b| a.0.total_cmp(&b.0));
-            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() {
+            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() {
                 self.scene.clip_marks.push(m);
             }
         }

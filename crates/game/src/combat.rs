@@ -950,7 +950,7 @@ fn receive_hits(
             continue;
         }
         // Corvo's own blow about to land: the blades lock
-        if !h.kick && !h.push && versus.npc.is_none() && sword.swing > 0.0 && !sword.hit_done && PLAYER_HIT - sword.swing < VERSUS_ZONE {
+        if !h.kick && !h.push && !h.unblockable && versus.npc.is_none() && sword.swing > 0.0 && !sword.hit_done && PLAYER_HIT - sword.swing < VERSUS_ZONE {
             if let Ok((mut npc, nt)) = npcs.get_mut(h.npc) {
                 if can_lock(&npc, nt, pt.translation, fwd, |d| d.abs() < 0.1) {
                     sword.hit_done = true;
@@ -981,7 +981,7 @@ fn receive_hits(
         // the block's reach (`Twk_Inv_SwordCorvo`'s `m_fBlockAngle` 50 degrees); a perfect parry
         // is a block begun within `m_fTapForPerfectParryWindow` (0.2 s) of the blow
         let facing = fwd.dot(to_npc) > 50f32.to_radians().cos();
-        if sword.blocking && facing {
+        if sword.blocking && facing && !h.unblockable {
             noise.write(Noise { pos: pt.translation, radius: 8.0, kind: NoiseKind::Threatening });
             sfx.write(PostEvent::named("Snd_Imp_Sword_vs_Sword_ak", None));
             // (a tap parry forces a plain block for 0.3 s after: `DishonoredPlayerPawn`'s

@@ -208,6 +208,8 @@ pub struct Npc {
     pub shots: u32,
     /// seconds it stands after a pistol shot, for the shot and putting the gun away
     pub gun_hold: f32,
+    /// until it strikes under a hideout again, with its blade and with its pistol
+    pub under_cd: [f32; 2],
     /// an NPC of an enemy faction it is fighting (`DisTweaks_Faction.m_EnemyFactions`), and
     /// when it next looks for one
     pub foe: Option<Entity>,
@@ -326,11 +328,13 @@ pub struct Arms {
     pub moves: Vec<dhcook::format::MeleeMove>,
     /// a music box's tunes
     pub tunes: Option<dhcook::format::NpcTunes>,
+    /// how its firearm or bow shoots (its fire context)
+    pub fire: Option<dhcook::format::FireContext>,
 }
 
 impl Default for Arms {
     fn default() -> Self {
-        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None }
+        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None }
     }
 }
 
@@ -347,6 +351,8 @@ pub struct Swing {
     /// no sword lock against it (`DisTweaks_MeleeAttack.m_bDisableVersus`: the whalers' coup de
     /// grace)
     pub no_versus: bool,
+    /// its later blows (a clip striking twice), after `hit`
+    pub more: Vec<f32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -360,6 +366,10 @@ pub enum MoveKind {
     Right90,
     Left180,
     Right180,
+    /// under a table: a stab (`Sword_Attack_UnderTable`), a pistol's shots
+    /// (`Sword_Gun_AttackUnderTable`)
+    Under,
+    UnderGun,
 }
 
 impl MoveKind {
@@ -437,6 +447,7 @@ impl Arms {
         a.grenades = st.grenades.clone();
         a.moves = st.melee.clone();
         a.tunes = st.tunes.clone();
+        a.fire = st.fire.clone();
         a
     }
 }
@@ -1387,6 +1398,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         aim: None,
         shots: 0,
         gun_hold: 0.0,
+        under_cd: [0.0; 2],
         foe: None,
         feud_scan: rand::random::<f32>(),
         grab: None,
@@ -2479,7 +2491,7 @@ pub(crate) fn npc_brain(
                 npc.crowded = -0.2;
                 npc.gesture(3);
                 npc.bark_req = (npc.bark_req.0.wrapping_add(1), "PATROL_PERSONAL_SPACE");
-                hit_writer.write(PlayerHit { npc: e, from: pos, damage: 0.0, kick: false, big: false, push: true });
+                hit_writer.write(PlayerHit { npc: e, from: pos, damage: 0.0, kick: false, big: false, push: true, unblockable: false });
             }
         }
         // on its way to ring an alarm bell: nothing else (the bell's slot, Alert, is above
@@ -2656,7 +2668,7 @@ pub(crate) fn npc_brain(
                         npc.yaw = (-to.x).atan2(-to.z);
                         npc.gesture(10);
                         npc.attack_t = Some(0.0);
-                        npc.swing = Some(Swing { kind: MoveKind::Short, big: true, len: 1.0, hit: 0.35, reach: reach + 0.8, lunge: 3.0, no_versus: false });
+                        npc.swing = Some(Swing { kind: MoveKind::Short, big: true, len: 1.0, hit: 0.35, reach: reach + 0.8, lunge: 3.0, no_versus: false, more: Vec::new() });
                         info!("ambush: {} springs at {d:.1} m", npc.name);
                     } else if w > AMBUSH_WAIT || d > 10.0 {
                         npc.ambush = None;
@@ -2670,6 +2682,47 @@ pub(crate) fn npc_brain(
                     npc.gesture(9);
                     info!("ambush: {} lies in wait ({d:.1} m)", npc.name);
                     continue;
+                }
+                // Corvo hiding in a hideout close by (under a table, a bed: `DisHideoutVolume`): it
+                // comes to its way in and strikes under it (`DisTweaks_NPCAttackUnder`:
+                // `Sword_Attack_UnderTable`, which can't be blocked or dodged; its tweak sets no
+                // cooldown, so a 1-2 s pause between) or, its pistol's context run
+                // (`DisTweaks_NPCAttackUnder_Gun`, every 10-20 s), shoots under it
+                // (`Sword_Gun_AttackUnderTable`)
+                for c in npc.under_cd.iter_mut() {
+                    *c -= dt;
+                }
+                let can_under = (npc.has_sword || npc.ranged == 1) && npc.brain_flags & BRAIN_DONT_ATTACK == 0 && npc.attack_t.is_none();
+                // (seen there, or last seen beside it: he went under)
+                let knows = npc.sees_player || npc.last_seen.is_some_and(|ls| ls.distance(ppos) < 2.5);
+                if let Some((way_in, _)) = ai.hideout_access(ppos).filter(|_| can_under && knows) {
+                    let flat = (ppos - pos).with_y(0.0).length();
+                    // (at the way in, or beside him: the blow reaches under to him)
+                    if (flat < 1.9 || pos.with_y(0.0).distance(way_in.with_y(0.0)) < 0.9 && flat < 4.0) && (ppos.y - pos.y).abs() < 1.5 {
+                        // (beside him: it keeps hold of him there, unseen)
+                        npc.mode_timer = npc.mode_timer.min(1.0);
+                        npc.last_seen = Some(ppos);
+                        let gun = npc.ranged == 1 && npc.under_cd[1] <= 0.0;
+                        if npc.stagger <= 0.0 && (gun || npc.has_sword && npc.under_cd[0] <= 0.0) {
+                            let kind = if gun { MoveKind::UnderGun } else { MoveKind::Under };
+                            if gun {
+                                npc.under_cd[1] = 10.0 + rand::random::<f32>() * 10.0;
+                            }
+                            npc.attack_t = Some(0.0);
+                            npc.swing = Some(Swing { kind, big: false, len: if gun { 4.03 } else { 2.7 }, hit: if gun { 1.39 } else { 0.95 }, reach: flat.max(2.0) + 0.5, lunge: 0.0, no_versus: true, more: Vec::new() });
+                            info!("{} strikes under the hideout ({kind:?}, {flat:.1} m)", npc.name);
+                        }
+                        npc.target = None;
+                        let to = (ppos - pos).with_y(0.0);
+                        if to.length() > 0.1 {
+                            npc.yaw = (-to.x).atan2(-to.z);
+                        }
+                        continue;
+                    }
+                    if npc.attack_t.is_none() {
+                        npc.target = Some(way_in);
+                        continue;
+                    }
                 }
                 if npc.sees_player {
                     npc.target = Some(ppos);
@@ -2752,13 +2805,22 @@ pub(crate) fn npc_brain(
                         continue;
                     }
                 }
-                // shooting (`DisTweaks_NPCFireGun`: 2.5-30 m, within 25° of where it faces;
-                // every 1-2 s at a player out of reach, else now and then)
+                // shooting (its fire context, `DisTweaks_NPCFireGun` / `DisTweaks_NPCFireBow`: its
+                // reach, within its allowed angle of where it faces, its cooldowns at Corvo within
+                // reach and out of it; without one, 2.5-30 m, 25 degrees, 10-20 s and 1-2 s, the
+                // wrist bow 3-6 s and 2-5 s)
                 if npc.ranged > 0 && npc.may_shoot() {
                     npc.shoot_cd -= dt;
                     let to = ppos - pos;
                     let unreachable = (ppos.y - pos.y).abs() > 1.6 || d > 6.0;
-                    let facing = to.with_y(0.0).normalize_or_zero().dot(npc.forward()) > 25f32.to_radians().cos();
+                    let ctx = npc.arms.fire.clone().unwrap_or(dhcook::format::FireContext {
+                        range: [2.5, 30.0, 6.5],
+                        angle: 25.0,
+                        cooldown: if npc.ranged == 3 { [3.0, 6.0] } else { [10.0, 20.0] },
+                        cooldown_unreachable: if npc.ranged == 3 { [2.0, 5.0] } else { [1.0, 2.0] },
+                    });
+                    let [near, far, _] = ctx.range;
+                    let facing = to.with_y(0.0).normalize_or_zero().dot(npc.forward()) > ctx.angle.to_radians().cos();
                     // a pistol is aimed before it fires (`DisAISubStateFirePistol`: the first shot
                     // 0.75-1.25 s after it starts aiming, given up once Corvo is lost for a moment)
                     // and, Corvo within its blade's reach, only from a standstill (as roshan's
@@ -2782,7 +2844,7 @@ pub(crate) fn npc_brain(
                     if npc.ranged == 1 {
                         if let Some((left, unseen)) = npc.aim {
                             let unseen = if npc.sees_player { 0.0 } else { unseen + dt };
-                            if unseen > 0.65 || d > 30.0 || npc.stagger > 0.0 || npc.attack_t.is_some() {
+                            if unseen > 0.65 || d > far || npc.stagger > 0.0 || npc.attack_t.is_some() {
                                 npc.aim = None;
                                 npc.shoot_cd = npc.shoot_cd.max(1.0);
                             } else if left > dt {
@@ -2798,7 +2860,7 @@ pub(crate) fn npc_brain(
                             }
                         }
                     }
-                    let ready = npc.shoot_cd <= 0.0 && npc.sees_player && npc.attack_t.is_none() && d > 2.5 && d < 30.0 && npc.stagger <= 0.0;
+                    let ready = npc.shoot_cd <= 0.0 && npc.sees_player && npc.attack_t.is_none() && d > near && d < far && npc.stagger <= 0.0;
                     if npc.ranged == 1 && ready && !aimed && (unreachable || npc.velocity.with_y(0.0).length() < 0.3) {
                         npc.aim = Some((0.75 + rand::random::<f32>() * 0.5, 0.0));
                         info!("{} aims its pistol {d:.1} m away (from {pos:.2}, facing {:.2})", npc.name, npc.yaw);
@@ -2806,21 +2868,15 @@ pub(crate) fn npc_brain(
                         continue;
                     }
                     if ready && (aimed || (npc.ranged != 1 && facing)) {
-                        npc.shoot_cd = if npc.ranged == 3 {
-                            // the wrist bow (`DisTweaks_NPCFireBow` cooldowns 3-6 s, 2-5 s out of reach)
-                            if unreachable { 2.0 + rand::random::<f32>() * 3.0 } else { 3.0 + rand::random::<f32>() * 3.0 }
-                        } else if unreachable {
-                            1.0 + rand::random::<f32>()
-                        } else {
-                            10.0 + rand::random::<f32>() * 10.0
-                        };
+                        let cd = if unreachable { ctx.cooldown_unreachable } else { ctx.cooldown };
+                        npc.shoot_cd = cd[0] + rand::random::<f32>() * (cd[1] - cd[0]).max(0.0);
                         // its accuracy: `m_MaxAccuracy` close, falling to `m_MinAccuracy` at the
                         // end of its reach
-                        let k = ((d - 2.5) / 27.5).clamp(0.0, 1.0);
+                        let k = ((d - near) / (far - near).max(0.1)).clamp(0.0, 1.0);
                         let chance = (npc.arms.accuracy[0] + (npc.arms.accuracy[1] - npc.arms.accuracy[0]) * k) * if npc.ranged == 1 { 1.0 - attrs.npc_gun_miss } else { 1.0 };
                         let hit = rand::random::<f32>() < chance;
                         if hit {
-                            hit_writer.write(PlayerHit { npc: e, from: pos, damage: npc.arms.ranged, kick: false, big: false, push: false });
+                            hit_writer.write(PlayerHit { npc: e, from: pos, damage: npc.arms.ranged, kick: false, big: false, push: false, unblockable: false });
                         }
                         info!("{} shoots {d:.1} m ({})", npc.name, if hit { "hit" } else { "miss" });
                         shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: npc.ranged >= 2 });
@@ -2880,7 +2936,7 @@ pub(crate) fn npc_brain(
                         npc.riposte -= dt;
                         if npc.riposte <= 0.0 && npc.attack_t.is_none() && npc.stagger <= 0.0 && d < 2.6 {
                             npc.attack_t = Some(0.0);
-                            npc.swing = Some(Swing { kind: MoveKind::Short, big: false, len: 0.85, hit: 0.4, reach: 2.6, lunge: 0.0, no_versus: false });
+                            npc.swing = Some(Swing { kind: MoveKind::Short, big: false, len: 0.85, hit: 0.4, reach: 2.6, lunge: 0.0, no_versus: false, more: Vec::new() });
                         }
                     }
                     // Corvo's blow coming: a step aside or back out of it (its blade's
@@ -2916,15 +2972,31 @@ pub(crate) fn npc_brain(
                         // (a kick, and the charge's shoulder, knock him back: no damage,
                         // `m_fAttackDamageMultiplier` 0)
                         let (len, hit_at, reach, kick, big) = npc.swing.as_ref().map(|s| (s.len, s.hit, s.reach, matches!(s.kind, MoveKind::Bash | MoveKind::Jump), s.big)).unwrap_or((0.95, 0.55, 2.3, false, false));
-                        if t_att < hit_at && t_new >= hit_at {
+                        let kind = npc.swing.as_ref().map(|s| s.kind);
+                        let under = matches!(kind, Some(MoveKind::Under | MoveKind::UnderGun));
+                        let blows = std::iter::once(hit_at).chain(npc.swing.as_ref().map(|s| s.more.clone()).unwrap_or_default());
+                        for b in blows {
+                            if !(t_att < b && t_new >= b) {
+                                continue;
+                            }
                             let to = (ppos - pos).with_y(0.0);
                             let in_front = to.normalize_or_zero().dot(npc.forward()) > 0.5;
+                            let shot = kind == Some(MoveKind::UnderGun);
                             if to.length() < reach && (ppos.y - pos.y).abs() < 1.5 && in_front {
-                                hit_writer.write(PlayerHit { npc: e, from: pos, damage: if kick { 0.0 } else { npc.arms.melee }, kick, big, push: false });
+                                let damage = if kick { 0.0 } else if shot { npc.arms.ranged } else { npc.arms.melee };
+                                hit_writer.write(PlayerHit { npc: e, from: pos, damage, kick, big, push: false, unblockable: under });
                             }
-                            noise.write(Noise { pos, radius: 8.0, kind: NoiseKind::Threatening });
+                            if shot {
+                                shots.write(NpcShot { from: pos + Vec3::Y * 0.2, to: ppos, bow: false });
+                                noise.write(Noise { pos, radius: 40.0, kind: NoiseKind::Danger });
+                            } else {
+                                noise.write(Noise { pos, radius: 8.0, kind: NoiseKind::Threatening });
+                            }
                         }
                         npc.attack_t = if t_new > len { None } else { Some(t_new) };
+                        if npc.attack_t.is_none() && kind == Some(MoveKind::Under) {
+                            npc.under_cd[0] = UNDER_SWORD.0 + rand::random::<f32>() * UNDER_SWORD.1;
+                        }
                         if npc.attack_t.is_none() {
                             npc.swing = None;
                         }
@@ -2976,9 +3048,9 @@ pub(crate) fn npc_brain(
                                     if kind.side() != 0.0 {
                                         npc.yaw = (-(ppos - pos).x).atan2(-(ppos - pos).z);
                                     }
-                                    Swing { kind, big: rand::random::<f32>() < m.big, len, hit, reach: if kind == MoveKind::Bash { m.range[1] + 0.3 } else { 2.4 }, lunge, no_versus: false }
+                                    Swing { kind, big: rand::random::<f32>() < m.big, len, hit, reach: if kind == MoveKind::Bash { m.range[1] + 0.3 } else { 2.4 }, lunge, no_versus: false, more: Vec::new() }
                                 }
-                                None => Swing { kind: MoveKind::Short, big: false, len: 0.95, hit: 0.55, reach: 2.3, lunge: 0.0, no_versus: false },
+                                None => Swing { kind: MoveKind::Short, big: false, len: 0.95, hit: 0.55, reach: 2.3, lunge: 0.0, no_versus: false, more: Vec::new() },
                             });
                             if let Some(i) = i {
                                 // (the less aggressive, the longer: x1 at full aggression, x2 at none)
@@ -3375,6 +3447,8 @@ pub struct NpcClips {
     /// the pistol drawn, aimed, fired and put away (`Npc_EliteGuard_Gun_as`: `Sword_Gun_Draw`,
     /// `Sword_Gun_Idle`, `Sword_Gun_Fire`, `Sword_Gun_Undraw`)
     gun: [Option<ClipId>; 4],
+    /// striking under a table, with the blade and with the pistol
+    under: [Option<ClipId>; 2],
     /// its aim offsets (`ADD_Sword_Gun_AimIdle_*`): up, centre and down rows, left to right
     gun_aim: [Option<ClipId>; 9],
 }
@@ -3482,6 +3556,7 @@ impl NpcClips {
                 lib.find("Generic_Assassination_DropRight_Slave"),
             ],
             gun: [lib.find("Sword_Gun_Draw"), lib.find("Sword_Gun_Idle"), lib.find("Sword_Gun_Fire"), lib.find("Sword_Gun_Undraw")],
+            under: [lib.find("Sword_Attack_UnderTable"), lib.find("Sword_Gun_AttackUnderTable")],
             gun_aim: ["UpLeft", "Up", "UpRight", "CenterLeft", "Center", "CenterRight", "DownLeft", "Down", "DownRight"].map(|d| lib.find(&format!("ADD_Sword_Gun_AimIdle_{d}"))),
         };
         (c.idle.is_some() && c.walk.is_some()).then_some(c)
@@ -3527,6 +3602,10 @@ pub struct NpcAnim {
     gun_out: bool,
     shots_seen: u32,
 }
+
+/// The pause before a blade strikes under a hideout again, after its strike's clip (s:
+/// `DisTweaks_NPCAttackUnder` sets no cooldown of its own): base and spread.
+const UNDER_SWORD: (f32, f32) = (1.0, 1.0);
 
 /// How long a character stands after its pistol shot (`Sword_Gun_Fire` 1 s, then `Sword_Gun_Undraw`
 /// 1 s).
@@ -3874,7 +3953,32 @@ fn npc_select_anim(
                     MoveKind::Right90 => pick(&clips.attack_turn[1]),
                     MoveKind::Left180 => pick(&clips.attack_turn[2]),
                     MoveKind::Right180 => pick(&clips.attack_turn[3]),
+                    MoveKind::Under => clips.under[0],
+                    MoveKind::UnderGun => clips.under[1],
                 };
+                // (under a table: each of the clip's blows, its zones' ends or its shots, the clip
+                // as authored)
+                if let (Some(c), Some(s)) = (own.filter(|_| matches!(kind, MoveKind::Under | MoveKind::UnderGun)), npc.swing.as_mut()) {
+                    let marks = st.marks.get(&c);
+                    let blows: Vec<f32> = if kind == MoveKind::UnderGun {
+                        marks.map(|m| m.fires.clone()).unwrap_or_default()
+                    } else {
+                        marks.map(|m| m.zones.iter().map(|(z, d)| (z + d - 0.12).max(*z)).collect()).unwrap_or_default()
+                    };
+                    if let Some((first, rest)) = blows.split_first() {
+                        s.hit = *first;
+                        s.more = rest.to_vec();
+                    }
+                    s.len = lib.duration(c);
+                    if kind == MoveKind::UnderGun {
+                        hang(&mut commands, &st.gun, st.gun_hand);
+                        st.gun_out = true;
+                    }
+                    anim.restart(c, false, 1.0, 0.1);
+                    st.last_mode = npc.mode;
+                    st.last_alert = npc.alert;
+                    continue;
+                }
                 if let Some(c) = own.or_else(|| pick(&clips.attack)) {
                     // a blow with its zone (`DishonoredNotify_AttackZone`): its clip as authored,
                     // the blow landing in the zone's last `m_fDamageZoneMaxTime` (0.12 s: the

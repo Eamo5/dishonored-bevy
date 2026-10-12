@@ -107,7 +107,9 @@ impl AiWorld {
     }
     /// Where a guard looks into the hideout `p` is in (its nearest access point).
     pub fn hideout_access(&self, p: Vec3) -> Option<(Vec3, f32)> {
-        if !self.hideouts.iter().any(|h| inside(h, p)) {
+        // (the volumes are slabs on the floor, half a metre high: the low part of his body
+        // counts, crouched under a table)
+        if !self.hideouts.iter().any(|h| inside(h, p) || inside(h, p - Vec3::Y * 0.45)) {
             return None;
         }
         self.markers

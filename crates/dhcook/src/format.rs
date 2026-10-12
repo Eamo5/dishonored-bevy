@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::Path;
 
 // 103: retain unmatched-rig timelines and zero-track animation sequences.
-pub const SCENE_VERSION: u32 = 117;
+pub const SCENE_VERSION: u32 = 119;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -757,6 +757,12 @@ pub struct ClipMarks {
     /// kill's gasp, a taunt with its gesture), as the voices' dialog hooks
     #[serde(default)]
     pub hooks: Vec<(f32, String)>,
+    /// every blow's zone (`DishonoredNotify_AttackZone`: start, length) and every shot it fires
+    /// (`DishonoredNotify_FireProjectile`), in order
+    #[serde(default)]
+    pub zones: Vec<(f32, f32)>,
+    #[serde(default)]
+    pub fires: Vec<f32>,
 }
 
 /// A character's ragdoll (`PhysicsAsset`): its bodies on its bones, the joints between them.
@@ -916,6 +922,21 @@ pub struct NpcStats {
     /// `DisTweaks_NPCTune_Protection`)
     #[serde(default)]
     pub tunes: Option<NpcTunes>,
+    /// how its firearm or bow shoots (its `DisTweaks_NPCFireGun` / `DisTweaks_NPCFireBow`)
+    #[serde(default)]
+    pub fire: Option<FireContext>,
+}
+
+/// A firearm's or bow's shooting context (`DisTweaks_NPCFireGun`, `DisTweaks_NPCFireBow`): its
+/// reach (`m_fMinContextRange`, `m_fMaxContextRange`, `m_fIdealContextRange`, m), the angle
+/// off its facing it shoots within (`m_fAllowedAngle`, degrees), and its cooldowns
+/// (`m_ContextCooldown`, `m_ContextCooldownWhenUnreachable`, s).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct FireContext {
+    pub range: [f32; 3],
+    pub angle: f32,
+    pub cooldown: [f32; 2],
+    pub cooldown_unreachable: [f32; 2],
 }
 
 /// One of a character's blade moves (its weapon's NPC contexts: `DisTweaks_NPCAttackShort`,

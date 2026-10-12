@@ -1316,6 +1316,21 @@ against the install's own data where it carries them, then implemented independe
   - Possession takes 1.1 s (`m_IntroDuration`) before he has control. During Bend Time,
     possessing at level 2 extends it by 4 s.
   - A rat's bite slows him 40 % for a second.
+- **Shooting contexts.** Each firearm or bow fires by its own context (`DisTweaks_NPCFireGun`,
+  `DisTweaks_NPCFireBow`), cooked with the character: its reach, the angle off its facing it
+  fires within, and its cooldowns at Corvo within reach and out of it. The officers' pistol:
+  2.5-30 m, 25 degrees, every 1-2 s either way (it had been 10-20 s within reach). A tallboy's
+  bow: 4-45 m, 40 degrees, every 1-3 s. An assassin's wrist bow: 2.5-30 m, 25 degrees, 3-6 s
+  (2-5 s out of reach). Accuracy falls from `m_MaxAccuracy` to `m_MinAccuracy` across the reach.
+- **Striking under a hideout.** With Corvo under a table or a bed (`DisHideoutVolume`), a guard who
+  saw him go there comes to its way in (`DisHideoutAccessPoint`) and strikes under it. With the
+  blade it plays `Sword_Attack_UnderTable` (`DisTweaks_NPCAttackUnder`): every stab its clip
+  marks (an officer's two, a watchman's four), which can't be blocked, parried or locked. With an
+  officer's pistol (`DisTweaks_NPCAttackUnder_Gun`, every 10-20 s) it plays
+  `Sword_Gun_AttackUnderTable`, crouching to fire its two shots under. Beside him it keeps hold of
+  him, unseen; the blade pauses 1-2 s between strikes (its tweak sets no cooldown). The volumes
+  are half-metre slabs on the floor, so the low part of his body counts as inside. Clips now
+  keep all their attack zones and shots (`DishonoredNotify_FireProjectile`). Script: `hideout`.
 - **Guards with pistols** aim before they shoot: the shot comes 0.75-1.25 s after they start, and
   they give up once he is out of sight for a moment. Within reach of their blades they only start
   from a standstill.
@@ -1861,8 +1876,8 @@ or jumping onto what holds it up; `DH_GOTO_LOG`), `gototask [N] [S]` (to the N-t
 furthest spot with a floor and a clear line to it), `ledge [LOW] [HIGH] [crouch]` (before the nearest edge Corvo could mantle onto, LOW-HIGH m
 high; `crouch`, only one he'd arrive crouched on; `DH_MANTLE_LOG` logs what blocks a mantle's
 top), `pos` (his position, velocity, footing), `pistol [NAME]` (the nearest hostile character
-carries a pistol and turns on him), `npchere [D]` (the nearest hostile character moved D m
-before him), `stream NAME [out]` (a streamed sublevel loads, or goes), `rise D` (Corvo lifted D m and held there), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `runes N`,
+carries a pistol and turns on him), `npchere [D] [NAME]` (the nearest hostile character, or
+the nearest whose name holds NAME, moved D m before him), `stream NAME [out]` (a streamed sublevel loads, or goes), `rise D` (Corvo lifted D m and held there), `hideout` (Corvo crouched in the nearest hideout volume), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `runes N`,
 `charms N`, `mana`, `ammo TYPE N` (0 bullets .. 6 grenades, 7 sticky), `fx EFFECT [DIST]`,
 `remote EVENT` (a level-script remote event, e.g. `ChangeLvl_fromStreets1_toHub`), `chaos N`,
 `ko [NAME]` (a sleep dart into the nearest, or the nearest whose name or pawn holds NAME),

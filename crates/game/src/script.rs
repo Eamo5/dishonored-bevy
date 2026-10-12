@@ -453,6 +453,32 @@ fn run_script(
             p.noclip = cmd[0] == "fly";
             info!("script: {} to {}", cmd[0], t.translation);
         }
+        "hideout" => {
+            // (tests) hideout: Corvo crouched in the nearest hideout (`DisHideoutVolume`: under a
+            // table, a bed), on its floor
+            let centre = level.as_ref().and_then(|l| {
+                l.scene
+                    .volumes
+                    .iter()
+                    .filter(|v| v.kind == "DisHideoutVolume")
+                    .filter_map(|v| {
+                        let pts: Vec<Vec3> = v.hulls.iter().flatten().map(|q| Vec3::from(*q)).collect();
+                        (!pts.is_empty()).then(|| pts.iter().copied().sum::<Vec3>() / pts.len() as f32)
+                    })
+                    .min_by(|a, b| a.distance(t.translation).total_cmp(&b.distance(t.translation)))
+            });
+            let (Some(c), Ok(ctx), Ok(pe)) = (centre, rapier.single(), player_ent.single()) else { return };
+            let world = bevy_rapier3d::prelude::QueryFilter::default().exclude_collider(pe).exclude_sensors().groups(bevy_rapier3d::prelude::CollisionGroups::new(bevy_rapier3d::prelude::Group::ALL, crate::level::GROUP_WORLD));
+            let floor = ctx.cast_ray(c, Vec3::NEG_Y, 3.0, true, world).map(|(_, toi)| c.y - toi).unwrap_or(c.y - 0.5);
+            t.translation = Vec3::new(c.x, floor + crate::player::CROUCH_HALF + crate::player::RADIUS + 0.04, c.z);
+            p.velocity = Vec3::ZERO;
+            p.noclip = false;
+            p.crouched = true;
+            commands.queue(move |w: &mut World| {
+                w.entity_mut(pe).insert(bevy_rapier3d::prelude::Collider::capsule_y(crate::player::CROUCH_HALF, crate::player::RADIUS));
+            });
+            info!("script: in the hideout at {:.2}", t.translation);
+        }
         "rise" => {
             // (tests) rise D: Corvo lifted D m where he stands, held there (as `fly`)
             t.translation.y += f(1);
@@ -837,16 +863,17 @@ fn run_script(
             }
         }
         "npchere" => {
-            // (tests) npchere [D]: the nearest standing hostile character is moved D m (default
-            // 1.5) before Corvo, on his floor
+            // (tests) npchere [D] [NAME]: the nearest standing hostile character (whose name holds
+            // NAME) is moved D m (default 1.5) before Corvo, on his floor
             let d = if cmd.len() > 1 { f(1) } else { 1.5 };
+            let named = cmd.get(2).cloned().unwrap_or_default();
             let fwd = Quat::from_rotation_y(p.yaw) * Vec3::NEG_Z;
             let feet = t.translation - Vec3::Y * (crate::player::STAND_HALF + crate::player::RADIUS);
             let to = feet + fwd.with_y(0.0).normalize_or_zero() * d + Vec3::Y * (crate::npc::NPC_HALF + crate::npc::NPC_RADIUS);
             let at = t.translation;
             commands.queue(move |w: &mut World| {
                 let mut q = w.query::<(&Npc, &mut Transform)>();
-                if let Some((n, mut nt)) = q.iter_mut(w).filter(|(n, _)| !n.is_down() && n.hostile()).min_by(|a, b| a.1.translation.distance(at).total_cmp(&b.1.translation.distance(at))) {
+                if let Some((n, mut nt)) = q.iter_mut(w).filter(|(n, _)| !n.is_down() && n.hostile() && n.name.contains(&named)).min_by(|a, b| a.1.translation.distance(at).total_cmp(&b.1.translation.distance(at))) {
                     info!("script: {} moved to {to:.2}", n.name);
                     nt.translation = to;
                 }
@@ -854,7 +881,7 @@ fn run_script(
         }
         "pistol" => {
             // (tests) pistol [NAME]: the nearest standing hostile character (whose name holds NAME)
-            // carries a pistol, and fights
+            // carries a pistol, and fights (knowing where Corvo is)
             let at = t.translation;
             let named = cmd.get(1).cloned().unwrap_or_default();
             commands.queue(move |w: &mut World| {
@@ -865,6 +892,7 @@ fn run_script(
                     n.enemy = true;
                     n.alert = crate::npc::Alert::Combat;
                     n.set_mode(crate::npc::Mode::Combat);
+                    n.last_seen = Some(at);
                     info!("script: {} carries a pistol (may shoot {}, flags {:#x})", n.name, n.may_shoot(), n.brain_flags);
                 }
             });
@@ -946,7 +974,7 @@ fn run_script(
                         n.sees_player = true;
                         n.stagger = 0.0;
                         n.yaw = yaw;
-                        n.swing = Some(crate::npc::Swing { kind: crate::npc::MoveKind::Short, big: false, len: 0.85, hit: 0.4, reach: 2.6, lunge: 0.0, no_versus: false });
+                        n.swing = Some(crate::npc::Swing { kind: crate::npc::MoveKind::Short, big: false, len: 0.85, hit: 0.4, reach: 2.6, lunge: 0.0, no_versus: false, more: Vec::new() });
                         n.attack_t = Some(0.4 - 0.18);
                     }
                 });

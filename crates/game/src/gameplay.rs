@@ -234,6 +234,9 @@ pub struct PlayerHit {
     pub big: bool,
     /// a shove out of someone's way (`DisTweaks_NPCPush`): no harm meant
     pub push: bool,
+    /// it can't be blocked, parried or met blade to blade (`DisItemAction.m_bUnblockable`: a
+    /// blow under a table)
+    pub unblockable: bool,
 }
 
 /// Interrupt an NPC (parried, blinded...).
