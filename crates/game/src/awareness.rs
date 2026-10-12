@@ -4,10 +4,15 @@
 //! reached (head track, turn to face, investigate: `fillIn`, a red flash settling white; back
 //! down, `emptyOut`), all three fly off red once he is busted (`busted_1..3`); the fans fade in
 //! as the marker comes up and out once the attention has leaked away (`fadeOut`), or at once
-//! when the character goes down (`quickFadeOut`). Markers stand at 75% and fade out within
-//! 2 m (`m_ScaleVariation`, `m_AlphaVariation`), on enemies and on those the scripts show
-//! (`DisSeqAct_OverrideAwarenessDisplay`). Reaching turn to face plays the detection stinger
-//! (`m_pAwarenessStingerEvent` at `m_AttentionLevelToPlayAwarenessStinger`).
+//! when the character goes down (`quickFadeOut`). Markers shrink with distance (500 /
+//! (tan(fov / 2) x distance in units), at 75%: `m_ScaleVariation`) and fade out within 2 m
+//! (`m_AlphaVariation`), on enemies and on those the scripts show
+//! (`DisSeqAct_OverrideAwarenessDisplay`). A character off the screen has its marker at the
+//! screen's edge, the symbol's second frame turned towards it (mirrored on the left), sized
+//! 50-150% (`m_fMin/MaxScaleOutsideFOV`). A marker shows while its character is seen (on the
+//! screen, or in a clear line from the eye) and for `m_fFadeOutDelay_NowHidden` (1 s) after,
+//! as roshan's r614/blink research decoded the marker's tick. Reaching turn to face plays the
+//! detection stinger (`m_pAwarenessStingerEvent` at `m_AttentionLevelToPlayAwarenessStinger`).
 
 use crate::flash::{Clip, FlashClip, MovieTimelines};
 use crate::npc::{Alert, Npc};
@@ -34,6 +39,12 @@ const FADE_FAR: f32 = 2.0;
 const FADE_NEAR: f32 = 1.5;
 /// `m_fDisplay_NPCMaxDist_NoVision`
 const MAX_DIST: f32 = 100.0;
+/// `m_fFadeOutDelay_NowHidden`: seconds a marker stays once its character is out of sight
+const NOW_HIDDEN: f32 = 1.0;
+/// `m_fMinScaleOutsideFOV`, `m_fMaxScaleOutsideFOV` (percent)
+const OUTSIDE_SCALE: (f32, f32) = (0.5, 1.5);
+/// how far in from the screen's edge an off-screen marker stands (stage units)
+const EDGE: f32 = 70.0;
 /// from the character's middle to its head
 const HEAD: f32 = 0.82;
 /// `fadeOut` and `quickFadeOut` (frames at 30 per second)
@@ -59,6 +70,10 @@ struct Marker {
     leaving: Option<f32>,
     /// the attention level last seen (for the stinger)
     level: u8,
+    /// seconds it still shows with its character out of sight
+    shown_for: f32,
+    /// standing at the screen's edge (the symbol's off-screen frame)
+    edge: bool,
 }
 
 /// (tests: the script's `aware 1,2,3,4,0`) the markers step through these attention levels,
@@ -84,6 +99,7 @@ fn update_markers(
     script_ui: Option<Res<crate::kismet::ScriptUi>>,
     forced: Option<ResMut<ForcedLevels>>,
     settings: Res<crate::settings::Settings>,
+    (rapier, projection): (bevy_rapier3d::prelude::ReadRapierContext, Query<&Projection, With<PlayerCamera>>),
 ) {
     let dt = time.delta_secs();
     let force = forced.and_then(|mut f| {
@@ -181,24 +197,66 @@ fn update_markers(
                 m.lit = level;
             }
         }
-        // where: around the head, at 75% of the stage's scale, faded out close up
+        // where: around the head, shrinking with distance, faded out close up; off the screen at
+        // its edge, turned towards the character
         let head = gt.translation() + Vec3::Y * HEAD;
-        let d = head.distance(cgt.translation());
-        let on_screen = if d <= MAX_DIST && !hud_off { camera.world_to_viewport(cgt, head).ok() } else { None };
-        match on_screen {
-            Some(p) => {
-                node.left = Val::Px(p.x);
-                node.top = Val::Px(p.y);
-                fc.scale = s * SCALE;
-                fc.alpha = ((d - FADE_NEAR) / (FADE_FAR - FADE_NEAR)).clamp(0.0, 1.0);
-                if *vis != Visibility::Inherited {
-                    *vis = Visibility::Inherited;
+        let eye = cgt.translation();
+        let d = head.distance(eye);
+        let size = window_size(w);
+        let on_screen = camera.world_to_viewport(cgt, head).ok().filter(|p| p.x >= 0.0 && p.y >= 0.0 && p.x <= size.x && p.y <= size.y && (head - eye).dot(cgt.forward().as_vec3()) > 0.0);
+        // (seen: on the screen, or in a clear line from the eye)
+        let clear = || {
+            rapier.single().ok().is_some_and(|ctx| {
+                let to = head - eye;
+                let filter = bevy_rapier3d::prelude::QueryFilter::default().groups(bevy_rapier3d::prelude::CollisionGroups::new(bevy_rapier3d::prelude::Group::ALL, crate::level::GROUP_WORLD));
+                ctx.cast_ray(eye, to / d.max(1e-3), (d - 0.3).max(0.0), true, filter).is_none()
+            })
+        };
+        if on_screen.is_some() || clear() {
+            m.shown_for = NOW_HIDDEN;
+        } else {
+            m.shown_for -= dt;
+        }
+        let tan = projection.single().ok().and_then(|p| if let Projection::Perspective(pp) = p { Some((pp.fov * 0.5).tan() * pp.aspect_ratio) } else { None }).unwrap_or(0.767);
+        let fit = 5.0 / (tan * d).max(0.01);
+        if d > MAX_DIST || hud_off || (m.shown_for <= 0.0 && level < 4) {
+            if *vis != Visibility::Hidden {
+                *vis = Visibility::Hidden;
+            }
+        } else {
+            let (p, edge, turn) = match on_screen {
+                Some(p) => (p, false, None),
+                None => {
+                    // the way to it from the screen's middle (behind: as if before)
+                    let local = cgt.affine().inverse().transform_point3(head);
+                    let way = Vec2::new(local.x, -local.y).normalize_or(Vec2::Y);
+                    let half = size * 0.5 - Vec2::splat(EDGE * s);
+                    let k = (half.x / way.x.abs().max(1e-4)).min(half.y / way.y.abs().max(1e-4));
+                    (size * 0.5 + way * k, true, Some(way))
+                }
+            };
+            if edge != m.edge {
+                m.edge = edge;
+                fc.goto_frame("", if edge { 2 } else { 1 }, false);
+            }
+            node.left = Val::Px(p.x);
+            node.top = Val::Px(p.y);
+            match turn {
+                Some(way) => {
+                    // (Flash turns clockwise; the symbol mirrored on the screen's left)
+                    let deg = way.y.atan2(way.x).to_degrees() + 90.0;
+                    fc.m = crate::flash::turn_scale(deg, if way.x < 0.0 { -1.0 } else { 1.0 }, 1.0);
+                    fc.scale = s * fit.clamp(OUTSIDE_SCALE.0, OUTSIDE_SCALE.1);
+                    fc.alpha = 1.0;
+                }
+                None => {
+                    fc.m = crate::flash::IDENTITY;
+                    fc.scale = s * SCALE * fit;
+                    fc.alpha = ((d - FADE_NEAR) / (FADE_FAR - FADE_NEAR)).clamp(0.0, 1.0);
                 }
             }
-            None => {
-                if *vis != Visibility::Hidden {
-                    *vis = Visibility::Hidden;
-                }
+            if *vis != Visibility::Inherited {
+                *vis = Visibility::Inherited;
             }
         }
     }
@@ -215,7 +273,7 @@ fn update_markers(
         }
         fc.scale = s * SCALE;
         commands.spawn((
-            Marker { npc: e, lit: 0, busted: false, leaving: None, level: 0 },
+            Marker { npc: e, lit: 0, busted: false, leaving: None, level: 0, shown_for: 0.0, edge: false },
             fc,
             Node { position_type: PositionType::Absolute, ..default() },
             Visibility::Hidden,
@@ -224,4 +282,9 @@ fn update_markers(
             DespawnOnExit(GameState::InGame),
         ));
     }
+}
+
+/// The window's size in its logical pixels (what the UI nodes are placed in).
+fn window_size(w: &Window) -> Vec2 {
+    Vec2::new(w.width(), w.height())
 }

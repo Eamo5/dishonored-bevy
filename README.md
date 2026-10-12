@@ -439,8 +439,13 @@ fullscreen display, vertical sync and the crosshair.
   attention level reached (head track, turn to face, investigate: a red flash settling
   white), goes dark again as the attention falls, and all three fly off red when he is
   busted; the fans fade in as the marker comes up, out once the attention has leaked away,
-  at once when the character goes down. Markers stand at 75% and vanish within 2 m
-  (`m_ScaleVariation`, `m_AlphaVariation`), show on enemies and on those the scripts name
+  at once when the character goes down. Markers shrink with distance (500 / (tan(fov / 2) x
+  its distance in units), at 75%: `m_ScaleVariation`) and vanish within 2 m
+  (`m_AlphaVariation`). One whose character is off the screen stands at the screen's edge, the
+  symbol's off-screen frame turned towards it (mirrored on the left), sized 50-150%
+  (`m_fMin/MaxScaleOutsideFOV`); a marker shows while its character is seen (on the screen or
+  in a clear line from the eye) and a second after (`m_fFadeOutDelay_NowHidden`), as roshan's
+  r614/blink research decoded the marker's tick. They show on enemies and on those the scripts name
   (`DisSeqAct_OverrideAwarenessDisplay`: Emily seeking at hide-and-seek), and reaching turn to
   face plays the detection stinger (`m_pAwarenessStingerEvent` `Music_Player_Detected` at
   `m_AttentionLevelToPlayAwarenessStinger`). The script's `aware 1,2,3,4,0` steps every
