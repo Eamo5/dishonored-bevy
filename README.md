@@ -1292,7 +1292,11 @@ against the install's own data where it carries them, then implemented independe
     it (seen or not), and being struck. One starting to run cries for help (a 15 m call the
     guards hear).
 - **The alarm bell.** A guard who has found Corvo, within `m_fNPCGoToAlarmCloseness` of a bell,
-  runs to it (the nearest of them; not with Corvo on him) and rings it after `m_fWaitTimeBeforeRing`.
+  runs to it (the nearest of them; not with Corvo on him) and rings it after `m_fWaitTimeBeforeRing`,
+  when the sighting finds it alone (none of its own within `m_fCompanionRange`, 20 m:
+  `TweaksBehavior_TriggerAlarm_Default`'s `m_fAlarmChanceUponSighting_Alone` 1, in a group 0) or it
+  saw one of its own die (`m_fAlarmChanceUponWitnessDeath` 1); a body it comes upon later, or a
+  cry for help, doesn't send it.
   - Its noise (60 m, an alarm) goes out after `m_fAlarmRingDelayBeforeAINoise` (2.5 s).
   - It rings while anyone still hunts him, then every bell waits 10 s.
   - Its spawners far enough from Corvo (`m_fSpawnerMinDistFromPlayer`) come first.

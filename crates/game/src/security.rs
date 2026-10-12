@@ -835,6 +835,9 @@ fn walls(
     devices.drains.extend(spent);
 }
 
+/// How near one of its own keeps a guard from ringing at a sighting (`m_fCompanionRange`, 2000 uu).
+const COMPANION_RANGE: f32 = 20.0;
+
 /// Arc pylons: an intruder in the cylinder makes them charge, then strike.
 #[allow(clippy::too_many_arguments)]
 fn pylons(
@@ -948,6 +951,8 @@ fn alarms(
     let dt = time.delta_secs();
     let ppos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
     *global_cooldown = (*global_cooldown - dt).max(0.0);
+    // (the standing guards, by faction: a ringer's companions)
+    let guards: Vec<(String, Vec3)> = npcs.iter().filter(|(_, n, _)| n.hostile() && !n.is_down()).map(|(_, n, t)| (n.faction.clone(), t.translation)).collect();
     for i in 0..devices.list.len() {
         if devices.list[i].def.kind != "AlarmBell" {
             continue;
@@ -988,7 +993,11 @@ fn alarms(
                 // (`DisBehaviorTriggerAlarm`, as roshan's r614/blink research decoded it)
                 let reach = d.def.params.get("m_fNPCGoToAlarmCloseness").copied().unwrap_or(5000.0) * 0.01;
                 let usable = d.def.params.get("m_fNPCUseCloseness").copied().unwrap_or(150.0) * 0.01 + 0.6;
-                let may_ring = |n: &Npc, at: Vec3| n.hostile() && !n.is_down() && n.alert == Alert::Combat && n.kind == crate::npc::Kind::Guard && at.distance(ppos) > 5.0;
+                // (`TweaksBehavior_TriggerAlarm_Default`: a sighting rings it alone, none of its own
+                // within `m_fCompanionRange` 20 m (`m_fAlarmChanceUponSighting_Alone` 1, in a group
+                // 0), a death it saw rings it either way (`m_fAlarmChanceUponWitnessDeath` 1)
+                let alone = |n: &Npc, at: Vec3| !guards.iter().any(|(f, p)| *f == n.faction && p.distance(at) > 0.05 && p.distance(at) < COMPANION_RANGE);
+                let may_ring = |n: &Npc, at: Vec3| n.hostile() && !n.is_down() && n.alert == Alert::Combat && n.kind == crate::npc::Kind::Guard && at.distance(ppos) > 5.0 && (n.witnessed_death || alone(n, at));
                 // (the one on the way gives up: down, fighting him now, or unable to get there;
                 // then the bell rests a while)
                 if let Some(who) = d.ringer {

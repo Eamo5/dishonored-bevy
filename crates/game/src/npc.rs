@@ -216,6 +216,8 @@ pub struct Npc {
     /// investigating or searching at a run (`TweaksBehavior_Search_Default`'s `m_bShouldRun`:
     /// danger, help, alarm and death-rattle noises, corpses, sightings), else at a walk
     pub search_run: bool,
+    /// it saw one of its own die (the alarm's `m_fAlarmChanceUponWitnessDeath`)
+    pub witnessed_death: bool,
     /// an NPC of an enemy faction it is fighting (`DisTweaks_Faction.m_EnemyFactions`), and
     /// when it next looks for one
     pub foe: Option<Entity>,
@@ -1411,6 +1413,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         taunt_cd: 5.0 + rand::random::<f32>() * 10.0,
         taunt_hold: 0.0,
         search_run: false,
+        witnessed_death: false,
         foe: None,
         feud_scan: rand::random::<f32>(),
         grab: None,
@@ -2170,6 +2173,8 @@ pub(crate) fn npc_perception(
     let difficulty = settings.difficulty.min(3) as usize;
     let log = std::env::var("DH_ATTN_LOG").is_ok();
     let body_positions: Vec<(Entity, Vec3)> = npcs.iter().filter(|(_, n, _)| n.is_down() && !n.corpse).map(|(e, _, t)| (e, t.translation)).collect();
+    // (deaths just now: the bodies of the last two seconds)
+    let fresh: Vec<(Entity, Vec3)> = npcs.iter().filter(|(_, n, _)| n.mode == Mode::Dead && !n.corpse && n.corpse_age < 2.0).map(|(e, _, t)| (e, t.translation)).collect();
     // (for the civilians: the guards fighting, the others panicking)
     let fighting: Vec<Vec3> = npcs.iter().filter(|(_, n, _)| n.mode == Mode::Combat && n.hostile() && !n.is_down()).map(|(_, _, t)| t.translation).collect();
     let panicking: Vec<Vec3> = npcs.iter().filter(|(_, n, _)| n.mode == Mode::Flee && !n.fighter() && !n.is_down()).map(|(_, _, t)| t.translation).collect();
@@ -2307,6 +2312,20 @@ pub(crate) fn npc_perception(
                 npc.attn_level = if npc.alert == Alert::Combat { 4 } else if npc.awareness >= 0.35 { 3 } else if npc.awareness > 0.05 { 1 } else { 0 };
                 npc.attn_fill = npc.awareness;
             }
+            // a death before its eyes (fighting too)
+            if !npc.witnessed_death {
+                for (_, b) in &fresh {
+                    let d = b.distance(eye);
+                    if d < 14.0 && (*b - eye).normalize_or_zero().dot(fwd) > 0.3 {
+                        let dir = (*b + Vec3::Y * 0.2 - eye).normalize_or_zero();
+                        let filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+                        if ctx.cast_ray(eye, dir, d - 0.3, true, filter).is_none() {
+                            npc.witnessed_death = true;
+                            break;
+                        }
+                    }
+                }
+            }
             // discover bodies
             if !npc.saw_body && npc.alert != Alert::Combat {
                 for (body, b) in &body_positions {
@@ -2316,6 +2335,8 @@ pub(crate) fn npc_perception(
                         let filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
                         if ctx.cast_ray(eye, dir, d - 0.3, true, filter).is_none() {
                             npc.saw_body = true;
+                            // (one it saw die, not one it came upon)
+                            npc.witnessed_death |= fresh.iter().any(|f| f.0 == *body);
                             // the mission statistics count each body found once
                             if found.insert(*body) {
                                 stats.bodies_found += 1;
