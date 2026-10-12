@@ -1432,6 +1432,13 @@ fn run_script(
         "rmb" => script.held.push((Input::Mouse(MouseButton::Right), 0.05)),
         "rmbhold" => script.held.push((Input::Mouse(MouseButton::Right), f(1))),
         "mmbhold" => script.held.push((Input::Mouse(MouseButton::Middle), f(1))),
+        "scroll" => {
+            // (tests) scroll N: the mouse wheel turned N notches (up positive)
+            let y = f(1);
+            commands.queue(move |w: &mut World| {
+                w.write_message(bevy::input::mouse::MouseWheel { unit: bevy::input::mouse::MouseScrollUnit::Line, x: 0.0, y, window: Entity::PLACEHOLDER, phase: bevy::input::touch::TouchPhase::Moved });
+            });
+        }
         "key" | "hold" => {
             if let Some(k) = cmd.get(1).and_then(|s| key_of(s)) {
                 let secs = if cmd[0] == "hold" { f(2) } else { 0.05 };

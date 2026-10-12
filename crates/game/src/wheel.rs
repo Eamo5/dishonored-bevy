@@ -43,6 +43,13 @@ pub struct Wheel {
     daud: bool,
 }
 
+impl Wheel {
+    /// What it points at (open).
+    pub fn hovered(&self) -> Option<Power> {
+        self.hover.filter(|_| self.open).and_then(|i| self.items.get(i)).map(|(p, _)| *p)
+    }
+}
+
 /// The original's time scale while the wheel is open.
 pub const WHEEL_TIME: f32 = 0.05;
 

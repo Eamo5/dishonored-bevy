@@ -518,6 +518,20 @@ fullscreen display, vertical sync and the crosshair.
   their discs at 75% on the 500-wide circle's rim with their counts, the separators between
   the groups, the indicator turned to the one pointed at (dark on its light disc), its
   illustration (`item_schema`) and name in the middle.
+- **The number keys' shortcuts and their dock** (`powers::Shortcuts`, `dock.rs`): ten slots, as
+  the original's power wheel keeps them (roshan's r614/blink research). Those he hasn't set
+  himself fill in turn from `m_AutoAssign_KeyboardItemOrder` by kind: weapons 1-5, the Heart 6,
+  powers 7-0, refilled each time the wheel or the dock comes up. A number key with the wheel
+  open puts what it points at on that slot, or takes it off (`UI_P_AssignShortcut` /
+  `UI_P_UnassignShortcut`); alone it shows the dock and takes the slot as it's let go. The
+  mouse wheel steps through the filled slots from the last taken and takes the one shown 0.33 s
+  after the last step (`m_fShortcutsInputTimer`). The dock is the movie's `shPC_` with its ten
+  `shPC_item`s (keys, discs, art, counts; an empty slot's broken ring), laid out and animated
+  as its own ActionScript has it (`PC_ShortcutsHandler`, `MovieClipCreator`, disassembled from
+  the movie): with the wheel it rises 40 under it, alone 10 with the slot shown at 110 %; a
+  slot taken, the others fade, it glows and rises 20, and the dock fades and drops. The keys
+  and counts are drawn as text (the clip's round key backing is a vector shape). `scroll N`
+  turns the mouse wheel in test scripts.
 - **The crosshair** (`crosshair.rs`, the HUD movie's crosshair symbols): the original dot,
   and over something to use the HUD tweak's `m_InteractionCrosshairSettings` symbol by
   `eCrossHairStatus` (a hand to take, a note with an eye to read, a hand to carry, a padlock

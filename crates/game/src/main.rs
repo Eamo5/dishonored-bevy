@@ -116,6 +116,7 @@ mod skip;
 mod softshadow;
 mod tallboy;
 mod plague;
+mod dock;
 mod pickuplog;
 mod targetcard;
 mod gauges;
@@ -244,6 +245,7 @@ fn main() -> AppExit {
         .add_plugins((menu::MenuPlugin, save::SavePlugin, settings::SettingsPlugin, mission::MissionPlugin, ppgraph::PostGraphPlugin, watchtower::WatchTowerPlugin, highlight::HighlightPlugin, stealth::StealthPlugin, hudfx::HudFxPlugin, skip::SkipPlugin, pickuplog::PickupLogPlugin, targetcard::TargetCardPlugin, gauges::GaugesPlugin, zones::ZonesPlugin))
         .add_plugins((flash::FlashPlugin, awareness::AwarenessPlugin, location::LocationPlugin, crosshair::CrosshairPlugin, intwindow::IntWindowPlugin, hudtext::HudTextPlugin, softshadow::SoftShadowPlugin, tallboy::TallboyPlugin, plague::PlaguePlugin, objnotify::ObjNotifyPlugin, oxygen::OxygenPlugin, playerstate::PlayerStatePlugin, grenadeind::GrenadeIndPlugin, prompts::PromptsPlugin, tutwindow::TutWindowPlugin))
         .add_plugins((gamedata::GameDataPlugin, journal::JournalPlugin, possession::PossessionPlugin, store::StorePlugin, swarm::SwarmPlugin, gadgets::GadgetsPlugin, campaign::CampaignPlugin, heart::HeartPlugin, security::SecurityPlugin, wheel::WheelPlugin))
+        .add_plugins(dock::DockPlugin)
         .add_systems(Startup, powers::configure_xray_gizmos)
         .run()
 }

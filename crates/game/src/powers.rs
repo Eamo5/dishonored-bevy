@@ -23,6 +23,7 @@ pub struct PowersPlugin;
 impl Plugin for PowersPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Powers>()
+            .init_resource::<Shortcuts>()
             .init_resource::<ProjectileRestore>()
             .add_message::<PowerUsed>()
             .add_message::<PowerEquipped>()
@@ -709,6 +710,81 @@ fn spawn_blink_marker(mut commands: Commands) {
     commands.spawn((BlinkMarker, Transform::default(), Visibility::Hidden, DespawnOnExit(GameState::InGame)));
 }
 
+/// The number keys' ten slots, as the original's power wheel keeps them
+/// (`DisGFxMoviePlayerPowerWheel`, decoded by roshan's r614/blink research): each holds an item
+/// or nothing. Those the player hasn't set (or emptied) himself take, in turn from the first,
+/// the first item of the auto-assignment order (`m_AutoAssign_KeyboardItemOrder`: the
+/// shortcut order) that he has, that no slot holds and that is of the slot's kind
+/// (`m_AutoAssign_KeyboardShortcut`: weapons 1-5, the Heart 6, powers 7-0).
+#[derive(Resource, Default)]
+pub struct Shortcuts {
+    pub slots: [Option<Power>; 10],
+    /// the slots he set (or emptied) himself (`m_ShortcutPlayerAssignFlags`)
+    pub mine: [bool; 10],
+    /// the slot he last took (`m_LastUsedShortcutIndex`): the mouse wheel steps on from it
+    pub last: usize,
+    /// a number key held: its slot, shown on the dock, taken as it's let go
+    pub held: Option<usize>,
+    /// the mouse wheel stepping: the slot shown, and how long before it's taken
+    pub stepping: Option<(usize, f32)>,
+}
+
+/// The mouse wheel's steps settle this long after the last (`m_fShortcutsInputTimer`).
+const SHORTCUT_SETTLE: f32 = 0.33;
+
+impl Shortcuts {
+    /// The kind of item a slot takes: 0 weapons, 1 the Heart, 2 powers.
+    fn kind(slot: usize) -> u8 {
+        match slot {
+            0..=4 => 0,
+            5 => 1,
+            _ => 2,
+        }
+    }
+    fn kind_of(p: Power) -> u8 {
+        if p == Power::Heart {
+            1
+        } else if p.key().is_some() {
+            2
+        } else {
+            0
+        }
+    }
+    /// Empty the slots of what he no longer has, then fill the free ones (`SetShortcuts`).
+    pub fn refresh(&mut self, stats: &PlayerStats, daud: bool) {
+        for s in self.slots.iter_mut() {
+            if s.is_some_and(|p| !p.owned(stats)) {
+                *s = None;
+            }
+        }
+        let order = shortcut_order(daud);
+        for i in 0..10 {
+            if self.slots[i].is_some() || self.mine[i] {
+                continue;
+            }
+            let pick = order.iter().copied().find(|p| Shortcuts::kind_of(*p) == Shortcuts::kind(i) && p.owned(stats) && !self.slots.contains(&Some(*p)));
+            self.slots[i] = pick;
+        }
+    }
+    /// Put an item on a slot (or take it off, when it's there already): his own choice.
+    pub fn assign(&mut self, slot: usize, p: Power) -> bool {
+        let on = self.slots[slot] != Some(p);
+        for s in self.slots.iter_mut() {
+            if *s == Some(p) {
+                *s = None;
+            }
+        }
+        self.slots[slot] = on.then_some(p);
+        self.mine[slot] = true;
+        on
+    }
+    /// The next slot holding something, on from `from` the given way (round the end).
+    fn step(&self, from: usize, way: i32) -> Option<usize> {
+        (1..=10).map(|k| (from as i32 + way * k).rem_euclid(10) as usize).find(|i| self.slots[*i].is_some())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn select_power(
     keys: Res<ButtonInput<KeyCode>>,
     scroll: Res<AccumulatedMouseScroll>,
@@ -718,12 +794,18 @@ fn select_power(
     mut sfx: MessageWriter<PostEvent>,
     (possession, choice, paused): (Res<crate::possession::Possession>, Res<crate::choice::Choice>, Res<crate::hud::Paused>),
     data: Res<Data>,
+    (mut slots, wheel, time): (ResMut<Shortcuts>, Res<crate::wheel::Wheel>, Res<Time>),
 ) {
     // the number keys answer a choice on screen
     if paused.0 || possession.host.is_some() || choice.pending.is_some() {
         return;
     }
     let list = shortcuts(&stats, data.is_daud());
+    // (filled again as the wheel or the dock comes up, not while the wheel is open:
+    // `SetShortcuts` on each start)
+    if !wheel.open {
+        slots.refresh(&stats, data.is_daud());
+    }
     let mut sel = None;
     let digits = [
         KeyCode::Digit1,
@@ -739,16 +821,42 @@ fn select_power(
     ];
     for (i, k) in digits.iter().enumerate() {
         if keys.just_pressed(*k) {
-            if let Some(p) = list.get(i) {
-                sel = Some(*p);
+            if let Some(p) = wheel.hovered() {
+                // the wheel open: what it points at goes to the slot (or leaves it)
+                let on = slots.assign(i, p);
+                sfx.write(PostEvent::named(if on { "UI_P_AssignShortcut" } else { "UI_P_UnassignShortcut" }, None));
+            } else {
+                // shown on the dock while held, taken as it's let go
+                slots.held = Some(i);
+                slots.stepping = None;
+            }
+        }
+        if keys.just_released(*k) && slots.held == Some(i) {
+            slots.held = None;
+            if let Some(p) = slots.slots[i] {
+                sel = Some(p);
+                slots.last = i;
             }
         }
     }
-    if scroll.delta.y.abs() > 0.0 && !list.is_empty() {
-        let cur = list.iter().position(|p| *p == powers.selected).map(|i| i as i32).unwrap_or(-1);
-        let n = list.len() as i32;
-        let next = (cur + if scroll.delta.y > 0.0 { -1 } else { 1 }).rem_euclid(n);
-        sel = Some(list[next as usize]);
+    // the mouse wheel steps through the filled slots from the last taken (not with a key held
+    // or the wheel open), each step putting off the choice; it settles on the one shown
+    if scroll.delta.y.abs() > 0.0 && !wheel.open && slots.held.is_none() {
+        let way = if scroll.delta.y > 0.0 { -1 } else { 1 };
+        let from = slots.stepping.map(|(s, _)| s).unwrap_or(slots.last);
+        if let Some(next) = slots.step(from, way) {
+            slots.stepping = Some((next, SHORTCUT_SETTLE));
+        }
+    }
+    if let Some((slot, left)) = slots.stepping {
+        let left = left - time.delta_secs();
+        if left <= 0.0 {
+            slots.stepping = None;
+            slots.last = slot;
+            sel = slots.slots[slot];
+        } else {
+            slots.stepping = Some((slot, left));
+        }
     }
     // lost what was held (a fresh map, a script took it), or an empty hand and something to hold
     if sel.is_none() && ((powers.selected != Power::Empty && !powers.selected.owned(&stats)) || (powers.selected == Power::Empty && !list.is_empty())) {
@@ -1931,15 +2039,49 @@ mod elixir_input_tests {
             .init_resource::<PlayerStats>().init_resource::<Powers>().init_resource::<Data>()
             .init_resource::<crate::possession::Possession>().init_resource::<crate::choice::Choice>()
             .insert_resource(crate::hud::Paused(true))
+            .init_resource::<Shortcuts>().init_resource::<crate::wheel::Wheel>().init_resource::<Time>()
             .add_message::<PowerEquipped>().add_message::<PostEvent>().add_systems(Update, select_power);
         app.world_mut().resource_mut::<PlayerStats>().weapons = true;
         app.world_mut().resource_mut::<Powers>().selected = Power::Empty;
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Digit1);
         app.update();
         assert_eq!(app.world().resource::<Powers>().selected, Power::Empty);
+        // (back in the game: the key pressed and let go takes its slot, the pistol's)
         app.world_mut().resource_mut::<crate::hud::Paused>().0 = false;
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::Digit1);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Digit1);
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::Digit1);
         app.update();
         assert_eq!(app.world().resource::<Powers>().selected, Power::Pistol);
+        assert_eq!(app.world().resource::<Shortcuts>().slots[5], Some(Power::Heart));
+    }
+
+    #[test]
+    fn shortcuts_fill_by_kind_and_keep_his_own() {
+        let mut stats = PlayerStats::default();
+        stats.weapons = true;
+        stats.powers.insert("Blink".into(), 1);
+        let mut sc = Shortcuts::default();
+        sc.refresh(&stats, false);
+        // weapons on 1-5, the Heart on 6, powers on 7-0
+        assert_eq!(sc.slots[0], Some(Power::Pistol));
+        assert_eq!(sc.slots[1], Some(Power::Crossbow));
+        assert_eq!(sc.slots[5], Some(Power::Heart));
+        assert_eq!(sc.slots[6], Some(Power::Blink));
+        assert_eq!(sc.slots[7], None);
+        // put on another slot by him: off its old one, and kept there
+        assert!(sc.assign(9, Power::Blink));
+        sc.refresh(&stats, false);
+        assert_eq!(sc.slots[9], Some(Power::Blink));
+        assert_eq!(sc.slots[6], None);
+        // taken off his slot: it stays empty
+        assert!(!sc.assign(9, Power::Blink));
+        sc.refresh(&stats, false);
+        assert_eq!(sc.slots[9], None);
     }
 
     #[test]
