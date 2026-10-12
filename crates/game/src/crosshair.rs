@@ -75,16 +75,17 @@ fn info_line(
     focus: Res<crate::interact::InteractFocus>,
     level: Option<Res<crate::level::LevelInfo>>,
     npcs: Query<&crate::npc::Npc>,
-    mut line: Query<(&mut Text, &mut TextFont, &mut Node, &mut Visibility), With<InfoText>>,
+    mut line: Query<(&mut Text, &mut TextFont, &mut Node, &mut Visibility, &mut crate::softshadow::SoftShadow), With<InfoText>>,
 ) {
-    let Ok((mut t, mut f, mut n, mut v)) = line.single_mut() else {
+    let Ok((mut t, mut f, mut n, mut v, mut sh)) = line.single_mut() else {
         if let Ok(h) = hud.single() {
             commands.spawn((
                 InfoText,
                 Text::new(""),
                 TextFont::default(),
                 TextColor(INFO_COLOR),
-                TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(23.0 / 255.0, 25.0 / 255.0, 28.0 / 255.0, 0.85) },
+                // (its field's drop shadow: blurred 8, strength 1.2)
+                crate::softshadow::SoftShadow::flash(crate::hudtext::SHADOW, 8.0, 0.0, 1.2, 1.0),
                 TextLayout::new(Justify::Center, bevy::text::LineBreak::NoWrap),
                 Node { position_type: PositionType::Absolute, ..default() },
                 Visibility::Hidden,
@@ -117,6 +118,10 @@ fn info_line(
     let fs = bevy::text::FontSize::Px(INFO_SIZE * s);
     if f.font_size != fs {
         f.font_size = fs;
+    }
+    let want = crate::softshadow::SoftShadow::flash(crate::hudtext::SHADOW, 8.0, 0.0, 1.2, s);
+    if *sh != want {
+        *sh = want;
     }
 }
 

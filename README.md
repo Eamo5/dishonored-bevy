@@ -522,8 +522,16 @@ fullscreen display, vertical sync and the crosshair.
   the HUD movie's fields are, scaled with its stage — the subtitles (the body font at 24,
   `#e8f7db`, centred in a box from 582 units down), the game messages above them (from 522
   down, `#e3f2d6`) and the level scripts' tutorial above those (`TutorialMessage`: one at a
-  time, fading in 0.35 s as it settles from 110%, out in 0.15 s); their dark drop-shadow
-  filter is approximated. Script: `message TEXT`, `tutorial TEXT`.
+  time, fading in 0.35 s as it settles from 110%, out in 0.15 s). Their fields' dark Flash
+  drop shadows (the subtitles' blurred 8 at strength 1.9, the messages' 5 at 1.5, the
+  tutorial's 5 at 1.2, a unit off) are drawn soft (`softshadow.rs`): faint copies of the text
+  on two rings a third and two thirds of the blur out, beneath it, building up where the
+  letters are close as the blurred alpha does, and fading with the text. The crosshair's
+  information line has its own (8 at 1.2), and so do the Flash movies' text fields whose
+  placements carry a drop shadow or glow filter (`PlaceObject3`'s filter list, cooked into the
+  timelines: the HUD's pickup log, objective markers, interaction window, tutorial window and
+  objectives list; the journal's and the shop's), at the field's scale on the screen. Script:
+  `message TEXT`, `tutorial TEXT`.
 - **Stance** (`playerstate.rs`, the HUD movie's `hud_icPlayerStates`, by
   `EDisUIPlayerState`): crouched, a figure crouching (or creeping, moving) plays in from
   standing at the bottom left over its swirl backing, and back up as he stands.

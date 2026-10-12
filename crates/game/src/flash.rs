@@ -140,6 +140,8 @@ struct Placed {
     child: Option<Box<Clip>>,
     /// attached from code (`attachMovie`): kept through the timeline's changes
     attached: bool,
+    /// its drop shadow (or glow) filter: over what it holds
+    shadow: Option<dhcook::format::FlashShadow>,
 }
 
 /// A placed instance's Flash properties: `_x`, `_y`, `_xscale` / `_yscale` (1 for 100),
@@ -294,6 +296,8 @@ pub struct TextLeaf {
     pub clip: Option<[f32; 4]>,
     /// that mask itself (its frame: turned to the field, it is cut as drawn)
     pub(crate) mask: Option<Mask>,
+    /// its drop shadow filter (or the nearest clip's it is in)
+    pub shadow: Option<dhcook::format::FlashShadow>,
 }
 
 /// The text fields met walking a clip, and the path walked to; the pictures loaded into its
@@ -307,6 +311,8 @@ struct TextWalk<'a> {
     masks: Vec<(String, String, Mask, Option<[f32; 4]>)>,
     clip: Option<[f32; 4]>,
     mask: Option<Mask>,
+    /// the drop shadow of the clip walked in
+    shadow: Option<dhcook::format::FlashShadow>,
 }
 
 /// A mask: the inverse of its frame (from the root's space) and its rectangle in that frame.
@@ -416,7 +422,7 @@ impl Clip {
                 TlOp::Remove(d) => {
                     self.list.remove(d);
                 }
-                TlOp::Place { depth, moved, id, name, m, cx, clip } => {
+                TlOp::Place { depth, moved, id, name, m, cx, clip, filtered, shadow } => {
                     let existing = if *moved { self.list.remove(depth) } else { None };
                     let mut p = match (existing, id) {
                         // the same character moved (or a new one put in its place, keeping
@@ -435,6 +441,7 @@ impl Clip {
                             mask: None,
                             child: tl.sprites.contains_key(id).then(|| Box::new(Clip::new(tl, *id))),
                             attached: false,
+                            shadow: None,
                         },
                         (None, None) => continue,
                     };
@@ -449,6 +456,9 @@ impl Clip {
                     }
                     if clip.is_some() {
                         p.mask = *clip;
+                    }
+                    if *filtered {
+                        p.shadow = *shadow;
                     }
                     self.list.insert(*depth, p);
                 }
@@ -588,14 +598,14 @@ impl Clip {
     pub fn attach(&mut self, tl: &Timelines, sprite: u16, name: &str, m: Mat) {
         let depth = self.list.keys().next_back().map_or(0, |d| d + 1).max(16384);
         let child = tl.sprites.contains_key(&sprite).then(|| Box::new(Clip::new(tl, sprite)));
-        self.list.insert(depth, Placed { id: sprite, name: Some(name.to_string()), m, cx: NO_CX, mask: None, child, attached: true });
+        self.list.insert(depth, Placed { id: sprite, name: Some(name.to_string()), m, cx: NO_CX, mask: None, child, attached: true, shadow: None });
     }
 
     /// `createEmptyMovieClip`: a new clip with nothing in it, to attach to.
     pub fn attach_empty(&mut self, name: &str, m: Mat) {
         let depth = self.list.keys().next_back().map_or(0, |d| d + 1).max(16384);
         let child = Clip { sprite: u16::MAX, frame: 0, playing: false, visible: true, list: BTreeMap::new() };
-        self.list.insert(depth, Placed { id: u16::MAX, name: Some(name.to_string()), m, cx: NO_CX, mask: None, child: Some(Box::new(child)), attached: true });
+        self.list.insert(depth, Placed { id: u16::MAX, name: Some(name.to_string()), m, cx: NO_CX, mask: None, child: Some(Box::new(child)), attached: true, shadow: None });
     }
 
     /// The character an instance here shows.
@@ -692,7 +702,7 @@ impl Clip {
                 Some((clip.clone(), mask.clone(), Mask { inv: invert(&mm), rect }, on))
             })
             .collect();
-        let mut w = TextWalk { path: String::new(), out: texts, images, masks, clip: None, mask: None };
+        let mut w = TextWalk { path: String::new(), out: texts, images, masks, clip: None, mask: None, shadow: None };
         self.masked_leaves(tl, m, cx, None, out, Some(&mut w));
     }
 
@@ -751,14 +761,17 @@ impl Clip {
                             w.path.truncate(len);
                             continue;
                         }
-                        let was = (w.clip, w.mask);
+                        let was = (w.clip, w.mask, w.shadow);
                         if let Some(k) = w.masks.iter().find(|k| k.0 == w.path) {
                             mask = Some(k.2);
                             w.clip = k.3;
                             w.mask = Some(k.2);
                         }
+                        if p.shadow.is_some() {
+                            w.shadow = p.shadow;
+                        }
                         c.masked_leaves(tl, &pm, &pc, mask, out, Some(&mut *w));
-                        (w.clip, w.mask) = was;
+                        (w.clip, w.mask, w.shadow) = was;
                         // (a picture loaded into it, over what it has)
                         if let Some(img) = w.images.get(&w.path).filter(|_| c.visible) {
                             let l = Leaf { bitmap: 0, size: img.size, m: concat(&pm, &[1.0, 0.0, 0.0, 1.0, img.at.x, img.at.y]), cx: pc, uv: [0.0, 0.0, 1.0, 1.0], repeat: false, image: Some(img.image.clone()), mask: None };
@@ -779,7 +792,7 @@ impl Clip {
                 if let Some(w) = txt.as_deref_mut() {
                     let name = p.name.as_deref().unwrap_or(t.var.as_str());
                     let path = if w.path.is_empty() { name.to_string() } else { format!("{}.{name}", w.path) };
-                    w.out.push(TextLeaf { id: p.id, path, m: pm, cx: pc, clip: w.clip, mask: w.mask });
+                    w.out.push(TextLeaf { id: p.id, path, m: pm, cx: pc, clip: w.clip, mask: w.mask, shadow: p.shadow.or(w.shadow) });
                 }
                 continue;
             }
@@ -1225,7 +1238,7 @@ fn play_clips(
     mut commands: Commands,
     mut clips: Query<(Entity, &mut FlashClip, Option<&Children>, &InheritedVisibility)>,
     mut leaves: Query<(&mut Node, &mut UiTransform, &MaterialNode<FlashFill>, &mut Visibility), (With<LeafNode>, Without<TextNode>)>,
-    mut text_nodes: Query<(&mut Node, &mut UiTransform, &mut Visibility, &mut TextNode, &mut Text, &mut TextColor, &mut TextLayout, &mut TextFont, Option<&Children>), Without<LeafNode>>,
+    mut text_nodes: Query<(&mut Node, &mut UiTransform, &mut Visibility, &mut TextNode, &mut Text, &mut TextColor, &mut TextLayout, &mut TextFont, Option<&Children>, Option<&crate::softshadow::SoftShadow>), Without<LeafNode>>,
     mut spans: Query<(&mut TextSpan, &mut TextColor), Without<TextNode>>,
     mut boxes: Query<(&mut Node, &mut Visibility, Option<&Children>), (With<TextBox>, Without<TextNode>, Without<LeafNode>)>,
     (mut mats, mut ui, mut images, fonts): (ResMut<Assets<FlashFill>>, ResMut<crate::ui_images::UiImages>, ResMut<Assets<Image>>, Res<crate::ui_fonts::UiFonts>),
@@ -1480,6 +1493,16 @@ fn play_clips(
                 _ => Justify::Left,
             };
             let layout = TextLayout::new(justify, if wrap { bevy::text::LineBreak::WordBoundary } else { bevy::text::LineBreak::NoWrap });
+            // its drop shadow filter, at its scale on the screen (`softshadow`)
+            let shadow = t.shadow.map(|f| {
+                let k = sx.abs().max(1e-3);
+                crate::softshadow::SoftShadow {
+                    color: Color::srgba(f.color[0], f.color[1], f.color[2], f.color[3]),
+                    blur: Vec2::new(f.blur[0], f.blur[1]) * k,
+                    offset: Vec2::new(f.offset[0], f.offset[1]) * k,
+                    strength: f.strength,
+                }
+            });
             // (within its box: a mask's rectangle, else the clip's origin)
             let (ox, oy) = t.clip.map_or((0.0, 0.0), |r| (r[0], r[1]));
             let boxed = |n: &mut Node| {
@@ -1516,8 +1539,14 @@ fn play_clips(
                     *bv = Visibility::Inherited;
                 }
                 let Some(k) = bkids.and_then(|c| c.first().copied()) else { continue };
-                let Ok((mut n, mut tf, mut v, mut tn, mut text, mut tc, mut tl_, mut tfont, kids)) = text_nodes.get_mut(k) else { continue };
+                let Ok((mut n, mut tf, mut v, mut tn, mut text, mut tc, mut tl_, mut tfont, kids, had)) = text_nodes.get_mut(k) else { continue };
                 place(&mut n, &mut tf);
+                if had != shadow.as_ref() {
+                    match shadow {
+                        Some(sh) => commands.entity(k).insert(sh),
+                        None => commands.entity(k).remove::<crate::softshadow::SoftShadow>(),
+                    };
+                }
                 if *v != Visibility::Inherited {
                     *v = Visibility::Inherited;
                 }
@@ -1583,6 +1612,9 @@ fn play_clips(
                     .id();
                 for s in p.iter().skip(1) {
                     commands.spawn((TextSpan::new(s.0.clone()), font.clone(), TextColor(tint(s.1.unwrap_or(field))), ChildOf(k)));
+                }
+                if let Some(sh) = shadow {
+                    commands.entity(k).insert(sh);
                 }
             }
         }

@@ -3256,8 +3256,25 @@ pub enum TlOp {
         cx: Option<[f32; 8]>,
         /// a mask over the depths up to this one
         clip: Option<u16>,
+        /// its filters set (`PlaceObject3`'s filter list: kept as they were when not)
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        filtered: bool,
+        /// its drop shadow or glow filter, the first of them
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shadow: Option<FlashShadow>,
     },
     Remove(u16),
+}
+
+/// A placement's drop shadow (a glow: one with no distance) filter: its colour (RGBA 0..1),
+/// blur (x, y), offset (its distance along its angle; stage units) and strength (the blurred
+/// alpha's multiplier).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct FlashShadow {
+    pub color: [f32; 4],
+    pub blur: [f32; 2],
+    pub offset: [f32; 2],
+    pub strength: f32,
 }
 
 /// The frame scripts' controls of their own clip (anything else is left out).

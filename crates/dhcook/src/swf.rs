@@ -640,8 +640,14 @@ fn walk_timeline(d: &[u8], mut p: usize, end: usize, frames: &mut Vec<crate::for
                     q = e;
                     s
                 });
-                let clip = (f & 64 != 0).then(|| u16_at(body, q));
-                cur.ops.push(TlOp::Place { depth, moved: f & 1 != 0, id, name, m, cx, clip });
+                let clip = (f & 64 != 0).then(|| {
+                    q += 2;
+                    u16_at(body, q - 2)
+                });
+                // (`PlaceObject3`'s filters: a drop shadow's or glow's kept)
+                let filtered = code == 70 && f2 & 1 != 0;
+                let shadow = if filtered { body.get(q..).and_then(first_shadow) } else { None };
+                cur.ops.push(TlOp::Place { depth, moved: f & 1 != 0, id, name, m, cx, clip, filtered, shadow });
             }
             37 if len >= 4 => {
                 if let Some((id, t)) = edit_text(body) {
@@ -655,6 +661,60 @@ fn walk_timeline(d: &[u8], mut p: usize, end: usize, frames: &mut Vec<crate::for
             _ => {}
         }
     }
+}
+
+/// A `PlaceObject3` filter list's first drop shadow (not an inner one) or glow (`FILTERLIST`:
+/// a count, then each filter's id and fields).
+fn first_shadow(d: &[u8]) -> Option<crate::format::FlashShadow> {
+    let fixed = |q: usize| -> Option<f32> { Some(i32::from_le_bytes(d.get(q..q + 4)?.try_into().ok()?) as f32 / 65536.0) };
+    let fixed8 = |q: usize| -> Option<f32> { Some(u16::from_le_bytes(d.get(q..q + 2)?.try_into().ok()?) as f32 / 256.0) };
+    let rgba = |q: usize| -> Option<[f32; 4]> {
+        let c = d.get(q..q + 4)?;
+        Some([c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, c[3] as f32 / 255.0])
+    };
+    let n = *d.first()? as usize;
+    let mut q = 1;
+    for _ in 0..n {
+        let kind = *d.get(q)?;
+        q += 1;
+        match kind {
+            // drop shadow: colour, blur x / y, angle, distance, strength, flags (inner shadow,
+            // knockout, composite source, passes)
+            0 => {
+                let (color, bx, by, angle, dist, strength, flags) = (rgba(q)?, fixed(q + 4)?, fixed(q + 8)?, fixed(q + 12)?, fixed(q + 16)?, fixed8(q + 20)?, *d.get(q + 22)?);
+                if flags & 0x80 == 0 {
+                    return Some(crate::format::FlashShadow { color, blur: [bx, by], offset: [angle.cos() * dist, angle.sin() * dist], strength });
+                }
+                q += 23;
+            }
+            // blur: blur x / y, passes
+            1 => q += 9,
+            // glow: colour, blur x / y, strength, flags
+            2 => {
+                let (color, bx, by, strength, flags) = (rgba(q)?, fixed(q + 4)?, fixed(q + 8)?, fixed8(q + 12)?, *d.get(q + 14)?);
+                if flags & 0x80 == 0 {
+                    return Some(crate::format::FlashShadow { color, blur: [bx, by], offset: [0.0, 0.0], strength });
+                }
+                q += 15;
+            }
+            // bevel: two colours, blur x / y, angle, distance, strength, flags
+            3 => q += 27,
+            // gradient glow and bevel: their colours and ratios, then as a bevel's
+            4 | 7 => {
+                let k = *d.get(q)? as usize;
+                q += 1 + 5 * k + 19;
+            }
+            // convolution: its matrix's size, divisor, bias, matrix, default colour, flags
+            5 => {
+                let (x, y) = (*d.get(q)? as usize, *d.get(q + 1)? as usize);
+                q += 2 + 8 + 4 * x * y + 5;
+            }
+            // colour matrix: 20 floats
+            6 => q += 80,
+            _ => return None,
+        }
+    }
+    None
 }
 
 impl Movie {
