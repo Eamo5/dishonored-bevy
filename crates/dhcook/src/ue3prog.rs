@@ -287,12 +287,13 @@ fn constant_fill(st: &StageT, prefix: &str, map: &CookedMap, ctx: &mut Ctx) -> S
                 }
             }
             0 => {
-                // bool constants: the dominant directional light's pass takes the dynamic
-                // objects' shadows (`ue_light_attenuation`); no distance fading
+                // bool constants: the dominant directional light's pass, and the dynamic lights'
+                // (a dominant spot or point light's, from its shadow-only Bevy light), take the
+                // dynamic objects' shadows (`ue_light_attenuation`); no distance fading
                 if c.name != "bReceiveDynamicShadows" && c.name != "bEnableDistanceShadowFading" {
                     ctx.unknown.insert(c.name.clone());
                 }
-                let on = c.name == "bReceiveDynamicShadows" && ctx.light && !ctx.dyn_light;
+                let on = c.name == "bReceiveDynamicShadows" && (ctx.light || ctx.dyn_light);
                 for i in 0..c.count.max(1) as u32 {
                     let r = c.reg as u32 + i;
                     if r <= st.iface.max_bool {
@@ -434,7 +435,8 @@ const PLATFORM_BEVY: &str = r#"#import bevy_pbr::mesh_functions
 #import bevy_pbr::mesh_view_bindings::view
 #ifndef PREPASS_PIPELINE
 #import bevy_pbr::mesh_view_bindings::{lights, globals}
-#import bevy_pbr::shadows::fetch_directional_shadow
+#import bevy_pbr::shadows::{fetch_directional_shadow, fetch_spot_shadow, fetch_point_shadow}
+#import bevy_pbr::{mesh_view_bindings as ue_vb, mesh_view_types as ue_vt, clustered_forward as ue_cf}
 #endif
 #import bevy_pbr::skinning
 #import bevy_pbr::prepass_utils
@@ -488,7 +490,8 @@ fn ue_frag_setup(pos: vec4<f32>) {
 }
 
 // UE3's light attenuation buffer: the dynamic objects (characters, props) shadowing the
-// dominant directional light, from Bevy's shadow map of them
+// dominant directional light, from Bevy's shadow map of them; in a dominant spot or point
+// light's pass, that light's (a shadow-only Bevy light where it stands)
 fn ue_light_attenuation(x: vec4<f32>) -> vec4<f32> {
 #ifdef UE_FOREGROUND
     return x;
@@ -496,6 +499,9 @@ fn ue_light_attenuation(x: vec4<f32>) -> vec4<f32> {
 #ifdef PREPASS_PIPELINE
     return x;
 #else
+    if (UE_DYN_LIGHT_PASS) {
+        return vec4<f32>(ue_dyn_light_shadow());
+    }
     if (lights.n_directional_lights == 0u) {
         return x;
     }
@@ -504,6 +510,34 @@ fn ue_light_attenuation(x: vec4<f32>) -> vec4<f32> {
 #endif
 #endif
 }
+
+// (debug: anything the shadow map darkens at all, black)
+fn ue_dbg_step(x: f32) -> f32 { return select(1.0, 0.0, x < 0.98); }
+#ifndef PREPASS_PIPELINE
+// the shadow of this light pass's light (its position in the material's light slots, UE units
+// with Y and Z swapped): the clustered Bevy light standing there, if it casts shadows
+fn ue_dyn_light_shadow() -> f32 {
+    let lp = ue_mat.p[UE_DYN_LIGHT_SLOT];
+    let at = vec3<f32>(lp.x, lp.z, lp.y) * 0.01;
+    let view_z = (view.view_from_world * vec4<f32>(ue_frag_world, 1.0)).z;
+    let ranges = ue_cf::unpack_clusterable_object_index_ranges(ue_cf::view_fragment_cluster_index(ue_frag_coord.xy, view_z, false));
+    for (var i: u32 = ranges.first_spot_light_index_offset; i < ranges.first_reflection_probe_index_offset; i = i + 1u) {
+        let id = ue_cf::get_clusterable_object_id(i);
+        let l = ue_vb::clustered_lights.data[id];
+        if ((l.flags & ue_vt::POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u && distance(l.position_radius.xyz, at) < 0.05) {
+            return UE_DYN_SHADOW_FOUND(fetch_spot_shadow(id, vec4<f32>(ue_frag_world, 1.0), ue_frag_normal, l.shadow_map_near_z, ue_frag_coord.xy));
+        }
+    }
+    for (var i: u32 = ranges.first_point_light_index_offset; i < ranges.first_spot_light_index_offset; i = i + 1u) {
+        let id = ue_cf::get_clusterable_object_id(i);
+        let l = ue_vb::clustered_lights.data[id];
+        if ((l.flags & ue_vt::POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u && distance(l.position_radius.xyz, at) < 0.05) {
+            return UE_DYN_SHADOW_FOUND(fetch_point_shadow(id, vec4<f32>(ue_frag_world, 1.0), ue_frag_normal, ue_frag_coord.xy));
+        }
+    }
+    return 1.0;
+}
+#endif
 
 // UE3 on D3D9 keeps the scene depth (UE units / 256) in the scene colour's alpha; translucent
 // materials read it back for depth fading. Here it comes from the depth prepass.
@@ -654,10 +688,18 @@ pub fn build(map: &CookedMap, vs_code: &[u8], ps_code: &[u8], light: Option<(&[u
     let dyn_light = light.is_none() && ps.sh.ctab.iter().any(|c| c.name == "LightColorAndFalloffExponent");
     let mut ctx = Ctx { unknown: BTreeSet::new(), slots: 0, light: false, dyn_light };
     let mut m = String::new();
-    m.push_str(match platform {
+    m.push_str(&match platform {
         Platform::Bevy => PLATFORM_BEVY,
         Platform::Standalone => PLATFORM_STANDALONE,
-    });
+    }
+    .replace("UE_DYN_LIGHT_SLOT", &DYN_LIGHT_SLOT.to_string())
+    // (`DH_DYN_SHADOW_DEBUG=1`: a light pass whose Bevy light is found reads as fully shadowed)
+    .replace("UE_DYN_SHADOW_FOUND", match std::env::var("DH_DYN_SHADOW_DEBUG").as_deref() {
+        Ok("2") => "ue_dbg_step",
+        Ok(_) => "0.0 * ",
+        Err(_) => "",
+    }));
+    let _ = writeln!(m, "const UE_DYN_LIGHT_PASS: bool = {dyn_light};");
     let group = match platform {
         Platform::Bevy => "#{MATERIAL_BIND_GROUP}",
         Platform::Standalone => "3",
@@ -768,7 +810,8 @@ pub fn build(map: &CookedMap, vs_code: &[u8], ps_code: &[u8], light: Option<(&[u
     // fragment entry: base pass plus the light pass
     m.push_str("@fragment\nfn fragment(in: UeVaryings, @builtin(front_facing) face: bool) -> @location(0) vec4<f32> {\n");
     m.push_str("    ue_setup(in.ids.x, in.ids.y);\n");
-    if light.is_some() {
+    // (the fragment's place, for the dynamic shadows: the sun's pass, a dynamic light's)
+    if light.is_some() || ctx.dyn_light {
         m.push_str("    ue_frag_setup(in.position);\n");
     }
     if ctx.dyn_light {

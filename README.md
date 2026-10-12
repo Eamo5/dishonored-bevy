@@ -591,7 +591,15 @@ fullscreen display, vertical sync and the crosshair.
   material's own light-pass shaders (`DH_NO_DYN_LIGHTS=1` turns these off), each level's
   reflection cube (`WorldInfo.mSceneReflection`) on the surfaces that reflect it, and the
   characters' shadows from the dominant directional light (UE3's light attenuation buffer,
-  from a shadow map of the dynamic objects). Gameplay lights (explosions, burning bolts) light
+  from a shadow map of the dynamic objects). The dominant spot and point lights that cast
+  dynamic shadows (`bCastDynamicShadow`: 1-22 a map, the interiors' lamps) cast the characters'
+  and props' shadows too: each has a Bevy light rendering their shadow map while it is one of
+  the four nearest the view whose reach takes it in and holds a character or prop to shadow
+  (a light's shadow views cost whether or not anything stands in them), and the original
+  shaders' pass for that light finds it among the fragment's clustered lights and reads its
+  shadow as the light attenuation (`DH_NO_DOM_SHADOWS=1` turns them off; `DH_DOM_SHADOW_LOG=1`
+  logs the lights casting them; `DH_DYN_SHADOW_DEBUG=1` shows each pass that finds its light
+  as fully shadowed, `=2` anything its map shadows as black). Gameplay lights (explosions, burning bolts) light
   the world through the same light-pass shaders, and characters take the passes of the runtime
   and gameplay lights near them (as UE3's light environments add the dynamic lights);
   `DH_NO_PART_LIGHTS=1` turns the characters' off. Characters' ambient light comes from the
@@ -1882,7 +1890,7 @@ furthest spot with a floor and a clear line to it), `ledge [LOW] [HIGH] [crouch]
 high; `crouch`, only one he'd arrive crouched on; `DH_MANTLE_LOG` logs what blocks a mantle's
 top), `pos` (his position, velocity, footing), `pistol [NAME]` (the nearest hostile character
 carries a pistol and turns on him), `npchere [D] [NAME]` (the nearest hostile character, or
-the nearest whose name holds NAME, moved D m before him), `stream NAME [out]` (a streamed sublevel loads, or goes), `rise D` (Corvo lifted D m and held there), `hideout` (Corvo crouched in the nearest hideout volume), `keyhole [D]` (before the nearest keyhole, looking at it), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `runes N`,
+the nearest whose name holds NAME, moved D m before him), `stream NAME [out]` (a streamed sublevel loads, or goes), `rise D` (Corvo lifted D m and held there), `hideout` (Corvo crouched in the nearest hideout volume), `keyhole [D]` (before the nearest keyhole, looking at it), `spotlit [D]` (a character stood under the nearest dominant spot light, Corvo looking on), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `runes N`,
 `charms N`, `mana`, `ammo TYPE N` (0 bullets .. 6 grenades, 7 sticky), `fx EFFECT [DIST]`,
 `remote EVENT` (a level-script remote event, e.g. `ChangeLvl_fromStreets1_toHub`), `chaos N`,
 `ko [NAME]` (a sleep dart into the nearest, or the nearest whose name or pawn holds NAME),

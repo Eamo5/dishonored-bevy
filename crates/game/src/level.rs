@@ -28,7 +28,7 @@ impl Plugin for LevelPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(LightTuning::default())
             .add_systems(OnEnter(GameState::InGame), spawn_level.in_set(LevelSpawnSet))
-            .add_systems(Update, (run_sun_probes, stream_volumes).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (run_sun_probes, stream_volumes, dominant_shadows).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -116,6 +116,63 @@ pub struct InstanceCollider(pub Entity);
 
 #[derive(Component)]
 pub struct LevelLight(pub u32);
+
+/// A dominant spot or point light that casts the dynamic objects' shadows (`bCastDynamicShadow`):
+/// its reach. Its Bevy light renders their shadow map while it is one of the nearest to the
+/// view, and the original shaders' pass for it reads that map (`ue3prog::ue_dyn_light_shadow`).
+#[derive(Component)]
+pub struct DominantShadow(pub f32);
+
+/// How many dominant spot and point lights cast the dynamic objects' shadows at once (the
+/// nearest whose reach takes in the view and something to shadow).
+const DOMINANT_SHADOWS: usize = 4;
+
+fn dominant_shadows(
+    time: Res<Time>,
+    mut every: Local<f32>,
+    cam: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
+    mut spots: Query<(Entity, &DominantShadow, &GlobalTransform, Option<&mut SpotLight>, Option<&mut PointLight>)>,
+    casters: Query<(&GlobalTransform, &InheritedVisibility), (With<Mesh3d>, Without<NotShadowCaster>)>,
+) {
+    *every -= time.delta_secs();
+    if *every > 0.0 {
+        return;
+    }
+    *every = 0.25;
+    let Ok(c) = cam.single() else { return };
+    let eye = c.translation();
+    // (`DH_NO_DOM_SHADOWS=1`: none)
+    let off = std::env::var("DH_NO_DOM_SHADOWS").is_ok();
+    // (only a light with something to shadow in its reach: each costs its shadow views, a
+    // point light's six, whether or not anything stands in them)
+    let shown: Vec<Vec3> = casters.iter().filter(|(_, v)| v.get()).map(|(t, _)| t.translation()).collect();
+    let mut near: Vec<(Entity, f32)> = spots
+        .iter()
+        .filter(|_| !off)
+        .map(|(e, d, t, ..)| (e, t.translation(), d.0))
+        .filter(|(_, at, r)| at.distance(eye) - r < 2.0 && shown.iter().any(|p| p.distance_squared(*at) < (r + 1.5) * (r + 1.5)))
+        .map(|(e, at, r)| (e, at.distance(eye) - r))
+        .collect();
+    near.sort_by(|a, b| a.1.total_cmp(&b.1));
+    near.truncate(DOMINANT_SHADOWS);
+    if std::env::var("DH_DOM_SHADOW_LOG").is_ok() {
+        let list: Vec<String> = near.iter().filter_map(|(e, x)| spots.get(*e).ok().map(|(_, d, t, s, _)| format!("{} at {:.1} r {:.1} ({x:.1})", if s.is_some() { "spot" } else { "point" }, t.translation(), d.0))).collect();
+        info!("dominant shadows: {} casters shown; {}", shown.len(), list.join(", "));
+    }
+    for (e, _, _, spot, point) in &mut spots {
+        let on = near.iter().any(|(n, _)| *n == e);
+        if let Some(mut s) = spot {
+            if s.shadow_maps_enabled != on {
+                s.shadow_maps_enabled = on;
+            }
+        }
+        if let Some(mut p) = point {
+            if p.shadow_maps_enabled != on {
+                p.shadow_maps_enabled = on;
+            }
+        }
+    }
+}
 
 struct SunProbe {
     entry: u32,
@@ -1375,7 +1432,7 @@ fn spawn_level(
         let lumens = l.brightness.max(0.0) * tuning.point_scale * (l.radius.clamp(0.5, 60.0)).powi(2);
         match l.kind {
             LightKind::Point => {
-                commands.spawn((
+                let mut ec = commands.spawn((
                     LevelLight(li as u32),
                     DespawnOnExit(GameState::InGame),
                     PointLight {
@@ -1389,11 +1446,14 @@ fn spawn_level(
                     },
                     Transform::from_translation(pos),
                 ));
+                if l.dominant && l.shadows {
+                    ec.insert(DominantShadow(l.radius.max(0.5)));
+                }
             }
             LightKind::Spot => {
                 let outer = l.outer_cone.clamp(1.0, 89.0).to_radians();
                 let inner = l.inner_cone.clamp(0.0, l.outer_cone.clamp(1.0, 89.0)).to_radians();
-                commands.spawn((
+                let mut ec = commands.spawn((
                     LevelLight(li as u32),
                     DespawnOnExit(GameState::InGame),
                     SpotLight {
@@ -1409,6 +1469,9 @@ fn spawn_level(
                     },
                     Transform::from_translation(pos).looking_to(dir, if dir.y.abs() > 0.99 { Vec3::X } else { Vec3::Y }),
                 ));
+                if l.dominant && l.shadows {
+                    ec.insert(DominantShadow(l.radius.max(0.5)));
+                }
             }
             LightKind::Directional => {
                 commands.spawn((

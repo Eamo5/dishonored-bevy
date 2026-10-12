@@ -453,6 +453,74 @@ fn run_script(
             p.noclip = cmd[0] == "fly";
             info!("script: {} to {}", cmd[0], t.translation);
         }
+        "spotlit" => {
+            // (tests) spotlit [D]: the nearest dominant spot light that casts characters' shadows:
+            // the nearest hostile character stood where its cone's axis meets the floor, Corvo D m
+            // (default 4) on along the light's way, looking at it (its shadow falls his way)
+            let d = if cmd.len() > 1 { f(1) } else { 4.0 };
+            let (Some(l), Ok(ctx), Ok(pe)) = (level.as_ref(), rapier.single(), player_ent.single()) else { return };
+            let world = bevy_rapier3d::prelude::QueryFilter::default().exclude_collider(pe).exclude_sensors().groups(bevy_rapier3d::prelude::CollisionGroups::new(bevy_rapier3d::prelude::Group::ALL, crate::level::GROUP_WORLD));
+            let here = t.translation;
+            let best = l
+                .scene
+                .lights
+                .iter()
+                .filter(|x| x.enabled && x.dominant && x.shadows && x.kind == dhcook::format::LightKind::Spot)
+                .filter_map(|x| {
+                    let pos = Vec3::from(x.position);
+                    let dir = Vec3::from(x.direction).normalize_or_zero();
+                    let (_, toi) = ctx.cast_ray(pos, dir, x.radius, true, world)?;
+                    let hit = pos + dir * toi;
+                    (hit.y < pos.y - 1.5).then_some((pos, dir, hit))
+                })
+                .min_by(|a, b| a.2.distance(here).total_cmp(&b.2.distance(here)));
+            let Some((pos, dir, hit)) = best else {
+                info!("script: no spot-lit floor");
+                return;
+            };
+            // (around it, from the shadow's side: a floor, room to stand and a clear view of it)
+            let way = dir.with_y(0.0).normalize_or(Vec3::Z);
+            let body = bevy_rapier3d::prelude::Collider::capsule_y(crate::player::STAND_HALF, crate::player::RADIUS * 0.9);
+            let mut spot_at = None;
+            'find: for k in 0..12 {
+                let turn = Quat::from_rotation_y(((k + 1) / 2) as f32 * if k % 2 == 0 { 0.5 } else { -0.5 });
+                for dd in [d, d * 0.75, d * 1.25] {
+                    let c = hit + turn * way * dd + Vec3::Y * 1.5;
+                    let Some((_, toi)) = ctx.cast_ray(c, Vec3::NEG_Y, 4.0, true, world) else { continue };
+                    let stand = Vec3::new(c.x, c.y - toi + crate::player::STAND_HALF + crate::player::RADIUS + 0.04, c.z);
+                    let mut blocked = false;
+                    ctx.intersect_shape(stand + Vec3::Y * 0.1, Quat::IDENTITY, &*body.raw, world, |_| {
+                        blocked = true;
+                        false
+                    });
+                    let eye = stand + Vec3::Y * crate::player::STAND_EYE;
+                    let to = hit + Vec3::Y * 0.6 - eye;
+                    if !blocked && ctx.cast_ray(eye, to.normalize_or_zero(), to.length() - 0.1, true, world).is_none() {
+                        spot_at = Some(stand);
+                        break 'find;
+                    }
+                }
+            }
+            let Some(stand_at) = spot_at else {
+                info!("script: no clear view of the spot-lit floor at {hit:.2}");
+                return;
+            };
+            t.translation = stand_at;
+            p.velocity = Vec3::ZERO;
+            p.noclip = false;
+            let to = hit + Vec3::Y * 0.6 - (t.translation + Vec3::Y * crate::player::STAND_EYE);
+            p.yaw = (-to.x).atan2(-to.z);
+            p.pitch = (to.y / to.length().max(1e-3)).asin();
+            let stand = hit + Vec3::Y * (crate::npc::NPC_HALF + crate::npc::NPC_RADIUS);
+            commands.queue(move |w: &mut World| {
+                let mut q = w.query::<(&Npc, &mut Transform)>();
+                if let Some((n, mut nt)) = q.iter_mut(w).filter(|(n, _)| !n.is_down() && n.hostile()).min_by(|a, b| a.1.translation.distance(stand).total_cmp(&b.1.translation.distance(stand))) {
+                    info!("script: {} stood in the light at {stand:.2}", n.name);
+                    nt.translation = stand;
+                }
+            });
+            info!("script: spot at {pos:.2} lights the floor at {hit:.2}; Corvo at {:.2}", t.translation);
+        }
         "keyhole" => {
             // (tests) keyhole [D]: Corvo stands D m (default 0.8) before the nearest keyhole, on
             // his side of its door, looking at it
