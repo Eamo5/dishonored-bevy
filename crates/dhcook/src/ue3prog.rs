@@ -93,7 +93,8 @@ pub const MAX_TEXTURES: usize = 12;
 /// mapped, 2 unshadowed)  [4] shadow coordinate scale.xy, bias.xy  [5] ambient colour and
 /// sky factor  [6..7] reserved.
 /// Entry 0 holds the scene: [0] direction towards the dominant light (UE space)
-/// [1] its colour times brightness.
+/// [1] its colour times brightness  [2].x the view model's projection scale (1 / tan of half
+/// its vertical field of view; 0: the view's).
 pub const INSTANCE_STRIDE: u32 = 8;
 
 pub struct Program {
@@ -446,15 +447,18 @@ const PLATFORM_BEVY: &str = r#"#import bevy_pbr::mesh_functions
 fn ue_world_from_local(i: u32) -> mat4x4<f32> { return mesh_functions::get_world_from_local(i); }
 fn ue_tag(i: u32) -> u32 { return mesh_functions::get_tag(i); }
 #ifdef UE_FOREGROUND
-// first-person view model (UE3's foreground depth priority group): its own field of view
-// (62 degrees), and depths squeezed into the nearest slice so it never clips into the world
+// first-person view model (UE3's foreground depth priority group): the world's field of view
+// but for the mask's zoom (the arms' `m_fCurFOV_Arms` follows the world's unless a zoom locks
+// it: the scene entry's projection scale, `ue_inst[2].x`), and depths squeezed into the nearest
+// slice so it never clips into the world
 fn ue_clip_from_world() -> mat4x4<f32> {
     var p = view.clip_from_view;
 #ifdef UE_FOREGROUND_WORLD
     // (a character drawn in the foreground group, `DisSeqAct_OutsiderConfig`: the world's view)
     let k = 1.0;
 #else
-    let k = 1.6642795 / p[1][1];
+    let arms = ue_inst[2u].x;
+    let k = select(1.0, arms / p[1][1], arms > 0.0);
 #endif
     p[0][0] *= k;
     p[1][1] *= k;

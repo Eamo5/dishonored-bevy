@@ -156,7 +156,7 @@ fn follow_bolt(
         }
     }
     if let Projection::Perspective(pp) = proj.as_mut() {
-        pp.fov = st.fov.to_radians();
+        pp.fov = crate::player::ue_fov(st.fov, pp.aspect_ratio);
     }
     for mut v in &mut hands {
         *v = Visibility::Hidden;

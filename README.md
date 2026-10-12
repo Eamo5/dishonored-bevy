@@ -62,7 +62,10 @@ the missions before it.
 
 The original PC bindings (`DefaultInput.ini`); the keyboard ones can be changed in
 Options > Controls (prompts and tutorials name the keys bound). Options also hold mouse
-sensitivity and inversion, field of view, master / music / effects / voice volumes,
+sensitivity and inversion, field of view (UE3's horizontal angle, as `DefaultCamera.ini`'s
+`m_fDefaultFOV` 75: at 16:9 about 47 degrees tall; the arms drawn with the world's, but for
+the mask's zoom, which leaves them as they were: `m_fCurFOV_Arms`, its `m_bLockArms`; as
+roshan's r614/blink research measured against the original), master / music / effects / voice volumes,
 subtitles, brightness (scaling the level's display gamma in its colour LUT), windowed or
 fullscreen display, vertical sync and the crosshair.
 

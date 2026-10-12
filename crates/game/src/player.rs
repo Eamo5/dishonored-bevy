@@ -94,6 +94,13 @@ pub struct Player {
 #[derive(Component)]
 pub struct PlayerCamera;
 
+/// A UE3 field of view (horizontal, degrees: `m_fDefaultFOV`, the options' FOV) as Bevy takes
+/// it (vertical, radians) at an aspect ratio. UE3 holds the horizontal angle (no aspect
+/// constraint), so a wider screen sees less above and below.
+pub fn ue_fov(horizontal_deg: f32, aspect: f32) -> f32 {
+    2.0 * ((horizontal_deg.to_radians() * 0.5).tan() / aspect.max(0.1)).atan()
+}
+
 /// Scripted input used by automated tests (and future gamepad/cutscene control).
 #[derive(Resource, Default)]
 pub struct VirtualInput {
@@ -188,7 +195,7 @@ pub fn spawn_player(mut commands: Commands, level: Option<Res<LevelInfo>>, confi
                 PlayerCamera,
                 Camera3d::default(),
                 Projection::from(PerspectiveProjection {
-                    fov: 75f32.to_radians(),
+                    fov: ue_fov(75.0, 16.0 / 9.0),
                     near: 0.05,
                     // sky domes are scaled out to ~20 km
                     far: 60000.0,
@@ -807,13 +814,24 @@ fn update_camera_offset(
     mut q: Query<(Entity, &mut Player, &Transform), Without<PlayerCamera>>,
     mut cam: Query<(&mut Transform, &mut Projection), With<PlayerCamera>>,
     (swim, settings, zoom, possession): (Res<crate::swim::Swim>, Res<crate::settings::Settings>, Res<crate::zoom::Zoom>, Res<crate::possession::Possession>),
+    mut world_light: Option<ResMut<crate::world_light::WorldLighting>>,
 ) {
     let Ok((entity, mut p, t)) = q.single_mut() else { return };
     let Ok((mut ct, mut proj)) = cam.single_mut() else { return };
     if let Projection::Perspective(pp) = proj.as_mut() {
-        // the options' field of view, widened by Blink's kick, narrowed by the mask's lens
-        let base = (settings.fov.clamp(55.0, 110.0) + 14.0 * powers.fov_kick).to_radians();
+        // the options' field of view (horizontal, as UE3's), widened by Blink's kick, narrowed by
+        // the mask's lens; the arms keep the unzoomed one (the zoom's `m_bLockArms`)
+        let base = ue_fov(settings.fov.clamp(55.0, 110.0) + 14.0 * powers.fov_kick, pp.aspect_ratio);
         pp.fov = 2.0 * ((base * 0.5).tan() / zoom.factor.max(1.0)).atan();
+        if let Some(wl) = world_light.as_mut() {
+            let arms = 1.0 / (base * 0.5).tan();
+            if (wl.ue_entries.get(2).map_or(0.0, |e| e[0]) - arms).abs() > 1e-4 {
+                if let Some(e) = wl.ue_entries.get_mut(2) {
+                    e[0] = arms;
+                    wl.dirty = true;
+                }
+            }
+        }
     }
     let dt = time.delta_secs();
     let target_eye = if stats.dead {

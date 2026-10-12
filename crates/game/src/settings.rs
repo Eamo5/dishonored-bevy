@@ -250,7 +250,7 @@ fn apply_settings(
     volume.volume = bevy::audio::Volume::Linear(settings.master_volume);
     for mut p in &mut cams {
         if let Projection::Perspective(pp) = &mut *p {
-            pp.fov = settings.fov.clamp(55.0, 110.0).to_radians();
+            pp.fov = crate::player::ue_fov(settings.fov.clamp(55.0, 110.0), pp.aspect_ratio);
         }
     }
 }
