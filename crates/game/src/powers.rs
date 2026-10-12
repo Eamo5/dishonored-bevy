@@ -1385,6 +1385,7 @@ fn windblast_gusts(
     (mut hits, mut stag, mut noise): (MessageWriter<NpcHit>, MessageWriter<NpcStagger>, MessageWriter<Noise>),
     (mut world_hits, mut door_blast, mut props): (MessageWriter<WorldDamage>, MessageWriter<crate::interact::DoorBlast>, MessageWriter<crate::props::PropGust>),
     (mut grenades, held): (Query<(Entity, &mut crate::gadgets::Grenade, &Transform)>, Res<crate::props::Held>),
+    (mut arrows, mut spits, mut bolts): (Query<(&mut crate::tallboy::Arrow, &Transform)>, Query<(&mut crate::krust::Spit, &Transform)>, Query<(&mut Projectile, &Transform)>),
 ) {
     if powers.gusts.is_empty() {
         return;
@@ -1435,6 +1436,31 @@ fn windblast_gusts(
                 if held.0 != Some(ge) && factor(gt.translation).is_some() {
                     gr.blown(dir);
                 }
+            }
+            // (and every other projectile in flight before it, turned along the blast: the
+            // original gathers every actor, projectiles too, as roshan's r614/blink research
+            // found: a tallboy's arrow, a krust's spit, his own bolts)
+            let mut turned = 0;
+            for (mut a, at) in &mut arrows {
+                if factor(at.translation).is_some() {
+                    a.blown(dir);
+                    turned += 1;
+                }
+            }
+            for (mut s, st) in &mut spits {
+                if factor(st.translation).is_some() {
+                    s.blown(dir);
+                    turned += 1;
+                }
+            }
+            for (mut p, pt) in &mut bolts {
+                if !p.stuck && factor(pt.translation).is_some() {
+                    p.vel = dir * p.vel.length();
+                    turned += 1;
+                }
+            }
+            if turned > 0 {
+                info!("windblast turns {turned} projectiles back");
             }
             noise.write(Noise { pos: g.from, radius: 15.0, kind: NoiseKind::Danger });
         }

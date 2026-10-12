@@ -31,10 +31,19 @@ pub struct TallboyShot {
 }
 
 #[derive(Component)]
-struct Arrow {
+pub(crate) struct Arrow {
     vel: Vec3,
     life: f32,
     source: Entity,
+}
+
+impl Arrow {
+    /// Turned along a Wind Blast: back the way the blast goes, its bow's tallboy no longer
+    /// spared.
+    pub(crate) fn blown(&mut self, dir: Vec3) {
+        self.vel = dir * self.vel.length().max(SPEED);
+        self.source = Entity::PLACEHOLDER;
+    }
 }
 
 /// The arrow's speed (m/s: 2000 uu/s) and how much of gravity takes it.

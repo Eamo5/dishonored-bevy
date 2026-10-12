@@ -454,6 +454,14 @@ pub(crate) struct Spit {
     life: f32,
 }
 
+impl Spit {
+    /// Turned along a Wind Blast, its shell no longer spared.
+    pub(crate) fn blown(&mut self, dir: Vec3) {
+        self.vel = dir * self.vel.length();
+        self.source = Entity::PLACEHOLDER;
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct SpitSave {
     source: Option<u32>,
