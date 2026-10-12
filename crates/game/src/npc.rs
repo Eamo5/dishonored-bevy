@@ -1864,6 +1864,10 @@ fn npc_hits(
                 npc.health = 0.0;
                 npc.set_mode(Mode::Dead);
                 stats.killed(&npc.pawn, !npc.hostile());
+                // (a wall of light burns its dead to ash, `DisWallOfLight`'s kill)
+                if h.kind == HitKind::WallOfLight {
+                    commands.entity(e).try_insert(Ashes(-0.2));
+                }
                 if h.kind == HitKind::Assassinate {
                     msgs.push(format!("{} assassinated", npc.name));
                 }

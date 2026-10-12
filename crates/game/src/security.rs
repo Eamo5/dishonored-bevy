@@ -722,6 +722,12 @@ fn walls(
     (time, mut sheets): (Res<Time>, Query<(&WallSheet, &mut Visibility, &MeshMaterial3d<StandardMaterial>)>),
     mut mats: ResMut<Assets<StandardMaterial>>,
     (tc, mut touching): (Res<crate::gameplay::TimeControl>, Local<Vec<bool>>),
+    (mut commands, carry, ashes, thrown): (
+        Commands,
+        Res<crate::carry::Carry>,
+        Query<(), With<crate::npc::Ashes>>,
+        Query<(Entity, &GlobalTransform), Or<(With<crate::powers::Projectile>, With<crate::gadgets::Grenade>)>>,
+    ),
 ) {
     // (stopped time: no collision, nothing burns)
     let stopped = tc.bend_remaining > 0.0 && tc.world_dilation <= 0.0;
@@ -785,8 +791,27 @@ fn walls(
             }
             touching[i] = now_in;
         }
+        // a bolt, dart or grenade meeting it is destroyed with a shock, nothing bursting or
+        // sticking (the wall's `TakeDamage` from a causer that isn't a pawn)
+        for (e, g) in &thrown {
+            if inside(w, g.translation()) {
+                commands.entity(e).try_despawn();
+                fx.write(crate::particles::SpawnEffect { secs: 0.8, ..crate::particles::SpawnEffect::at("electrified", g.translation()) });
+                let s = d.def.sounds.get("m_ShockSound").cloned().unwrap_or_else(|| "Snd_P_Death_Light".into());
+                sfx.write(PostEvent::named(&s, Some(g.translation())));
+            }
+        }
         for (e, n, t) in &npcs {
             if n.is_down() {
+                // a body touching it burns to ash, at a kill's cost; one carried through is spared
+                // (`StateNPCMasterDead_BeingCarried`)
+                if n.mode == crate::npc::Mode::Dead && !ashes.contains(e) && carry.body != Some(e) && inside(w, t.translation) {
+                    commands.entity(e).try_insert(crate::npc::Ashes(-0.2));
+                    if let Some(seat) = d.receptacle_idx.and_then(|r| devices.list[r].tank_seat()) {
+                        spent.push((seat, 1));
+                    }
+                    fx.write(crate::particles::SpawnEffect { follow: Some(e), secs: 1.5, ..crate::particles::SpawnEffect::at("electrified", Vec3::Y * 0.3) });
+                }
                 continue;
             }
             let spared = d.def.friendly.iter().any(|f| *f == n.faction);

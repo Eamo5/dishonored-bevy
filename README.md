@@ -1245,7 +1245,10 @@ against the install's own data where it carries them, then implemented independe
   swing (blink measured 0.30–0.35 s).
 - **Walls of light.** One shocks Corvo for its `m_Damage` (100) as he touches it, rather than
   killing him outright, so health upgrades can survive it. While Bend Time stops the world it can be
-  walked through.
+  walked through. Those it kills burn to ash, and so does a body that touches it (at a kill's
+  cost of its tank), unless Corvo carries it through; a bolt, dart or grenade meeting it is
+  destroyed with a shock, bursting and sticking nowhere (the wall's `TakeDamage` from a causer
+  that isn't a pawn), as roshan's r614/blink research decoded `DisWallOfLight`.
 - **Autosaves.**
   - A level script's autosave is denied while Corvo is fighting, unless it is a mission's start or
     `m_bEvenInCombat`.
