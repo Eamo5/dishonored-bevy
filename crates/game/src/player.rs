@@ -18,7 +18,7 @@ pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Slide>();
+        app.init_resource::<Slide>().init_resource::<AutoCrouch>();
         app.init_resource::<VirtualInput>()
             .init_resource::<MantleSpot>()
             .add_systems(OnEnter(GameState::InGame), spawn_player.after(LevelSpawnSet))
@@ -333,7 +333,7 @@ fn player_move(
     (mut msgs, attrs, zone): (ResMut<HudMessages>, Res<crate::gamedata::Attrs>, Res<crate::zones::ZonePush>),
     (swim, waters, carry, possession): (Res<crate::swim::Swim>, Option<Res<crate::swim::Waters>>, Res<crate::carry::Carry>, Res<crate::possession::Possession>),
     (mut climb, climbables, mut sfx): (ResMut<crate::climb::Climb>, Option<Res<crate::climb::Climbables>>, MessageWriter<crate::audio::PostEvent>),
-    (cine, settings, paused, tc, mut slide): (Res<crate::script_world::Cinematic>, Res<crate::settings::Settings>, Res<Paused>, Res<crate::gameplay::TimeControl>, ResMut<Slide>),
+    (cine, settings, paused, tc, mut slide, mut auto): (Res<crate::script_world::Cinematic>, Res<crate::settings::Settings>, Res<Paused>, Res<crate::gameplay::TimeControl>, ResMut<Slide>, ResMut<AutoCrouch>),
     mut q: Query<(
         Entity,
         &mut Player,
@@ -504,24 +504,25 @@ fn player_move(
     }
 
     // crouch toggle (Ctrl / C); a creature doesn't
-    if keys.just_pressed(bind.key(crate::bindings::Act::Crouch)) && host.is_none() {
-        if p.crouched {
-            // need headroom to stand
-            let ctx = rapier.single();
-            let blocked = ctx.ok().and_then(|ctx| {
-                ctx.cast_ray(
-                    t.translation,
-                    Vec3::Y,
-                    STAND_HALF + RADIUS + 0.45,
-                    true,
-                    QueryFilter::default().exclude_collider(entity).groups(player_groups()),
-                )
-            });
-            if blocked.is_none() {
+    let room = |t: &Transform| {
+        rapier.single().ok().is_none_or(|ctx| {
+            ctx.cast_ray(t.translation, Vec3::Y, STAND_HALF + RADIUS + 0.45, true, QueryFilter::default().exclude_collider(entity).groups(player_groups())).is_none()
+        })
+    };
+    let toggled = keys.just_pressed(bind.key(crate::bindings::Act::Crouch)) && host.is_none();
+    if toggled {
+        if p.crouched && !auto.0 {
+            // need headroom to stand; without it he stays down until there is (auto-crouched)
+            if room(&t) {
                 p.crouched = false;
                 *col = Collider::capsule_y(STAND_HALF, RADIUS);
                 t.translation.y += STAND_HALF - CROUCH_HALF;
+            } else {
+                auto.0 = true;
             }
+        } else if p.crouched {
+            // (auto-crouched, he means to sneak after all)
+            auto.0 = false;
         } else {
             // (from a sprint: a slide)
             let horiz = p.velocity.with_y(0.0);
@@ -529,9 +530,20 @@ fn player_move(
                 slide.0 = Some((0.0, horiz.normalize(), horiz.length()));
             }
             p.crouched = true;
+            auto.0 = false;
             *col = Collider::capsule_y(CROUCH_HALF, RADIUS);
             t.translation.y -= STAND_HALF - CROUCH_HALF;
         }
+    }
+    // auto-crouched, he stands by himself once there is room
+    if !p.crouched {
+        auto.0 = false;
+    } else if auto.0 && !toggled && host.is_none() && room(&t) {
+        info!("player: room to stand again: stands up");
+        auto.0 = false;
+        p.crouched = false;
+        *col = Collider::capsule_y(STAND_HALF, RADIUS);
+        t.translation.y += STAND_HALF - CROUCH_HALF;
     }
     // a slide ends at its time, when its way turns (a wall), when let go late enough, off the
     // ground, or stood up
@@ -686,6 +698,12 @@ pub struct MantleSpot(pub bool);
 const MANTLE_MAX: f32 = 2.3;
 const MANTLE_STEP_UP: f32 = 1.2;
 
+/// Crouched by the world rather than by choice (the original's auto-crouch, `bonus_autocrouching`
+/// to his visibility): after a mantle into a space too low to stand, or trying to stand without
+/// room; he stands by himself once there is room.
+#[derive(Resource, Default)]
+pub struct AutoCrouch(pub bool);
+
 fn mantle_time(h: f32, crouch: bool) -> f32 {
     if h <= MANTLE_STEP_UP {
         if crouch { 0.633 } else { 0.0 }
@@ -752,7 +770,7 @@ fn mantle(
     stats: Res<PlayerStats>,
     attrs: Res<crate::gamedata::Attrs>,
     mut q: Query<(Entity, &mut Player, &mut Transform, &mut Collider), Without<PlayerCamera>>,
-    mut spot: ResMut<MantleSpot>,
+    (mut spot, mut auto): (ResMut<MantleSpot>, ResMut<AutoCrouch>),
 ) {
     spot.0 = false;
     if paused.0 { return; }
@@ -791,6 +809,8 @@ fn mantle(
     let Some((dest, h, crouch)) = found else { return };
     info!("mantle: {h:.2} m edge, {:.3} s{}", mantle_time(h, crouch), if crouch { ", crouched" } else { "" });
     if crouch {
+        // (into a space too low to stand: crouched by it, not by choice)
+        auto.0 |= !p.crouched;
         p.crouched = true;
         *col = Collider::capsule_y(CROUCH_HALF, RADIUS);
     }

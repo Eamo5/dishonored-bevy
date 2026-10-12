@@ -66,6 +66,7 @@ fn player_visibility(
     time: Res<Time>,
     rapier: ReadRapierContext,
     wl: Option<Res<crate::world_light::WorldLighting>>,
+    (slide, auto): (Res<crate::player::Slide>, Res<crate::player::AutoCrouch>),
     player: Query<(&Transform, &Player)>,
     mut vis: ResMut<PlayerVisibility>,
     (mut last, mut raw_light): (Local<Option<[f32; 2]>>, Local<(f32, f32)>),
@@ -99,12 +100,20 @@ fn player_visibility(
     let raw = raw_light.1;
     let light = ((raw - range[0]) / (range[1] - range[0]).max(1e-3)).clamp(0.0, 1.0);
     let flat = p.velocity.with_y(0.0).length();
-    let speed = if p.crouched && pv.sneak_still { 0.0 } else { (flat / crate::player::SPRINT_SPEED).clamp(0.0, 1.0) };
+    // (sneaking, or crouched by the world, counts as still; a slide doesn't)
+    let sliding = p.crouched && slide.0.is_some();
+    let speed = if p.crouched && !sliding && pv.sneak_still { 0.0 } else { (flat / crate::player::SPRINT_SPEED).clamp(0.0, 1.0) };
     // the stance: standing, walking, sprinting, sneaking .. swimming, swimming on the surface
+    // (swimming, sliding and being crouched by the world come first, as roshan's r614/blink
+    // research found: `bonus_autocrouching` -1)
     let stance = if swim.under.is_some() {
         6
     } else if swim.swimming() {
         7
+    } else if sliding {
+        4
+    } else if p.crouched && auto.0 {
+        5
     } else if p.crouched {
         3
     } else if p.sprinting && flat > 0.5 {
@@ -118,6 +127,9 @@ fn player_visibility(
     value = pv.light.apply(value, light);
     value = pv.speed.apply(value, speed);
     value += pv.bonus[stance];
+    if std::env::var("DH_VIS_LOG").is_ok() && raw_light.0 == 0.1 {
+        info!("player visibility {value:.2}: light {light:.2}, speed {speed:.2}, stance {stance}");
+    }
     *vis = PlayerVisibility { light, speed, value, range };
 }
 

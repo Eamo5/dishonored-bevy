@@ -447,7 +447,12 @@ fullscreen display, vertical sync and the crosshair.
   character investigates, then he's busted. What it hears raises attention by the tweak's
   increases (an anomaly, danger). Sneaking, the HUD effects movie's black shroud darkens the screen's edges
   (`BlackShroud`, tweened in 0.35 s) until someone busts him, with the entering-sneak sound.
-  `DH_ATTN_LOG=1` logs attention levels, `DH_VIS_LOG=1` the light range and sneaking.
+  Crouched by the world rather than by choice (a mantle into a space too low to stand, or trying
+  to stand without room), he is auto-crouched: he stands by himself once there is room, and his
+  stance gives `m_fVisLevelBonus_Autocrouching` (-1) as the original's does, sneaking's
+  stillness too; a slide is its own stance and doesn't count as still (roshan's r614/blink
+  research). `DH_ATTN_LOG=1` logs attention levels, `DH_VIS_LOG=1` the light range, the value
+  and the stance.
 - **The interface movies' animations as authored** (`flash.rs`): `dhtool cook-ui` also
   writes each Scaleform movie's timelines (`ui/<movie>/timeline.json`: every sprite's frames
   as the SWF has them — display-list places, moves, colour transforms and removals, frame
