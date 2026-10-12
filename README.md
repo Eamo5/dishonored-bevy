@@ -346,6 +346,19 @@ fullscreen display, vertical sync and the crosshair.
   tallboys on stilts with bows), sight, hearing, searching, ranged weapons, alarm bells
   that call reinforcements; feuding factions fight each other; weepers lunge and seize
   Corvo's arm (`DisTweaks_WeeperGrab`: break free with five attacks, or step out of reach).
+  Weepers carry the plague (`plague.rs`, their pawns' `m_bHasPlague` tweaks cooked as
+  `NpcPlague`). They have no blow: they follow, grab, weep standing (`Empty_Weep_Idle`) and
+  cough. After any weeper's grab, none grabs for 20 s (`DisGlobalCombatManager`'s
+  `m_fInhibitionTimeWeeperArmGrab`). The cough comes every `m_fCoughingCooldown` (2-5 s) while Corvo is near enough to
+  catch it, the weeper standing for the clip `Empty_Idle_Cough`. Its notifies spew the vomit
+  (`weeper_vomit` at the `Puke_Spit` socket) and start the cloud (`DishonoredNotify_StartPlague`;
+  the grab's retching loop starts one too). The cloud deals `m_iPlagueDmgPerTick` 4 every 0.5 s
+  for 2-3 s to everyone within 3.5 m before the weeper with a clear line, other carriers
+  spared, as roshan's r614/blink research decoded it. Corvo struck sees `ps_camera_weeperspit`
+  and hears `Imp_Insect_on_Body`; his plague charms lessen the damage and turn it to mana.
+  Flies (`WeeperFlies` at `spine_3_jnt`) hang about a weeper, buzzing within 18 m, until a second
+  after it dies. The characters' clips start their own effects too (`AnimNotify_PlayParticleEffect`,
+  cooked into `clip_marks`). `DH_PLAGUE_LOG` logs the coughs and what they strike.
   Spawners put their characters in other factions where the original does
   (`m_pFactionTweakOverride`: the Tower's guards serve Corvo, Lady Boyle's guests and guards
   are neutral, the Golden Cat and the Lighthouse have their own); armed characters Corvo

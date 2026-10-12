@@ -263,7 +263,7 @@ fn sever(
                     let Some(sb) = rig.index(&s.bone) else { continue };
                     let local = Transform::from_translation(Vec3::from(s.translation)).with_rotation(Quat::from_array(s.rotation).normalize());
                     let on = if limb[sb] { copies[sb] } else if let Some(j) = rig.joint_at(sb) { j } else { continue };
-                    let at = commands.spawn((local, Visibility::default(), ChildOf(on))).id();
+                    let at = commands.spawn((local, ChildOf(on))).id();
                     let follow = if *attached { Some(at) } else { None };
                     let world = rig.joint_at(sb).and_then(|j| joints.get(j).ok()).map(|(_, g)| g.mul_transform(local).translation()).unwrap_or(cut_at);
                     fx.write(crate::particles::SpawnEffect {

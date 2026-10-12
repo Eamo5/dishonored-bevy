@@ -9,7 +9,8 @@ use std::path::Path;
 // 103: retain unmatched-rig timelines and zero-track animation sequences.
 // 121: props' muzzles; the contact system's impact effects (`contact_fx`).
 // 122: Blink's target markers (`blink_ground`, `blink_mantle`, `blink_fall` effects).
-pub const SCENE_VERSION: u32 = 122;
+// 123: the characters' clips' effects and plague coughs; plague carriers.
+pub const SCENE_VERSION: u32 = 123;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -775,6 +776,23 @@ pub struct ClipMarks {
     pub zones: Vec<(f32, f32)>,
     #[serde(default)]
     pub fires: Vec<f32>,
+    /// the effects it starts (`AnimNotify_PlayParticleEffect`: a weeper's vomit as it coughs)
+    #[serde(default)]
+    pub fx: Vec<ClipFx>,
+    /// when it starts its character's plague cloud (`DishonoredNotify_StartPlague`: a weeper's
+    /// cough, and its retching on Corvo as it holds him)
+    #[serde(default)]
+    pub plague: Vec<f32>,
+}
+
+/// An effect a character's clip starts: seconds in, the particle system, the socket (or bone)
+/// it plays at, and whether it is held there (`bAttach`) or left where it began.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ClipFx {
+    pub time: f32,
+    pub system: u32,
+    pub socket: String,
+    pub attach: bool,
 }
 
 /// A character's ragdoll (`PhysicsAsset`): its bodies on its bones, the joints between them.
@@ -940,6 +958,34 @@ pub struct NpcStats {
     /// when it taunts Corvo (its weapon's `DisTweaks_NPCTaunt`: reach, angle, cooldowns)
     #[serde(default)]
     pub taunt: Option<FireContext>,
+    /// the plague it carries (a weeper's)
+    #[serde(default)]
+    pub plague: Option<NpcPlague>,
+}
+
+/// A plague carrier's (a weeper's pawn: `m_bHasPlague`). The cloud its cough starts deals
+/// `m_iPlagueDmgPerTick` every `m_fPlagueDmgePeriod` s for `m_fPlagueDmgLength` s (a range) to
+/// those within `m_fPlagueRadius` (m) and `m_fPlagueDmgAngle` degrees of its facing. Flies hang
+/// about it (`m_pPlagueVFX` at `m_PlagueFXSocket`, gone `m_PlagueDeathFadeTimer` s after it dies)
+/// with their buzz (`m_PlagueSFX_Idle_Start` / `_Stop`, heard within `m_PlagueSFX_MaxDistance`
+/// m). The cloud striking shows its lens effect
+/// (`m_pPlagueLensFXClass`'s `PS_CameraEffect`) and sound (`m_PlagueSFX_Damage`). Its weep
+/// behaviour coughs every `m_fCoughingCooldown` s (a range).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct NpcPlague {
+    pub per_tick: f32,
+    pub period: f32,
+    pub length: [f32; 2],
+    pub radius: f32,
+    pub angle: f32,
+    pub flies: Option<u32>,
+    pub socket: String,
+    pub fade: f32,
+    pub buzz: [String; 2],
+    pub buzz_reach: f32,
+    pub lens: Option<u32>,
+    pub hurt: String,
+    pub cough: [f32; 2],
 }
 
 /// A firearm's or bow's shooting context (`DisTweaks_NPCFireGun`, `DisTweaks_NPCFireBow`): its

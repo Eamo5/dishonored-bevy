@@ -115,6 +115,7 @@ mod hudfx;
 mod skip;
 mod softshadow;
 mod tallboy;
+mod plague;
 mod pickuplog;
 mod targetcard;
 mod gauges;
@@ -241,7 +242,7 @@ fn main() -> AppExit {
         .add_plugins((audiorooms::AudioRoomsPlugin, npcparts::NpcPartsPlugin, achievements::AchievementsPlugin, reflections::ReflectionsPlugin))
         .add_plugins((flares::FlaresPlugin, challenge::ChallengePlugin, dlc05hud::Dlc05HudPlugin, dlc05results::Dlc05ResultsPlugin, dlc05menu::Dlc05MenuPlugin, dlc05brief::Dlc05BriefPlugin, dlc05score::Dlc05ScorePlugin))
         .add_plugins((menu::MenuPlugin, save::SavePlugin, settings::SettingsPlugin, mission::MissionPlugin, ppgraph::PostGraphPlugin, watchtower::WatchTowerPlugin, highlight::HighlightPlugin, stealth::StealthPlugin, hudfx::HudFxPlugin, skip::SkipPlugin, pickuplog::PickupLogPlugin, targetcard::TargetCardPlugin, gauges::GaugesPlugin, zones::ZonesPlugin))
-        .add_plugins((flash::FlashPlugin, awareness::AwarenessPlugin, location::LocationPlugin, crosshair::CrosshairPlugin, intwindow::IntWindowPlugin, hudtext::HudTextPlugin, softshadow::SoftShadowPlugin, tallboy::TallboyPlugin, objnotify::ObjNotifyPlugin, oxygen::OxygenPlugin, playerstate::PlayerStatePlugin, grenadeind::GrenadeIndPlugin, prompts::PromptsPlugin, tutwindow::TutWindowPlugin))
+        .add_plugins((flash::FlashPlugin, awareness::AwarenessPlugin, location::LocationPlugin, crosshair::CrosshairPlugin, intwindow::IntWindowPlugin, hudtext::HudTextPlugin, softshadow::SoftShadowPlugin, tallboy::TallboyPlugin, plague::PlaguePlugin, objnotify::ObjNotifyPlugin, oxygen::OxygenPlugin, playerstate::PlayerStatePlugin, grenadeind::GrenadeIndPlugin, prompts::PromptsPlugin, tutwindow::TutWindowPlugin))
         .add_plugins((gamedata::GameDataPlugin, journal::JournalPlugin, possession::PossessionPlugin, store::StorePlugin, swarm::SwarmPlugin, gadgets::GadgetsPlugin, campaign::CampaignPlugin, heart::HeartPlugin, security::SecurityPlugin, wheel::WheelPlugin))
         .add_systems(Startup, powers::configure_xray_gizmos)
         .run()

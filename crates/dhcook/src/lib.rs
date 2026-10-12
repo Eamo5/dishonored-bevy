@@ -3593,6 +3593,7 @@ impl<'a> Cooker<'a> {
             }
             st.rat_dps = self.tweak_float(&c, "m_fRatSwarmDamagePerSecond", 0).unwrap_or(0.0);
         }
+        st.plague = self.npc_plague(pawn);
         log::debug!(
             "npc stats {}: health {:?}, weapons {:?}, ammo {:?}",
             pawn.name(),
@@ -3607,6 +3608,63 @@ impl<'a> Cooker<'a> {
             log::debug!("npc grenades {}: {:?}", pawn.name(), st.grenades.iter().map(|g| (&g.kind, g.range, g.cooldown, g.speed, g.fuse, g.blast.radius, g.blast.damage[1])).collect::<Vec<_>>());
         }
         st
+    }
+
+    /// The plague a pawn carries (`m_bHasPlague`: a weeper's), its fields' defaults the class
+    /// default's (`Default__DisTweaks_NPCPawn`, `Default__DisTweaks_AIBehavior_Weep`).
+    fn npc_plague(&mut self, pawn: &Obj) -> Option<NpcPlague> {
+        if !matches!(self.tweak_prop(pawn, "m_bHasPlague", 0, 0), Some((_, Value::Bool(true)))) {
+            return None;
+        }
+        let f = |s: &mut Self, n: &str, d: f32| s.tweak_float(pawn, n, 0).unwrap_or(d);
+        let ranged = |s: &mut Self, tw: &Obj, n: &str, d: [f32; 2]| match s.tweak_prop(tw, n, 0, 0) {
+            Some((_, Value::Struct(_, r))) => {
+                let p = Props(r);
+                [p.float("m_fMinValue").unwrap_or(d[0]), p.float("m_fMaxValue").unwrap_or(d[1])]
+            }
+            _ => d,
+        };
+        let event = |s: &mut Self, n: &str| s.tweak_obj(pawn, n).map(|o| o.name().to_string()).unwrap_or_default();
+        let flies = self.tweak_obj(pawn, "m_pPlagueVFX").and_then(|ps| self.particle_system(&ps));
+        let lens = self.tweak_obj(pawn, "m_pPlagueLensFXClass").and_then(|c| self.lens_effect(&c));
+        let socket = match self.tweak_prop(pawn, "m_PlagueFXSocket", 0, 0) {
+            Some((_, Value::Name(n))) => n,
+            _ => "spine_3_jnt".into(),
+        };
+        // its weep behaviour (the brain's behaviours, at normal difficulty)
+        let brain = self.tweak_obj(pawn, "m_pBrainTweak");
+        let weep = brain.and_then(|b| match self.tweak_prop(&b, "m_BehaviorTweak", 0, 0) {
+            Some((pkg, Value::Array { count, offset, size })) => parse_struct_array(&pkg, offset, size, count)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|b| match b.get_idx("m_Difficulty", 1) {
+                    Some(Value::Object(o)) if *o != 0 => self.assets.resolve(&pkg, *o),
+                    _ => None,
+                })
+                .find(|o| o.class() == "DisTweaks_AIBehavior_Weep"),
+            _ => None,
+        });
+        let cough = match weep {
+            Some(w) => ranged(self, &w, "m_fCoughingCooldown", [2.0, 7.0]),
+            None => [2.0, 7.0],
+        };
+        let plague = NpcPlague {
+            per_tick: f(self, "m_iPlagueDmgPerTick", 2.0),
+            period: f(self, "m_fPlagueDmgePeriod", 1.0),
+            length: ranged(self, pawn, "m_fPlagueDmgLength", [2.0, 5.0]),
+            radius: f(self, "m_fPlagueRadius", 350.0) * UNIT,
+            angle: f(self, "m_fPlagueDmgAngle", 90.0),
+            flies,
+            socket,
+            fade: f(self, "m_PlagueDeathFadeTimer", 10.0),
+            buzz: [event(self, "m_PlagueSFX_Idle_Start"), event(self, "m_PlagueSFX_Idle_Stop")],
+            buzz_reach: f(self, "m_PlagueSFX_MaxDistance", 2500.0) * UNIT,
+            lens,
+            hurt: event(self, "m_PlagueSFX_Damage"),
+            cough,
+        };
+        log::debug!("npc plague {}: {plague:?}", pawn.name());
+        Some(plague)
     }
 
     /// An object-valued tweak property (through the tweak's fallbacks).
@@ -5508,6 +5566,14 @@ impl<'a> Cooker<'a> {
                         }
                     }
                     "DishonoredNotify_FireProjectile" => m.fires.push(t),
+                    "DishonoredNotify_StartPlague" => m.plague.push(t),
+                    "AnimNotify_PlayParticleEffect" => {
+                        let Ok(np) = upk::read_object(&seq.pkg, no).map(|o| o.props) else { continue };
+                        let Some(ps) = np.object("PSTemplate").filter(|o| *o != 0).and_then(|o| self.assets.resolve(&seq.pkg, o)) else { continue };
+                        let Some(system) = self.particle_system(&ps) else { continue };
+                        let socket = np.name("SocketName").filter(|n| *n != "None").or(np.name("BoneName")).unwrap_or("None").to_string();
+                        m.fx.push(ClipFx { time: t, system, socket, attach: np.bool("bAttach").unwrap_or(false) });
+                    }
                     "DishonoredNotify_AttackInterruptable" if m.interruptible == 0.0 => m.interruptible = t,
                     "DisNotify_DropItem" => m.drops.push(t),
                     "DishonoredNotify_Ragdoll" if m.ragdoll.is_none() => m.ragdoll = Some(t),
@@ -5538,10 +5604,19 @@ impl<'a> Cooker<'a> {
             }
             m.feet.sort_by(|a, b| a.0.total_cmp(&b.0));
             m.hooks.sort_by(|a, b| a.0.total_cmp(&b.0));
-            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() {
+            m.fx.sort_by(|a, b| a.time.total_cmp(&b.time));
+            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() {
                 self.scene.clip_marks.push(m);
             }
         }
+    }
+
+    /// A camera lens effect class's particle system (its default's `PS_CameraEffect`).
+    fn lens_effect(&mut self, cls: &Obj) -> Option<u32> {
+        let name = cls.name().to_string();
+        let def = ["DishonoredGame", "Engine", "GameFramework"].iter().find_map(|p| self.assets.find(&format!("{p}.Default__{name}")))?;
+        let ps = self.chain(&def).obj(self.assets, "PS_CameraEffect")?;
+        self.particle_system(&ps)
     }
 
     fn npc_severs(&mut self, set: &Obj) {
@@ -6574,10 +6649,7 @@ impl<'a> Cooker<'a> {
                                 if class == "AnimNotify_CameraEffect" {
                                     let Ok(np) = upk::read_object(&seq.pkg, no).map(|o| o.props) else { continue };
                                     let Some(cls) = np.object("CameraLensEffect").filter(|o| *o != 0).and_then(|o| self.assets.resolve(&seq.pkg, o)) else { continue };
-                                    let name = cls.name().to_string();
-                                    let def = ["DishonoredGame", "Engine", "GameFramework"].iter().find_map(|p| self.assets.find(&format!("{p}.Default__{name}")));
-                                    let Some(ps) = def.and_then(|d| self.chain(&d).obj(self.assets, "PS_CameraEffect")) else { continue };
-                                    let Some(system) = self.particle_system(&ps) else { continue };
+                                    let Some(system) = self.lens_effect(&cls) else { continue };
                                     self.scene.arm_fx.push(ArmFx { clip: clip.clone(), time: n.float("Time").unwrap_or(0.0), socket: "lens".into(), system });
                                     continue;
                                 }

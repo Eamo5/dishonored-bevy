@@ -34,7 +34,7 @@ impl Plugin for GameAudioPlugin {
             .add_systems(Update, apply_speakers)
             .add_systems(
                 Update,
-                (attach_listener, run_ambients, run_timed, play_events, advance_playlists, finish_voices, stop_events, run_fades, attenuate, pause_voices).chain().after(apply_speakers).run_if(in_state(GameState::InGame)),
+                (attach_listener, run_ambients, run_timed, play_events, follow_sounds, advance_playlists, finish_voices, stop_events, run_fades, attenuate, pause_voices).chain().after(apply_speakers).run_if(in_state(GameState::InGame)),
             );
     }
 }
@@ -142,6 +142,8 @@ pub struct PostEvent {
     pub speaker: Option<Entity>,
     /// a spoken line (the voice volume)
     pub voice: bool,
+    /// carried by this entity (it follows it, and fades once it's gone)
+    pub follow: Option<Entity>,
 }
 
 impl PostEvent {
@@ -150,7 +152,13 @@ impl PostEvent {
         if log_enabled() {
             NAMES.lock().unwrap().get_or_insert_with(HashMap::new).entry(event).or_insert_with(|| name.to_string());
         }
-        PostEvent { event, at, speaker: None, voice: false }
+        PostEvent { event, at, speaker: None, voice: false, follow: None }
+    }
+
+    /// Carried by `e` (a weeper's buzzing flies).
+    pub fn following(mut self, e: Entity) -> Self {
+        self.follow = Some(e);
+        self
     }
 
     /// Said by a character.
@@ -253,7 +261,7 @@ fn apply_speakers(
         a.retrigger = 0.0;
     }
     if let Some((event, _, _)) = music.current {
-        posts.write(PostEvent { event, at: None, speaker: None, voice: false });
+        posts.write(PostEvent { event, at: None, speaker: None, voice: false, follow: None });
     }
 }
 
@@ -288,6 +296,24 @@ fn rtpc_mods(curves: &[RtpcCurve], value: impl Fn(u32) -> Option<f32>) -> (f32, 
         }
     }
     (gain, 2f32.powf(cents / 1200.0))
+}
+
+/// A sound carried by an entity.
+#[derive(Component)]
+struct Following(Entity);
+
+/// Sounds go with what carries them, and fade once it's gone.
+fn follow_sounds(mut q: Query<(&Following, &mut Transform, &mut Emitter)>, carriers: Query<&GlobalTransform>) {
+    for (f, mut t, mut em) in &mut q {
+        match carriers.get(f.0) {
+            Ok(g) => t.translation = g.translation(),
+            Err(_) if em.fade_rate >= 0.0 => {
+                em.playlist = None;
+                em.fade_rate = -4.0;
+            }
+            Err(_) => {}
+        }
+    }
 }
 
 /// Stop (fade out) the sounds an event started.
@@ -397,6 +423,7 @@ struct Start {
     fade_in: bool,
     speaker: Option<Entity>,
     voice: bool,
+    follow: Option<Entity>,
 }
 
 /// Start one "play" entry of an event; returns the state cases it depends on.
@@ -479,6 +506,9 @@ fn start_play(
         if one_shot {
             ec.insert(OneShot);
         }
+        if let Some(f) = s.follow {
+            ec.insert(Following(f));
+        }
     }
     used
 }
@@ -541,7 +571,7 @@ fn play_events(
                 // one music at a time
                 fade_out_music(&mut emitters);
             }
-            let used = start_play(&mut commands, &lib, &mut handles, &out, listener.single().ok(), &states.0, play, Start { event: m.event, at: m.at, ambient, fade_in, speaker: m.speaker, voice: m.voice });
+            let used = start_play(&mut commands, &lib, &mut handles, &out, listener.single().ok(), &states.0, play, Start { event: m.event, at: m.at, ambient, fade_in, speaker: m.speaker, voice: m.voice, follow: m.follow });
             if play.music {
                 music.current = Some((m.event, k, used));
             }
@@ -560,7 +590,7 @@ fn play_events(
                         info!("audio: music {event:#x} switches {used:x?} -> {now:x?}");
                     }
                     fade_out_music(&mut emitters);
-                    let used = start_play(&mut commands, &lib, &mut handles, &out, listener.single().ok(), &states.0, play, Start { event, at: None, ambient: None, fade_in: true, speaker: None, voice: false });
+                    let used = start_play(&mut commands, &lib, &mut handles, &out, listener.single().ok(), &states.0, play, Start { event, at: None, ambient: None, fade_in: true, speaker: None, voice: false, follow: None });
                     music.current = Some((event, k, used));
                 }
             }
@@ -801,7 +831,7 @@ fn run_ambients(
         }
         if near && !a.playing && a.retrigger <= 0.0 {
             a.playing = true;
-            requests.push((PostEvent { event: a.event, at: Some(a.position), speaker: None, voice: false }, i));
+            requests.push((PostEvent { event: a.event, at: Some(a.position), speaker: None, voice: false, follow: None }, i));
         } else if !near && a.playing {
             a.playing = false;
             stop.push(i);

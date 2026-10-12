@@ -149,7 +149,8 @@ pub struct Npc {
     /// the blow under way (with `attack_t`), and each move's cooldown
     pub swing: Option<Swing>,
     pub melee_cd: Vec<f32>,
-    /// a gesture to play once (1 its parry won, 2 its blow parried, 3 a shove) and its count;
+    /// a gesture to play once (1 its parry won, 2 its blow parried, 3 a shove; 12 a taunt, 13 a
+    /// weeper's cough) and its count;
     /// a riposte due in (s); how long Corvo has crowded it
     pub act: (u8, u32),
     pub riposte: f32,
@@ -218,6 +219,9 @@ pub struct Npc {
     pub search_run: bool,
     /// it saw one of its own die (the alarm's `m_fAlarmChanceUponWitnessDeath`)
     pub witnessed_death: bool,
+    /// a plague carrier's time until it coughs again, and how long its cough holds it
+    pub cough_cd: f32,
+    pub cough_hold: f32,
     /// an NPC of an enemy faction it is fighting (`DisTweaks_Faction.m_EnemyFactions`), and
     /// when it next looks for one
     pub foe: Option<Entity>,
@@ -340,11 +344,13 @@ pub struct Arms {
     pub fire: Option<dhcook::format::FireContext>,
     /// when it taunts (its taunt context)
     pub taunt: Option<dhcook::format::FireContext>,
+    /// the plague it carries (a weeper's: its cough's cloud, its flies)
+    pub plague: Option<dhcook::format::NpcPlague>,
 }
 
 impl Default for Arms {
     fn default() -> Self {
-        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None }
+        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None }
     }
 }
 
@@ -459,6 +465,7 @@ impl Arms {
         a.tunes = st.tunes.clone();
         a.fire = st.fire.clone();
         a.taunt = st.taunt.clone();
+        a.plague = st.plague.clone();
         a
     }
 }
@@ -906,6 +913,10 @@ pub struct Grabbed {
 const GRAB_RANGE: f32 = 4.0;
 const GRAB_DODGE: f32 = 1.5;
 pub const GRAB_PRESSES: u32 = 5;
+/// After any weeper's grab, none grabs for this long (s: `DefaultAI.ini`'s
+/// `DisGlobalCombatManager.m_fInhibitionTimeWeeperArmGrab`, as roshan's r614/blink research
+/// pointed out).
+const GRAB_INHIBIT: f32 = 20.0;
 
 /// A wolfhound's leap and pin (`Twk_Inv_WolfhoundBite`: `DisTweaks_WHJumpAttack` from 5.5 to
 /// 8 m, knocking Corvo down for `m_DamageOnKnockDown` 7/10/15/20 by difficulty; then
@@ -1414,6 +1425,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         taunt_hold: 0.0,
         search_run: false,
         witnessed_death: false,
+        cough_cd: rand::random::<f32>() * 3.0,
+        cough_hold: 0.0,
         foe: None,
         feud_scan: rand::random::<f32>(),
         grab: None,
@@ -2420,7 +2433,7 @@ pub(crate) fn npc_brain(
     player: Query<(Entity, &Transform, Option<&crate::combat::Sword>), With<Player>>,
     mut npcs: Query<(Entity, &mut Npc, &Transform), (Without<Player>, Without<crate::possession::Possessed>)>,
     (level, mut npc_hits, ai, mut fled): (Option<Res<LevelInfo>>, MessageWriter<NpcHit>, Res<crate::aiworld::AiWorld>, MessageWriter<crate::aiworld::FleePointReached>),
-    (stances, settings): (Res<crate::script_world::SpawnerOverrides>, Res<crate::settings::Settings>),
+    (stances, settings, mut grab_inhibit): (Res<crate::script_world::SpawnerOverrides>, Res<crate::settings::Settings>, Local<f32>),
     mut grenades: MessageWriter<crate::gadgets::NpcGrenade>,
     (finishing, mut finishers, mut tallboy_shots): (Query<(), With<FinisherClip>>, MessageWriter<NpcFinisher>, MessageWriter<crate::tallboy::TallboyShot>),
 ) {
@@ -2443,6 +2456,8 @@ pub(crate) fn npc_brain(
     let mut attackers = npcs.iter().filter(|(_, n, _)| n.attack_t.is_some()).count();
     // one weeper at a time grabs Corvo
     let grab_active = npcs.iter().any(|(_, n, _)| n.grab.is_some());
+    // (after any weeper's grab, none for a while: `DisGlobalCombatManager.m_fInhibitionTimeWeeperArmGrab`)
+    *grab_inhibit = (*grab_inhibit - dt_world).max(0.0);
     for (e, mut npc, t) in &mut npcs {
         let pos = t.translation;
         // (its time: the world's, stopped, or its own)
@@ -3014,6 +3029,32 @@ pub(crate) fn npc_brain(
                         continue;
                     }
                 }
+                // a plague carrier coughs (its weep behaviour's `m_fCoughingCooldown`), standing for
+                // the clip when Corvo is near enough to catch the cloud; the clip's notifies start
+                // the cloud and the vomit (`plague`)
+                if let Some((reach, cough)) = npc.arms.plague.as_ref().map(|p| (p.radius, p.cough)) {
+                    npc.cough_cd -= dt;
+                    if npc.cough_hold > 0.0 {
+                        npc.cough_hold -= dt;
+                        if npc.stagger <= 0.0 && npc.hit_react <= 0.0 && npc.grab.is_none() {
+                            npc.target = None;
+                            continue;
+                        }
+                        npc.cough_hold = 0.0;
+                    }
+                    if npc.cough_cd <= 0.0 && npc.grab.is_none() && npc.stagger <= 0.0 && npc.sees_player && d < reach + 1.5 {
+                        npc.cough_cd = cough[0] + rand::random::<f32>() * (cough[1] - cough[0]).max(0.0) + COUGH_HOLD;
+                        npc.cough_hold = COUGH_HOLD;
+                        npc.gesture(13);
+                        npc.target = None;
+                        let to = (ppos - pos).with_y(0.0);
+                        if to.length() > 0.1 {
+                            npc.yaw = (-to.x).atan2(-to.z);
+                        }
+                        info!("{} coughs {d:.1} m from Corvo", npc.name);
+                        continue;
+                    }
+                }
                 // weepers seize Corvo by the arm (`DisTweaks_WeeperGrab`)
                 if npc.grab.is_some() {
                     npc.target = None;
@@ -3023,10 +3064,11 @@ pub(crate) fn npc_brain(
                     }
                     continue;
                 }
-                if npc.name.contains("Weeper") && !grab_active && npc.attack_cd <= 0.0 && npc.stagger <= 0.0 && npc.sees_player && d < GRAB_RANGE && d > 0.6 {
+                if npc.name.contains("Weeper") && !grab_active && *grab_inhibit <= 0.0 && npc.attack_cd <= 0.0 && npc.stagger <= 0.0 && npc.sees_player && d < GRAB_RANGE && d > 0.6 {
                     let to = (ppos - pos).with_y(0.0);
                     let facing = to.normalize_or_zero().dot(npc.forward()) > 0.0;
                     if facing && (ppos.y - pos.y).abs() < 0.8 && rand::random::<f32>() < dt * 3.0 {
+                        *grab_inhibit = GRAB_INHIBIT;
                         npc.grab = Some((GrabPhase::Try, 0.0));
                         npc.target = None;
                         continue;
@@ -3043,8 +3085,14 @@ pub(crate) fn npc_brain(
                         continue;
                     }
                 }
-                // melee: blades, or teeth and claws for the unarmed (wolfhounds, weepers)
-                if npc.has_sword || npc.enemy {
+                // melee: blades, or teeth and claws for the unarmed (wolfhounds); a plague carrier
+                // has no blow (its weep behaviour only grabs and coughs, as roshan's r614/blink
+                // research found), and keeps the same distance
+                if npc.arms.plague.is_some() {
+                    if d < 1.4 {
+                        npc.target = None;
+                    }
+                } else if npc.has_sword || npc.enemy {
                     for c in npc.melee_cd.iter_mut() {
                         *c -= dt;
                     }
@@ -3614,6 +3662,8 @@ pub struct NpcClips {
     under: [Option<ClipId>; 2],
     /// its taunts (each cueing its line, `COMBAT_TAUNT_WITH_GESTURE`)
     taunt: Vec<ClipId>,
+    /// a weeper's cough (`DisNPCAnim_Weeper_Cough`)
+    cough: Vec<ClipId>,
     /// its aim offsets (`ADD_Sword_Gun_AimIdle_*`): up, centre and down rows, left to right
     gun_aim: [Option<ClipId>; 9],
 }
@@ -3638,7 +3688,8 @@ impl NpcClips {
                 "Patrol_Idle_04",
             ]),
             walk: lib.first(&["Sword_Patrol_WalkN", "Empty_Walk_Patrol", "Empty_WalkN", "Sword_WalkN", "Patrol_WalkN"]),
-            idle_alert: lib.first(&["Sword_Idle", "Empty_Idle", "Sword_Patrol_Idle", "Attack_idle", "Patrol_Idle"]),
+            // (a weeper weeps standing: `DisNPCAnim_Weep`)
+            idle_alert: lib.first(&["Sword_Idle", "Empty_Weep_Idle", "Empty_Idle", "Sword_Patrol_Idle", "Attack_idle", "Patrol_Idle"]),
             walk_alert: lib.first(&["Sword_WalkN", "Empty_WalkN", "Attack_WalkN", "Patrol_TrotN"]),
             run: lib.first(&["Sword_RunN", "Empty_RunN", "Patrol_RunN"]),
             flee: lib.first(&["Empty_RunN_Panic1", "Sword_RunN_Panic", "Empty_RunN", "Sword_RunN", "Patrol_RunN"]),
@@ -3723,6 +3774,7 @@ impl NpcClips {
             gun: [lib.find("Sword_Gun_Draw"), lib.find("Sword_Gun_Idle"), lib.find("Sword_Gun_Fire"), lib.find("Sword_Gun_Undraw")],
             under: [lib.find("Sword_Attack_UnderTable"), lib.find("Sword_Gun_AttackUnderTable")],
             taunt: lib.all(&["Sword_TauntA", "Sword_TauntB", "Sword_TauntC"]),
+            cough: lib.all(&["Empty_Idle_Cough"]),
             gun_aim: ["UpLeft", "Up", "UpRight", "CenterLeft", "Center", "CenterRight", "DownLeft", "Down", "DownRight"].map(|d| lib.find(&format!("ADD_Sword_Gun_AimIdle_{d}"))),
         };
         (c.idle.is_some() && c.walk.is_some()).then_some(c)
@@ -3772,6 +3824,9 @@ pub struct NpcAnim {
 /// The pause before a blade strikes under a hideout again, after its strike's clip (s:
 /// `DisTweaks_NPCAttackUnder` sets no cooldown of its own): base and spread.
 const UNDER_SWORD: (f32, f32) = (1.0, 1.0);
+
+/// How long a cough holds a plague carrier (s: `Empty_Idle_Cough` runs 2.66 s).
+const COUGH_HOLD: f32 = 2.6;
 
 /// How long a taunt holds a character (s: its gestures, `Sword_TauntA/B/C`, run 2.4-3.0 s).
 const TAUNT_HOLD: f32 = 2.7;
@@ -3856,6 +3911,16 @@ impl NpcAnim {
     /// The lines a clip cues (`DishonoredNotify_FireDialogHook`): when, which dialog hook.
     pub fn clip_hooks(&self, clip: ClipId) -> &[(f32, String)] {
         self.marks.get(&clip).map(|m| m.hooks.as_slice()).unwrap_or(&[])
+    }
+
+    /// The effects a clip starts (`AnimNotify_PlayParticleEffect`).
+    pub fn clip_fx(&self, clip: ClipId) -> &[dhcook::format::ClipFx] {
+        self.marks.get(&clip).map(|m| m.fx.as_slice()).unwrap_or(&[])
+    }
+
+    /// When a clip starts its character's plague cloud (`DishonoredNotify_StartPlague`).
+    pub fn plague_marks(&self, clip: ClipId) -> &[f32] {
+        self.marks.get(&clip).map(|m| m.plague.as_slice()).unwrap_or(&[])
     }
 
     /// A clip's `DisNotify_FootPlacement`s (as it starts, in its time, as it ends): when, and
@@ -4309,6 +4374,7 @@ fn npc_select_anim(
                 10 => &clips.ambush[2],
                 11 => &clips.ambush[3],
                 12 => &clips.taunt,
+                13 => &clips.cough,
                 _ => &clips.push,
             };
             if let Some(c) = pick(pool) {
