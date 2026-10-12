@@ -835,13 +835,15 @@ fn razors(
             }
             Some(tt) if tt + dt >= 0.35 => {
                 // the shrapnel (`m_fDamageActorDelayTime` 0.35 s on): every character in its
-                // cylinder and sight dies; Corvo there takes `m_NonNPCDamage`
+                // cylinder and sight dies; Corvo there takes `Twk_Inv_SpringRazorPlaced`'s
+                // `m_ImmuneNPCDamage` (50: the pawns the cut can't sever take it, the characters
+                // `m_NonNPCDamage`'s 5 and the cut, as roshan's r614/blink research decoded it)
                 sfx.write(PostEvent::named("Snd_Spring_Razor_Shot", Some(p)));
                 fx.write(SpawnEffect { rot: t.rotation, ..SpawnEffect::at("springrazor", p) });
                 noise.write(Noise { pos: p, radius: 15.0, kind: NoiseKind::Threatening });
                 if let Ok(pt) = player.single() {
                     if inside(pt.translation, 2.5 * bonus) && seen(pt.translation) && !stats.dead {
-                        stats.take_damage(5.0);
+                        stats.take_damage(50.0);
                         stats.damage_flash = 1.0;
                         stats.hit_from = Some(p);
                         if stats.health <= 0.0 {

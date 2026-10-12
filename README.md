@@ -549,7 +549,8 @@ fullscreen display, vertical sync and the crosshair.
   `EDisUIPlayerState`): crouched, a figure crouching (or creeping, moving) plays in from
   standing at the bottom left over its swirl backing, and back up as he stands.
 - **Taking damage as the original shows it** (`hudfx.rs`, the HUD effects movie
-  `UI_HUDFX.HUDFX` and its `DirectionalDamages` class, disassembled): the screen's edges
+  `UI_HUDFX.HUDFX` and its `DirectionalDamages` class, disassembled), each blow's d being its
+  damage as a share of `m_fMaxDamage` (70) x 100: the screen's edges
   redden (the movie's edge strip on all four sides, the sides at a third, alpha raised by
   `0.01·d² + 0.4·d − 1` per hit, held `max(40·d ms, 2.5 s)`, faded over 3.5 s); the hit
   sprite (`dirHitSprite`, played from its timeline) lands on the screen's edge towards the
@@ -1346,7 +1347,8 @@ against the install's own data where it carries them, then implemented independe
     The fuse runs out whatever they hit, and a sticky grenade does 75 more to whoever it is stuck
     to. A sticky grenade sinks 5 cm into what it sticks to; on a wall it goes off just out of it.
   - The Spring Razor kills everyone in a 2.5 m cylinder along its surface's normal and in its
-    sight; the Spring Razor upgrade doubles the radius. Corvo caught in it takes 5. A blast sets it
+    sight; the Spring Razor upgrade doubles the radius. Corvo caught in it takes 50
+    (`m_ImmuneNPCDamage`; the characters' `m_NonNPCDamage` 5 comes with the cut). A blast sets it
     off 0.75 s later.
   - The blade reaches 2.1 m, growing to 2.835 m at a full sprint.
   - Thrown props fly at `ThrowStrength` whatever their weight, without his own speed.

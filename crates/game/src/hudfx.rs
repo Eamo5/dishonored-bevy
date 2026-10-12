@@ -186,6 +186,9 @@ fn spawn_damage_fx(mut commands: Commands, mut ui: ResMut<crate::ui_images::UiIm
     }
 }
 
+/// The damage the HUD's effects are made for (`DisTweaks_GFxMoviePlayerHUD.m_fMaxDamage`).
+const MAX_DAMAGE: f32 = 70.0;
+
 /// `TakeDamage`: each drop of Corvo's health, from where the blow came.
 fn take_damage(
     mut stats: ResMut<PlayerStats>,
@@ -197,10 +200,13 @@ fn take_damage(
     let last = fx.last_health.replace(health);
     let from = stats.hit_from.take();
     let Some(last) = last else { return };
-    let damage = last - health;
-    if damage <= 0.01 || fx.hits.is_empty() || std::env::var("DH_NO_HUDFX").is_ok() {
+    let lost = last - health;
+    if lost <= 0.01 || fx.hits.is_empty() || std::env::var("DH_NO_HUDFX").is_ok() {
         return;
     }
+    // the movie takes it as a share of `DisTweaks_GFxMoviePlayerHUD.m_fMaxDamage` (70), x 100
+    // (as roshan's r614/blink research read `DirectionalDamages.TakeDamage`'s call)
+    let damage = (lost / MAX_DAMAGE).clamp(0.0, 1.0) * 100.0;
     // the blow's angle on the screen: 0 ahead (up), clockwise; unknown, from below
     let angle = match (from, cam.single(), player.single()) {
         (Some(f), Ok(c), Ok(p)) => {
