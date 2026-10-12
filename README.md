@@ -1017,7 +1017,12 @@ fullscreen display, vertical sync and the crosshair.
   rewiring and script-controlled power state.
 - **Tallboys** carry their tanks and shields on their sockets (`m_pAttachmentsTweaks`): the
   breakable parts wear down, break at once to the blows their tweak names (a bullet or bolt in
-  a tank) and shrug off others (Wind Blast); a tank bursts with its blast and kills its tallboy.
+  a tank) and shrug off others (Wind Blast); a tank bursts with its blast and kills its tallboy. Their
+  arrows fly (`tallboy.rs`, the bow `NPCFireBow_1` as roshan's r614/blink research decoded it): one
+  meant to hit is aimed at the ground under Corvo, leading him, on the arc that brings it down
+  there (20 m/s, half gravity), one meant to miss turns aside up to 30 degrees; it bursts where
+  it first strikes (`TallboyArrowExplosion_Twk`: 40 within 1 m, nothing at 5 m), and a tallboy
+  holds its arrow while one of its own stands within 7.5 m of Corvo.
 - **Room reverb**: each room's environment (`m_Environment`: `Room_Medium_Wood`,
   `PC_streets_01`, `sewer`...) is the bank's reverb effect of that name (`Init.bnk`'s RoomVerb
   and Matrix Reverb share sets: decay, high damping, tail level), cooked into the audio index;
@@ -1950,7 +1955,7 @@ or jumping onto what holds it up; `DH_GOTO_LOG`), `gototask [N] [S]` (to the N-t
 furthest spot with a floor and a clear line to it), `ledge [LOW] [HIGH] [crouch]` (before the nearest edge Corvo could mantle onto, LOW-HIGH m
 high; `crouch`, only one he'd arrive crouched on; `DH_MANTLE_LOG` logs what blocks a mantle's
 top), `pos` (his position, velocity, footing), `pistol [NAME]` (the nearest hostile character
-carries a pistol and turns on him), `npchere [D] [NAME]` (the nearest hostile character, or
+carries a pistol and turns on him; `bow [NAME]`, a tallboy's bow: `DH_GUN_LOG` logs why it holds), `npchere [D] [NAME]` (the nearest hostile character, or
 the nearest whose name holds NAME, moved D m before him), `stream NAME [out]` (a streamed sublevel loads, or goes), `rise D` (Corvo lifted D m and held there), `hideout` (Corvo crouched in the nearest hideout volume), `keyhole [D]` (before the nearest keyhole, looking at it), `spotlit [D]` (a character stood under the nearest dominant spot light, Corvo looking on), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `runes N`,
 `charms N`, `mana`, `ammo TYPE N` (0 bullets .. 6 grenades, 7 sticky), `fx EFFECT [DIST]`,
 `remote EVENT` (a level-script remote event, e.g. `ChangeLvl_fromStreets1_toHub`), `chaos N`,

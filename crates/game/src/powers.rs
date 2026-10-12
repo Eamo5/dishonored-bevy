@@ -612,7 +612,7 @@ pub(crate) fn save_projectiles<'a>(projectiles: impl IntoIterator<Item = (&'a Pr
     }).collect()
 }
 
-fn projectile_model(entity: &mut EntityCommands, assets: Option<&GameAssets>, kind: HitKind) {
+pub(crate) fn projectile_model(entity: &mut EntityCommands, assets: Option<&GameAssets>, kind: HitKind) {
     if kind == HitKind::Fire {
         entity.insert((
             PointLight { color: Color::srgb(1.0, 0.55, 0.2), intensity: 60_000.0, range: 5.0, ..default() },

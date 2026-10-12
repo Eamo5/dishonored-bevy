@@ -967,16 +967,17 @@ fn run_script(
                 }
             });
         }
-        "pistol" => {
+        "pistol" | "bow" => {
             // (tests) pistol [NAME]: the nearest standing hostile character (whose name holds NAME)
-            // carries a pistol, and fights (knowing where Corvo is)
+            // carries a pistol (or a tallboy's bow), and fights (knowing where Corvo is)
             let at = t.translation;
             let named = cmd.get(1).cloned().unwrap_or_default();
+            let kind = if cmd[0] == "bow" { 2 } else { 1 };
             commands.queue(move |w: &mut World| {
                 let mut q = w.query::<(&mut Npc, &Transform)>();
                 if let Some((mut n, _)) = q.iter_mut(w).filter(|(n, _)| !n.is_down() && n.hostile() && n.name.contains(&named)).min_by(|a, b| a.1.translation.distance(at).total_cmp(&b.1.translation.distance(at))) {
                     // (and turns on Corvo)
-                    n.ranged = 1;
+                    n.ranged = kind;
                     n.enemy = true;
                     n.alert = crate::npc::Alert::Combat;
                     n.set_mode(crate::npc::Mode::Combat);

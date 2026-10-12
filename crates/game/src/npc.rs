@@ -2422,7 +2422,7 @@ pub(crate) fn npc_brain(
     (level, mut npc_hits, ai, mut fled): (Option<Res<LevelInfo>>, MessageWriter<NpcHit>, Res<crate::aiworld::AiWorld>, MessageWriter<crate::aiworld::FleePointReached>),
     (stances, settings): (Res<crate::script_world::SpawnerOverrides>, Res<crate::settings::Settings>),
     mut grenades: MessageWriter<crate::gadgets::NpcGrenade>,
-    (finishing, mut finishers): (Query<(), With<FinisherClip>>, MessageWriter<NpcFinisher>),
+    (finishing, mut finishers, mut tallboy_shots): (Query<(), With<FinisherClip>>, MessageWriter<NpcFinisher>, MessageWriter<crate::tallboy::TallboyShot>),
 ) {
     let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
     let max_attackers = INNER_SKIRMISH_CAPS[(settings.difficulty as usize).min(3)];
@@ -2965,7 +2965,13 @@ pub(crate) fn npc_brain(
                             }
                         }
                     }
-                    let ready = npc.shoot_cd <= 0.0 && npc.sees_player && npc.attack_t.is_none() && d > near && d < far && npc.stagger <= 0.0;
+                    // (a tallboy holds its arrow while one of its own stands within 7.5 m of Corvo: the
+                    // burst would take them too)
+                    let ally_by = npc.ranged == 2 && others.iter().any(|o| o.0 != e && !o.3 && o.2 == npc.faction && o.1.distance(ppos) < 7.5);
+                    let ready = npc.shoot_cd <= 0.0 && npc.sees_player && npc.attack_t.is_none() && d > near && d < far && npc.stagger <= 0.0 && !ally_by;
+                    if npc.ranged == 2 && std::env::var("DH_GUN_LOG").is_ok() && (time.elapsed_secs() % 1.0) < time.delta_secs() {
+                        info!("bow: {} cd {:.1} sees {} attack {} d {d:.1} ({near}-{far}) stagger {:.1} ally {ally_by} facing {facing}", npc.name, npc.shoot_cd, npc.sees_player, npc.attack_t.is_some(), npc.stagger);
+                    }
                     if npc.ranged == 1 && ready && !aimed && (unreachable || npc.velocity.with_y(0.0).length() < 0.3) {
                         npc.aim = Some((0.75 + rand::random::<f32>() * 0.5, 0.0));
                         info!("{} aims its pistol {d:.1} m away (from {pos:.2}, facing {:.2})", npc.name, npc.yaw);
@@ -2980,11 +2986,17 @@ pub(crate) fn npc_brain(
                         let k = ((d - near) / (far - near).max(0.1)).clamp(0.0, 1.0);
                         let chance = (npc.arms.accuracy[0] + (npc.arms.accuracy[1] - npc.arms.accuracy[0]) * k) * if npc.ranged == 1 { 1.0 - attrs.npc_gun_miss } else { 1.0 };
                         let hit = rand::random::<f32>() < chance;
-                        if hit {
-                            hit_writer.write(PlayerHit { npc: e, from: pos, damage: npc.arms.ranged, kick: false, big: false, push: false, unblockable: false });
-                        }
                         info!("{} shoots {d:.1} m ({})", npc.name, if hit { "hit" } else { "miss" });
-                        shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: npc.ranged >= 2 });
+                        if npc.ranged == 2 {
+                            // a tallboy's arrow flies and bursts where it strikes (`tallboy`), from
+                            // the rider's bow
+                            tallboy_shots.write(crate::tallboy::TallboyShot { from: pos + Vec3::Y * 2.0, at: ppos, hit, source: e });
+                        } else {
+                            if hit {
+                                hit_writer.write(PlayerHit { npc: e, from: pos, damage: npc.arms.ranged, kick: false, big: false, push: false, unblockable: false });
+                            }
+                            shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: npc.ranged >= 2 });
+                        }
                         npc.shots += 1;
                         if npc.ranged == 1 {
                             npc.gun_hold = GUN_HOLD;
