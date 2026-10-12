@@ -453,6 +453,26 @@ fn run_script(
             p.noclip = cmd[0] == "fly";
             info!("script: {} to {}", cmd[0], t.translation);
         }
+        "keyhole" => {
+            // (tests) keyhole [D]: Corvo stands D m (default 0.8) before the nearest keyhole, on
+            // his side of its door, looking at it
+            let d = if cmd.len() > 1 { f(1) } else { 0.8 };
+            let near = level.as_ref().and_then(|l| l.scene.keyholes.iter().min_by(|a, b| Vec3::from(a.center).distance(t.translation).total_cmp(&Vec3::from(b.center).distance(t.translation))).cloned());
+            let (Some(k), Ok(ctx), Ok(pe)) = (near, rapier.single(), player_ent.single()) else { return };
+            let c = Vec3::from(k.center);
+            let n = Vec3::from(k.normal).with_y(0.0).normalize_or(Vec3::X);
+            let side = if (t.translation - c).dot(n) < 0.0 { -n } else { n };
+            let at = c + side * d;
+            let world = bevy_rapier3d::prelude::QueryFilter::default().exclude_collider(pe).exclude_sensors().groups(bevy_rapier3d::prelude::CollisionGroups::new(bevy_rapier3d::prelude::Group::ALL, crate::level::GROUP_WORLD));
+            let floor = ctx.cast_ray(at + Vec3::Y * 0.5, Vec3::NEG_Y, 3.0, true, world).map(|(_, toi)| at.y + 0.5 - toi).unwrap_or(at.y - 1.0);
+            t.translation = Vec3::new(at.x, floor + crate::player::STAND_HALF + crate::player::RADIUS + 0.04, at.z);
+            p.velocity = Vec3::ZERO;
+            p.noclip = false;
+            let to = c - (t.translation + Vec3::Y * crate::player::STAND_EYE);
+            p.yaw = (-to.x).atan2(-to.z);
+            p.pitch = (to.y / to.length().max(1e-3)).asin();
+            info!("script: before the keyhole of {} at {c:.2}", k.actor);
+        }
         "hideout" => {
             // (tests) hideout: Corvo crouched in the nearest hideout (`DisHideoutVolume`: under a
             // table, a bed), on its floor
