@@ -221,7 +221,7 @@ fn main() -> Result<()> {
             // dhtool animdump <file.anim> <clip>: a cooked clip's tracks (bone, keys, value range)
             let f = dhcook::format::AnimFile::read(std::path::Path::new(&args[2]))?;
             for c in f.clips.iter().filter(|c| c.name.eq_ignore_ascii_case(&args[3])) {
-                println!("{} {:.2}s {} fps {} frames", c.name, c.duration, c.rate, c.frames);
+                println!("{} {:.2}s {} fps {} frames, root motion {:?}", c.name, c.duration, c.rate, c.frames, c.root_motion);
                 for t in &c.rotations {
                     let ang: Vec<f32> = t.values.iter().map(|q| { let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt().max(1e-9); 2.0 * (q[3].abs() / n).min(1.0).acos().to_degrees() }).collect();
                     println!("  rot {} keys {} angle {:.2}..{:.2} first {:?}", f.bones[t.bone as usize], t.values.len(), ang.iter().cloned().fold(f32::MAX, f32::min), ang.iter().cloned().fold(f32::MIN, f32::max), t.values.first());

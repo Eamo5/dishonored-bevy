@@ -1694,6 +1694,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 holster,
                 grab_seen: None,
                 act_seen: 0,
+                way: 0,
                 marks: std::sync::Arc::new(lib.marks(scene)),
                 blade,
                 gun,
@@ -3609,6 +3610,11 @@ pub struct NpcClips {
     idle_alert: Option<ClipId>,
     walk_alert: Option<ClipId>,
     run: Option<ClipId>,
+    /// the alert walk's and the run's other ways (`AnimNodeBlendDirectional`: east (right),
+    /// south, west), each with its rate's sign: a set without a south or west of its own plays
+    /// its `_Revert` clip backwards (the guards' sword sets)
+    walk_dirs: [Option<(ClipId, f32)>; 3],
+    run_dirs: [Option<(ClipId, f32)>; 3],
     flee: Option<ClipId>,
     attack: Vec<ClipId>,
     /// the moves' own: a short blow (small, big), a medium and a long lunge, a kick
@@ -3776,7 +3782,15 @@ impl NpcClips {
             taunt: lib.all(&["Sword_TauntA", "Sword_TauntB", "Sword_TauntC"]),
             cough: lib.all(&["Empty_Idle_Cough"]),
             gun_aim: ["UpLeft", "Up", "UpRight", "CenterLeft", "Center", "CenterRight", "DownLeft", "Down", "DownRight"].map(|d| lib.find(&format!("ADD_Sword_Gun_AimIdle_{d}"))),
+            walk_dirs: [None; 3],
+            run_dirs: [None; 3],
         };
+        let dirs = |n: Option<ClipId>, base: &str| -> [Option<(ClipId, f32)>; 3] {
+            let Some(prefix) = n.and_then(|n| lib.clip(n).name.strip_suffix(&format!("{base}N")).map(str::to_string)) else { return [None; 3] };
+            let way = |d: &str| lib.find(&format!("{prefix}{base}{d}")).map(|c| (c, 1.0)).or_else(|| lib.find(&format!("{prefix}{base}{d}_Revert")).map(|c| (c, -1.0)));
+            [lib.find(&format!("{prefix}{base}E")).map(|c| (c, 1.0)), way("S"), way("W")]
+        };
+        let c = NpcClips { walk_dirs: dirs(c.walk_alert, "Walk"), run_dirs: dirs(c.run, "Run"), ..c };
         (c.idle.is_some() && c.walk.is_some()).then_some(c)
     }
 }
@@ -3804,6 +3818,8 @@ pub struct NpcAnim {
     grab_seen: Option<GrabPhase>,
     /// the gesture last played (its count)
     act_seen: u32,
+    /// the way it last went relative to its facing (0 ahead, 1 right, 2 back, 3 left)
+    way: u8,
     /// what its clips' notifies mark (the blows' zones, when an attack may be broken off, when
     /// the sword falls from the hand)
     marks: std::sync::Arc<std::collections::HashMap<ClipId, dhcook::format::ClipMarks>>,
@@ -4438,18 +4454,42 @@ fn npc_select_anim(
             }
         } else {
             st.idle_time = 0.0;
+            let running = npc.mode != Mode::Flee && sp > (npc.gait[1] * 1.3 + npc.gait[2]) * 0.5;
             let c = if npc.mode == Mode::Flee {
                 clips.flee.or(clips.run)
-            } else if sp > (npc.gait[1] * 1.3 + npc.gait[2]) * 0.5 {
+            } else if running {
                 clips.run.or(clips.walk_alert)
             } else if alert {
                 clips.walk_alert.or(clips.walk)
             } else {
                 clips.walk
             };
+            // alert, it goes the way it goes facing where it faces: the walk or run for that way
+            // (the quarter its going falls in, held 10 degrees past the edge, not to flicker)
+            let (c, sign) = match c {
+                Some(c) if alert && npc.mode != Mode::Flee => {
+                    let v = npc.velocity.with_y(0.0);
+                    let right = Quat::from_rotation_y(npc.yaw) * Vec3::X;
+                    let a = v.dot(right).atan2(v.dot(npc.forward())).to_degrees();
+                    let centre = [0.0f32, 90.0, 180.0, -90.0][st.way as usize % 4];
+                    let off = (a - centre + 540.0).rem_euclid(360.0) - 180.0;
+                    if off.abs() > 55.0 {
+                        st.way = (((a + 405.0) / 90.0).floor() as i32).rem_euclid(4) as u8;
+                        if std::env::var("DH_LOCO_LOG").is_ok() {
+                            info!("loco: {} goes {} ({a:.0} deg off its facing at {sp:.1} m/s)", npc.name, ["ahead", "right", "back", "left"][st.way as usize]);
+                        }
+                    }
+                    let dirs = if running { &clips.run_dirs } else { &clips.walk_dirs };
+                    match st.way {
+                        0 => (Some(c), 1.0),
+                        w => dirs[w as usize - 1].map(|(d, s)| (Some(d), s)).unwrap_or((Some(c), 1.0)),
+                    }
+                }
+                c => (c, 1.0),
+            };
             if let Some(c) = c {
                 let natural = lib.root_speed(c).max(0.3);
-                anim.play(c, true, (sp / natural).clamp(0.5, 1.8), 0.25);
+                anim.play(c, true, sign * (sp / natural).clamp(0.5, 1.8), 0.25);
             }
         }
     }
