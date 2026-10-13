@@ -1689,7 +1689,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 attacking: false,
                 oneshot: false,
                 hit_seen: 0.0,
-                idle_time: 0.0,
+                // (as it starts out: its first ambient idle comes within a few seconds)
+                idle_time: rand::random::<f32>() * 3.0,
                 settle: None,
                 drawn: true,
                 sword: swords.clone(),
@@ -3699,19 +3700,16 @@ impl NpcClips {
         let c = NpcClips {
             // humans first, then the wolfhound's own sets (Patrol_ / Attack_)
             idle: lib.first(&["Sword_Patrol_Idle", "Empty_Idle", "Sword_Idle", "Patrol_Idle"]),
-            idle_fidgets: lib.all(&[
-                "Sword_Patrol_Idle_01",
-                "Sword_Patrol_Idle_03",
-                "Sword_Patrol_Idle_04",
-                "Empty_Idle_01",
-                "Empty_Idle_02",
-                "Empty_Idle_03",
-                "Empty_Idle_04",
-                "Patrol_Idle_01",
-                "Patrol_Idle_02",
-                "Patrol_Idle_03",
-                "Patrol_Idle_04",
-            ]),
+            // (the ambient idles of the set it stands in: a guard's patrol stance, empty hands,
+            // a wolfhound's)
+            idle_fidgets: {
+                let sets: [(&str, &[&str]); 3] = [
+                    ("Sword_Patrol_Idle", &["Sword_Patrol_Idle_01", "Sword_Patrol_Idle_03", "Sword_Patrol_Idle_04"]),
+                    ("Empty_Idle", &["Empty_Idle_01", "Empty_Idle_02", "Empty_Idle_03", "Empty_Idle_04"]),
+                    ("Patrol_Idle", &["Patrol_Idle_01", "Patrol_Idle_02", "Patrol_Idle_03", "Patrol_Idle_04"]),
+                ];
+                sets.iter().find(|(base, _)| lib.first(&[base]).is_some()).map(|(_, all)| lib.all(all)).unwrap_or_default()
+            },
             walk: lib.first(&["Sword_Patrol_WalkN", "Empty_Walk_Patrol", "Empty_WalkN", "Sword_WalkN", "Patrol_WalkN"]),
             // (a weeper weeps standing: `DisNPCAnim_Weep`)
             idle_alert: lib.first(&["Sword_Idle", "Empty_Weep_Idle", "Empty_Idle", "Sword_Patrol_Idle", "Attack_idle", "Patrol_Idle"]),
@@ -3844,6 +3842,7 @@ pub struct NpcAnim {
     /// A one-shot (reaction, search, fidget) is playing.
     oneshot: bool,
     hit_seen: f32,
+    /// standing time left before its next ambient idle
     idle_time: f32,
     /// Lying pose to blend into once the current (falling) clip ends.
     settle: Option<ClipId>,
@@ -3894,6 +3893,10 @@ fn side_struck(npc: &Npc, at: Vec3) -> Option<usize> {
         1
     })
 }
+
+/// Standing time between ambient idles (s: the patrol and guard behaviours'
+/// `m_fMinAmbientAnimFrequency`, `m_fMaxAmbientAnimFrequency`).
+const AMBIENT_IDLE: [f32; 2] = [30.0, 60.0];
 
 /// How long a cough holds a plague carrier (s: `Empty_Idle_Cough` runs 2.66 s).
 const COUGH_HOLD: f32 = 2.6;
@@ -4498,14 +4501,21 @@ fn npc_select_anim(
 
         // locomotion, played at the rate that matches the ground speed
         let alert = npc.alert != Alert::Unaware || matches!(npc.mode, Mode::Combat | Mode::Search | Mode::Investigate);
+        if alert {
+            // (a change of behaviour starts its ambient idles over)
+            st.idle_time = 0.0;
+        }
         if sp < 0.3 {
-            st.idle_time += dt;
-            // occasional fidget while standing around unaware
-            if !alert && st.idle_time > 8.0 && rand::random::<f32>() < dt * 0.1 {
+            // standing about unaware, an ambient idle at once and then every 30-60 s of standing
+            // (`DisTweaks_AISubProcess_AmbientAnims` of the patrol and guard behaviours,
+            // `m_fMin/MaxAmbientAnimFrequency`, counting while it stands still, as roshan's
+            // r614/blink research found)
+            st.idle_time -= dt;
+            if !alert && st.idle_time <= 0.0 {
+                st.idle_time = AMBIENT_IDLE[0] + rand::random::<f32>() * (AMBIENT_IDLE[1] - AMBIENT_IDLE[0]);
                 if let Some(c) = pick(&clips.idle_fidgets) {
                     anim.restart(c, false, 1.0, 0.3);
                     st.oneshot = true;
-                    st.idle_time = 0.0;
                     continue;
                 }
             }
@@ -4514,7 +4524,6 @@ fn npc_select_anim(
                 anim.play(c, true, 1.0, 0.3);
             }
         } else {
-            st.idle_time = 0.0;
             let running = npc.mode != Mode::Flee && sp > (npc.gait[1] * 1.3 + npc.gait[2]) * 0.5;
             let c = if npc.mode == Mode::Flee {
                 clips.flee.or(clips.run)

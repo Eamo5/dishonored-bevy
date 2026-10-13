@@ -358,6 +358,10 @@ fullscreen display, vertical sync and the crosshair.
   Alert characters walk and run the way they go relative to where they face
   (`AnimNodeBlendDirectional`'s four ways: `WalkN/E/S/W`, the sword sets' `_Revert` clips played
   backwards for south and west, by root motion), the quarter held 10 degrees past its edge.
+  Standing about unaware, a character plays an ambient idle of the set it stands in (a guard's
+  `Sword_Patrol_Idle_0x`, empty hands' `Empty_Idle_0x`) as it stops, then every 30-60 s of
+  standing (the patrol and guard behaviours' `DisTweaks_AISubProcess_AmbientAnims`), starting
+  over when anything sets it on edge.
   Weepers carry the plague (`plague.rs`, their pawns' `m_bHasPlague` tweaks cooked as
   `NpcPlague`). They have no blow: they follow, grab, weep standing (`Empty_Weep_Idle`) and
   cough. After any weeper's grab, none grabs for 20 s (`DisGlobalCombatManager`'s
