@@ -755,7 +755,12 @@ fullscreen display, vertical sync and the crosshair.
   says its `PANIC_START` (`FLEEING`), a guard set alight `COMBAT_IMMOLATED`, off to a bell
   `ALARM_GO_TO_RING_ALARM`, a grenade by it `ESCAPE_IMPENDING_EXPLOSION`, Corvo's magic before
   its eyes `WITNESSEDMAGIC` (Blink: `MAGIC_DISAPPEARED`), finding him again in a search
-  `SEARCH_FIND_ENEMY`, and going to look again `INVESTIGATE` (`NOTICE`).
+  `SEARCH_FIND_ENEMY`, and going to look again `INVESTIGATE` (`NOTICE`). Also `FALLING` as one
+  falls (faster than 6 m/s down), `COMBAT_STEALTHKILL_PROJECTILE` for one killed unaware by a
+  bolt or bullet, `PATROL_ATTACK_RATSINGLE` stamping on a rat, `COMBAT_RANGED_BEGIN` as a
+  pistol is aimed, and the weepers' own: `WEEP_NOTICED_TARGET` as one turns on him, then
+  `WEEP_FOLLOWING` as it follows and `WEEP_STAND_STILL_WEEPING` standing, every 2-5 s
+  (`m_fFollowingBark`, `m_fStandStillWeepingBark`).
 - **Finishers** (`DisTweaks_Fatality`): a sword blow that kills, the counter after a parry and
   the Blood Thirst strike play the original paired finishers (`Sword_Ready_Fatality_<Front |
   FastFront | SmallFront_<Side>>_*_Master` with `Generic_Fatality_..._Slave`, a target's

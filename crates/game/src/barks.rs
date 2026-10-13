@@ -3,7 +3,7 @@
 //! spotting the player, getting hurt, dying, losing the target, muttering on patrol...
 
 use crate::audio::{event_length, PostEvent};
-use crate::gameplay::PlayerStats;
+use crate::gameplay::{HitKind, PlayerStats};
 use crate::level::LevelInfo;
 use crate::npc::{Alert, Mode, Npc};
 use crate::player::Player;
@@ -58,6 +58,12 @@ pub struct BarkState {
     burning: bool,
     alarm: bool,
     grenade: bool,
+    /// falling, aiming its pistol, the gesture last seen (its count), and how long since a
+    /// projectile last struck it
+    falling: bool,
+    aiming: bool,
+    act_seen: u32,
+    shot: f32,
 }
 
 /// Global pacing: one voice at a time near the player.
@@ -65,6 +71,12 @@ pub struct BarkState {
 struct BarkClock {
     busy: f32,
 }
+
+/// Falling this fast (m/s down) is a fall worth a cry.
+const FALL_SPEED: f32 = -6.0;
+/// A weeper's barks as it follows or weeps (`DisTweaks_AIBehavior_Weep`'s `m_fFollowingBark_Min`
+/// / `_Max`, `m_fStandStillWeepingBark_Min` / `_Max`).
+const WEEP_BARK: [f32; 2] = [2.0, 5.0];
 
 /// Barks are heard (and subtitled) within this range (metres).
 const HEAR: f32 = 25.0;
@@ -82,6 +94,7 @@ fn npc_barks(
     mut subs: MessageWriter<Subtitle>,
     data: Res<crate::gamedata::Data>,
     (mut used, burning, grenades): (MessageReader<crate::powers::PowerUsed>, Query<(), With<crate::powers::Ignite>>, Query<&Transform, With<crate::gadgets::Grenade>>),
+    mut hits: MessageReader<crate::gameplay::NpcHit>,
 ) {
     let Some(level) = level else { return };
     let Ok(pt) = player.single() else { return };
@@ -90,6 +103,8 @@ fn npc_barks(
     let log = std::env::var("DH_AUDIO_LOG").is_ok();
     // a power Corvo used this frame (Blink: he vanishes from where they saw him)
     let magic = used.read().last().map(|u| u.0);
+    // (who a bolt or bullet struck this frame)
+    let shot: Vec<Entity> = hits.read().filter(|h| matches!(h.kind, HitKind::Bolt | HitKind::Bullet | HitKind::ExplosiveBullet | HitKind::ExplosiveBolt)).map(|h| h.npc).collect();
     for (e, npc, t, state, anim, clips) in &mut npcs {
         let Some(mut st) = state else {
             commands.entity(e).try_insert(BarkState {
@@ -108,6 +123,10 @@ fn npc_barks(
                 burning: false,
                 alarm: false,
                 grenade: false,
+                falling: false,
+                aiming: false,
+                act_seen: npc.act.1,
+                shot: 10.0,
             });
             continue;
         };
@@ -115,6 +134,11 @@ fn npc_barks(
         st.quiet -= dt;
         st.next_chatter -= dt;
         st.since += dt;
+        st.shot = if shot.contains(&e) { 0.0 } else { st.shot + dt };
+        // (a weeper turning on him starts its following barks' clock)
+        if npc.arms.plague.is_some() && npc.alert == Alert::Combat && st.alert != Alert::Combat {
+            st.next_chatter = st.next_chatter.min(WEEP_BARK[1]);
+        }
         let d = t.translation.distance(pt.translation);
         // the line its clip cues as it passes it (`DishonoredNotify_FireDialogHook`)
         let mut cued: Option<String> = None;
@@ -148,6 +172,9 @@ fn npc_barks(
             let stealth = st.health > 0.0 && st.alert != Alert::Combat;
             if npc.mode == Mode::Dead && !stealth {
                 st.dying = Some((0.35, &["COMBAT_DYING"]));
+            } else if npc.mode == Mode::Dead && st.shot < 0.5 {
+                // (unaware, a bolt or bullet: `COMBAT_STEALTHKILL_PROJECTILE`)
+                st.dying = Some((0.35, &["COMBAT_STEALTHKILL_PROJECTILE", "COMBAT_BACKSTABBED"]));
             } else if npc.mode == Mode::Dead {
                 st.dying = Some((0.35, &["COMBAT_BACKSTABBED"]));
             }
@@ -174,6 +201,15 @@ fn npc_barks(
         } else if !down && npc.health < st.health - 0.5 {
             let big = st.health - npc.health >= npc.arms.big_hit;
             want = Some((if big { &["COMBAT_OUCH_BIG", "COMBAT_OUCH_SMALL"] } else { &["COMBAT_OUCH_SMALL", "COMBAT_OUCH_BIG"] }, true));
+        } else if !down && !npc.grounded && npc.velocity.y < FALL_SPEED && !st.falling {
+            // falling (`FALLING`: off a ledge, thrown)
+            want = Some((&["FALLING"], true));
+        } else if !down && npc.act.1 != st.act_seen && npc.act.0 == 8 {
+            // stamping on a rat (`PATROL_ATTACK_RATSINGLE`)
+            want = Some((&["PATROL_ATTACK_RATSINGLE"], false));
+        } else if !down && npc.aim.is_some() && !st.aiming {
+            // drawing a bead on him (`COMBAT_RANGED_BEGIN`)
+            want = Some((&["COMBAT_RANGED_BEGIN"], false));
         } else if !down && burning.contains(e) && !st.burning {
             // set alight (`COMBAT_IMMOLATED`)
             want = Some((&["COMBAT_IMMOLATED"], true));
@@ -199,8 +235,9 @@ fn npc_barks(
         } else if !down && npc.alert != st.alert {
             want = match (st.alert, npc.alert) {
                 (Alert::Unaware, Alert::Suspicious) => Some((&["NOTICE_SUSPICIOUS_ACTIVITY", "SUSPICIONDIST", "ATTENTION_TRACKTARGET_BEGIN"], false)),
-                (Alert::Unaware, Alert::Combat) => Some((&["COMBAT_SURPRISED", "COMBAT_THREAT"], true)),
-                (_, Alert::Combat) => Some((&["COMBAT_THREAT", "COMBAT_THREAT_GROUP", "COMBAT_SURPRISED"], true)),
+                // (a weeper's voice has only its own: `WEEP_NOTICED_TARGET`)
+                (Alert::Unaware, Alert::Combat) => Some((&["COMBAT_SURPRISED", "COMBAT_THREAT", "WEEP_NOTICED_TARGET"], true)),
+                (_, Alert::Combat) => Some((&["COMBAT_THREAT", "COMBAT_THREAT_GROUP", "COMBAT_SURPRISED", "WEEP_NOTICED_TARGET"], true)),
                 (Alert::Combat, _) => Some((&["COMBAT_LOST", "SEARCH_STOPHUNTING", "SEARCH_GIVEUP_POSTCORPSE"], false)),
                 (Alert::Suspicious, Alert::Unaware) => Some((&["SEARCH_STOPHUNTING", "COMBAT_GOING_HOME"], false)),
                 _ => None,
@@ -208,6 +245,12 @@ fn npc_barks(
         } else if !down && npc.alert == Alert::Combat && stats.dead && !st.victory {
             st.victory = true;
             want = Some((&["COMBAT_VICTORY", "COMBAT_VICTORY_LOST_ALLIES"], false));
+        } else if !down && st.next_chatter <= 0.0 && npc.arms.plague.is_some() && npc.alert == Alert::Combat {
+            // a weeper after him moans as it follows or weeps standing (`m_fFollowingBark`,
+            // `m_fStandStillWeepingBark`: every 2-5 s)
+            st.next_chatter = WEEP_BARK[0] + rand::random::<f32>() * (WEEP_BARK[1] - WEEP_BARK[0]);
+            let moving = npc.velocity.with_y(0.0).length() > 0.3;
+            want = Some(if moving { (&["WEEP_FOLLOWING", "WEEP_MOAN"], false) } else { (&["WEEP_STAND_STILL_WEEPING", "WEEP_MOAN"], false) });
         } else if !down && st.next_chatter <= 0.0 {
             st.next_chatter = if npc.alert == Alert::Combat { 6.0 + rand::random::<f32>() * 8.0 } else { 15.0 + rand::random::<f32>() * 30.0 };
             want = match npc.alert {
@@ -224,6 +267,9 @@ fn npc_barks(
         st.burning = burning.contains(e);
         st.alarm = npc.alarm_run.is_some();
         st.grenade = grenades.iter().any(|g| g.translation.distance(t.translation) < 5.0);
+        st.falling = !npc.grounded && npc.velocity.y < FALL_SPEED;
+        st.aiming = npc.aim.is_some();
+        st.act_seen = npc.act.1;
         let Some((hooks, urgent)) = want else { continue };
         if d > HEAR || (!urgent && (st.quiet > 0.0 || clock.busy > 0.0)) {
             continue;
