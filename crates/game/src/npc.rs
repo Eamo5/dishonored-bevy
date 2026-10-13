@@ -2246,6 +2246,17 @@ pub(crate) fn npc_perception(
                 break;
             }
         }
+        // (an enemy he is in sight of keeps him there without a clear line while he stays within
+        // its attention's `m_fDistanceToLoseSight`, 3 m: round a corner, behind a crate, as
+        // roshan's r614/blink research decoded it)
+        if !visible && npc.sees_player && npc.hostile() {
+            let keep = level.as_ref().and_then(|l| attention_of(&npc, &l.scene)).map_or(0.0, |a| a.lose_sight);
+            let off = pt.translation - t.translation;
+            if off.with_y(0.0).length() <= keep && off.y.abs() <= keep {
+                visible = true;
+                dist = off.length();
+            }
+        }
         npc.sees_player = visible;
         if visible {
             npc.last_seen = Some(pt.translation);

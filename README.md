@@ -439,7 +439,9 @@ fullscreen display, vertical sync and the crosshair.
   (`Twk_PlayerVisibility`: his light value normalised over the darkest and brightest of the
   scripts' `DisSeqAct_SetPlayerVisSettings`, the `DisStealthVolume` he stands in or the map's
   `m_pMapPlayerVisSettings`, plus his speed; swimming under water hides) plus what nearness
-  adds (`m_DistanceValueTuning`), scaled by difficulty; out of sight it leaks away. His light
+  adds (`m_DistanceValueTuning`), scaled by difficulty; out of sight it leaks away. An enemy
+  that has him in sight keeps him there without a clear line while he stays within its
+  attention's `m_fDistanceToLoseSight` (3 m: round a corner, behind a crate). His light
   value is read as the original's visibility component reads his light environment, measured
   on the original by roshan's r614/blink research: `(L / 4 pi)^(1/2.2)`. L is the light volume's
   baked light where he stands (its ambient and directional luminance, which carries the static

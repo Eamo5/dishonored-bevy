@@ -14,7 +14,8 @@ use std::path::Path;
 // 125: branches' weights and turns; conversations' Interrupted and Player Walked Away ways,
 //      near radius and blocking.
 // 126: the player approach and loiter hooks' distances and times.
-pub const SCENE_VERSION: u32 = 126;
+// 127: attention's distance to lose sight.
+pub const SCENE_VERSION: u32 = 127;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -1214,6 +1215,10 @@ pub struct Attention {
     /// per second, out of sight (`m_fAttentionLeakRate`)
     pub leak: f32,
     pub max: f32,
+    /// an enemy in sight stays in sight without a clear line within this (m,
+    /// `m_fDistanceToLoseSight`)
+    #[serde(default)]
+    pub lose_sight: f32,
     /// the levels' (head track, turn to face, investigate, busted) start and stop thresholds
     pub levels: [[f32; 2]; 4],
     /// seeing Corvo's gain scale, by difficulty (`m_SeeingPawnAttentionIncreaseScalar_ToPlayer`)

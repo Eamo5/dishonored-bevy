@@ -3787,7 +3787,12 @@ impl<'a> Cooker<'a> {
 
     /// A `DisTweaks_PawnAttention`.
     fn attention(&mut self, tw: &Obj) -> Attention {
-        let mut a = Attention { leak: self.tweak_float(tw, "m_fAttentionLeakRate", 0).unwrap_or(0.1), max: self.tweak_float(tw, "m_fMaxAttention", 0).unwrap_or(1.0), ..Default::default() };
+        let mut a = Attention {
+            leak: self.tweak_float(tw, "m_fAttentionLeakRate", 0).unwrap_or(0.1),
+            max: self.tweak_float(tw, "m_fMaxAttention", 0).unwrap_or(1.0),
+            lose_sight: self.tweak_float(tw, "m_fDistanceToLoseSight", 0).unwrap_or(300.0) * crate::xform::UNIT,
+            ..Default::default()
+        };
         for k in 0..4 {
             if let Some((_, Value::Struct(_, r))) = self.tweak_prop(tw, "m_AttentionThresholds", k as i32, 0) {
                 let p = Props(r);
