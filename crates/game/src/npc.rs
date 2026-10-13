@@ -93,6 +93,8 @@ const ARRIVAL_GRACE: f32 = 3.0;
 const INNER_SKIRMISH_CAPS: [usize; 4] = [1, 2, 3, 3];
 /// Beyond this distance from the player, unaware NPCs move without the character controller.
 const FAR_MOVE: f32 = 25.0;
+/// The most such an NPC steps up (m), as its controller's autostep and ground snap.
+const FAR_STEP: f32 = 0.45;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
@@ -3520,10 +3522,18 @@ fn npc_move(
         if far {
             kcc.translation = None;
             let mut p = t.translation + Vec3::new(npc.velocity.x, 0.0, npc.velocity.z) * dt;
-            let hit = ctx.as_ref().and_then(|c| c.cast_ray(p + Vec3::Y * 0.6, Vec3::NEG_Y, 3.0, true, ground_filter));
+            // (the floor looked for from a step's height above its feet, as its controller
+            // steps: a wall in its way is no floor to climb, and it stops at it)
+            let top = p.y - NPC_CENTER + FAR_STEP;
+            let hit = ctx.as_ref().and_then(|c| c.cast_ray(p.with_y(top), Vec3::NEG_Y, FAR_STEP + 2.4, true, ground_filter));
             match hit {
+                Some((_, toi)) if toi <= 0.0 => {
+                    p = t.translation;
+                    npc.velocity.x = 0.0;
+                    npc.velocity.z = 0.0;
+                }
                 Some((_, toi)) => {
-                    let ground = p.y + 0.6 - toi + NPC_CENTER + 0.03;
+                    let ground = top - toi + NPC_CENTER + 0.03;
                     p.y += (ground - p.y) * (12.0 * dt).min(1.0);
                     npc.grounded = true;
                     npc.velocity.y = 0.0;
