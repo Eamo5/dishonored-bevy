@@ -1445,7 +1445,12 @@ against the install's own data where it carries them, then implemented independe
     roshan's r614/blink research listed them: a body in their sight (a corpse, a death), a guard
     fighting in their sight within the group distance (10 m), another civilian panicking within
     it (seen or not), and being struck. One starting to run cries for help (a 15 m call the
-    guards hear).
+    guards hear). Caught, Corvo within 3.5 m of it (`m_fCowerReactionDistance`, 350 uu), it
+    gives up running and kneels to beg facing him (`m_eCaughtReaction`: `EReaction_Beg`;
+    `Empty_Beg_Kneeling_In`, the loop, `_Out`; a set without them cowers where it stands,
+    `Empty_Idle_Panic_Recover`), pleading every few seconds (`COMBAT_BEGGING`: "Help me!") and
+    crying for help again; once he has backed off a moment it gets up and runs on. Run as far as
+    its flee points go, it cowers there.
 - **The alarm bell.** A guard who has found Corvo, within `m_fNPCGoToAlarmCloseness` of a bell,
   runs to it (the nearest of them; not with Corvo on him) and rings it after `m_fWaitTimeBeforeRing`,
   when the sighting finds it alone (none of its own within `m_fCompanionRange`, 20 m:

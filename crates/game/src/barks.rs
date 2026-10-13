@@ -75,6 +75,8 @@ pub struct BarkState {
     was_stuck: bool,
     /// a taunt due, said once it can speak
     taunt: bool,
+    /// begging: time to its next plea
+    beg: f32,
     act_seen: u32,
     shot: f32,
 }
@@ -114,6 +116,9 @@ const HEAR: f32 = 25.0;
 /// Others of its side within this (m) hear a character's call for help (`COMBAT_HELP`: a cry
 /// for help carries 15 m).
 const HELP_REACH: f32 = 15.0;
+
+/// A begging civilian pleads again every this long (s).
+const BEG_BARK: [f32; 2] = [5.0, 9.0];
 
 /// Fighting Corvo out of its reach this long (s) brings its first taunt, then again each this
 /// long (the `UNREACH` hooks' refire, 8 s).
@@ -241,6 +246,7 @@ fn npc_barks(
                 stuck: 0.0,
                 was_stuck: false,
                 taunt: false,
+                beg: 0.0,
                 act_seen: npc.act.1,
                 shot: 10.0,
             });
@@ -265,6 +271,7 @@ fn npc_barks(
         // then each `UNREACH` refire (8 s)
         let no_way = npc.nav.points.is_empty() && npc.nav.goal.is_some_and(|g| g.distance(pt.translation) < 1.0);
         let unreachable = npc.mode == Mode::Combat && npc.sees_player && no_way && (pt.translation.y - t.translation.y).abs() > 1.2;
+        st.beg = if npc.caught.is_some() { st.beg - dt } else { 0.0 };
         let stuck_was = st.stuck;
         st.stuck = if unreachable { st.stuck + dt } else { 0.0 };
         let beat = |x: f32| (x - UNREACH_AFTER).div_euclid(UNREACH_EVERY);
@@ -348,6 +355,10 @@ fn npc_barks(
         } else if !down && npc.mode == Mode::Flee && st.mode != Mode::Flee {
             // a civilian starting to run (`PANIC_START`, `FLEEING`)
             want = Some((&["PANIC_START", "FLEEING"], true));
+        } else if !down && npc.caught.is_some() && st.beg <= 0.0 {
+            // a civilian caught, on its knees, pleading (`COMBAT_BEGGING`: "Help me!")
+            st.beg = BEG_BARK[0] + rand::random::<f32>() * (BEG_BARK[1] - BEG_BARK[0]);
+            want = Some((&["COMBAT_BEGGING", "PANIC_START"], true));
         } else if !down && npc.alarm_run.is_some() && !st.alarm {
             // off to ring the alarm (`ALARM_GO_TO_RING_ALARM`)
             want = Some((&["ALARM_GO_TO_RING_ALARM", "ALARM_HEAR_AND_RESPOND"], true));

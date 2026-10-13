@@ -254,6 +254,10 @@ pub struct Npc {
     pub tether: Vec<u32>,
     /// the flee point it runs to (`aiworld::AiWorld::flee_target`)
     pub flee_to: Option<usize>,
+    /// caught panicking with Corvo upon it: how long it has begged, and how long he has been
+    /// back off; then the seconds left getting up again
+    pub caught: Option<(f32, f32)>,
+    pub rising: f32,
     /// a watch point it checks while searching: the point and seconds left watching it; those
     /// checked this search
     pub watch: Option<(usize, f32)>,
@@ -1525,6 +1529,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         can_flee: sp.can_flee,
         tether: sp.tether.clone(),
         flee_to: None,
+        caught: None,
+        rising: 0.0,
         watch: None,
         watched: Vec::new(),
         trespass: None,
@@ -1764,6 +1770,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 clips: std::sync::Arc::new(clips),
                 last_mode: npc.mode,
                 last_alert: npc.alert,
+                begging: false,
                 down: false,
                 attacking: false,
                 oneshot: false,
@@ -2686,6 +2693,11 @@ pub(crate) fn npc_brain(
             npc.target = None;
             continue;
         }
+        // (begging is a panic's: out of it, it's over)
+        if npc.mode != Mode::Flee {
+            npc.caught = None;
+            npc.rising = 0.0;
+        }
         match npc.mode {
             Mode::Idle => {
                 npc.target = if pos.distance(npc.home) > 0.6 { Some(npc.home) } else { None };
@@ -2785,6 +2797,42 @@ pub(crate) fn npc_brain(
             }
             Mode::Flee => {
                 let from = npc.last_seen.unwrap_or(ppos);
+                // caught: Corvo upon it (within the panic's `m_fCowerReactionDistance`, 350 uu),
+                // a civilian gives up running and begs where it is, facing him
+                // (`m_eCaughtReaction`: `EReaction_Beg`), its cry for help heard 15 m; once he
+                // has backed off past the reach a moment, it gets up and runs on
+                if !npc.fighter() {
+                    let near = (ppos - pos).length() < BEG_REACH;
+                    match npc.caught {
+                        None if npc.rising <= 0.0 && near && (npc.sees_player || (ppos - pos).length() < 2.0) => {
+                            npc.caught = Some((0.0, 0.0));
+                            noise.write(Noise { pos, radius: 15.0, kind: NoiseKind::Help });
+                        }
+                        Some((t, away)) => {
+                            let away = if (ppos - pos).length() > BEG_REACH + 1.5 { away + dt } else { 0.0 };
+                            if away > 1.0 {
+                                npc.caught = None;
+                                npc.rising = BEG_RISE;
+                                npc.flee_to = None;
+                            } else {
+                                npc.caught = Some((t + dt, away));
+                            }
+                        }
+                        _ => {}
+                    }
+                    if npc.caught.is_some() || npc.rising > 0.0 {
+                        npc.rising = (npc.rising - dt).max(0.0);
+                        npc.target = None;
+                        npc.mode_timer = 0.0;
+                        let to = (ppos - pos).with_y(0.0);
+                        if npc.caught.is_some() && to.length() > 0.1 {
+                            let want = (-to.x).atan2(-to.z);
+                            let turn = (want - npc.yaw + PI).rem_euclid(TAU) - PI;
+                            npc.yaw += turn.clamp(-4.0 * dt, 4.0 * dt);
+                        }
+                        continue;
+                    }
+                }
                 // a civilian starting to run cries for help: a 15 m call the guards hear (the
                 // panic's help bark at `Loudness2`)
                 if npc.mode_timer < dt * 1.5 && !npc.fighter() {
@@ -3778,6 +3826,10 @@ pub struct NpcClips {
     under: [Option<ClipId>; 2],
     /// its taunts (each cueing its line, `COMBAT_TAUNT_WITH_GESTURE`)
     taunt: Vec<ClipId>,
+    /// begging on its knees: in, the loop, up again (`Empty_Beg_Kneeling_*`); else cowering where
+    /// it stands (`Empty_Idle_Panic_Recover`, the cower sub-state's stance)
+    beg: [Option<ClipId>; 3],
+    cower: Option<ClipId>,
     /// a weeper's cough (`DisNPCAnim_Weeper_Cough`)
     cough: Vec<ClipId>,
     /// its aim offsets (`ADD_Sword_Gun_AimIdle_*`): up, centre and down rows, left to right
@@ -3908,6 +3960,8 @@ impl NpcClips {
             under: [lib.find("Sword_Attack_UnderTable"), lib.find("Sword_Gun_AttackUnderTable")],
             taunt: lib.all(&["Sword_TauntA", "Sword_TauntB", "Sword_TauntC"]),
             cough: lib.all(&["Empty_Idle_Cough"]),
+            beg: [lib.find("Empty_Beg_Kneeling_In"), lib.find("Empty_Beg_Kneeling_Loop"), lib.find("Empty_Beg_Kneeling_Out")],
+            cower: lib.find("Empty_Idle_Panic_Recover"),
             gun_aim: ["UpLeft", "Up", "UpRight", "CenterLeft", "Center", "CenterRight", "DownLeft", "Down", "DownRight"].map(|d| lib.find(&format!("ADD_Sword_Gun_AimIdle_{d}"))),
             walk_dirs: [None; 3],
             run_dirs: [None; 3],
@@ -3928,6 +3982,8 @@ pub struct NpcAnim {
     clips: std::sync::Arc<NpcClips>,
     last_mode: Mode,
     last_alert: Alert,
+    /// on its knees begging (or cowering)
+    begging: bool,
     down: bool,
     attacking: bool,
     /// A one-shot (reaction, search, fidget) is playing.
@@ -4000,6 +4056,13 @@ const COUGH_HOLD: f32 = 2.6;
 
 /// How long a taunt holds a character (s: its gestures, `Sword_TauntA/B/C`, run 2.4-3.0 s).
 const TAUNT_HOLD: f32 = 2.7;
+
+/// A panicking civilian is caught with Corvo this near (m: `TweaksBehavior_Panic_Civilian`'s
+/// `m_fCowerReactionDistance`, 350 uu), and kneels to beg.
+const BEG_REACH: f32 = 3.5;
+
+/// How long getting up from begging holds a civilian (s: `Empty_Beg_Kneeling_Out`).
+const BEG_RISE: f32 = 1.5;
 
 /// How long a character stands after its pistol shot (`Sword_Gun_Fire` 1 s, then `Sword_Gun_Undraw`
 /// 1 s).
@@ -4585,6 +4648,32 @@ fn npc_select_anim(
             continue;
         }
         // lying in wait: in, then the wait's loop
+        // caught begging: down on its knees, then the loop (or cowering where it stands); up
+        // again as it lets go
+        if npc.caught.is_some() {
+            let [beg_in, beg_loop, _] = clips.beg;
+            if !st.begging {
+                st.begging = true;
+                if let Some(c) = beg_in.filter(|_| beg_loop.is_some()) {
+                    anim.restart(c, false, 1.0, 0.2);
+                    continue;
+                }
+            }
+            if anim.finished() || anim.current().is_none_or(|p| Some(p.clip) != beg_in && Some(p.clip) != beg_loop.or(clips.cower)) {
+                if let Some(c) = beg_loop.or(clips.cower) {
+                    anim.restart(c, true, 1.0, 0.25);
+                }
+            }
+            continue;
+        }
+        if st.begging {
+            st.begging = false;
+            if let Some(c) = clips.beg[2].filter(|_| clips.beg[1].is_some()) {
+                anim.restart(c, false, 1.0, 0.2);
+                st.oneshot = true;
+                continue;
+            }
+        }
         if npc.ambush.is_some() {
             if anim.finished() {
                 if let Some(c) = pick(&clips.ambush[1]) {
@@ -4632,7 +4721,8 @@ fn npc_select_anim(
                     continue;
                 }
             }
-            let c = if alert { clips.idle_alert.or(clips.idle) } else { clips.idle };
+            // (run as far as it goes, a civilian cowers there: the panic's stance)
+            let c = if npc.mode == Mode::Flee && !npc.fighter() { clips.cower.or(clips.idle_alert).or(clips.idle) } else if alert { clips.idle_alert.or(clips.idle) } else { clips.idle };
             if let Some(c) = c {
                 anim.play(c, true, 1.0, 0.3);
             }
