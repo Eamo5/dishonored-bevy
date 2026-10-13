@@ -222,6 +222,8 @@ pub struct Npc {
     /// a plague carrier's time until it coughs again, and how long its cough holds it
     pub cough_cd: f32,
     pub cough_hold: f32,
+    /// where the last blow came from (its reaction and its death go by the side it struck)
+    pub hit_from: Option<Vec3>,
     /// an NPC of an enemy faction it is fighting (`DisTweaks_Faction.m_EnemyFactions`), and
     /// when it next looks for one
     pub foe: Option<Entity>,
@@ -1427,6 +1429,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         witnessed_death: false,
         cough_cd: rand::random::<f32>() * 3.0,
         cough_hold: 0.0,
+        hit_from: None,
         foe: None,
         feud_scan: rand::random::<f32>(),
         grab: None,
@@ -1794,6 +1797,7 @@ fn npc_hits(
         if std::env::var("DH_HIT_LOG").is_ok() {
             info!("hit {} ({}): {:?} {:.0} at health {:.0}", npc.name, npc.pawn, h.kind, h.damage, npc.health);
         }
+        npc.hit_from = Some(h.from);
         // (its armour may come off: a shot or a bolt to the head, Wind Blast, a flare)
         knocks.write(crate::npcparts::KnockOff { npc: e, kind: h.kind, head, from: h.from });
         // those who can fight turn on Corvo when he hurts them (the Tower's guards too)
@@ -3639,6 +3643,10 @@ pub struct NpcClips {
     ambush: [Vec<ClipId>; 4],
     hit: Vec<ClipId>,
     hit_empty: Vec<ClipId>,
+    /// the hit reactions and deaths by the side struck: front, left, right, back
+    hit_dir: [Vec<ClipId>; 4],
+    hit_dir_empty: [Vec<ClipId>; 4],
+    death_dir: [Option<ClipId>; 4],
     stun: Option<ClipId>,
     death: Vec<ClipId>,
     death_fast: Option<ClipId>,
@@ -3746,6 +3754,25 @@ impl NpcClips {
                 "Attack_HitRight",
             ]),
             hit_empty: lib.all(&["Empty_HitFront_A", "Empty_HitFront_Left", "Empty_HitFront_Right", "Empty_HitFront_Head", "Empty_HitFront_Stomach"]),
+            // (by the side struck, as the clips are named for it: front, left, right, back)
+            hit_dir: [
+                lib.all(&["Sword_HitFront_A", "Sword_HitFront_Head", "Sword_HitFront_Stomach", "Sword_HitFront_Left", "Sword_HitFront_Right", "Attack_HitFront"]),
+                lib.all(&["Sword_HitLeft_A", "Attack_HitLeft"]),
+                lib.all(&["Sword_HitRight_A", "Attack_HitRight"]),
+                lib.all(&["Sword_HitBack_A"]),
+            ],
+            hit_dir_empty: [
+                lib.all(&["Empty_HitFront_A", "Empty_HitFront_Head", "Empty_HitFront_Stomach", "Empty_HitFront_Left", "Empty_HitFront_Right"]),
+                lib.all(&["Empty_HitLeft_A"]),
+                lib.all(&["Empty_HitRight_A"]),
+                lib.all(&["Empty_HitBack_A"]),
+            ],
+            death_dir: [
+                lib.first(&["Generic_DeathFrontA", "Generic_DeathFront_A"]),
+                lib.first(&["Generic_DeathLeftA", "Generic_DeathLeft_A"]),
+                lib.first(&["Generic_DeathRightA", "Generic_DeathRight_A"]),
+                lib.first(&["Generic_DeathBackA", "Generic_DeathBack_A"]),
+            ],
             stun: lib.first(&["Sword_HitWindblast", "Empty_HitWindblast", "Patrol_Stun_Loop"]),
             death: {
                 let human = lib.all(&["Generic_DeathFrontA", "Generic_DeathBackA", "Generic_DeathLeftA", "Generic_DeathRightA"]);
@@ -3840,6 +3867,22 @@ pub struct NpcAnim {
 /// The pause before a blade strikes under a hideout again, after its strike's clip (s:
 /// `DisTweaks_NPCAttackUnder` sets no cooldown of its own): base and spread.
 const UNDER_SWORD: (f32, f32) = (1.0, 1.0);
+
+/// The side a character was struck from (0 front, 1 left, 2 right, 3 back), by where the last
+/// blow came from; none without one.
+fn side_struck(npc: &Npc, at: Vec3) -> Option<usize> {
+    let to = (npc.hit_from? - at).with_y(0.0).normalize_or_zero();
+    let f = npc.forward();
+    let right = Vec3::new(-f.z, 0.0, f.x);
+    let (ahead, side) = (to.dot(f), to.dot(right));
+    Some(if ahead.abs() >= side.abs() {
+        if ahead >= 0.0 { 0 } else { 3 }
+    } else if side > 0.0 {
+        2
+    } else {
+        1
+    })
+}
 
 /// How long a cough holds a plague carrier (s: `Empty_Idle_Cough` runs 2.66 s).
 const COUGH_HOLD: f32 = 2.6;
@@ -4109,7 +4152,8 @@ fn npc_select_anim(
                 } else if rand::random::<f32>() < 0.5 && clips.death_fast.is_some() {
                     (clips.death_fast, clips.lie_back)
                 } else {
-                    (pick(&clips.death), None)
+                    // (falling away from the blow, by the side it struck)
+                    (side_struck(&npc, t.translation).and_then(|s| clips.death_dir[s]).or(pick(&clips.death)), None)
                 };
                 let (clip, settle) = match clip {
                     Some(c) => (Some(c), settle),
@@ -4371,6 +4415,12 @@ fn npc_select_anim(
         if npc.hit_react > st.hit_seen + 1e-3 {
             // the reactions of the hands it has: sword drawn, or empty
             let pool = if (st.drawn && !st.sword.is_empty() || clips.hit_empty.is_empty()) && !clips.hit.is_empty() { &clips.hit } else if clips.hit_empty.is_empty() { &clips.hit } else { &clips.hit_empty };
+            // (the side struck, where its clips have one)
+            let dirs = if std::ptr::eq(pool, &clips.hit) { &clips.hit_dir } else { &clips.hit_dir_empty };
+            let pool = match side_struck(&npc, t.translation) {
+                Some(s) if !dirs[s].is_empty() => &dirs[s],
+                _ => pool,
+            };
             let c = if npc.stagger > 1.0 { clips.stun.or(pick(pool)) } else { pick(pool) };
             if let Some(c) = c {
                 anim.restart(c, false, 1.3, 0.06);

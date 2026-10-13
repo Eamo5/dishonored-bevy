@@ -1492,8 +1492,9 @@ fn run_script(
             // or pawn holds NAME
             let named = cmd.get(1).cloned().unwrap_or_default();
             if let Some((e, _)) = npc_ents.iter().filter(|(_, n, _)| !n.is_down() && (named.is_empty() || n.name.contains(&named) || n.pawn.contains(&named))).map(|(e, _, nt)| (e, nt.translation.distance(t.translation))).min_by(|a, b| a.1.total_cmp(&b.1)) {
+                let from = t.translation;
                 commands.queue(move |w: &mut World| {
-                    w.write_message(crate::gameplay::NpcHit { npc: e, damage: 0.0, kind: crate::gameplay::HitKind::SleepDart, from: Vec3::ZERO });
+                    w.write_message(crate::gameplay::NpcHit { npc: e, damage: 0.0, kind: crate::gameplay::HitKind::SleepDart, from });
                 });
             }
         }

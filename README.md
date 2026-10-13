@@ -391,7 +391,9 @@ fullscreen display, vertical sync and the crosshair.
   (`DishonoredNotify_AttackInterruptable`). Corvo's own blow lands 0.29 s into his swing: his A
   swings' zones end at 0.35 s, less his 0.05 s. Moves without a zone keep their fitted timings. A character going down lets its sword fall at its clip's `DisNotify_DropItem` (the
   deaths', the assassinations', the finishers'), else soon after falling. The sword becomes a
-  loose body that lands beside it. His pistol's bullet (`Twk_Proj_BulletUpgraded`) deals 20, ×1.5
+  loose body that lands beside it. A character struck flinches, and falls dead, by the side the
+  blow came from: its front, left, right or back clips (`Sword_HitLeft_A`, `Empty_HitBack_A`,
+  `Generic_DeathRightA`...), where it has them; hurt by no blow it knows of, it picks among them. His pistol's bullet (`Twk_Proj_BulletUpgraded`) deals 20, ×1.5
   within 9 m, and kills with a head shot (`m_bKillOnHeadshot`); a crossbow bolt deals the
   crossbow's 20, doubled on someone unaware (`m_fDamageMultiplier_Stealth`). Characters'
   shots hit at their `m_MaxAccuracy` close, falling to `m_MinAccuracy` at the end of their
