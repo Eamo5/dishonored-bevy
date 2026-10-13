@@ -774,7 +774,9 @@ fullscreen display, vertical sync and the crosshair.
   (`m_HookEnum`): the voices' `DisConv_Hook_*` nodes used to be lumped by their class, so a
   guard on patrol muttered search lines ("Let's find the little shit"). On patrol a guard says
   its `PATROL_MISC` (`PATROL_MISC_GROUP` among others of its side), noticing something
-  `ATTENTION_NOTICE_BEGIN`, a notice come to nothing `ATTENTION_NOTICE_END`; a suspicion-level
+  `ATTENTION_NOTICE_BEGIN`, a notice come to nothing `ATTENTION_NOTICE_END`, finding a body
+  `SEARCH_DETECT_CORPSE` (its `Hook_DeathMode` lines for a dead one, "A body! Murder!", or one
+  knocked out, "Hey, wake up!") and a death before its eyes `SEARCH_WITNESS_DEATH`; a suspicion-level
   hook says the lines of its output for whether the speaker suspects anything, a notice those
   for whether it saw or heard, and a branch on who set it off takes its way for Corvo.
 - **Finishers** (`DisTweaks_Fatality`): the counter after a parry, the Blood Thirst strike and a

@@ -62,6 +62,9 @@ pub struct BarkState {
     /// projectile last struck it
     falling: bool,
     aiming: bool,
+    /// a body found, a death seen (as last seen)
+    saw_body: bool,
+    witnessed_death: bool,
     act_seen: u32,
     shot: f32,
 }
@@ -124,6 +127,8 @@ fn npc_barks(
     let shot: Vec<Entity> = hits.read().filter(|h| matches!(h.kind, HitKind::Bolt | HitKind::Bullet | HitKind::ExplosiveBullet | HitKind::ExplosiveBolt)).map(|h| h.npc).collect();
     // (who stands where, for the barks said in a group: those of one side within reach)
     let standing: Vec<(Entity, Vec3, String)> = npcs.iter().filter(|(_, n, ..)| !n.is_down()).map(|(e, n, t, ..)| (e, t.translation, n.faction.clone())).collect();
+    // (and the bodies: dead or knocked out)
+    let bodies: Vec<(Vec3, bool)> = npcs.iter().filter(|(_, n, ..)| n.is_down()).map(|(_, n, t, ..)| (t.translation, n.mode == Mode::Dead)).collect();
     for (e, npc, t, state, anim, clips) in &mut npcs {
         let Some(mut st) = state else {
             commands.entity(e).try_insert(BarkState {
@@ -144,6 +149,8 @@ fn npc_barks(
                 grenade: false,
                 falling: false,
                 aiming: false,
+                saw_body: npc.saw_body,
+                witnessed_death: npc.witnessed_death,
                 act_seen: npc.act.1,
                 shot: 10.0,
             });
@@ -183,6 +190,8 @@ fn npc_barks(
         let one: [&str; 1];
         // (hooks to try in order, urgent: ignores pacing)
         let mut want: Option<(&[&str], bool)> = None;
+        // (the hook node's output, where the moment decides it)
+        let mut out_hint: Option<usize> = None;
         let down = npc.is_down();
         if !down {
             st.cried = false;
@@ -246,6 +255,16 @@ fn npc_barks(
             // Corvo's magic before its eyes: gone from where it saw him, else a power seen
             // (`MAGIC_DISAPPEARED`, `WITNESSEDMAGIC`)
             want = Some(if magic == Some(crate::powers::Power::Blink) { (&["MAGIC_DISAPPEARED", "MAGIC_WITNESSED"], true) } else { (&["MAGIC_WITNESSED"], true) });
+        } else if !down && npc.witnessed_death && !st.witnessed_death && !npc.saw_body {
+            // a death before its eyes (`SEARCH_WITNESS_DEATH`)
+            want = Some((&["SEARCH_WITNESS_DEATH"], true));
+        } else if !down && npc.saw_body && !st.saw_body {
+            // a body found (`SEARCH_DETECT_CORPSE`: its `Hook_DeathMode` way for a dead one, or
+            // one knocked out), the one it goes to
+            let at = npc.target.unwrap_or(t.translation);
+            let dead = bodies.iter().min_by(|a, b| a.0.distance(at).total_cmp(&b.0.distance(at))).is_none_or(|b| b.1);
+            out_hint = Some(if dead { 0 } else { 1 });
+            want = Some((if npc.witnessed_death { &["SEARCH_WITNESS_DEATH", "SEARCH_DETECT_CORPSE"] } else { &["SEARCH_DETECT_CORPSE"] }, true));
         } else if !down && npc.alert == Alert::Combat && st.alert == Alert::Combat && npc.mode == Mode::Combat && matches!(st.mode, Mode::Search | Mode::Investigate) {
             // found again while searching (`SEARCH_FIND_ENEMY`)
             want = Some((&["SEARCH_FIND_ENEMY", "COMBAT_THREAT"], true));
@@ -295,6 +314,8 @@ fn npc_barks(
         st.alarm = npc.alarm_run.is_some();
         st.grenade = grenades.iter().any(|g| g.translation.distance(t.translation) < 5.0);
         st.falling = !npc.grounded && npc.velocity.y < FALL_SPEED;
+        st.saw_body = npc.saw_body;
+        st.witnessed_death = npc.witnessed_death;
         st.aiming = npc.aim.is_some();
         st.act_seen = npc.act.1;
         let Some((hooks, urgent)) = want else { continue };
@@ -303,7 +324,7 @@ fn npc_barks(
         }
         let Some(bark) = hooks.iter().find_map(|h| voice.hooks.iter().find(|x| x.hook == *h)) else { continue };
         // (the lines of the hook node's output for what it knows, where it has some)
-        let pool: Vec<usize> = match hook_output(&bark.class, &npc).and_then(|k| bark.by_output.get(k)).filter(|o| !o.is_empty()) {
+        let pool: Vec<usize> = match out_hint.or_else(|| hook_output(&bark.class, &npc)).and_then(|k| bark.by_output.get(k)).filter(|o| !o.is_empty()) {
             Some(o) => o.iter().map(|i| *i as usize).filter(|i| *i < bark.lines.len()).collect(),
             None => (0..bark.lines.len()).collect(),
         };
