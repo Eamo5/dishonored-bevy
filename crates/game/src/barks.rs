@@ -83,6 +83,18 @@ const WEEP_BARK: [f32; 2] = [2.0, 5.0];
 /// `SEARCH_STOPHUNTING_GROUP`), as far as a fight spreads.
 const GROUP_REACH: f32 = 10.0;
 
+/// The output a hook node takes for what its speaker knows (`DisConv_Hook_<class>`, as roshan's
+/// r614/blink research decoded them): a suspicion level's (`SuspicionLevel`, `SuspicionDist`)
+/// by whether it suspects anything, a notice's (`Notice`) by whether it saw or heard; others
+/// all their lines.
+fn hook_output(class: &str, npc: &Npc) -> Option<usize> {
+    match class {
+        "SuspicionLevel" | "SuspicionDist" => Some((npc.alert != Alert::Unaware) as usize),
+        "Notice" => Some(if npc.sees_player { 0 } else { 1 }),
+        _ => None,
+    }
+}
+
 /// Barks are heard (and subtitled) within this range (metres).
 const HEAR: f32 = 25.0;
 
@@ -233,16 +245,16 @@ fn npc_barks(
         } else if !down && npc.hostile() && npc.sees_player && magic.is_some() {
             // Corvo's magic before its eyes: gone from where it saw him, else a power seen
             // (`MAGIC_DISAPPEARED`, `WITNESSEDMAGIC`)
-            want = Some(if magic == Some(crate::powers::Power::Blink) { (&["MAGIC_DISAPPEARED", "WITNESSEDMAGIC"], true) } else { (&["WITNESSEDMAGIC"], true) });
+            want = Some(if magic == Some(crate::powers::Power::Blink) { (&["MAGIC_DISAPPEARED", "MAGIC_WITNESSED"], true) } else { (&["MAGIC_WITNESSED"], true) });
         } else if !down && npc.alert == Alert::Combat && st.alert == Alert::Combat && npc.mode == Mode::Combat && matches!(st.mode, Mode::Search | Mode::Investigate) {
             // found again while searching (`SEARCH_FIND_ENEMY`)
             want = Some((&["SEARCH_FIND_ENEMY", "COMBAT_THREAT"], true));
         } else if !down && npc.alert == Alert::Suspicious && st.alert == Alert::Suspicious && npc.mode == Mode::Investigate && st.mode != Mode::Investigate {
-            // off to look again (`INVESTIGATE`, `NOTICE`)
-            want = Some((&["INVESTIGATE", "NOTICE"], false));
+            // off to look again (`ATTENTION_INVESTIGATE`, else `ATTENTION_NOTICE_BEGIN`)
+            want = Some((&["ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"], false));
         } else if !down && npc.alert != st.alert {
             want = match (st.alert, npc.alert) {
-                (Alert::Unaware, Alert::Suspicious) => Some((&["NOTICE_SUSPICIOUS_ACTIVITY", "SUSPICIONDIST", "ATTENTION_TRACKTARGET_BEGIN"], false)),
+                (Alert::Unaware, Alert::Suspicious) => Some((&["ATTENTION_NOTICE_BEGIN", "NOTICE_SUSPICIOUS_ACTIVITY", "ATTENTION_HEADTRACK", "ATTENTION_TRACKTARGET_BEGIN"], false)),
                 // (a weeper's voice has only its own: `WEEP_NOTICED_TARGET`)
                 (Alert::Unaware, Alert::Combat) => Some((&["COMBAT_SURPRISED", "COMBAT_THREAT", "WEEP_NOTICED_TARGET"], true)),
                 // (with others of its side about, their group's lines first)
@@ -250,8 +262,9 @@ fn npc_barks(
                 (_, Alert::Combat) => Some((&["COMBAT_THREAT", "COMBAT_THREAT_GROUP", "COMBAT_SURPRISED", "WEEP_NOTICED_TARGET"], true)),
                 (Alert::Combat, _) if grouped => Some((&["COMBAT_LOST_GROUP", "COMBAT_LOST", "SEARCH_STOPHUNTING_GROUP", "SEARCH_STOPHUNTING"], false)),
                 (Alert::Combat, _) => Some((&["COMBAT_LOST", "SEARCH_STOPHUNTING", "SEARCH_GIVEUP_POSTCORPSE"], false)),
-                (Alert::Suspicious, Alert::Unaware) if grouped => Some((&["SEARCH_STOPHUNTING_GROUP", "SEARCH_STOPHUNTING", "COMBAT_GOING_HOME"], false)),
-                (Alert::Suspicious, Alert::Unaware) => Some((&["SEARCH_STOPHUNTING", "COMBAT_GOING_HOME"], false)),
+                // (a notice that came to nothing: `ATTENTION_NOTICE_END`)
+                (Alert::Suspicious, Alert::Unaware) if grouped => Some((&["SEARCH_STOPHUNTING_GROUP", "SEARCH_STOPHUNTING", "ATTENTION_NOTICE_END", "COMBAT_GOING_HOME"], false)),
+                (Alert::Suspicious, Alert::Unaware) => Some((&["SEARCH_STOPHUNTING", "ATTENTION_NOTICE_END", "COMBAT_GOING_HOME"], false)),
                 _ => None,
             };
         } else if !down && npc.alert == Alert::Combat && stats.dead && !st.victory {
@@ -268,7 +281,9 @@ fn npc_barks(
             want = match npc.alert {
                 // (the taunt's line comes with its gesture, cued by its clip)
                 Alert::Combat if npc.mode == Mode::Combat => Some((&["COMBAT_ATTACK", "COMBAT_THREAT_VERSUS"], false)),
-                Alert::Unaware if d < 12.0 => Some((&["SUSPICIONLEVEL"], false)),
+                // (the patrol's chatter: `PATROL_MISC`, with others of its side about its group's)
+                Alert::Unaware if d < 12.0 && grouped => Some((&["PATROL_MISC_GROUP", "PATROL_MISC"], false)),
+                Alert::Unaware if d < 12.0 => Some((&["PATROL_MISC"], false)),
                 _ => None,
             };
         }
@@ -286,11 +301,16 @@ fn npc_barks(
         if d > HEAR || (!urgent && (st.quiet > 0.0 || clock.busy > 0.0)) {
             continue;
         }
-        let Some(lines) = hooks.iter().find_map(|h| voice.hooks.iter().find(|x| x.hook == *h)).map(|h| &h.lines) else { continue };
-        if lines.is_empty() {
+        let Some(bark) = hooks.iter().find_map(|h| voice.hooks.iter().find(|x| x.hook == *h)) else { continue };
+        // (the lines of the hook node's output for what it knows, where it has some)
+        let pool: Vec<usize> = match hook_output(&bark.class, &npc).and_then(|k| bark.by_output.get(k)).filter(|o| !o.is_empty()) {
+            Some(o) => o.iter().map(|i| *i as usize).filter(|i| *i < bark.lines.len()).collect(),
+            None => (0..bark.lines.len()).collect(),
+        };
+        if pool.is_empty() {
             continue;
         }
-        let (event, text) = &lines[rand::random_range(0..lines.len())];
+        let (event, text) = &bark.lines[pool[rand::random_range(0..pool.len())]];
         let len = event_length(event).unwrap_or(1.5);
         if log {
             info!("bark {} {:?}: {event} \"{text}\"", npc.name, hooks.first());

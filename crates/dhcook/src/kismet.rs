@@ -962,46 +962,76 @@ pub fn bark_voice(pkg: &Package, voice: i32) -> Option<crate::format::BarkVoice>
         }
         let cls = pkg.class_name(h);
         let Some(hp) = read_props(pkg, h) else { continue };
+        // (the hook it answers is its `m_HookEnum`, whatever its class: a `Hook_SuspicionLevel`
+        // may be the patrol's chatter, a head turn or a search)
+        let class = cls.strip_prefix("DisConv_Hook_").unwrap_or("").to_string();
         let hook = match (cls.as_str(), hp.get("m_HookEnum")) {
-            ("DisConv_DialogHook", Some(Value::Enum(e))) => e.trim_start_matches("DDH_").to_string(),
-            (c, _) if c.starts_with("DisConv_Hook_") => c.trim_start_matches("DisConv_Hook_").to_ascii_uppercase(),
+            (c, Some(Value::Enum(e))) if c == "DisConv_DialogHook" || c.starts_with("DisConv_Hook_") => e.trim_start_matches("DDH_").to_string(),
+            (c, _) if c.starts_with("DisConv_Hook_") => class.to_ascii_uppercase(),
             _ => continue,
         };
-        // breadth-first to the blurbs
-        let mut lines = Vec::new();
-        let mut seen = HashSet::new();
-        let mut queue: VecDeque<(i32, usize)> = struct_array(pkg, &hp, "m_OutputLinks").iter().filter_map(|l| l.object("m_pLink")).filter(|o| *o > 0).map(|o| (o, 0)).collect();
-        while let Some((n, depth)) = queue.pop_front() {
-            if !seen.insert(n) || depth > 8 || lines.len() >= 64 {
-                continue;
-            }
-            let Some(np) = read_props(pkg, n) else { continue };
-            match pkg.class_name(n).as_str() {
-                "DisConv_Blurb" | "DisConv_NonWord" => {
-                    let text = match np.get("m_Text") {
-                        Some(Value::Str(t)) => t.trim().to_string(),
-                        _ => String::new(),
-                    };
-                    if let Some(Value::Guid(g)) = np.get("m_iBlurbGUID") {
-                        if let Some(e) = events.get(g) {
-                            lines.push((e.clone(), text));
+        // breadth-first to the blurbs from each output
+        let mut lines: Vec<(String, String)> = Vec::new();
+        let mut by_output: Vec<Vec<u16>> = Vec::new();
+        for link in struct_array(pkg, &hp, "m_OutputLinks").iter().map(|l| l.object("m_pLink").filter(|o| *o > 0)) {
+            let mut mine: Vec<u16> = Vec::new();
+            let mut seen = HashSet::new();
+            let mut queue: VecDeque<(i32, usize)> = link.map(|o| (o, 0)).into_iter().collect();
+            while let Some((n, depth)) = queue.pop_front() {
+                if !seen.insert(n) || depth > 8 || mine.len() >= 64 {
+                    continue;
+                }
+                let Some(np) = read_props(pkg, n) else { continue };
+                match pkg.class_name(n).as_str() {
+                    "DisConv_Blurb" | "DisConv_NonWord" => {
+                        let text = match np.get("m_Text") {
+                            Some(Value::Str(t)) => t.trim().to_string(),
+                            _ => String::new(),
+                        };
+                        if let Some(e) = np.get("m_iBlurbGUID").and_then(|g| if let Value::Guid(g) = g { events.get(g) } else { None }) {
+                            let line = (e.clone(), text);
+                            let at = lines.iter().position(|l| *l == line).unwrap_or_else(|| {
+                                lines.push(line);
+                                lines.len() - 1
+                            });
+                            if !mine.contains(&(at as u16)) {
+                                mine.push(at as u16);
+                            }
                         }
                     }
-                }
-                "DisConversation" | "DisConv_ConversationRef" => {}
-                _ => {
-                    for l in struct_array(pkg, &np, "m_OutputLinks") {
-                        if let Some(o) = l.object("m_pLink").filter(|o| *o > 0) {
+                    "DisConversation" | "DisConv_ConversationRef" => {}
+                    // (barks answer Corvo: a branch on who set them off takes its "everyone else"
+                    // way, the groups it names being creatures)
+                    "DisConv_SpeakerInStoryGroup" if np.int("m_iSpeaker") == Some(1) => {
+                        if let Some(o) = struct_array(pkg, &np, "m_OutputLinks").last().and_then(|l| l.object("m_pLink")).filter(|o| *o > 0) {
                             queue.push_back((o, depth + 1));
                         }
                     }
+                    _ => {
+                        for l in struct_array(pkg, &np, "m_OutputLinks") {
+                            if let Some(o) = l.object("m_pLink").filter(|o| *o > 0) {
+                                queue.push_back((o, depth + 1));
+                            }
+                        }
+                    }
                 }
             }
+            by_output.push(mine);
         }
         if !lines.is_empty() {
             match out.hooks.iter_mut().find(|x| x.hook == hook) {
-                Some(x) => x.lines.extend(lines),
-                None => out.hooks.push(BarkHook { hook, lines }),
+                Some(x) => {
+                    // (a second node of the same hook: its lines after the first's)
+                    let base = x.lines.len() as u16;
+                    x.lines.extend(lines);
+                    for (k, mine) in by_output.into_iter().enumerate() {
+                        if x.by_output.len() <= k {
+                            x.by_output.push(Vec::new());
+                        }
+                        x.by_output[k].extend(mine.into_iter().map(|i| i + base));
+                    }
+                }
+                None => out.hooks.push(BarkHook { hook, lines, class, by_output }),
             }
         }
     }

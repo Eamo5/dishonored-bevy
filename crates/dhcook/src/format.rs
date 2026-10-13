@@ -17,7 +17,8 @@ use std::path::Path;
 // 127: attention's distance to lose sight.
 // 128: one-shot dialogue actors' speakers.
 // 129: dialogue branches by a task's state and by objectives.
-pub const SCENE_VERSION: u32 = 129;
+// 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
+pub const SCENE_VERSION: u32 = 130;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -1407,6 +1408,14 @@ pub struct BarkHook {
     pub hook: String,
     /// the lines it may say: (Wwise event, subtitle)
     pub lines: Vec<(String, String)>,
+    /// the hook node's class (`DisConv_Hook_<class>`: "SuspicionLevel", "Notice",
+    /// "DeathMode"...; empty for a plain `DisConv_DialogHook`), whose outputs pick by what
+    /// the speaker knows
+    #[serde(default)]
+    pub class: String,
+    /// the lines (indices into `lines`) each of its outputs leads to
+    #[serde(default)]
+    pub by_output: Vec<Vec<u16>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

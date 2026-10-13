@@ -758,15 +758,21 @@ fullscreen display, vertical sync and the crosshair.
   noticing, threatening, losing Corvo, hurting, dying and victory, a civilian starting to run
   says its `PANIC_START` (`FLEEING`), a guard set alight `COMBAT_IMMOLATED`, off to a bell
   `ALARM_GO_TO_RING_ALARM`, a grenade by it `ESCAPE_IMPENDING_EXPLOSION`, Corvo's magic before
-  its eyes `WITNESSEDMAGIC` (Blink: `MAGIC_DISAPPEARED`), finding him again in a search
-  `SEARCH_FIND_ENEMY`, and going to look again `INVESTIGATE` (`NOTICE`). Also `FALLING` as one
+  its eyes `MAGIC_WITNESSED` (Blink: `MAGIC_DISAPPEARED`), finding him again in a search
+  `SEARCH_FIND_ENEMY`, and going to look again `ATTENTION_INVESTIGATE`. Also `FALLING` as one
   falls (faster than 6 m/s down), `COMBAT_STEALTHKILL_PROJECTILE` for one killed unaware by a
   bolt or bullet, `PATROL_ATTACK_RATSINGLE` stamping on a rat, `COMBAT_RANGED_BEGIN` as a
   pistol is aimed, and the weepers' own: `WEEP_NOTICED_TARGET` as one turns on him, then
   `WEEP_FOLLOWING` as it follows and `WEEP_STAND_STILL_WEEPING` standing, every 2-5 s
   (`m_fFollowingBark`, `m_fStandStillWeepingBark`). With others of its side within 10 m, its
   threat, losing Corvo and calling off a search are its group's lines (`COMBAT_THREAT_GROUP`,
-  `COMBAT_LOST_GROUP`, `SEARCH_STOPHUNTING_GROUP`).
+  `COMBAT_LOST_GROUP`, `SEARCH_STOPHUNTING_GROUP`). Each hook is the one its node answers
+  (`m_HookEnum`): the voices' `DisConv_Hook_*` nodes used to be lumped by their class, so a
+  guard on patrol muttered search lines ("Let's find the little shit"). On patrol a guard says
+  its `PATROL_MISC` (`PATROL_MISC_GROUP` among others of its side), noticing something
+  `ATTENTION_NOTICE_BEGIN`, a notice come to nothing `ATTENTION_NOTICE_END`; a suspicion-level
+  hook says the lines of its output for whether the speaker suspects anything, a notice those
+  for whether it saw or heard, and a branch on who set it off takes its way for Corvo.
 - **Finishers** (`DisTweaks_Fatality`): the counter after a parry, the Blood Thirst strike and a
   sword blow that kills as a slow-motion finisher play the original paired finishers
   (`Sword_Ready_Fatality_<Front | FastFront>_*_Master` with `Generic_Fatality_..._Slave`, a
