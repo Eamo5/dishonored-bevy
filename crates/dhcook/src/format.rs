@@ -18,7 +18,8 @@ use std::path::Path;
 // 128: one-shot dialogue actors' speakers.
 // 129: dialogue branches by a task's state and by objectives.
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
-pub const SCENE_VERSION: u32 = 130;
+// 131: barks' graphs from their hooks to their lines.
+pub const SCENE_VERSION: u32 = 131;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -1416,6 +1417,36 @@ pub struct BarkHook {
     /// the lines (indices into `lines`) each of its outputs leads to
     #[serde(default)]
     pub by_output: Vec<Vec<u16>>,
+    /// its graph from its outputs (`roots`: node per output, -1 none) to its lines, walked as
+    /// the original walks it
+    #[serde(default)]
+    pub nodes: Vec<BarkNode>,
+    #[serde(default)]
+    pub roots: Vec<i32>,
+}
+
+/// A node of a bark's graph and its outputs (node indices, -1 unlinked: nothing said).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BarkNode {
+    pub step: BarkStep,
+    pub outs: Vec<i32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum BarkStep {
+    /// a line (index into the hook's `lines`): the walk ends there
+    Line(u16),
+    /// a branch as a conversation's (random by weights, in turn, a story flag...)
+    Branch(KBranch),
+    /// the speaker's suspicion (`DisConv_CheckSpeakerSuspicionLevel`): output 0 none, 1 some
+    Suspicion,
+    /// who it is (`DisConv_SpeakerInStoryGroup`): the first of `groups` (story group names) the
+    /// speaker, or the one who set it off (`initiator`), is in, else the last output
+    StoryGroup { initiator: bool, groups: Vec<String> },
+    /// at most once in so many seconds (`DisConv_TimeLimit`): output 0, else 1
+    TimeLimit(f32),
+    /// anything else: on along its first linked output (none: nothing said)
+    Pass,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

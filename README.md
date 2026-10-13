@@ -778,7 +778,12 @@ fullscreen display, vertical sync and the crosshair.
   `SEARCH_DETECT_CORPSE` (its `Hook_DeathMode` lines for a dead one, "A body! Murder!", or one
   knocked out, "Hey, wake up!") and a death before its eyes `SEARCH_WITNESS_DEATH`; a suspicion-level
   hook says the lines of its output for whether the speaker suspects anything, a notice those
-  for whether it saw or heard, and a branch on who set it off takes its way for Corvo.
+  for whether it saw or heard, and a branch on who set it off takes its way for Corvo. From
+  there the line is walked to as the original walks the hook's graph: weighted random and
+  in-turn branches as the conversations' (`m_Branches` percentages, keeping unique), the
+  speaker's suspicion (`DisConv_CheckSpeakerSuspicionLevel`), its story group
+  (`DisConv_SpeakerInStoryGroup`: a city guard's lines, a lower guard's), time limits and the
+  story's state; a way that leads nowhere says nothing.
 - **Finishers** (`DisTweaks_Fatality`): the counter after a parry, the Blood Thirst strike and a
   sword blow that kills as a slow-motion finisher play the original paired finishers
   (`Sword_Ready_Fatality_<Front | FastFront>_*_Master` with `Generic_Fatality_..._Slave`, a

@@ -3,6 +3,7 @@
 //! spotting the player, getting hurt, dying, losing the target, muttering on patrol...
 
 use crate::audio::{event_length, PostEvent};
+use std::collections::HashMap;
 use crate::gameplay::{HitKind, PlayerStats};
 use crate::level::LevelInfo;
 use crate::npc::{Alert, Mode, Npc};
@@ -16,6 +17,7 @@ impl Plugin for BarksPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Subtitle>()
             .init_resource::<BarkClock>()
+            .init_resource::<BarkMemory>()
             .add_systems(Update, npc_barks.run_if(in_state(GameState::InGame)));
     }
 }
@@ -101,6 +103,58 @@ fn hook_output(class: &str, npc: &Npc) -> Option<usize> {
 /// Barks are heard (and subtitled) within this range (metres).
 const HEAR: f32 = 25.0;
 
+/// What the barks' graphs remember: their random and in-turn branches' states (by voice, hook
+/// and node; by speaker too for a turn that isn't global) and when each speaker last passed a
+/// time limit.
+#[derive(Resource, Default)]
+pub struct BarkMemory {
+    branches: HashMap<(u32, usize, usize, Option<Entity>), crate::kismet::BranchState>,
+    passed: HashMap<(Entity, u32, usize, usize), f32>,
+}
+
+/// The line a bark's graph says now, walked from its output `out` as the original walks a
+/// hook's graph: weighted random and in-turn branches as the conversations' are, the speaker's
+/// suspicion, who it is (the one who set it off being Corvo, in none of the groups named),
+/// time limits, the story's state. Its voice and hook are `key`. None: it says nothing.
+#[allow(clippy::too_many_arguments)]
+fn walk_bark(bark: &dhcook::format::BarkHook, key: (u32, usize), out: usize, (e, suspicious, group): (Entity, bool, &str), vm: Option<&crate::kismet::Vm>, mem: &mut BarkMemory, now: f32) -> Option<usize> {
+    use dhcook::format::{BarkStep, KBranch};
+    let mut node = *bark.roots.get(out)?;
+    for _ in 0..64 {
+        let n = bark.nodes.get(usize::try_from(node).ok()?)?;
+        let k = match &n.step {
+            BarkStep::Line(i) => return Some(*i as usize),
+            BarkStep::Branch(b @ (KBranch::Random { .. } | KBranch::Sequential { .. } | KBranch::Shuffled { .. })) => {
+                let owner = matches!(b, KBranch::Sequential { global: false, .. } | KBranch::Shuffled { global: false, .. }).then_some(e);
+                let st = mem.branches.entry((key.0, key.1, node as usize, owner)).or_default();
+                crate::kismet::pick_turn(b, st, false)?
+            }
+            // (the story's state: a flag, a conversation had, a task; not so without the scripts)
+            BarkStep::Branch(b) => vm.and_then(|v| v.condition(b)).unwrap_or(0),
+            BarkStep::Suspicion => suspicious as usize,
+            BarkStep::StoryGroup { initiator, groups } => {
+                let who = if *initiator { "" } else { group.rsplit('.').next().unwrap_or("") };
+                groups.iter().position(|g| !who.is_empty() && g == who).unwrap_or(groups.len())
+            }
+            BarkStep::TimeLimit(secs) => {
+                let at = (e, key.0, key.1, node as usize);
+                if mem.passed.get(&at).is_some_and(|t| now - t <= *secs) {
+                    1
+                } else {
+                    mem.passed.insert(at, now);
+                    0
+                }
+            }
+            BarkStep::Pass => n.outs.iter().position(|o| *o >= 0)?,
+        };
+        node = *n.outs.get(k)?;
+        if node < 0 {
+            return None;
+        }
+    }
+    None
+}
+
 #[allow(clippy::too_many_arguments)]
 fn npc_barks(
     mut commands: Commands,
@@ -115,6 +169,7 @@ fn npc_barks(
     data: Res<crate::gamedata::Data>,
     (mut used, burning, grenades): (MessageReader<crate::powers::PowerUsed>, Query<(), With<crate::powers::Ignite>>, Query<&Transform, With<crate::gadgets::Grenade>>),
     mut hits: MessageReader<crate::gameplay::NpcHit>,
+    (mut memory, vm): (ResMut<BarkMemory>, Option<Res<crate::kismet::Vm>>),
 ) {
     let Some(level) = level else { return };
     let Ok(pt) = player.single() else { return };
@@ -322,16 +377,25 @@ fn npc_barks(
         if d > HEAR || (!urgent && (st.quiet > 0.0 || clock.busy > 0.0)) {
             continue;
         }
-        let Some(bark) = hooks.iter().find_map(|h| voice.hooks.iter().find(|x| x.hook == *h)) else { continue };
-        // (the lines of the hook node's output for what it knows, where it has some)
-        let pool: Vec<usize> = match out_hint.or_else(|| hook_output(&bark.class, &npc)).and_then(|k| bark.by_output.get(k)).filter(|o| !o.is_empty()) {
-            Some(o) => o.iter().map(|i| *i as usize).filter(|i| *i < bark.lines.len()).collect(),
-            None => (0..bark.lines.len()).collect(),
+        let Some((hi, bark)) = hooks.iter().find_map(|h| voice.hooks.iter().enumerate().find(|(_, x)| x.hook == *h)) else { continue };
+        // the hook node's output for what it knows, walked to a line (or to nothing said);
+        // without its graph, a line of that output's
+        let out_k = out_hint.or_else(|| hook_output(&bark.class, &npc));
+        let line = if bark.nodes.is_empty() {
+            let pool: Vec<usize> = match out_k.and_then(|k| bark.by_output.get(k)).filter(|o| !o.is_empty()) {
+                Some(o) => o.iter().map(|i| *i as usize).filter(|i| *i < bark.lines.len()).collect(),
+                None => (0..bark.lines.len()).collect(),
+            };
+            (!pool.is_empty()).then(|| pool[rand::random_range(0..pool.len())])
+        } else {
+            walk_bark(bark, (npc.voice.unwrap_or(0), hi), out_k.unwrap_or(0), (e, npc.alert != Alert::Unaware, &npc.story_group), vm.as_deref(), &mut memory, time.elapsed_secs())
         };
-        if pool.is_empty() {
+        let Some((event, text)) = line.and_then(|i| bark.lines.get(i)) else {
+            if log {
+                info!("bark {} {}: says nothing (output {out_k:?})", npc.name, bark.hook);
+            }
             continue;
-        }
-        let (event, text) = &bark.lines[pool[rand::random_range(0..pool.len())]];
+        };
         let len = event_length(event).unwrap_or(1.5);
         if log {
             info!("bark {} {:?}: {event} \"{text}\"", npc.name, hooks.first());
@@ -347,5 +411,47 @@ fn npc_barks(
         st.quiet = len + 3.0;
         st.since = 0.0;
         clock.busy = len.min(2.5);
+    }
+}
+
+#[cfg(test)]
+mod walk_tests {
+    use super::*;
+    use dhcook::format::{BarkHook, BarkNode, BarkStep, KBranch};
+
+    fn hook(nodes: Vec<(BarkStep, Vec<i32>)>, roots: Vec<i32>) -> BarkHook {
+        BarkHook {
+            hook: "TEST".into(),
+            lines: (0..4).map(|i| (format!("Play_{i}"), format!("line {i}"))).collect(),
+            class: String::new(),
+            by_output: Vec::new(),
+            nodes: nodes.into_iter().map(|(step, outs)| BarkNode { step, outs }).collect(),
+            roots,
+        }
+    }
+
+    #[test]
+    fn a_bark_walks_by_suspicion_group_and_weights_to_a_line_or_to_nothing() {
+        let e = Entity::from_raw_u32(1).unwrap();
+        let mut mem = BarkMemory::default();
+        // suspicion: 0 -> line 0, 1 -> nothing said
+        let h = hook(vec![(BarkStep::Suspicion, vec![1, -1]), (BarkStep::Line(0), vec![])], vec![0]);
+        assert_eq!(walk_bark(&h, (0, 0), 0, (e, false, ""), None, &mut mem, 0.0), Some(0));
+        assert_eq!(walk_bark(&h, (0, 0), 0, (e, true, ""), None, &mut mem, 0.0), None);
+        // the speaker's story group, else its "everyone else" way; one who set it off is Corvo
+        let groups = vec!["Twk_ID_CityGuard".to_string(), "Twk_ID_LowerGuard".to_string()];
+        let h = hook(vec![(BarkStep::StoryGroup { initiator: false, groups: groups.clone() }, vec![1, 2, 3]), (BarkStep::Line(1), vec![]), (BarkStep::Line(2), vec![]), (BarkStep::Line(3), vec![])], vec![0]);
+        assert_eq!(walk_bark(&h, (0, 1), 0, (e, false, "Twk_ID_LowerGuard"), None, &mut mem, 0.0), Some(2));
+        assert_eq!(walk_bark(&h, (0, 1), 0, (e, false, "Twk_ID_Thug"), None, &mut mem, 0.0), Some(3));
+        let h2 = hook(vec![(BarkStep::StoryGroup { initiator: true, groups }, vec![1, 2, 3]), (BarkStep::Line(1), vec![]), (BarkStep::Line(2), vec![]), (BarkStep::Line(3), vec![])], vec![0]);
+        assert_eq!(walk_bark(&h2, (0, 2), 0, (e, false, "Twk_ID_CityGuard"), None, &mut mem, 0.0), Some(3));
+        // a random branch by its weights: all on the second way
+        let h = hook(vec![(BarkStep::Branch(KBranch::Random { weights: vec![0.0, 100.0], unique: false }), vec![1, 2]), (BarkStep::Line(0), vec![]), (BarkStep::Line(1), vec![])], vec![0]);
+        assert!((0..20).all(|_| walk_bark(&h, (0, 3), 0, (e, false, ""), None, &mut mem, 0.0) == Some(1)));
+        // a time limit: once, then its other way until the time is up
+        let h = hook(vec![(BarkStep::TimeLimit(10.0), vec![1, -1]), (BarkStep::Line(0), vec![])], vec![0]);
+        assert_eq!(walk_bark(&h, (0, 4), 0, (e, false, ""), None, &mut mem, 1.0), Some(0));
+        assert_eq!(walk_bark(&h, (0, 4), 0, (e, false, ""), None, &mut mem, 5.0), None);
+        assert_eq!(walk_bark(&h, (0, 4), 0, (e, false, ""), None, &mut mem, 12.0), Some(0));
     }
 }

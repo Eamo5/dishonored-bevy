@@ -1018,6 +1018,72 @@ pub fn bark_voice(pkg: &Package, voice: i32) -> Option<crate::format::BarkVoice>
             }
             by_output.push(mine);
         }
+        // its graph, node by node from its outputs (the lines as above)
+        let mut nodes: Vec<crate::format::BarkNode> = Vec::new();
+        let mut ids: HashMap<i32, i32> = HashMap::new();
+        let mut queue: Vec<i32> = Vec::new();
+        let node_of = |o: Option<i32>, ids: &mut HashMap<i32, i32>, queue: &mut Vec<i32>| -> i32 {
+            let Some(o) = o.filter(|o| *o > 0) else { return -1 };
+            *ids.entry(o).or_insert_with(|| {
+                queue.push(o);
+                queue.len() as i32 - 1
+            })
+        };
+        let roots: Vec<i32> = struct_array(pkg, &hp, "m_OutputLinks").iter().map(|l| node_of(l.object("m_pLink"), &mut ids, &mut queue)).collect();
+        let mut k = 0;
+        while k < queue.len() && k < 256 {
+            let n = queue[k];
+            k += 1;
+            let np = read_props(pkg, n).unwrap_or_default();
+            let ncls = pkg.class_name(n);
+            use crate::format::BarkStep;
+            let step = match ncls.as_str() {
+                "DisConv_Blurb" | "DisConv_NonWord" => {
+                    let text = match np.get("m_Text") {
+                        Some(Value::Str(t)) => t.trim().to_string(),
+                        _ => String::new(),
+                    };
+                    match np.get("m_iBlurbGUID").and_then(|g| if let Value::Guid(g) = g { events.get(g) } else { None }) {
+                        Some(e) => {
+                            let line = (e.clone(), text);
+                            let at = lines.iter().position(|l| *l == line).unwrap_or_else(|| {
+                                lines.push(line);
+                                lines.len() - 1
+                            });
+                            BarkStep::Line(at as u16)
+                        }
+                        None => BarkStep::Pass,
+                    }
+                }
+                "DisConv_CheckSpeakerSuspicionLevel" => BarkStep::Suspicion,
+                "DisConv_SpeakerInStoryGroup" => BarkStep::StoryGroup {
+                    initiator: np.int("m_iSpeaker") == Some(1),
+                    groups: struct_array(pkg, &np, "m_Branches").iter().map(|b| b.object("m_pStoryGroup").filter(|o| *o != 0).map(|o| pkg.obj_name(o).to_string()).unwrap_or_default()).collect(),
+                },
+                "DisConv_TimeLimit" => BarkStep::TimeLimit(np.float("m_fTimeLimitInSeconds").unwrap_or(0.0)),
+                "DisConv_CheckStoryFlag" => match np.get("m_StoryFlag") {
+                    Some(Value::Guid(g)) => BarkStep::Branch(crate::format::KBranch::StoryFlag(format!("{:08x}{:08x}{:08x}{:08x}", g[0], g[1], g[2], g[3]))),
+                    _ => BarkStep::Pass,
+                },
+                c => match branch_of(pkg, c, &np) {
+                    Some(b) => BarkStep::Branch(b),
+                    None => BarkStep::Pass,
+                },
+            };
+            // (a line or a conversation ends the walk)
+            let stops = matches!(step, BarkStep::Line(_)) || matches!(ncls.as_str(), "DisConversation" | "DisConv_ConversationRef" | "DisConv_Blurb" | "DisConv_NonWord");
+            let outs = if stops { Vec::new() } else { struct_array(pkg, &np, "m_OutputLinks").iter().map(|l| node_of(l.object("m_pLink"), &mut ids, &mut queue)).collect() };
+            nodes.push(crate::format::BarkNode { step, outs });
+        }
+        // (nodes past the cap say nothing)
+        let count = nodes.len() as i32;
+        for n in nodes.iter_mut() {
+            for o in n.outs.iter_mut() {
+                if *o >= count {
+                    *o = -1;
+                }
+            }
+        }
         if !lines.is_empty() {
             match out.hooks.iter_mut().find(|x| x.hook == hook) {
                 Some(x) => {
@@ -1031,7 +1097,7 @@ pub fn bark_voice(pkg: &Package, voice: i32) -> Option<crate::format::BarkVoice>
                         x.by_output[k].extend(mine.into_iter().map(|i| i + base));
                     }
                 }
-                None => out.hooks.push(BarkHook { hook, lines, class, by_output }),
+                None => out.hooks.push(BarkHook { hook, lines, class, by_output, nodes, roots }),
             }
         }
     }

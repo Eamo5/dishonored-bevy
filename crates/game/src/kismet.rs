@@ -637,7 +637,7 @@ fn approach_band(last: &mut f32, d: f32, edges: [f32; 3], linked: [bool; 3]) -> 
 }
 
 #[derive(Clone, Default)]
-struct BranchState {
+pub(crate) struct BranchState {
     /// the last output picked at random (the first pick avoids output 0, as the original's
     /// does)
     last: usize,
@@ -4265,51 +4265,18 @@ impl Vm {
         let key = (owner, at.0, at.1, at.2);
         let mut st = self.branches.get(&key).cloned().unwrap_or_default();
         let k = match b {
-            KBranch::Random { weights, unique } => {
-                let n = weights.len();
-                if n == 0 {
-                    return None;
-                }
-                let roll = rand::random::<f32>() * 100.0;
-                let mut sum = 0.0;
-                let mut k = (0..n).find(|&i| {
-                    sum += weights[i];
-                    sum > roll
-                }).unwrap_or(n - 1);
-                // (the other output whose weight is nearest the one picked, the first of equals)
-                if *unique && k == st.last && n >= 2 {
-                    let w = weights[k];
-                    k = (0..n).filter(|&i| i != k).min_by(|a, b| (weights[*a] - w).abs().total_cmp(&(weights[*b] - w).abs())).unwrap_or(k);
-                }
-                st.last = k;
-                k
-            }
-            KBranch::Sequential { count, looping, .. } => {
-                if *count == 0 {
-                    return None;
-                }
-                let next = if st.turn + 1 > *count { if *looping { 1 } else { *count } } else { st.turn + 1 };
-                st.turn = next;
-                next as usize - 1
-            }
-            KBranch::Shuffled { count, looping, .. } => {
-                let n = *count as usize;
-                if st.order.len() != n {
-                    st.order = shuffled(n);
-                }
-                let next = st.turn + 1;
-                if next > *count && !*looping {
-                    n
-                } else {
-                    let next = if next > *count { 1 } else { next };
-                    st.turn = next;
-                    let k = st.order.get(next as usize - 1).copied().unwrap_or(0);
-                    if !in_conv && *looping && next == *count {
-                        st.order = shuffled(n);
-                    }
-                    k
-                }
-            }
+            KBranch::Random { .. } | KBranch::Sequential { .. } | KBranch::Shuffled { .. } => pick_turn(b, &mut st, in_conv)?,
+            _ => self.condition(b)?,
+        };
+        Some((k, key, st))
+    }
+
+    /// The output a branch on the state of the story takes (a story flag, a conversation had,
+    /// a task's state, an objective); none for one at random or in turn.
+    pub(crate) fn condition(&self, b: &dhcook::format::KBranch) -> Option<usize> {
+        use dhcook::format::KBranch;
+        Some(match b {
+            KBranch::Random { .. } | KBranch::Sequential { .. } | KBranch::Shuffled { .. } => return None,
             KBranch::StoryFlag(f) => self.flag(f) as usize,
             KBranch::Fired(p) => self.fired_convs.contains(p) as usize,
             KBranch::TaskState(t) => match self.tasks.get(t).map(|s| s.0) {
@@ -4320,8 +4287,7 @@ impl Vm {
             },
             KBranch::ObjectiveDone(o) => self.tasks.get(o).is_some_and(|s| s.0 == TaskState::Completed) as usize,
             KBranch::HasObjective(o) => self.objectives.contains(o) as usize,
-        };
-        Some((k, key, st))
+        })
     }
 
     /// Who says a conversation's own lines: a one-shot dialogue actor's character
@@ -6631,6 +6597,64 @@ pub fn apply_effects(
 /// The cooked map that has a player start tagged `tag`.
 /// `DisConv_CompareDarknessLevel`'s output for the chaos level against `than`: 0 the same,
 /// 1 lower, 2 higher (as roshan's r614/blink research decoded it).
+/// The output a random or in-turn branch takes, and the state it leaves (`DisConvGlobalMan`'s
+/// rules): the random pick by its weights, not the last again where another is near as likely;
+/// the turn staying on its last output unless looping; a shuffled turn "Depleted" past its end,
+/// shuffled anew as it starts over outside a running conversation (`in_conv`).
+pub(crate) fn pick_turn(b: &dhcook::format::KBranch, st: &mut BranchState, in_conv: bool) -> Option<usize> {
+    use dhcook::format::KBranch;
+    Some(match b {
+        KBranch::Random { weights, unique } => {
+            let n = weights.len();
+            if n == 0 {
+                return None;
+            }
+            let roll = rand::random::<f32>() * 100.0;
+            let mut sum = 0.0;
+            let mut k = (0..n)
+                .find(|&i| {
+                    sum += weights[i];
+                    sum > roll
+                })
+                .unwrap_or(n - 1);
+            // (the other output whose weight is nearest the one picked, the first of equals)
+            if *unique && k == st.last && n >= 2 {
+                let w = weights[k];
+                k = (0..n).filter(|&i| i != k).min_by(|a, b| (weights[*a] - w).abs().total_cmp(&(weights[*b] - w).abs())).unwrap_or(k);
+            }
+            st.last = k;
+            k
+        }
+        KBranch::Sequential { count, looping, .. } => {
+            if *count == 0 {
+                return None;
+            }
+            let next = if st.turn + 1 > *count { if *looping { 1 } else { *count } } else { st.turn + 1 };
+            st.turn = next;
+            next as usize - 1
+        }
+        KBranch::Shuffled { count, looping, .. } => {
+            let n = *count as usize;
+            if st.order.len() != n {
+                st.order = shuffled(n);
+            }
+            let next = st.turn + 1;
+            if next > *count && !*looping {
+                n
+            } else {
+                let next = if next > *count { 1 } else { next };
+                st.turn = next;
+                let k = st.order.get(next as usize - 1).copied().unwrap_or(0);
+                if !in_conv && *looping && next == *count {
+                    st.order = shuffled(n);
+                }
+                k
+            }
+        }
+        _ => return None,
+    })
+}
+
 /// The outputs 0..n in a random order (by random keys, as the original's shuffled turn sorts
 /// them).
 fn shuffled(n: usize) -> Vec<usize> {
