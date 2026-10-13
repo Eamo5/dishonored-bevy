@@ -838,6 +838,9 @@ fn animate_arms(
         }
     }
     if full_body {
+        if std::env::var("DH_ARMS_LOG").is_ok() {
+            info!("arms: full body {:?} base {}", scene_arms.0.as_ref().map(|s| s.0.clone()), anim.current().map(|p| anim.lib.clip(p.clip).name.clone()).unwrap_or_default());
+        }
         anim.stop_overlay(0.1);
         // Do not replay casts or switches made before the full-body sequence
         // when normal gameplay resumes.
@@ -889,7 +892,10 @@ fn animate_arms(
     // (the Heart held up as the gadgets are, its fingers about it: not the open hand of a power)
     let heart = powers.selected == Power::Heart;
     anim.masked = c.heart_fingers.filter(|_| heart && !st.fingers_l.is_empty()).map(|f| (f, 0.0, st.fingers_l.clone()));
-    let idle = if heart {
+    // (nothing in the left hand: it rests as the body's clip has it)
+    let idle = if powers.selected == Power::Empty {
+        None
+    } else if heart {
         c.gadgets_idle.or(c.powers_idle)
     } else if ranged {
         if bow { c.wristbow_idle.or(c.gadgets_idle) } else { c.gadgets_idle }
