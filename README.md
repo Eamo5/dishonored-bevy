@@ -363,7 +363,9 @@ fullscreen display, vertical sync and the crosshair.
   Standing about unaware, a character plays an ambient idle of the set it stands in (a guard's
   `Sword_Patrol_Idle_0x`, empty hands' `Empty_Idle_0x`) as it stops, then every 30-60 s of
   standing (the patrol and guard behaviours' `DisTweaks_AISubProcess_AmbientAnims`), starting
-  over when anything sets it on edge.
+  over when anything sets it on edge. Characters blink: their sets' `Blink` on the eyelid bones
+  alone, every 0.5-6 s at 1-2 times its pace (`ArkComponentLookatConfig`), over whatever they
+  play; a line's own face animation takes the eyelids while it lasts.
   Weepers carry the plague (`plague.rs`, their pawns' `m_bHasPlague` tweaks cooked as
   `NpcPlague`). They have no blow: they follow, grab, weep standing (`Empty_Weep_Idle`) and
   cough. After any weeper's grab, none grabs for 20 s (`DisGlobalCombatManager`'s

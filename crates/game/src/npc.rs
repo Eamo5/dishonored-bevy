@@ -1691,6 +1691,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 hit_seen: 0.0,
                 // (as it starts out: its first ambient idle comes within a few seconds)
                 idle_time: rand::random::<f32>() * 3.0,
+                blink_in: rand::random::<f32>() * BLINK_EVERY[1],
                 settle: None,
                 drawn: true,
                 sword: swords.clone(),
@@ -3660,6 +3661,8 @@ pub struct NpcClips {
     hit_dir_empty: [Vec<ClipId>; 4],
     death_dir: [Option<ClipId>; 4],
     stun: Option<ClipId>,
+    /// the eyelids' `Blink`
+    blink: Option<ClipId>,
     death: Vec<ClipId>,
     death_fast: Option<ClipId>,
     /// lying poses (last frames) to settle into after a reaction that ends mid-fall
@@ -3783,6 +3786,7 @@ impl NpcClips {
                 lib.first(&["Generic_DeathBackA", "Generic_DeathBack_A"]),
             ],
             stun: lib.first(&["Sword_HitWindblast", "Empty_HitWindblast", "Patrol_Stun_Loop"]),
+            blink: lib.find("Blink"),
             death: {
                 let human = lib.all(&["Generic_DeathFrontA", "Generic_DeathBackA", "Generic_DeathLeftA", "Generic_DeathRightA"]);
                 if human.is_empty() {
@@ -3844,6 +3848,8 @@ pub struct NpcAnim {
     hit_seen: f32,
     /// standing time left before its next ambient idle
     idle_time: f32,
+    /// time to its next blink
+    blink_in: f32,
     /// Lying pose to blend into once the current (falling) clip ends.
     settle: Option<ClipId>,
     /// Sword in hand (else in its holster).
@@ -3893,6 +3899,10 @@ fn side_struck(npc: &Npc, at: Vec3) -> Option<usize> {
         1
     })
 }
+
+/// Time between blinks (s: `ArkComponentLookatConfig`'s `MinDurationBetweenBlink`,
+/// `MaxDurationBetweenBlink`).
+const BLINK_EVERY: [f32; 2] = [0.5, 6.0];
 
 /// Standing time between ambient idles (s: the patrol and guard behaviours'
 /// `m_fMinAmbientAnimFrequency`, `m_fMaxAmbientAnimFrequency`).
@@ -4091,6 +4101,22 @@ fn npc_select_anim(
         let st = &mut *st;
         let clips = st.clips.clone();
         let lib = anim.lib.clone();
+
+        // the eyelids: a blink every 0.5-6 s at 1-2 times its pace, on the eyelid bones alone
+        // (`ArkComponentLookatConfig`'s `MinDurationBetweenBlink`..`Max`, `MinBlinkSpeed`..`Max`,
+        // as roshan's r614/blink research read them); none for the down
+        if let Some(b) = clips.blink {
+            st.blink_in -= dt;
+            if anim.overlay_is(Some(b)) && anim.overlay_finished() {
+                anim.stop_overlay(0.02);
+            }
+            if st.blink_in <= 0.0 {
+                st.blink_in = BLINK_EVERY[0] + rand::random::<f32>() * (BLINK_EVERY[1] - BLINK_EVERY[0]);
+                if !npc.is_down() && !far {
+                    anim.restart_overlay(b, false, 1.0 + rand::random::<f32>(), 0.02);
+                }
+            }
+        }
 
         // sword: drawn when alerted, holstered otherwise
         let drawn = npc.alert != Alert::Unaware
