@@ -13,7 +13,8 @@ use std::path::Path;
 // 124: branches within conversations (random, in turn, story flags, conversations had).
 // 125: branches' weights and turns; conversations' Interrupted and Player Walked Away ways,
 //      near radius and blocking.
-pub const SCENE_VERSION: u32 = 125;
+// 126: the player approach and loiter hooks' distances and times.
+pub const SCENE_VERSION: u32 = 126;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -498,7 +499,13 @@ pub struct KDialogNode {
 pub enum KDialogNodeKind {
     /// an entry (`DDH_KISMET_ACTIVATED` with its input names, one per output;
     /// `DDH_PLAYER_APPROACHES`, `DDH_PLAYER_LOITERS`...)
-    Hook { hook: String, inputs: Vec<String> },
+    Hook {
+        hook: String,
+        inputs: Vec<String>,
+        /// what the hook watches for (the player's approach and loitering)
+        #[serde(default)]
+        poll: Option<KHookPoll>,
+    },
     /// a conversation (index into the tree's)
     Conversation(u32),
     /// a story flag: output 1 when set, 0 when not
@@ -517,6 +524,18 @@ pub enum KDialogNodeKind {
     /// the chaos level against this one (`DisConv_CompareDarknessLevel`): output 0 the same,
     /// 1 lower, 2 higher
     Darkness(i32),
+}
+
+/// What a hook node watches for, polled as the player moves (`DisConv_Hook_*`).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum KHookPoll {
+    /// the player coming within the close, medium or far distance of a speaker (m:
+    /// `DisConv_Hook_Distance` `m_fCloseDistance`, `m_fMediumDistance`, `m_fFarDistance`; its
+    /// outputs in that order)
+    Distance([f32; 3]),
+    /// the player staying within `radius` (m, on the ground plane) for `min`..`max` seconds
+    /// (`DisConv_Hook_PlayerLoiter`)
+    Loiter { radius: f32, min: f32, max: f32 },
 }
 
 /// A conversation flattened along its first links.

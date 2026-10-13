@@ -955,6 +955,12 @@ fullscreen display, vertical sync and the crosshair.
   once a conversation, unless it holds the player (`m_bIsBlocking_Player`), the player walking
   away takes its "Player Walked Away" way, or breaks it off. One marked
   `m_bNotWhenPlayerIsInCombat` doesn't start while Corvo fights.
+  The approach hooks (`DisConv_Hook_Distance`: `DDH_PLAYER_APPROACHES` and its `_RADIAL` form,
+  which used to go unheard) fire their close, medium or far way as the player comes within
+  its distance of the speaker (2, 5 and 10 m by the class; the Hound Pits' 4 m), once until
+  they draw back; the loiter hooks (`DisConv_Hook_PlayerLoiter`) fire once the player has
+  stayed within 6 m for 5-7 s, rolled anew each time, as roshan's r614/blink research decoded
+  them.
   The trees' story-flag and conversation-had nodes give their negative output first (a flag
   unset, a conversation not yet had). One-shot dialogue actors are spoken for by the
   characters the scripts name with them (`DisSeqAct_DialogInputs` Target): talking to the
@@ -1310,7 +1316,8 @@ against the install's own data where it carries them, then implemented independe
   their last pick; in-turn branches stay on their last output unless they loop; a shuffled turn
   ends on "Depleted". A conversation breaks off on its speaker's death or change of behaviour,
   running its "Interrupted" way to its first line; one that wants the player near walks its
-  "Player Walked Away" way once when they leave (see Dialogue above).
+  "Player Walked Away" way once when they leave. Approach hooks fire as the player comes within
+  each of their distances; loiter hooks after a stay of 5-7 s (see Dialogue above).
 - **Melee defence.** A blow from behind Corvo's view does half damage
   (`m_fOffscreenMeleeDamageReduction` 0.5, at least 1). A tap parry forces a plain block for 0.3 s,
   with no second parry until it ends.

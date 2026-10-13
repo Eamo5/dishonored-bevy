@@ -835,7 +835,18 @@ fn dialog_tree(pkg: &Package, t: i32, voices: &HashMap<[u32; 4], Vec<String>>) -
                             }
                         }
                     }
-                    KDialogNodeKind::Hook { hook, inputs }
+                    // (the class's own distances: 2, 5 and 10 m; loitering 6 m for 5-7 s)
+                    let f = |k: &str, d: f32| p.float(k).unwrap_or(d);
+                    let poll = match c {
+                        "DisConv_Hook_Distance" => Some(crate::format::KHookPoll::Distance([f("m_fCloseDistance", 200.0), f("m_fMediumDistance", 500.0), f("m_fFarDistance", 1000.0)].map(|x| x * crate::xform::UNIT))),
+                        "DisConv_Hook_PlayerLoiter" => Some(crate::format::KHookPoll::Loiter {
+                            radius: f("m_fLoiterRadius", 600.0) * crate::xform::UNIT,
+                            min: f("m_fLoiterTime_Min", 5.0),
+                            max: f("m_fLoiterTime_Max", 7.0),
+                        }),
+                        _ => None,
+                    };
+                    KDialogNodeKind::Hook { hook, inputs, poll }
                 }
                 // a reference: the conversation it names
                 "DisConv_ConversationRef" => match links.first().and_then(|c| conv_ids.get(c)) {

@@ -447,6 +447,45 @@ mod conversation_tests {
 }
 
 #[cfg(test)]
+mod proximity_tests {
+    use super::*;
+
+    #[test]
+    fn an_approach_fires_once_as_the_player_comes_within_each_distance() {
+        let edges = [2.0, 5.0, 10.0];
+        let mut last = f32::MAX;
+        let walk = |last: &mut f32, ds: &[f32], linked: [bool; 3]| ds.iter().map(|d| approach_band(last, *d, edges, linked)).collect::<Vec<_>>();
+        // only the medium way linked (the Hound Pits' approaches): within 5 m, once
+        assert_eq!(walk(&mut last, &[20.0, 9.0, 6.0, 4.0, 3.0, 1.0], [false, true, false]), [None, None, None, Some(1), None, None]);
+        // out within the far edge and back: again
+        assert_eq!(walk(&mut last, &[8.0, 4.5], [false, true, false]), [None, Some(1)]);
+        // gone beyond the far edge, the distance last seen stands
+        assert_eq!(walk(&mut last, &[50.0, 4.0], [false, true, false]), [None, None]);
+        let mut last = f32::MAX;
+        assert_eq!(walk(&mut last, &[9.0, 4.0, 1.5], [true, true, true]), [Some(2), Some(1), Some(0)]);
+    }
+
+    #[test]
+    fn loitering_fires_after_the_time_rolled_and_again_while_staying() {
+        let mut l = Loiter::default();
+        let mut fired = Vec::new();
+        for i in 0..200 {
+            let t = i as f32 * 0.1;
+            if l.update(t, 3.0, 6.0, 5.0, 7.0) {
+                fired.push(t);
+            }
+        }
+        assert!(fired.len() >= 2);
+        assert!(fired[0] > 5.0 && fired[0] <= 7.2, "{fired:?}");
+        // stepping out (or a pause in looking) starts it over
+        let mut l = Loiter::default();
+        assert!(!(0..40).any(|i| l.update(i as f32 * 0.1, 3.0, 6.0, 5.0, 7.0)));
+        l.update(4.0, 8.0, 6.0, 5.0, 7.0);
+        assert!(!(41..80).any(|i| l.update(i as f32 * 0.1, 3.0, 6.0, 5.0, 7.0)));
+    }
+}
+
+#[cfg(test)]
 mod tower_save_tests {
     use super::*;
 
@@ -534,6 +573,51 @@ pub enum Busy {
 /// conversation (none for the tree's own nodes) and node or step.
 type BranchKey = (u32, usize, usize, usize);
 
+/// A loiter hook's watch (`DisConv_Hook_PlayerLoiter`): when it last looked, whether the
+/// player was within its radius, and how long they have stayed of the time it rolled.
+#[derive(Clone, Copy, Default)]
+struct Loiter {
+    last: f32,
+    inside: bool,
+    stayed: f32,
+    time: f32,
+}
+
+impl Loiter {
+    /// The player `d` metres off (on the ground plane): staying past the time rolled on
+    /// entering fires the hook, and it rolls again. A pause of over half a second between
+    /// looks counts as having left.
+    fn update(&mut self, now: f32, d: f32, radius: f32, min: f32, max: f32) -> bool {
+        let dt = now - self.last;
+        let was = self.inside && dt <= 0.5;
+        self.last = now;
+        self.inside = d < radius;
+        if self.inside && !was {
+            self.time = min + rand::random::<f32>() * (max - min);
+            self.stayed = 0.0;
+        }
+        if self.inside && was && self.time > 1e-4 {
+            self.stayed += dt;
+            if self.stayed > self.time {
+                self.inside = false;
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// An approach hook's output (`DisConv_Hook_Distance`), the player now `d` metres off and
+/// `last` the distance last seen within the far edge: the close or the medium output as they
+/// come within it, the far one as they come within that; beyond it nothing changes.
+fn approach_band(last: &mut f32, d: f32, edges: [f32; 3], linked: [bool; 3]) -> Option<usize> {
+    if d > edges[2] {
+        return None;
+    }
+    let was = std::mem::replace(last, d);
+    (0..2).find(|&i| linked[i] && d <= edges[i] && was > edges[i]).or((linked[2] && edges[2] < was).then_some(2))
+}
+
 #[derive(Clone, Default)]
 struct BranchState {
     /// the last output picked at random (the first pick avoids output 0, as the original's
@@ -595,12 +679,12 @@ pub struct Vm {
     conv_ending: HashSet<u32>,
     walked_away: HashSet<u32>,
     /// speakers and the tree they answer with (for the player approaching / loitering),
-    /// their positions and how long the player has lingered by each
+    /// their positions, and their approach and loiter hooks' watch (by speaker and node)
     speaker_tree: HashMap<u32, usize>,
     pub speaker_pos: HashMap<u32, Vec3>,
     pub player_pos: Option<Vec3>,
-    linger: HashMap<u32, f32>,
-    hook_time: HashMap<(u32, u32), f32>,
+    hook_dist: HashMap<(u32, u32), f32>,
+    hook_loiter: HashMap<(u32, u32), Loiter>,
     /// NPC states last frame (for death / alert events)
     npc_seen: HashMap<Entity, (Mode, Alert, f32, bool)>,
     /// how many of Corvo's noises each character had heard (`DisSeqEvent_PlayerHeard`)
@@ -896,8 +980,8 @@ impl Vm {
             speaker_tree: g.dialogs.iter().map(|d| (d.actor, d.tree as usize)).collect(),
             speaker_pos: g.dialogs.iter().filter_map(|d| g.actors.get(d.actor as usize).map(|a| (d.actor, Vec3::from(a.position)))).collect(),
             player_pos: None,
-            linger: HashMap::new(),
-            hook_time: HashMap::new(),
+            hook_dist: HashMap::new(),
+            hook_loiter: HashMap::new(),
             npc_seen: HashMap::new(),
             npc_heard: HashMap::new(),
             being_assassinated: HashMap::new(),
@@ -4257,7 +4341,7 @@ impl Vm {
         let norm = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_ascii_lowercase();
         let want = norm(input);
         for (ni, n) in t.nodes.iter().enumerate() {
-            let dhcook::format::KDialogNodeKind::Hook { hook, inputs } = &n.kind else { continue };
+            let dhcook::format::KDialogNodeKind::Hook { hook, inputs, .. } = &n.kind else { continue };
             if hook != "DDH_KISMET_ACTIVATED" {
                 continue;
             }
@@ -4351,41 +4435,51 @@ impl Vm {
         }
     }
 
-    /// The player near a speaker: its tree's "player approaches" hook, and "player loiters"
-    /// after a few seconds there.
-    fn proximity_hooks(&mut self, dt: f32) {
+    /// The player near a speaker: its tree's approach hooks as they come within their
+    /// distances, and its loiter hooks as they stay (`DDH_PLAYER_APPROACHES`,
+    /// `DDH_PLAYER_LOITERS` and their `_RADIAL` forms). Each is watched all the time; one
+    /// that fires while its speaker is talking is lost.
+    fn proximity_hooks(&mut self) {
+        use dhcook::format::{KDialogNodeKind, KHookPoll};
         let Some(player) = self.player_pos else { return };
         let g = self.g.clone();
-        let speakers: Vec<(u32, usize)> = self.speaker_tree.iter().map(|(a, t)| (*a, *t)).collect();
+        let mut speakers: Vec<(u32, usize)> = self.speaker_tree.iter().map(|(a, t)| (*a, *t)).collect();
+        speakers.sort_unstable();
         for (actor, tree) in speakers {
-            let Some(pos) = self.speaker_pos.get(&actor).copied() else { continue };
-            let d = pos.distance(player);
-            let near = d < 4.0;
-            let lingered = if d < 3.0 { *self.linger.entry(actor).and_modify(|l| *l += dt).or_insert(0.0) } else {
-                self.linger.remove(&actor);
-                0.0
-            };
-            if !near || self.convs.iter().any(|c| c.0 == actor) {
+            // (where its characters stand, else the dialogue actor itself)
+            let mut at = self.speaker_at(actor);
+            if at.is_empty() && self.g.actors.get(actor as usize).is_some_and(|a| a.spawner.is_none()) {
+                at.extend(self.speaker_pos.get(&actor).copied());
+            }
+            if at.is_empty() {
                 continue;
             }
+            let d = at.iter().map(|p| p.distance(player)).fold(f32::MAX, f32::min);
+            let flat = at.iter().map(|p| p.xz().distance(player.xz())).fold(f32::MAX, f32::min);
+            let mut talking = self.convs.iter().any(|c| c.0 == actor);
             let Some(t) = g.dialog_trees.get(tree) else { continue };
             for (ni, n) in t.nodes.iter().enumerate() {
-                let dhcook::format::KDialogNodeKind::Hook { hook, .. } = &n.kind else { continue };
-                let due = match hook.as_str() {
-                    "DDH_PLAYER_APPROACHES" => true,
-                    "DDH_PLAYER_LOITERS" => lingered > 5.0,
-                    _ => false,
-                };
-                // a hook answers once per approach (again after a while)
+                let KDialogNodeKind::Hook { hook, poll: Some(poll), .. } = &n.kind else { continue };
                 let key = (actor, ni as u32);
-                if !due || self.hook_time.get(&key).is_some_and(|t0| self.time - t0 < 30.0) {
-                    continue;
+                let out = match poll {
+                    KHookPoll::Distance(edges) if hook.starts_with("DDH_PLAYER_APPROACHES") => {
+                        let linked = [0, 1, 2].map(|i| n.outs.get(i).is_some_and(|o| *o >= 0));
+                        approach_band(self.hook_dist.entry(key).or_insert(f32::MAX), d, *edges, linked)
+                    }
+                    KHookPoll::Loiter { radius, min, max } if hook.starts_with("DDH_PLAYER_LOITERS") => {
+                        let now = self.time;
+                        self.hook_loiter.entry(key).or_default().update(now, flat, *radius, *min, *max).then_some(0)
+                    }
+                    _ => None,
+                };
+                let Some(k) = out.filter(|_| !talking) else { continue };
+                if self.trace {
+                    info!("kismet: {hook} ({}) output {k} at {d:.1} m ({flat:.1} m across)", t.path);
                 }
-                self.hook_time.insert(key, self.time);
                 self.walk_speaker = Some(actor);
-                if let Some(c) = self.walk_tree(tree, ni as i32, 0) {
+                if let Some(c) = self.walk_tree(tree, n.outs.get(k).copied().unwrap_or(-1), 0) {
                     self.start_conversation(actor, tree, c);
-                    break;
+                    talking = true;
                 }
             }
         }
@@ -4639,7 +4733,7 @@ impl Vm {
     }
 
     fn tick(&mut self, dt: f32) {
-        self.proximity_hooks(dt);
+        self.proximity_hooks();
         self.time += dt;
         // DH_INTERP_LOG: the matinees running, once a second
         if std::env::var("DH_INTERP_LOG").is_ok() && (self.time - dt).floor() != self.time.floor() {
