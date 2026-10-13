@@ -78,6 +78,11 @@ const FALL_SPEED: f32 = -6.0;
 /// / `_Max`, `m_fStandStillWeepingBark_Min` / `_Max`).
 const WEEP_BARK: [f32; 2] = [2.0, 5.0];
 
+/// Others of its side within this (m) make a character's lines its group's
+/// (`m_eBarkToPlayWhenGrouped`: `COMBAT_THREAT_GROUP`, `COMBAT_LOST_GROUP`,
+/// `SEARCH_STOPHUNTING_GROUP`), as far as a fight spreads.
+const GROUP_REACH: f32 = 10.0;
+
 /// Barks are heard (and subtitled) within this range (metres).
 const HEAR: f32 = 25.0;
 
@@ -105,6 +110,8 @@ fn npc_barks(
     let magic = used.read().last().map(|u| u.0);
     // (who a bolt or bullet struck this frame)
     let shot: Vec<Entity> = hits.read().filter(|h| matches!(h.kind, HitKind::Bolt | HitKind::Bullet | HitKind::ExplosiveBullet | HitKind::ExplosiveBolt)).map(|h| h.npc).collect();
+    // (who stands where, for the barks said in a group: those of one side within reach)
+    let standing: Vec<(Entity, Vec3, String)> = npcs.iter().filter(|(_, n, ..)| !n.is_down()).map(|(e, n, t, ..)| (e, t.translation, n.faction.clone())).collect();
     for (e, npc, t, state, anim, clips) in &mut npcs {
         let Some(mut st) = state else {
             commands.entity(e).try_insert(BarkState {
@@ -140,6 +147,7 @@ fn npc_barks(
             st.next_chatter = st.next_chatter.min(WEEP_BARK[1]);
         }
         let d = t.translation.distance(pt.translation);
+        let grouped = standing.iter().any(|(o, at, f)| *o != e && *f == npc.faction && at.distance(t.translation) < GROUP_REACH);
         // the line its clip cues as it passes it (`DishonoredNotify_FireDialogHook`)
         let mut cued: Option<String> = None;
         // (a cry its clip has still to cue)
@@ -237,8 +245,12 @@ fn npc_barks(
                 (Alert::Unaware, Alert::Suspicious) => Some((&["NOTICE_SUSPICIOUS_ACTIVITY", "SUSPICIONDIST", "ATTENTION_TRACKTARGET_BEGIN"], false)),
                 // (a weeper's voice has only its own: `WEEP_NOTICED_TARGET`)
                 (Alert::Unaware, Alert::Combat) => Some((&["COMBAT_SURPRISED", "COMBAT_THREAT", "WEEP_NOTICED_TARGET"], true)),
+                // (with others of its side about, their group's lines first)
+                (_, Alert::Combat) if grouped => Some((&["COMBAT_THREAT_GROUP", "COMBAT_THREAT", "COMBAT_SURPRISED", "WEEP_NOTICED_TARGET"], true)),
                 (_, Alert::Combat) => Some((&["COMBAT_THREAT", "COMBAT_THREAT_GROUP", "COMBAT_SURPRISED", "WEEP_NOTICED_TARGET"], true)),
+                (Alert::Combat, _) if grouped => Some((&["COMBAT_LOST_GROUP", "COMBAT_LOST", "SEARCH_STOPHUNTING_GROUP", "SEARCH_STOPHUNTING"], false)),
                 (Alert::Combat, _) => Some((&["COMBAT_LOST", "SEARCH_STOPHUNTING", "SEARCH_GIVEUP_POSTCORPSE"], false)),
+                (Alert::Suspicious, Alert::Unaware) if grouped => Some((&["SEARCH_STOPHUNTING_GROUP", "SEARCH_STOPHUNTING", "COMBAT_GOING_HOME"], false)),
                 (Alert::Suspicious, Alert::Unaware) => Some((&["SEARCH_STOPHUNTING", "COMBAT_GOING_HOME"], false)),
                 _ => None,
             };

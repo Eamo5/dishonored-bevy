@@ -762,7 +762,9 @@ fullscreen display, vertical sync and the crosshair.
   bolt or bullet, `PATROL_ATTACK_RATSINGLE` stamping on a rat, `COMBAT_RANGED_BEGIN` as a
   pistol is aimed, and the weepers' own: `WEEP_NOTICED_TARGET` as one turns on him, then
   `WEEP_FOLLOWING` as it follows and `WEEP_STAND_STILL_WEEPING` standing, every 2-5 s
-  (`m_fFollowingBark`, `m_fStandStillWeepingBark`).
+  (`m_fFollowingBark`, `m_fStandStillWeepingBark`). With others of its side within 10 m, its
+  threat, losing Corvo and calling off a search are its group's lines (`COMBAT_THREAT_GROUP`,
+  `COMBAT_LOST_GROUP`, `SEARCH_STOPHUNTING_GROUP`).
 - **Finishers** (`DisTweaks_Fatality`): the counter after a parry, the Blood Thirst strike and a
   sword blow that kills as a slow-motion finisher play the original paired finishers
   (`Sword_Ready_Fatality_<Front | FastFront>_*_Master` with `Generic_Fatality_..._Slave`, a
