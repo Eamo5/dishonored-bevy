@@ -126,7 +126,7 @@ pub struct BarkMemory {
 
 /// The line a bark's graph says now, walked from its output `out` as the original walks a
 /// hook's graph: weighted random and in-turn branches as the conversations' are, the speaker's
-/// suspicion, who it is (the one who set it off being Corvo, in none of the groups named),
+/// suspicion, who it is (the one who set it off being Corvo, or what he possesses),
 /// time limits, the story's state. Its voice and hook are `key`. None: it says nothing.
 #[allow(clippy::too_many_arguments)]
 fn walk_bark(bark: &dhcook::format::BarkHook, key: (u32, usize), out: usize, (e, suspicious, group): (Entity, bool, &str), vm: Option<&crate::kismet::Vm>, mem: &mut BarkMemory, now: f32) -> Option<usize> {
@@ -142,10 +142,11 @@ fn walk_bark(bark: &dhcook::format::BarkHook, key: (u32, usize), out: usize, (e,
                 crate::kismet::pick_turn(b, st, false)?
             }
             // (the story's state: a flag, a conversation had, a task; not so without the scripts)
-            BarkStep::Branch(b) => vm.and_then(|v| v.condition(b)).unwrap_or(0),
+            BarkStep::Branch(b) => vm.and_then(|v| v.condition(b, None)).unwrap_or(0),
             BarkStep::Suspicion => suspicious as usize,
             BarkStep::StoryGroup { initiator, groups } => {
-                let who = if *initiator { "" } else { group.rsplit('.').next().unwrap_or("") };
+                // (the one who set it off: Corvo, in no group unless he possesses something)
+                let who = if *initiator { vm.and_then(|v| v.player_group.as_deref()).unwrap_or("") } else { group.rsplit('.').next().unwrap_or("") };
                 groups.iter().position(|g| !who.is_empty() && g == who).unwrap_or(groups.len())
             }
             BarkStep::TimeLimit(secs) => {

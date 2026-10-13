@@ -977,7 +977,9 @@ fullscreen display, vertical sync and the crosshair.
   every time. In a tree or a conversation, a task's state (`DisConv_CheckTaskState`: inactive,
   active, completed or failed) and an objective completed or had (`DisConv_IsObjectiveComplete`,
   `DisConv_HasObjective`) pick theirs too: Havelock no longer sends Corvo to bed before the
-  task is his. Random and in-turn branches, in a tree's graph as within a conversation, follow the
+  task is his. So do the speaker's suspicion (`DisConv_CheckSpeakerSuspicionLevel`), its story
+  group (`DisConv_SpeakerInStoryGroup`) and whether it is possessed (`DisConv_IsPossessed`);
+  checked on the one who set a hook off, that is Corvo, or what he possesses (in a rat, a rat). Random and in-turn branches, in a tree's graph as within a conversation, follow the
   original's rules (roshan's r614/blink research decoded them): `DisConv_RandomBranch` picks
   by its `m_Branches` percentages (50/50 by the class) and, keeping unique, not the output it
   picked last if another is near as likely; `DisConv_SequentialBranch` goes through its outputs

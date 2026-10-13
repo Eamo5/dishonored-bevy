@@ -693,6 +693,11 @@ pub struct Vm {
     /// conversations breaking off (their "Interrupted" way says its first line and ends) and
     /// those whose player has walked away once (by speaker)
     pub speaker_busy: HashMap<u32, Busy>,
+    /// the speakers' story groups and those Corvo possesses; the group of what he possesses
+    /// (a rat, a character), as the one setting hooks off
+    pub speaker_group: HashMap<u32, String>,
+    pub speaker_possessed: HashSet<u32>,
+    pub player_group: Option<String>,
     conv_busy: HashMap<u32, Option<Busy>>,
     conv_ending: HashSet<u32>,
     walked_away: HashSet<u32>,
@@ -991,6 +996,9 @@ impl Vm {
             branches: HashMap::new(),
             node_time: HashMap::new(),
             speaker_busy: HashMap::new(),
+            speaker_group: HashMap::new(),
+            speaker_possessed: HashSet::new(),
+            player_group: None,
             conv_busy: HashMap::new(),
             conv_ending: HashSet::new(),
             walked_away: HashSet::new(),
@@ -4266,14 +4274,14 @@ impl Vm {
         let mut st = self.branches.get(&key).cloned().unwrap_or_default();
         let k = match b {
             KBranch::Random { .. } | KBranch::Sequential { .. } | KBranch::Shuffled { .. } => pick_turn(b, &mut st, in_conv)?,
-            _ => self.condition(b)?,
+            _ => self.condition(b, (speaker != u32::MAX).then_some(speaker))?,
         };
         Some((k, key, st))
     }
 
     /// The output a branch on the state of the story takes (a story flag, a conversation had,
     /// a task's state, an objective); none for one at random or in turn.
-    pub(crate) fn condition(&self, b: &dhcook::format::KBranch) -> Option<usize> {
+    pub(crate) fn condition(&self, b: &dhcook::format::KBranch, speaker: Option<u32>) -> Option<usize> {
         use dhcook::format::KBranch;
         Some(match b {
             KBranch::Random { .. } | KBranch::Sequential { .. } | KBranch::Shuffled { .. } => return None,
@@ -4287,7 +4295,27 @@ impl Vm {
             },
             KBranch::ObjectiveDone(o) => self.tasks.get(o).is_some_and(|s| s.0 == TaskState::Completed) as usize,
             KBranch::HasObjective(o) => self.objectives.contains(o) as usize,
+            // (the speaker: its character, or those answering for a one-shot; the one who set it
+            // off is Corvo, or what he possesses)
+            KBranch::Suspicion => speaker.and_then(|a| self.busy(a)).is_some() as usize,
+            KBranch::StoryGroup { initiator, groups } => {
+                let who = if *initiator { self.player_group.clone().unwrap_or_default() } else { speaker.map(|a| self.group_of(a)).unwrap_or_default() };
+                groups.iter().position(|g| !who.is_empty() && *g == who).unwrap_or(groups.len())
+            }
+            KBranch::Possessed { initiator } => (if *initiator { self.player_group.is_some() } else { speaker.is_some_and(|a| self.speakers_of(a).iter().any(|p| self.speaker_possessed.contains(p))) }) as usize,
         })
+    }
+
+    /// The characters speaking for an actor: itself, and those answering for a one-shot.
+    fn speakers_of(&self, actor: u32) -> Vec<u32> {
+        let mut all = vec![actor];
+        all.extend(self.pawn_oneshot.iter().filter(|(_, o)| **o == actor).map(|(p, _)| *p));
+        all
+    }
+
+    /// A speaker's story group (`Twk_ID_...`), its own or its character's.
+    fn group_of(&self, actor: u32) -> String {
+        self.speakers_of(actor).iter().find_map(|a| self.speaker_group.get(a).cloned()).unwrap_or_default()
     }
 
     /// Who says a conversation's own lines: a one-shot dialogue actor's character
@@ -5470,16 +5498,27 @@ fn world_events(
         }
     }
     // where the player and the speaking characters are (for the dialogue hooks), and what
-    // those in conversations are doing (characters answering for one-shot dialogue actors too)
+    // those in conversations are doing (characters answering for one-shot dialogue actors too);
+    // what Corvo possesses, as one setting hooks off (a rat, a character's own group)
     vm.player_pos = player.single().ok().map(|(t, _)| t.translation);
+    vm.player_group = possession.host.and_then(|h| match npcs.get(h) {
+        Ok((_, n, _, _)) => Some(n.story_group.rsplit('.').next().unwrap_or("").to_string()),
+        Err(_) => hosts.get(h).ok().map(|ho| if !ho.fish && !ho.rooted { "Twk_ID_Rats".to_string() } else { String::new() }),
+    });
     let mut speaking: Vec<u32> = vm.speaker_tree.keys().chain(vm.pawn_oneshot.keys()).copied().collect();
     speaking.extend(vm.convs.iter().map(|c| c.0));
     speaking.sort_unstable();
     speaking.dedup();
     for a in speaking {
         let Some(s) = vm.g.actors.get(a as usize).and_then(|ka| ka.spawner) else { continue };
-        if let Some((_, n, _, t)) = npcs.iter().find(|(_, n, f, _)| f.0 == s && !n.is_down()) {
+        if let Some((ne, n, _, t)) = npcs.iter().find(|(_, n, f, _)| f.0 == s && !n.is_down()) {
             vm.speaker_pos.insert(a, t.translation);
+            vm.speaker_group.insert(a, n.story_group.rsplit('.').next().unwrap_or("").to_string());
+            if possession.host == Some(ne) {
+                vm.speaker_possessed.insert(a);
+            } else {
+                vm.speaker_possessed.remove(&a);
+            }
             let busy = match n.mode {
                 Mode::Combat | Mode::Flee | Mode::Choked => Some(Busy::Fighting),
                 Mode::Investigate | Mode::Search => Some(Busy::Noticing),

@@ -877,7 +877,15 @@ fn dialog_tree(pkg: &Package, t: i32, voices: &HashMap<[u32; 4], Vec<String>>) -
                 },
                 "DisConv_TimeLimit" => KDialogNodeKind::TimeLimit(p.float("m_fTimeLimitInSeconds").unwrap_or(0.0)),
                 "DisConv_CompareDarknessLevel" => KDialogNodeKind::Darkness(p.int("m_LevelToCompare").unwrap_or(0)),
-                "DisConv_RandomBranch" | "DisConv_RandomSequentialBranch" | "DisConv_SequentialBranch" | "DisConv_CheckTaskState" | "DisConv_IsObjectiveComplete" | "DisConv_HasObjective" => match branch_of(pkg, &cls, &p) {
+                "DisConv_RandomBranch"
+                | "DisConv_RandomSequentialBranch"
+                | "DisConv_SequentialBranch"
+                | "DisConv_CheckTaskState"
+                | "DisConv_IsObjectiveComplete"
+                | "DisConv_HasObjective"
+                | "DisConv_CheckSpeakerSuspicionLevel"
+                | "DisConv_SpeakerInStoryGroup"
+                | "DisConv_IsPossessed" => match branch_of(pkg, &cls, &p) {
                     Some(b) => KDialogNodeKind::Branch(b),
                     None => KDialogNodeKind::Pass,
                 },
@@ -1417,6 +1425,13 @@ fn branch_of(pkg: &Package, cls: &str, p: &Props) -> Option<crate::format::KBran
             looping: flag("m_bLooping", false),
             global: flag("m_bApplyGlobally", true),
         },
+        // (the speaker: slot 1 is the one who set it off)
+        "DisConv_CheckSpeakerSuspicionLevel" => KBranch::Suspicion,
+        "DisConv_SpeakerInStoryGroup" => KBranch::StoryGroup {
+            initiator: p.int("m_iSpeaker") == Some(1),
+            groups: struct_array(pkg, p, "m_Branches").iter().map(|b| b.object("m_pStoryGroup").filter(|o| *o != 0).map(|o| pkg.obj_name(o).to_string()).unwrap_or_default()).collect(),
+        },
+        "DisConv_IsPossessed" => KBranch::Possessed { initiator: p.int("m_iSpeaker") == Some(1) },
         // (tasks and objectives by object path, as the objectives are cooked)
         "DisConv_CheckTaskState" => KBranch::TaskState(pkg.obj_path(p.object("m_pTask").filter(|o| *o != 0)?)),
         "DisConv_IsObjectiveComplete" => KBranch::ObjectiveDone(pkg.obj_path(p.object("m_pObjective").filter(|o| *o != 0)?)),
@@ -1501,7 +1516,10 @@ fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<
             | "DisConv_HadConversation"
             | "DisConv_CheckTaskState"
             | "DisConv_IsObjectiveComplete"
-            | "DisConv_HasObjective" => {
+            | "DisConv_HasObjective"
+            | "DisConv_CheckSpeakerSuspicionLevel"
+            | "DisConv_SpeakerInStoryGroup"
+            | "DisConv_IsPossessed" => {
                 use crate::format::KBranch;
                 let kind = match cls.as_str() {
                     "DisConv_CheckStoryFlag" => Some(KBranch::StoryFlag(guid(&p, "m_StoryFlag").unwrap_or_default())),

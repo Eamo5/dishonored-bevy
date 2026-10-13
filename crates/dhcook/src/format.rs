@@ -19,7 +19,8 @@ use std::path::Path;
 // 129: dialogue branches by a task's state and by objectives.
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
-pub const SCENE_VERSION: u32 = 131;
+// 132: dialogue branches by the speaker's suspicion, story group and possession.
+pub const SCENE_VERSION: u32 = 132;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -633,6 +634,15 @@ pub enum KBranch {
     /// (`DisConv_HasObjective`): output 1 so, 0 not
     ObjectiveDone(String),
     HasObjective(String),
+    /// the speaker's suspicion (`DisConv_CheckSpeakerSuspicionLevel`): output 0 none, 1 some
+    Suspicion,
+    /// who the speaker, or the one who set it off (`initiator`), is
+    /// (`DisConv_SpeakerInStoryGroup`): the first of `groups` (story group names) it is in, else
+    /// the last output
+    StoryGroup { initiator: bool, groups: Vec<String> },
+    /// the speaker, or the one who set it off, possessed (`DisConv_IsPossessed`): output 1 so,
+    /// 0 not
+    Possessed { initiator: bool },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
