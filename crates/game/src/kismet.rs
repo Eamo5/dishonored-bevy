@@ -437,6 +437,24 @@ mod conversation_tests {
     }
 
     #[test]
+    fn task_and_objective_branches_follow_the_mission() {
+        let mut vm = speaker(None);
+        let task = KBranch::TaskState("Obj.Task".into());
+        let pick = |vm: &Vm, b: &KBranch| vm.pick_branch(b, 0, (0, 0, 0), true).unwrap().0;
+        assert_eq!(pick(&vm, &task), 0);
+        vm.tasks.insert("Obj.Task".into(), (TaskState::Active, false));
+        assert_eq!(pick(&vm, &task), 1);
+        vm.tasks.insert("Obj.Task".into(), (TaskState::Completed, false));
+        assert_eq!(pick(&vm, &task), 2);
+        assert_eq!(pick(&vm, &KBranch::ObjectiveDone("Obj".into())), 0);
+        vm.tasks.insert("Obj".into(), (TaskState::Completed, false));
+        assert_eq!(pick(&vm, &KBranch::ObjectiveDone("Obj".into())), 1);
+        assert_eq!(pick(&vm, &KBranch::HasObjective("Obj".into())), 0);
+        vm.objectives.push("Obj".into());
+        assert_eq!(pick(&vm, &KBranch::HasObjective("Obj".into())), 1);
+    }
+
+    #[test]
     fn a_random_branch_keeping_unique_never_repeats_itself() {
         let mut vm = speaker(None);
         let got = picks(&mut vm, &KBranch::Random { weights: vec![50.0, 50.0], unique: true }, 20);
@@ -4294,6 +4312,14 @@ impl Vm {
             }
             KBranch::StoryFlag(f) => self.flag(f) as usize,
             KBranch::Fired(p) => self.fired_convs.contains(p) as usize,
+            KBranch::TaskState(t) => match self.tasks.get(t).map(|s| s.0) {
+                None | Some(TaskState::Inactive) => 0,
+                Some(TaskState::Active) => 1,
+                Some(TaskState::Completed) => 2,
+                Some(TaskState::Failed) => 3,
+            },
+            KBranch::ObjectiveDone(o) => self.tasks.get(o).is_some_and(|s| s.0 == TaskState::Completed) as usize,
+            KBranch::HasObjective(o) => self.objectives.contains(o) as usize,
         };
         Some((k, key, st))
     }

@@ -16,7 +16,8 @@ use std::path::Path;
 // 126: the player approach and loiter hooks' distances and times.
 // 127: attention's distance to lose sight.
 // 128: one-shot dialogue actors' speakers.
-pub const SCENE_VERSION: u32 = 128;
+// 129: dialogue branches by a task's state and by objectives.
+pub const SCENE_VERSION: u32 = 129;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -623,6 +624,13 @@ pub enum KBranch {
     /// a conversation had (`DisConv_ConversationFired`, `DisConv_HadConversation`: object
     /// path): output 1 had, 0 not
     Fired(String),
+    /// a task's state (`DisConv_CheckTaskState`: object path): outputs inactive, active,
+    /// completed, failed
+    TaskState(String),
+    /// an objective completed (`DisConv_IsObjectiveComplete`), or had
+    /// (`DisConv_HasObjective`): output 1 so, 0 not
+    ObjectiveDone(String),
+    HasObjective(String),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

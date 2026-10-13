@@ -949,7 +949,10 @@ fullscreen display, vertical sync and the crosshair.
   Within a conversation its own branch nodes pick the way as it reaches them: by a story flag
   (`DisConv_CheckStoryFlag`), a conversation had (`DisConv_ConversationFired`,
   `DisConv_HadConversation`), at random or in turn (below); they used to take their first way
-  every time. Random and in-turn branches, in a tree's graph as within a conversation, follow the
+  every time. In a tree or a conversation, a task's state (`DisConv_CheckTaskState`: inactive,
+  active, completed or failed) and an objective completed or had (`DisConv_IsObjectiveComplete`,
+  `DisConv_HasObjective`) pick theirs too: Havelock no longer sends Corvo to bed before the
+  task is his. Random and in-turn branches, in a tree's graph as within a conversation, follow the
   original's rules (roshan's r614/blink research decoded them): `DisConv_RandomBranch` picks
   by its `m_Branches` percentages (50/50 by the class) and, keeping unique, not the output it
   picked last if another is near as likely; `DisConv_SequentialBranch` goes through its outputs
