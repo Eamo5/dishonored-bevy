@@ -6243,6 +6243,9 @@ pub fn apply_effects(
                 });
                 // a character's line: its jaw follows
                 let speaker = at.as_ref().and_then(|v| actor(v)).and_then(|a| a.spawner).and_then(|s| npcs.iter().find(|(_, _, f, _)| f.0 == s).map(|x| x.0));
+                if std::env::var("DH_AUDIO_LOG").is_ok() && voice {
+                    info!("audio: line {ev} by {:?} ({:?})", speaker, at.as_ref().and_then(|v| actor(v)).map(|a| (a.name.clone(), a.spawner)));
+                }
                 let post = crate::audio::PostEvent::named(&ev, pos);
                 let post = if voice { post.voiced() } else { post };
                 sounds.write(match speaker {

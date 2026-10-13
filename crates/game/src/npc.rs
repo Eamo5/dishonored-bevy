@@ -38,7 +38,7 @@ impl Plugin for NpcPlugin {
             .add_systems(PostUpdate, log_jumps.after(bevy_rapier3d::plugin::PhysicsSet::Writeback).run_if(in_state(GameState::InGame)))
             .add_systems(
                 PostUpdate,
-                (scene_head_look, speaking_jaw).after(crate::anim::AnimPose).before(bevy::transform::TransformSystems::Propagate).run_if(in_state(GameState::InGame)),
+                (scene_head_look, head_track, speaking_jaw).after(crate::anim::AnimPose).before(bevy::transform::TransformSystems::Propagate).run_if(in_state(GameState::InGame)),
             )
             .add_systems(
                 Update,
@@ -1042,6 +1042,83 @@ fn scene_head_look(npcs: Query<(&Transform, &Npc, &NpcRig, &SceneLook)>, mut joi
             let p = rig.parent[i];
             let pw = if p >= 0 { rig.bind_world[p as usize] } else { Quat::IDENTITY };
             jt.rotation = pw.inverse() * Quat::from_rotation_y(yaw * share) * pw * jt.rotation;
+        }
+    }
+}
+
+/// A character's head turned to what holds its attention, eased in and out: its yaw and pitch
+/// from its body, and how far it has turned.
+#[derive(Component, Default)]
+pub struct HeadTrack {
+    yaw: f32,
+    pitch: f32,
+    weight: f32,
+}
+
+/// How far a head turns (radians: `ArkComponentLookatConfig`'s idle look-at modes, the head's
+/// 65 degrees left and right with the torso's 60 behind it, 60 up and 35 down, as roshan's
+/// r614/blink research read them); beyond the turn it doesn't look.
+const LOOK_YAW: f32 = 1.9;
+const LOOK_UP: f32 = 1.05;
+const LOOK_DOWN: f32 = 0.6;
+
+/// Characters look at Corvo once they notice him (from head-tracking on, short of fighting him,
+/// when the whole body turns) and as they speak with him close by: the head takes most of the
+/// turn, the upper back the rest, over the body's animation (`ArkComponentLookatConfig`).
+#[allow(clippy::type_complexity)]
+fn head_track(
+    mut commands: Commands,
+    time: Res<Time>,
+    player: Query<&Transform, With<crate::player::Player>>,
+    npcs: Query<(Entity, &Transform, &Npc, &NpcRig, Option<&mut HeadTrack>, Has<crate::audio::Speaking>, Option<&crate::anim::Animator>), (Without<SceneLook>, Without<crate::player::Player>)>,
+    mut joints: Query<&mut Transform, (Without<Npc>, Without<crate::player::Player>)>,
+) {
+    let Ok(pt) = player.single() else { return };
+    let dt = time.delta_secs();
+    let eye = pt.translation + Vec3::Y * 0.6;
+    let mut npcs = npcs;
+    for (e, t, npc, rig, track, speaking, anim) in &mut npcs {
+        let Some(mut track) = track else {
+            commands.entity(e).try_insert(HeadTrack::default());
+            continue;
+        };
+        // (a rig not posed this frame keeps last frame's pose: nothing laid on it)
+        if anim.is_none_or(|a| a.frozen) {
+            continue;
+        }
+        let head = t.translation + Vec3::Y * 0.75;
+        let to = eye - head;
+        let flat = to.with_y(0.0).length();
+        let yaw = ((-to.x).atan2(-to.z) - npc.yaw + PI).rem_euclid(TAU) - PI;
+        let near = flat < 6.0;
+        let wants = !npc.is_down()
+            && npc.mode != Mode::Combat
+            && flat > 0.3
+            && yaw.abs() < LOOK_YAW
+            && ((npc.attn_level >= 1 && (npc.sees_player || npc.last_seen.is_some())) || (speaking && near));
+        let rate = 4.0 * dt;
+        track.weight = if wants { (track.weight + rate).min(1.0) } else { (track.weight - rate).max(0.0) };
+        if wants {
+            let pitch = to.y.atan2(flat).clamp(-LOOK_DOWN, LOOK_UP);
+            let k = (8.0 * dt).min(1.0);
+            track.yaw += (yaw - track.yaw) * k;
+            track.pitch += (pitch - track.pitch) * k;
+        }
+        if track.weight <= 0.0 {
+            continue;
+        }
+        if std::env::var("DH_LOOK_LOG").is_ok() {
+            info!("look: {} weight {:.2} yaw {:.0} pitch {:.0} (attention {}, speaking {speaking})", npc.name, track.weight, track.yaw.to_degrees(), track.pitch.to_degrees(), npc.attn_level);
+        }
+        let w = track.weight * track.weight * (3.0 - 2.0 * track.weight);
+        for (bone, share) in [(rig.idx.neck, 0.65), (rig.idx.spine[2], 0.35)] {
+            let Some(i) = bone else { continue };
+            let Some(&je) = rig.joints.get(i) else { continue };
+            let Ok(mut jt) = joints.get_mut(je) else { continue };
+            let p = rig.parent[i];
+            let pw = if p >= 0 { rig.bind_world[p as usize] } else { Quat::IDENTITY };
+            let turn = Quat::from_rotation_y(track.yaw * share * w) * Quat::from_rotation_x(track.pitch * share * w);
+            jt.rotation = pw.inverse() * turn * pw * jt.rotation;
         }
     }
 }

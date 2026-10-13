@@ -363,7 +363,12 @@ fullscreen display, vertical sync and the crosshair.
   Standing about unaware, a character plays an ambient idle of the set it stands in (a guard's
   `Sword_Patrol_Idle_0x`, empty hands' `Empty_Idle_0x`) as it stops, then every 30-60 s of
   standing (the patrol and guard behaviours' `DisTweaks_AISubProcess_AmbientAnims`), starting
-  over when anything sets it on edge. Characters blink: their sets' `Blink` on the eyelid bones
+  over when anything sets it on edge. A character that has noticed Corvo (head-tracking on, short
+  of fighting him, when its whole body turns) or speaks with him close by turns its head to
+  him, the neck taking most of the turn and the upper back the rest, within the original's
+  look-at limits (`ArkComponentLookatConfig`'s idle modes: 65 degrees each way for the head
+  with 60 for the torso behind it, 60 up and 35 down), eased in and out over a quarter of a
+  second; a scene's own look-at takes precedence. Characters blink: their sets' `Blink` on the eyelid bones
   alone, every 0.5-6 s at 1-2 times its pace (`ArkComponentLookatConfig`), over whatever they
   play; a line's own face animation takes the eyelids while it lasts.
   Weepers carry the plague (`plague.rs`, their pawns' `m_bHasPlague` tweaks cooked as
