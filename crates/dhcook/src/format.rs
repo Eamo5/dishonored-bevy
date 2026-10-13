@@ -10,7 +10,10 @@ use std::path::Path;
 // 121: props' muzzles; the contact system's impact effects (`contact_fx`).
 // 122: Blink's target markers (`blink_ground`, `blink_mantle`, `blink_fall` effects).
 // 123: the characters' clips' effects and plague coughs; plague carriers; lights' `live`.
-pub const SCENE_VERSION: u32 = 123;
+// 124: branches within conversations (random, in turn, story flags, conversations had).
+// 125: branches' weights and turns; conversations' Interrupted and Player Walked Away ways,
+//      near radius and blocking.
+pub const SCENE_VERSION: u32 = 125;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -498,15 +501,15 @@ pub enum KDialogNodeKind {
     Hook { hook: String, inputs: Vec<String> },
     /// a conversation (index into the tree's)
     Conversation(u32),
-    /// a story flag: output 0 when set, 1 when not
+    /// a story flag: output 1 when set, 0 when not
     StoryFlag(String),
     SetStoryFlag(String),
-    /// a conversation (object path) already played: output 0, else 1
+    /// a conversation (object path) already played: output 1, else 0
     Fired(String),
     /// at most once per this many seconds: output 0, else 1
     TimeLimit(f32),
-    Random,
-    Sequential,
+    /// at random or in turn (output by `KBranch::Random`, `Sequential` or `Shuffled`)
+    Branch(KBranch),
     /// activate a Kismet remote event
     Remote(String),
     /// anything else passes on through its first output
@@ -527,6 +530,26 @@ pub struct KConversation {
     /// plays once only (`m_bFireConvOnlyOnce`)
     #[serde(default)]
     pub once: bool,
+    /// the steps its "Interrupted" and "Player Walked Away" ways start at (outputs 1 and 2)
+    #[serde(default)]
+    pub interrupted: Option<u32>,
+    #[serde(default)]
+    pub walked_away: Option<u32>,
+    /// the player must be within this of the speaker (m, `m_bPlayerMustBeNear`,
+    /// `m_fPlayerNearRadius`)
+    #[serde(default)]
+    pub near: Option<f32>,
+    /// it holds the player (`m_bIsBlocking_Player`), its speakers (`m_bIsBlocking`) and
+    /// lets them go when they notice something (`m_bStopBlockingForAINotice`)
+    #[serde(default)]
+    pub blocking_player: bool,
+    #[serde(default)]
+    pub blocking: bool,
+    #[serde(default)]
+    pub stop_for_notice: bool,
+    /// not while the player fights (`m_bNotWhenPlayerIsInCombat`)
+    #[serde(default)]
+    pub not_in_combat: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -549,6 +572,30 @@ pub enum KDialogStep {
     Darkness(i32, [Option<u32>; 3]),
     /// the end of a branch
     End,
+    /// a branch within the conversation: the step each output's way starts at (none: the
+    /// conversation ends)
+    Branch(KBranch, Vec<Option<u32>>),
+}
+
+/// What a branch within a conversation goes by.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum KBranch {
+    /// one of its outputs at random by their weights (`DisConv_RandomBranch`: `m_Branches`
+    /// percentages), not the last one picked again where another is near as likely
+    /// (`m_bTryKeepUnique`)
+    Random { weights: Vec<f32>, unique: bool },
+    /// its `count` outputs in turn, staying on the last unless looping
+    /// (`DisConv_SequentialBranch`); counted for all who use its tree together, or for each
+    /// (`m_bApplyGlobally`)
+    Sequential { count: u32, looping: bool, global: bool },
+    /// its `count` outputs in a shuffled turn, then output `count` ("Depleted") unless looping
+    /// (`DisConv_RandomSequentialBranch`)
+    Shuffled { count: u32, looping: bool, global: bool },
+    /// a story flag (`DisConv_CheckStoryFlag`): output 1 set, 0 not
+    StoryFlag(String),
+    /// a conversation had (`DisConv_ConversationFired`, `DisConv_HadConversation`: object
+    /// path): output 1 had, 0 not
+    Fired(String),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

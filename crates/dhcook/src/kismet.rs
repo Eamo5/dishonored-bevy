@@ -785,12 +785,7 @@ fn dialog_tree(pkg: &Package, t: i32, voices: &HashMap<[u32; 4], Vec<String>>) -
     for c in obj_list(pkg, &tp, "m_Conversations").into_iter().filter(|c| *c > 0) {
         let Some(cp) = read_props(pkg, c) else { continue };
         conv_ids.insert(c, tree.conversations.len() as u32);
-        tree.conversations.push(KConversation {
-            label: str_of(&cp, "m_Label"),
-            steps: conversation_steps(pkg, c, voices),
-            path: pkg.obj_path(c),
-            once: matches!(cp.get("m_bFireConvOnlyOnce"), Some(Value::Bool(true))),
-        });
+        tree.conversations.push(conversation(pkg, c, &cp, voices));
     }
     let guid = |p: &Props, k: &str| match p.get(k) {
         Some(Value::Guid(g)) => format!("{:08x}{:08x}{:08x}{:08x}", g[0], g[1], g[2], g[3]),
@@ -817,12 +812,7 @@ fn dialog_tree(pkg: &Package, t: i32, voices: &HashMap<[u32; 4], Vec<String>>) -
             if l > 0 && !conv_ids.contains_key(&l) && pkg.class_name(l) == "DisConversation" {
                 if let Some(cp) = read_props(pkg, l) {
                     conv_ids.insert(l, tree.conversations.len() as u32);
-                    tree.conversations.push(KConversation {
-                        label: str_of(&cp, "m_Label"),
-                        steps: conversation_steps(pkg, l, voices),
-                        path: pkg.obj_path(l),
-                        once: matches!(cp.get("m_bFireConvOnlyOnce"), Some(Value::Bool(true))),
-                    });
+                    tree.conversations.push(conversation(pkg, l, &cp, voices));
                 }
             }
         }
@@ -855,7 +845,7 @@ fn dialog_tree(pkg: &Package, t: i32, voices: &HashMap<[u32; 4], Vec<String>>) -
                 // lines said outside a conversation (barks, one-liners): a conversation of their own
                 "DisConv_Blurb" | "DisConv_NonWord" => {
                     let ci = tree.conversations.len() as u32;
-                    tree.conversations.push(KConversation { label: String::new(), steps: steps_from(pkg, Some(n), voices), path: pkg.obj_path(n), once: false });
+                    tree.conversations.push(KConversation { steps: steps_from(pkg, Some(n), voices), path: pkg.obj_path(n), ..Default::default() });
                     KDialogNodeKind::Conversation(ci)
                 }
                 "DisConv_CheckStoryFlag" => KDialogNodeKind::StoryFlag(guid(&p, "m_StoryFlag")),
@@ -866,8 +856,10 @@ fn dialog_tree(pkg: &Package, t: i32, voices: &HashMap<[u32; 4], Vec<String>>) -
                 },
                 "DisConv_TimeLimit" => KDialogNodeKind::TimeLimit(p.float("m_fTimeLimitInSeconds").unwrap_or(0.0)),
                 "DisConv_CompareDarknessLevel" => KDialogNodeKind::Darkness(p.int("m_LevelToCompare").unwrap_or(0)),
-                "DisConv_RandomBranch" | "DisConv_RandomSequentialBranch" => KDialogNodeKind::Random,
-                "DisConv_SequentialBranch" => KDialogNodeKind::Sequential,
+                "DisConv_RandomBranch" | "DisConv_RandomSequentialBranch" | "DisConv_SequentialBranch" => match branch_of(pkg, &cls, &p) {
+                    Some(b) => KDialogNodeKind::Branch(b),
+                    None => KDialogNodeKind::Pass,
+                },
                 "DisConv_KismetActivateRemoteEvent" => match p.get("m_EventName") {
                     Some(Value::Name(e)) | Some(Value::Str(e)) => KDialogNodeKind::Remote(e.clone()),
                     _ => KDialogNodeKind::Pass,
@@ -1248,8 +1240,68 @@ pub(crate) fn blurb_texts(levels: &[Arc<Package>]) -> HashMap<[u32; 4], String> 
     out
 }
 
-fn conversation_steps(pkg: &Package, conv: i32, voices: &HashMap<[u32; 4], Vec<String>>) -> Vec<crate::format::KDialogStep> {
-    steps_from(pkg, read_props(pkg, conv).and_then(|p| next_node(pkg, &p)), voices)
+/// A conversation: what it says from its Start (output 0), then its "Interrupted" and "Player
+/// Walked Away" ways (outputs 1 and 2), each ended by `End`.
+fn conversation(pkg: &Package, conv: i32, cp: &Props, voices: &HashMap<[u32; 4], Vec<String>>) -> crate::format::KConversation {
+    use crate::format::KDialogStep;
+    let links: Vec<Option<i32>> = struct_array(pkg, cp, "m_OutputLinks").iter().map(|l| l.object("m_pLink").filter(|o| *o > 0)).collect();
+    let mut steps = steps_from(pkg, links.first().copied().flatten(), voices);
+    let mut tail = |k: usize| {
+        let link = links.get(k).copied().flatten()?;
+        steps.push(KDialogStep::End);
+        let at = steps.len() as u32;
+        walk_steps(pkg, Some(link), voices, &mut steps, &mut HashSet::new());
+        steps.push(KDialogStep::End);
+        Some(at)
+    };
+    let interrupted = tail(1);
+    let walked_away = tail(2);
+    let flag = |k: &str, d: bool| cp.bool(k).unwrap_or(d);
+    crate::format::KConversation {
+        label: str_of(cp, "m_Label"),
+        steps,
+        path: pkg.obj_path(conv),
+        once: flag("m_bFireConvOnlyOnce", false),
+        interrupted,
+        walked_away,
+        // (500 uu by the class)
+        near: flag("m_bPlayerMustBeNear", false).then(|| cp.float("m_fPlayerNearRadius").unwrap_or(500.0) * crate::xform::UNIT),
+        blocking_player: flag("m_bIsBlocking_Player", false),
+        blocking: flag("m_bIsBlocking", true),
+        stop_for_notice: flag("m_bStopBlockingForAINotice", false),
+        not_in_combat: flag("m_bNotWhenPlayerIsInCombat", false),
+    }
+}
+
+/// What a random or in-turn branch goes by: `m_Branches` holds the random one's weights
+/// (50/50 by the class) and counts the others' outputs; a shuffled turn's extra output is
+/// "Depleted". Turns are each user's own unless applied globally (a shuffled turn's are, by
+/// the class).
+fn branch_of(pkg: &Package, cls: &str, p: &Props) -> Option<crate::format::KBranch> {
+    use crate::format::KBranch;
+    let weights: Vec<f32> = match p.get("m_Branches") {
+        Some(Value::Array { count, offset, .. }) => {
+            let mut r = upk::Reader::at(&pkg.data, *offset);
+            (0..*count).filter_map(|_| r.f32().ok()).collect()
+        }
+        _ => Vec::new(),
+    };
+    let links = struct_array(pkg, p, "m_OutputLinks").len();
+    let flag = |k: &str, d: bool| p.bool(k).unwrap_or(d);
+    Some(match cls {
+        "DisConv_RandomBranch" => KBranch::Random { weights: if weights.is_empty() { vec![50.0, 50.0] } else { weights }, unique: flag("m_bTryKeepUnique", true) },
+        "DisConv_SequentialBranch" => KBranch::Sequential {
+            count: if weights.is_empty() { links } else { weights.len() } as u32,
+            looping: flag("m_bLooping", false),
+            global: flag("m_bApplyGlobally", false),
+        },
+        "DisConv_RandomSequentialBranch" => KBranch::Shuffled {
+            count: if weights.is_empty() { links.saturating_sub(1) } else { weights.len() } as u32,
+            looping: flag("m_bLooping", false),
+            global: flag("m_bApplyGlobally", true),
+        },
+        _ => return None,
+    })
 }
 
 /// What a chain of dialogue nodes says and does, from `start` along first links; a player
@@ -1317,6 +1369,32 @@ fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<
                     options.push((text, begin));
                 }
                 steps[at] = KDialogStep::Choice(options);
+                return;
+            }
+            // a branch: each output's way (outputs leading the same way share theirs)
+            "DisConv_RandomBranch" | "DisConv_RandomSequentialBranch" | "DisConv_SequentialBranch" | "DisConv_CheckStoryFlag" | "DisConv_ConversationFired" | "DisConv_HadConversation" => {
+                use crate::format::KBranch;
+                let kind = match cls.as_str() {
+                    "DisConv_CheckStoryFlag" => Some(KBranch::StoryFlag(guid(&p, "m_StoryFlag").unwrap_or_default())),
+                    "DisConv_ConversationFired" | "DisConv_HadConversation" => Some(KBranch::Fired(p.object("m_pConversation").filter(|c| *c > 0).map(|c| pkg.obj_path(c)).unwrap_or_default())),
+                    _ => branch_of(pkg, &cls, &p),
+                };
+                let Some(kind) = kind else { break };
+                let links: Vec<Option<i32>> = struct_array(pkg, &p, "m_OutputLinks").iter().map(|l| l.object("m_pLink").filter(|o| *o > 0)).collect();
+                let at = steps.len();
+                steps.push(KDialogStep::End);
+                let mut begins = vec![None; links.len()];
+                for k in 0..links.len() {
+                    let Some(link) = links[k] else { continue };
+                    if let Some(j) = (0..k).find(|&j| links[j] == Some(link)) {
+                        begins[k] = begins[j];
+                        continue;
+                    }
+                    begins[k] = Some(steps.len() as u32);
+                    walk_steps(pkg, Some(link), voices, steps, &mut seen.clone());
+                    steps.push(KDialogStep::End);
+                }
+                steps[at] = KDialogStep::Branch(kind, begins);
                 return;
             }
             // the chaos level's branches (outputs leading the same way share theirs)

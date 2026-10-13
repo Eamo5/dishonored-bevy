@@ -928,6 +928,26 @@ fullscreen display, vertical sync and the crosshair.
   (`DisConv_PlayerChoice`, 63 across the game: leaving the Hound Pits with Samuel, Piero's
   workshop, Slackjaw and Granny Rags, the Boyle sisters, the mask at the end) are offered like
   the scripts' choices, each option going on down its own branch (cooked flat, with jumps).
+  Within a conversation its own branch nodes pick the way as it reaches them: by a story flag
+  (`DisConv_CheckStoryFlag`), a conversation had (`DisConv_ConversationFired`,
+  `DisConv_HadConversation`), at random or in turn (below); they used to take their first way
+  every time. Random and in-turn branches, in a tree's graph as within a conversation, follow the
+  original's rules (roshan's r614/blink research decoded them): `DisConv_RandomBranch` picks
+  by its `m_Branches` percentages (50/50 by the class) and, keeping unique, not the output it
+  picked last if another is near as likely; `DisConv_SequentialBranch` goes through its outputs
+  in turn and stays on the last unless `m_bLooping`; `DisConv_RandomSequentialBranch` goes
+  through them in a shuffled order, then takes its "Depleted" output unless looping. Turns are
+  each speaker's own unless `m_bApplyGlobally` (the shuffled one's are, by the class), and a
+  tree's branch keeps its pick only when the way leads to a conversation, as the original
+  commits it only when one starts.
+  A conversation breaks off when its speaker is killed or knocked out, turns to fighting or
+  fleeing, or, unless the conversation holds it (`m_bIsBlocking` without
+  `m_bStopBlockingForAINotice`), goes to look into something. Its "Interrupted" way then runs to
+  its first line, which plays out (a speaker down says nothing). One that wants the player near
+  (`m_bPlayerMustBeNear`, `m_fPlayerNearRadius`, 5 m by the class) doesn't start farther off, and
+  once a conversation, unless it holds the player (`m_bIsBlocking_Player`), the player walking
+  away takes its "Player Walked Away" way, or breaks it off. One marked
+  `m_bNotWhenPlayerIsInCombat` doesn't start while Corvo fights.
   The trees' story-flag and conversation-had nodes give their negative output first (a flag
   unset, a conversation not yet had). One-shot dialogue actors are spoken for by the
   characters the scripts name with them (`DisSeqAct_DialogInputs` Target): talking to the
@@ -1279,6 +1299,11 @@ against the install's own data where it carries them, then implemented independe
   `Sword_Ready_JumpLandSmall`, crouched `Sword_Sneak_JumpLandSmall`, and past
   `m_fFall_Stun_Vel` (22 m/s) the hard `Generic_JumpLandBig`. None stops him moving (as roshan's
   r614/blink research found).
+- **Conversations.** Random branches pick by their percentage weights and avoid repeating
+  their last pick; in-turn branches stay on their last output unless they loop; a shuffled turn
+  ends on "Depleted". A conversation breaks off on its speaker's death or change of behaviour,
+  running its "Interrupted" way to its first line; one that wants the player near walks its
+  "Player Walked Away" way once when they leave (see Dialogue above).
 - **Melee defence.** A blow from behind Corvo's view does half damage
   (`m_fOffscreenMeleeDamageReduction` 0.5, at least 1). A tap parry forces a plain block for 0.3 s,
   with no second parry until it ends.

@@ -309,6 +309,144 @@ mod flow_tests {
 }
 
 #[cfg(test)]
+mod conversation_tests {
+    use super::*;
+    use dhcook::format::{KActor, KBranch, KConversation, KDialogNode, KDialogNodeKind, KDialogStep as S, KDialogTree};
+
+    /// A character (actor 0) a metre from the player, with one conversation: two lines, then its
+    /// "Interrupted" and "Player Walked Away" ways.
+    fn speaker(near: Option<f32>) -> Vm {
+        let mut g = Graph::default();
+        g.actors.push(KActor { spawner: Some(1), ..Default::default() });
+        let line = |t: &str| S::Line(t.into(), 0);
+        g.dialog_trees.push(KDialogTree {
+            path: "Tree".into(),
+            conversations: vec![KConversation {
+                label: "Talk".into(),
+                steps: vec![line("one"), line("two"), S::End, line("interrupted"), S::End, line("walked away"), S::End],
+                interrupted: Some(3),
+                walked_away: Some(5),
+                near,
+                blocking: true,
+                ..Default::default()
+            }],
+            nodes: vec![KDialogNode { kind: KDialogNodeKind::Conversation(0), outs: Vec::new() }],
+        });
+        let mut vm = Vm::new(Arc::new(g), &[]);
+        vm.player_pos = Some(Vec3::ZERO);
+        vm.speaker_pos.insert(0, Vec3::X);
+        vm
+    }
+
+    fn said(vm: &mut Vm) -> Vec<String> {
+        vm.effects.drain(..).filter_map(|e| if let Effect::Line(t, ..) = e { Some(t) } else { None }).collect()
+    }
+
+    #[test]
+    fn a_speaker_turning_to_fight_says_its_interrupted_line_and_stops() {
+        let mut vm = speaker(None);
+        vm.start_conversation(0, 0, 0);
+        vm.tick_conversations(0.1);
+        assert_eq!(said(&mut vm), ["one"]);
+        vm.speaker_busy.insert(0, Busy::Fighting);
+        vm.tick_conversations(0.1);
+        assert_eq!(said(&mut vm), ["interrupted"]);
+        vm.tick_conversations(60.0);
+        assert!(said(&mut vm).is_empty());
+        assert!(vm.convs.is_empty());
+    }
+
+    #[test]
+    fn a_speaker_killed_says_nothing_more() {
+        let mut vm = speaker(None);
+        vm.start_conversation(0, 0, 0);
+        vm.tick_conversations(0.1);
+        assert_eq!(said(&mut vm), ["one"]);
+        vm.speaker_busy.insert(0, Busy::Down);
+        vm.tick_conversations(0.1);
+        vm.tick_conversations(60.0);
+        assert!(said(&mut vm).is_empty());
+        assert!(vm.convs.is_empty());
+    }
+
+    #[test]
+    fn a_conversation_begun_in_a_fight_goes_on() {
+        let mut vm = speaker(None);
+        vm.speaker_busy.insert(0, Busy::Fighting);
+        vm.start_conversation(0, 0, 0);
+        vm.tick_conversations(0.1);
+        vm.tick_conversations(60.0);
+        assert_eq!(said(&mut vm), ["one", "two"]);
+    }
+
+    #[test]
+    fn walking_away_takes_its_own_way_once() {
+        let mut vm = speaker(Some(5.0));
+        vm.start_conversation(0, 0, 0);
+        vm.tick_conversations(0.1);
+        assert_eq!(said(&mut vm), ["one"]);
+        vm.player_pos = Some(Vec3::new(20.0, 0.0, 0.0));
+        vm.tick_conversations(0.1);
+        assert_eq!(said(&mut vm), ["walked away"]);
+        vm.tick_conversations(60.0);
+        assert!(vm.convs.is_empty());
+        // a new conversation looks again
+        vm.player_pos = Some(Vec3::ZERO);
+        vm.start_conversation(0, 0, 0);
+        vm.tick_conversations(0.1);
+        vm.player_pos = Some(Vec3::new(20.0, 0.0, 0.0));
+        vm.tick_conversations(0.1);
+        assert_eq!(said(&mut vm), ["one", "walked away"]);
+    }
+
+    #[test]
+    fn a_conversation_wanting_the_player_near_does_not_start_farther_off() {
+        let mut vm = speaker(Some(5.0));
+        vm.walk_speaker = Some(0);
+        assert_eq!(vm.walk_tree(0, 0, 0), Some(0));
+        vm.player_pos = Some(Vec3::new(20.0, 0.0, 0.0));
+        assert_eq!(vm.walk_tree(0, 0, 0), None);
+    }
+
+    fn picks(vm: &mut Vm, b: &KBranch, n: usize) -> Vec<usize> {
+        (0..n)
+            .map(|_| {
+                let (k, key, st) = vm.pick_branch(b, 0, (0, 0, 0), true).unwrap();
+                vm.branches.insert(key, st);
+                k
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_in_turn_branch_stays_on_its_last_output_unless_looping() {
+        let mut vm = speaker(None);
+        assert_eq!(picks(&mut vm, &KBranch::Sequential { count: 3, looping: false, global: false }, 5), [0, 1, 2, 2, 2]);
+        let mut vm = speaker(None);
+        assert_eq!(picks(&mut vm, &KBranch::Sequential { count: 3, looping: true, global: false }, 5), [0, 1, 2, 0, 1]);
+    }
+
+    #[test]
+    fn a_shuffled_turn_takes_each_output_once_then_depleted() {
+        let mut vm = speaker(None);
+        let mut got = picks(&mut vm, &KBranch::Shuffled { count: 4, looping: false, global: true }, 6);
+        assert_eq!(&got[4..], [4, 4]);
+        got.truncate(4);
+        got.sort();
+        assert_eq!(got, [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn a_random_branch_keeping_unique_never_repeats_itself() {
+        let mut vm = speaker(None);
+        let got = picks(&mut vm, &KBranch::Random { weights: vec![50.0, 50.0], unique: true }, 20);
+        // (its last pick starts at output 0)
+        assert_eq!(got[0], 1);
+        assert!(got.windows(2).all(|w| w[0] != w[1]));
+    }
+}
+
+#[cfg(test)]
 mod tower_save_tests {
     use super::*;
 
@@ -382,6 +520,30 @@ pub struct VmSave {
     tower_cmds: Vec<(Vec<Val>, u8, Vec<Val>)>,
 }
 
+/// What a conversation's speaker is doing that ends it (`DisConvoEndReasonEnum`: death,
+/// behaviour change), or ends it unless it holds the speaker (`m_bIsBlocking` without
+/// `m_bStopBlockingForAINotice`).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Busy {
+    Down,
+    Fighting,
+    Noticing,
+}
+
+/// A random or in-turn branch's state, by user (the speaker, or anyone for a global one), tree,
+/// conversation (none for the tree's own nodes) and node or step.
+type BranchKey = (u32, usize, usize, usize);
+
+#[derive(Clone, Default)]
+struct BranchState {
+    /// the last output picked at random (the first pick avoids output 0, as the original's
+    /// does)
+    last: usize,
+    /// the turn, and a shuffled turn's order
+    turn: u32,
+    order: Vec<usize>,
+}
+
 #[derive(Resource)]
 pub struct Vm {
     pub g: Arc<Graph>,
@@ -420,11 +582,18 @@ pub struct Vm {
     convs: Vec<(u32, usize, usize, usize, f32)>,
     /// dialogue trees by object path
     tree_by_path: HashMap<String, usize>,
-    /// conversations played (object paths), sequential branches' turns, time limits' last
-    /// passes
+    /// conversations played (object paths), random and in-turn branches' states, time
+    /// limits' last passes
     fired_convs: HashSet<String>,
-    branch_turn: HashMap<(usize, u32), u32>,
+    branches: HashMap<BranchKey, BranchState>,
     node_time: HashMap<(usize, u32), f32>,
+    /// what conversations' speakers are doing that their conversations mind; the
+    /// conversations breaking off (their "Interrupted" way says its first line and ends) and
+    /// those whose player has walked away once (by speaker)
+    pub speaker_busy: HashMap<u32, Busy>,
+    conv_busy: HashMap<u32, Option<Busy>>,
+    conv_ending: HashSet<u32>,
+    walked_away: HashSet<u32>,
     /// speakers and the tree they answer with (for the player approaching / loitering),
     /// their positions and how long the player has lingered by each
     speaker_tree: HashMap<u32, usize>,
@@ -717,8 +886,12 @@ impl Vm {
             convs: Vec::new(),
             tree_by_path: g.dialog_trees.iter().enumerate().map(|(i, t)| (t.path.clone(), i)).collect(),
             fired_convs: HashSet::new(),
-            branch_turn: HashMap::new(),
+            branches: HashMap::new(),
             node_time: HashMap::new(),
+            speaker_busy: HashMap::new(),
+            conv_busy: HashMap::new(),
+            conv_ending: HashSet::new(),
+            walked_away: HashSet::new(),
             // one-shot dialogue actors answer from where they stand
             speaker_tree: g.dialogs.iter().map(|d| (d.actor, d.tree as usize)).collect(),
             speaker_pos: g.dialogs.iter().filter_map(|d| g.actors.get(d.actor as usize).map(|a| (d.actor, Vec3::from(a.position)))).collect(),
@@ -3832,28 +4005,77 @@ impl Vm {
         let mut convs = std::mem::take(&mut self.convs);
         for c in convs.iter_mut() {
             c.4 -= dt;
-            let Some(steps) = g.dialog_trees.get(c.1).and_then(|t| t.conversations.get(c.2)).map(|cv| &cv.steps) else {
+            let Some(cv) = g.dialog_trees.get(c.1).and_then(|t| t.conversations.get(c.2)) else {
                 c.3 = usize::MAX;
                 continue;
             };
+            let steps = &cv.steps;
+            // its speaker going down or turning to something else, or the player gone from a
+            // conversation that wants them near: it breaks off (`DisConvoEndReasonEnum`; one
+            // begun while searching or fighting goes on as long as that does)
+            let busy = self.busy(c.0);
+            let changed = self.conv_busy.insert(c.0, busy) != Some(busy);
+            if (c.3 < steps.len() || c.4 > 0.0) && !self.conv_ending.contains(&c.0) {
+                let reason = match busy.filter(|_| changed) {
+                    Some(Busy::Down) => Some("death"),
+                    Some(Busy::Fighting) => Some("behaviour change"),
+                    Some(Busy::Noticing) if !cv.blocking || cv.stop_for_notice => Some("behaviour change"),
+                    _ => None,
+                };
+                // (the player walking away is looked for once a conversation: its own way, else
+                // it breaks off)
+                let away = reason.is_none() && !cv.blocking_player && !self.walked_away.contains(&c.0) && cv.near.is_some_and(|r| !self.player_near(c.0, r));
+                if away {
+                    self.walked_away.insert(c.0);
+                }
+                if let (true, Some(w)) = (away, cv.walked_away) {
+                    if self.trace {
+                        info!("kismet: conversation {}: the player walked away", cv.label);
+                    }
+                    c.3 = w as usize;
+                    c.4 = 0.0;
+                } else if let Some(reason) = reason.or(away.then_some("player walked away")) {
+                    if self.trace {
+                        info!("kismet: conversation {} interrupted ({reason})", cv.label);
+                    }
+                    self.conv_ending.insert(c.0);
+                    c.3 = cv.interrupted.map(|b| b as usize).unwrap_or(steps.len());
+                    c.4 = 0.0;
+                }
+            }
+            // (breaking off, its "Interrupted" way runs to its first line, which plays out; a
+            // speaker down says nothing)
+            let ending = self.conv_ending.contains(&c.0);
+            let mute = |speaker: i32| ending && speaker == 0 && busy == Some(Busy::Down);
             let mut voice_len = None;
             while c.4 <= 0.0 && c.3 < steps.len() {
                 match &steps[c.3] {
                     dhcook::format::KDialogStep::Voice(event) => {
                         // the speaker's voice; its length times the line
-                        self.effects.push(Effect::Voice(event.clone(), Some(Val::Actor(c.0))));
-                        voice_len = crate::audio::event_length(event);
+                        if !matches!(steps.get(c.3 + 1), Some(dhcook::format::KDialogStep::Line(_, s)) if mute(*s)) {
+                            self.effects.push(Effect::Voice(event.clone(), Some(Val::Actor(c.0))));
+                            voice_len = crate::audio::event_length(event);
+                        }
                     }
+                    dhcook::format::KDialogStep::Line(_, speaker) if mute(*speaker) => {}
                     dhcook::format::KDialogStep::Line(text, speaker) => {
                         let dur = voice_len.take().map(|l| l + 0.25).unwrap_or(1.2 + text.chars().count() as f32 / 15.0);
                         // slot 0 is the tree's own speaker
                         self.effects.push(Effect::Line(text.clone(), dur, (*speaker == 0).then_some(c.0)));
                         c.4 = dur;
+                        if ending {
+                            c.3 = steps.len();
+                            continue;
+                        }
                     }
                     dhcook::format::KDialogStep::SetFlag(f) => {
                         self.flags.insert(f.clone(), true);
                     }
                     // the player answers (or, not answering, the conversation ends)
+                    dhcook::format::KDialogStep::Choice(_) if ending => {
+                        c.3 = steps.len();
+                        continue;
+                    }
                     dhcook::format::KDialogStep::Choice(options) => {
                         let opts: Vec<(usize, String)> = options.iter().map(|(t, at)| (*at as usize, t.clone())).collect();
                         if self.trace {
@@ -3868,6 +4090,17 @@ impl Vm {
                         c.3 = steps.len();
                         continue;
                     }
+                    dhcook::format::KDialogStep::Branch(kind, begins) => {
+                        let k = self.pick_branch(kind, c.0, (c.1, c.2, c.3), true).map(|(k, key, st)| {
+                            self.branches.insert(key, st);
+                            k
+                        });
+                        if self.trace {
+                            info!("kismet: conversation branch {kind:?}: output {k:?}");
+                        }
+                        c.3 = k.and_then(|k| begins.get(k).copied().flatten()).map(|b| b as usize).unwrap_or(steps.len());
+                        continue;
+                    }
                     dhcook::format::KDialogStep::Darkness(level, begins) => {
                         c.3 = begins[darkness_branch(self.darkness, *level)].map(|b| b as usize).unwrap_or(steps.len());
                         continue;
@@ -3879,6 +4112,10 @@ impl Vm {
                             }
                         }
                         c.4 = 0.6;
+                        if ending {
+                            c.3 = steps.len();
+                            continue;
+                        }
                     }
                     dhcook::format::KDialogStep::Remote(name) => {
                         // the dialogue actor's own outputs first, else a level remote event
@@ -3905,8 +4142,103 @@ impl Vm {
         self.convs.extend(convs);
     }
 
+    /// The output a branch takes now, with the state it leaves (`DisConvGlobalMan`'s rules:
+    /// the random pick by weights, not the last again where it can; the turn staying on its
+    /// last output unless looping; a shuffled turn "Depleted" past its end). `at` is the tree,
+    /// conversation and node or step; `in_conv` within a running conversation, where a
+    /// finished shuffled turn repeats its order (outside one it is shuffled anew).
+    fn pick_branch(&self, b: &dhcook::format::KBranch, speaker: u32, at: (usize, usize, usize), in_conv: bool) -> Option<(usize, BranchKey, BranchState)> {
+        use dhcook::format::KBranch;
+        let owner = match b {
+            KBranch::Sequential { global: false, .. } | KBranch::Shuffled { global: false, .. } => speaker,
+            _ => u32::MAX,
+        };
+        let key = (owner, at.0, at.1, at.2);
+        let mut st = self.branches.get(&key).cloned().unwrap_or_default();
+        let k = match b {
+            KBranch::Random { weights, unique } => {
+                let n = weights.len();
+                if n == 0 {
+                    return None;
+                }
+                let roll = rand::random::<f32>() * 100.0;
+                let mut sum = 0.0;
+                let mut k = (0..n).find(|&i| {
+                    sum += weights[i];
+                    sum > roll
+                }).unwrap_or(n - 1);
+                // (the other output whose weight is nearest the one picked, the first of equals)
+                if *unique && k == st.last && n >= 2 {
+                    let w = weights[k];
+                    k = (0..n).filter(|&i| i != k).min_by(|a, b| (weights[*a] - w).abs().total_cmp(&(weights[*b] - w).abs())).unwrap_or(k);
+                }
+                st.last = k;
+                k
+            }
+            KBranch::Sequential { count, looping, .. } => {
+                if *count == 0 {
+                    return None;
+                }
+                let next = if st.turn + 1 > *count { if *looping { 1 } else { *count } } else { st.turn + 1 };
+                st.turn = next;
+                next as usize - 1
+            }
+            KBranch::Shuffled { count, looping, .. } => {
+                let n = *count as usize;
+                if st.order.len() != n {
+                    st.order = shuffled(n);
+                }
+                let next = st.turn + 1;
+                if next > *count && !*looping {
+                    n
+                } else {
+                    let next = if next > *count { 1 } else { next };
+                    st.turn = next;
+                    let k = st.order.get(next as usize - 1).copied().unwrap_or(0);
+                    if !in_conv && *looping && next == *count {
+                        st.order = shuffled(n);
+                    }
+                    k
+                }
+            }
+            KBranch::StoryFlag(f) => self.flag(f) as usize,
+            KBranch::Fired(p) => self.fired_convs.contains(p) as usize,
+        };
+        Some((k, key, st))
+    }
+
+    /// Where a conversation's speaker stands: its character, or the characters answering for
+    /// a one-shot dialogue actor (none known: nowhere).
+    fn speaker_at(&self, actor: u32) -> Vec<Vec3> {
+        if self.g.actors.get(actor as usize).is_some_and(|a| a.spawner.is_some()) {
+            return self.speaker_pos.get(&actor).copied().into_iter().collect();
+        }
+        self.pawn_oneshot.iter().filter(|(_, o)| **o == actor).filter_map(|(p, _)| self.speaker_pos.get(p).copied()).collect()
+    }
+
+    /// The player is near enough a speaker for a conversation that wants them near
+    /// (`m_bPlayerMustBeNear`: within the radius of a speaker, as far as is known).
+    fn player_near(&self, actor: u32, radius: f32) -> bool {
+        let Some(p) = self.player_pos else { return true };
+        let at = self.speaker_at(actor);
+        at.is_empty() || at.iter().any(|s| s.distance(p) < radius)
+    }
+
+    /// What a speaker (or one answering for a one-shot dialogue actor) is doing that its
+    /// conversation minds: the most pressing.
+    fn busy(&self, actor: u32) -> Option<Busy> {
+        let mut all = vec![self.speaker_busy.get(&actor).copied()];
+        all.extend(self.pawn_oneshot.iter().filter(|(_, o)| **o == actor).map(|(p, _)| self.speaker_busy.get(p).copied()));
+        let all: Vec<Busy> = all.into_iter().flatten().collect();
+        [Busy::Down, Busy::Fighting, Busy::Noticing].into_iter().find(|b| all.contains(b))
+    }
+
     /// Start a conversation of a tree, spoken by `actor` (it stops what it was saying).
     fn start_conversation(&mut self, actor: u32, tree: usize, conv: u32) {
+        self.conv_ending.remove(&actor);
+        self.walked_away.remove(&actor);
+        let busy = self.busy(actor);
+        self.conv_busy.insert(actor, busy);
         if let Some(c) = self.g.dialog_trees.get(tree).and_then(|t| t.conversations.get(conv as usize)) {
             self.fired_convs.insert(c.path.clone());
             if self.trace {
@@ -3964,7 +4296,13 @@ impl Vm {
         match &n.kind {
             K::Conversation(c) => {
                 let cv = t.conversations.get(*c as usize)?;
-                (!(cv.once && self.fired_convs.contains(&cv.path))).then_some(*c)
+                // it can't start: played once already, the player fighting
+                // (`m_bNotWhenPlayerIsInCombat`), away (`m_bPlayerMustBeNear`) or its speaker
+                // down
+                let speaker = self.walk_speaker;
+                let away = cv.near.zip(speaker).is_some_and(|(r, a)| !self.player_near(a, r));
+                let down = speaker.is_some_and(|a| self.busy(a) == Some(Busy::Down));
+                (!(cv.once && self.fired_convs.contains(&cv.path) || cv.not_in_combat && self.player_combat || away || down)).then_some(*c)
             }
             // (the nodes' outputs are the negative one first: a flag unset, a conversation not
             // had yet — the Regent's "Three days late" plays once, the letter is given once)
@@ -3990,21 +4328,13 @@ impl Vm {
                     self.walk_tree(tree, out(0), depth + 1)
                 }
             }
-            K::Random => {
-                if linked.is_empty() {
-                    return None;
-                }
-                let first = rand::random_range(0..linked.len());
-                (0..linked.len()).find_map(|k| self.walk_tree(tree, linked[(first + k) % linked.len()], depth + 1))
-            }
-            K::Sequential => {
-                if linked.is_empty() {
-                    return None;
-                }
-                let turn = self.branch_turn.entry((tree, node as u32)).or_insert(0);
-                let k = *turn as usize % linked.len();
-                *turn += 1;
-                self.walk_tree(tree, linked[k], depth + 1)
+            K::Branch(b) => {
+                let (k, key, st) = self.pick_branch(b, self.walk_speaker.unwrap_or(u32::MAX), (tree, usize::MAX, node as usize), false)?;
+                let c = self.walk_tree(tree, out(k), depth + 1)?;
+                // (kept only when it leads to a conversation, as the original's pending state
+                // is committed when one starts)
+                self.branches.insert(key, st);
+                Some(c)
             }
             K::Remote(name) => {
                 // the speaker's dialogue outputs first (the Empress's "Give_Letter"), else a
@@ -5040,15 +5370,34 @@ fn world_events(
             }
         }
     }
-    // where the player and the speaking characters are (for the dialogue hooks)
+    // where the player and the speaking characters are (for the dialogue hooks), and what
+    // those in conversations are doing (characters answering for one-shot dialogue actors too)
     vm.player_pos = player.single().ok().map(|(t, _)| t.translation);
-    let speaking: Vec<u32> = vm.speaker_tree.keys().copied().collect();
+    let mut speaking: Vec<u32> = vm.speaker_tree.keys().chain(vm.pawn_oneshot.keys()).copied().collect();
+    speaking.extend(vm.convs.iter().map(|c| c.0));
+    speaking.sort_unstable();
+    speaking.dedup();
     for a in speaking {
         let Some(s) = vm.g.actors.get(a as usize).and_then(|ka| ka.spawner) else { continue };
-        if let Some((_, _, _, t)) = npcs.iter().find(|(_, n, f, _)| f.0 == s && !n.is_down()) {
+        if let Some((_, n, _, t)) = npcs.iter().find(|(_, n, f, _)| f.0 == s && !n.is_down()) {
             vm.speaker_pos.insert(a, t.translation);
+            let busy = match n.mode {
+                Mode::Combat | Mode::Flee | Mode::Choked => Some(Busy::Fighting),
+                Mode::Investigate | Mode::Search => Some(Busy::Noticing),
+                _ => None,
+            };
+            match busy {
+                Some(b) => vm.speaker_busy.insert(a, b),
+                None => vm.speaker_busy.remove(&a),
+            };
         } else {
             vm.speaker_pos.remove(&a);
+            // (its character gone: down, or not yet come)
+            if npcs.iter().any(|(_, n, f, _)| f.0 == s && n.is_down()) {
+                vm.speaker_busy.insert(a, Busy::Down);
+            } else {
+                vm.speaker_busy.remove(&a);
+            }
         }
     }
     // touch volumes (those attached to a character move with it)
@@ -6149,6 +6498,14 @@ pub fn apply_effects(
 /// The cooked map that has a player start tagged `tag`.
 /// `DisConv_CompareDarknessLevel`'s output for the chaos level against `than`: 0 the same,
 /// 1 lower, 2 higher (as roshan's r614/blink research decoded it).
+/// The outputs 0..n in a random order (by random keys, as the original's shuffled turn sorts
+/// them).
+fn shuffled(n: usize) -> Vec<usize> {
+    let mut keyed: Vec<(f32, usize)> = (0..n).map(|i| (rand::random::<f32>(), i)).collect();
+    keyed.sort_by(|a, b| a.0.total_cmp(&b.0));
+    keyed.into_iter().map(|(_, i)| i).collect()
+}
+
 fn darkness_branch(level: i32, than: i32) -> usize {
     if level == than {
         0
