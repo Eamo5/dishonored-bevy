@@ -67,6 +67,9 @@ pub struct BarkState {
     /// a body found, a death seen (as last seen)
     saw_body: bool,
     witnessed_death: bool,
+    /// since it last stood easy: it has seen Corvo (it hunts him), it has gone to look
+    hunted: bool,
+    looked: bool,
     act_seen: u32,
     shot: f32,
 }
@@ -102,6 +105,15 @@ fn hook_output(class: &str, npc: &Npc) -> Option<usize> {
 
 /// Barks are heard (and subtitled) within this range (metres).
 const HEAR: f32 = 25.0;
+
+/// A sighting nearer than this share of a character's sight is a near one
+/// (`DisTweaks_AIBrain.m_fVisualDetectionRatioNear`: `SEARCH_NEAR_VDETECTION`).
+const VISUAL_NEAR: f32 = 0.3;
+
+/// How far a character sees (its focused cone's reach, m), else 30 m.
+fn sight_range(level: &LevelInfo, npc: &Npc) -> f32 {
+    npc.npc_type.and_then(|i| level.scene.npc_types.get(i as usize)).and_then(|t| t.sight.as_ref()).map(|s| s.inner[1]).filter(|r| *r > 0.0).unwrap_or(30.0)
+}
 
 /// What the barks' graphs remember: their random and in-turn branches' states (by voice, hook
 /// and node; by speaker too for a turn that isn't global) and when each speaker last passed a
@@ -206,6 +218,8 @@ fn npc_barks(
                 aiming: false,
                 saw_body: npc.saw_body,
                 witnessed_death: npc.witnessed_death,
+                hunted: false,
+                looked: false,
                 act_seen: npc.act.1,
                 shot: 10.0,
             });
@@ -323,24 +337,43 @@ fn npc_barks(
         } else if !down && npc.alert == Alert::Combat && st.alert == Alert::Combat && npc.mode == Mode::Combat && matches!(st.mode, Mode::Search | Mode::Investigate) {
             // found again while searching (`SEARCH_FIND_ENEMY`)
             want = Some((&["SEARCH_FIND_ENEMY", "COMBAT_THREAT"], true));
-        } else if !down && npc.alert == Alert::Suspicious && st.alert == Alert::Suspicious && npc.mode == Mode::Investigate && st.mode != Mode::Investigate {
-            // off to look again (`ATTENTION_INVESTIGATE`, else `ATTENTION_NOTICE_BEGIN`)
-            want = Some((&["ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"], false));
+        } else if !down && npc.alert == Alert::Suspicious && npc.mode == Mode::Investigate && st.mode != Mode::Investigate {
+            // off to look (a guard says what set it off: Corvo seen near or far, by
+            // `m_fVisualDetectionRatioNear` of its sight, or heard; others
+            // `ATTENTION_INVESTIGATE`)
+            let near = d < VISUAL_NEAR * sight_range(&level, &npc);
+            want = Some(match (npc.hostile(), npc.sees_player) {
+                (true, true) if near => (&["SEARCH_NEAR_VDETECTION", "ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"], false),
+                (true, true) => (&["SEARCH_FAR_VDETECTION", "ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"], false),
+                (true, false) => (&["SEARCH_ADETECTION", "ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"], false),
+                _ => (&["ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"], false),
+            });
         } else if !down && npc.alert != st.alert {
             want = match (st.alert, npc.alert) {
                 (Alert::Unaware, Alert::Suspicious) => Some((&["ATTENTION_NOTICE_BEGIN", "NOTICE_SUSPICIOUS_ACTIVITY", "ATTENTION_HEADTRACK", "ATTENTION_TRACKTARGET_BEGIN"], false)),
                 // (a weeper's voice has only its own: `WEEP_NOTICED_TARGET`)
                 (Alert::Unaware, Alert::Combat) => Some((&["COMBAT_SURPRISED", "COMBAT_THREAT", "WEEP_NOTICED_TARGET"], true)),
                 // (with others of its side about, their group's lines first)
+                // (an enemy it can't see: `COMBAT_THREAT_OFFSCREEN`)
+                (_, Alert::Combat) if !npc.sees_player => Some((&["COMBAT_THREAT_OFFSCREEN", "COMBAT_THREAT", "COMBAT_THREAT_GROUP", "WEEP_NOTICED_TARGET"], true)),
                 (_, Alert::Combat) if grouped => Some((&["COMBAT_THREAT_GROUP", "COMBAT_THREAT", "COMBAT_SURPRISED", "WEEP_NOTICED_TARGET"], true)),
                 (_, Alert::Combat) => Some((&["COMBAT_THREAT", "COMBAT_THREAT_GROUP", "COMBAT_SURPRISED", "WEEP_NOTICED_TARGET"], true)),
                 (Alert::Combat, _) if grouped => Some((&["COMBAT_LOST_GROUP", "COMBAT_LOST", "SEARCH_STOPHUNTING_GROUP", "SEARCH_STOPHUNTING"], false)),
                 (Alert::Combat, _) => Some((&["COMBAT_LOST", "SEARCH_STOPHUNTING", "SEARCH_GIVEUP_POSTCORPSE"], false)),
                 // (a notice that came to nothing: `ATTENTION_NOTICE_END`)
-                (Alert::Suspicious, Alert::Unaware) if grouped => Some((&["SEARCH_STOPHUNTING_GROUP", "SEARCH_STOPHUNTING", "ATTENTION_NOTICE_END", "COMBAT_GOING_HOME"], false)),
-                (Alert::Suspicious, Alert::Unaware) => Some((&["SEARCH_STOPHUNTING", "ATTENTION_NOTICE_END", "COMBAT_GOING_HOME"], false)),
+                // giving up: on a body found `SEARCH_GIVEUP_POSTCORPSE`, on Corvo seen
+                // `SEARCH_STOPHUNTING` (its group's among others), on a sound looked into
+                // `SEARCH_MUSTHAVEBEENARAT`, a glance `ATTENTION_NOTICE_END`
+                (Alert::Suspicious, Alert::Unaware) if st.saw_body => Some((&["SEARCH_GIVEUP_POSTCORPSE", "SEARCH_STOPHUNTING", "ATTENTION_NOTICE_END"], false)),
+                (Alert::Suspicious, Alert::Unaware) if st.hunted && grouped => Some((&["SEARCH_STOPHUNTING_GROUP", "SEARCH_STOPHUNTING", "ATTENTION_NOTICE_END", "COMBAT_GOING_HOME"], false)),
+                (Alert::Suspicious, Alert::Unaware) if st.hunted => Some((&["SEARCH_STOPHUNTING", "ATTENTION_NOTICE_END", "COMBAT_GOING_HOME"], false)),
+                (Alert::Suspicious, Alert::Unaware) if st.looked => Some((&["SEARCH_MUSTHAVEBEENARAT", "ATTENTION_NOTICE_END", "SEARCH_STOPHUNTING"], false)),
+                (Alert::Suspicious, Alert::Unaware) => Some((&["ATTENTION_NOTICE_END", "SEARCH_MUSTHAVEBEENARAT", "SEARCH_STOPHUNTING"], false)),
                 _ => None,
             };
+        } else if !down && npc.mode == Mode::Search && st.mode != Mode::Search && npc.alert != Alert::Combat {
+            // a search begun (`SEARCH`, its group's among others)
+            want = Some(if grouped { (&["SEARCH_GROUP", "SEARCH"], false) } else { (&["SEARCH", "SEARCH_GROUP"], false) });
         } else if !down && npc.alert == Alert::Combat && stats.dead && !st.victory {
             st.victory = true;
             want = Some((&["COMBAT_VICTORY", "COMBAT_VICTORY_LOST_ALLIES"], false));
@@ -371,6 +404,13 @@ fn npc_barks(
         st.falling = !npc.grounded && npc.velocity.y < FALL_SPEED;
         st.saw_body = npc.saw_body;
         st.witnessed_death = npc.witnessed_death;
+        if npc.alert == Alert::Unaware {
+            st.hunted = false;
+            st.looked = false;
+        } else {
+            st.hunted |= npc.sees_player;
+            st.looked |= matches!(npc.mode, Mode::Investigate | Mode::Search);
+        }
         st.aiming = npc.aim.is_some();
         st.act_seen = npc.act.1;
         let Some((hooks, urgent)) = want else { continue };

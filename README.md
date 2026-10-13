@@ -778,7 +778,13 @@ fullscreen display, vertical sync and the crosshair.
   its `PATROL_MISC` (`PATROL_MISC_GROUP` among others of its side), noticing something
   `ATTENTION_NOTICE_BEGIN`, a notice come to nothing `ATTENTION_NOTICE_END`, finding a body
   `SEARCH_DETECT_CORPSE` (its `Hook_DeathMode` lines for a dead one, "A body! Murder!", or one
-  knocked out, "Hey, wake up!") and a death before its eyes `SEARCH_WITNESS_DEATH`; a suspicion-level
+  knocked out, "Hey, wake up!") and a death before its eyes `SEARCH_WITNESS_DEATH`; a guard
+  going to look says what set it off (Corvo seen near, within `m_fVisualDetectionRatioNear` 0.3
+  of its sight, `SEARCH_NEAR_VDETECTION`, or far `SEARCH_FAR_VDETECTION`, or heard
+  `SEARCH_ADETECTION`), a search begun `SEARCH`, an enemy it can't see `COMBAT_THREAT_OFFSCREEN`,
+  and giving up after a body `SEARCH_GIVEUP_POSTCORPSE`, after Corvo seen `SEARCH_STOPHUNTING`,
+  after a sound looked into `SEARCH_MUSTHAVEBEENARAT` (the cause each transition names, as
+  roshan's r614/blink research laid them out); a suspicion-level
   hook says the lines of its output for whether the speaker suspects anything, a notice those
   for whether it saw or heard, and a branch on who set it off takes its way for Corvo. From
   there the line is walked to as the original walks the hook's graph: weighted random and
