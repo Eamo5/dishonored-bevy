@@ -143,7 +143,9 @@ fullscreen display, vertical sync and the crosshair.
   `FArkPpDofDownsample` + DOF uber pass do it: the scene mixed with a quarter-resolution copy
   by `saturate((depth - focus) / radius) x far blur`, before the grading, softening distant
   views. `DH_NO_DOF=1` turns it off.
-- **The Heart**: beats faster near runes and bone charms; whispers the original secrets about
+- **The Heart**: held in the left hand as the gadgets are (`Gadgets_Idle`), its fingers about
+  it in its own grip (`Ply_Gadgets_Heart_as`'s `Gadgets_Heart_Fingers_Idle`, on the finger bones
+  alone); beats faster near runes and bone charms; whispers the original secrets about
   the person targeted (by story group) or the place (by mission progress). Held, it marks the
   runes and bone charms still to be found with the HUD movie's `runeMarker` /
   `boneCharmMarker` as `m_RuneMarkerSettings` / `m_BoneCharmMarkerSettings` place them (90% at

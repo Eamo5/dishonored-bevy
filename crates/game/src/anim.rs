@@ -322,6 +322,9 @@ pub struct Animator {
     pending: Vec<String>,
     /// additive clips laid over the pose each frame (an aim offset): clip, time, weight
     pub additive: Vec<(ClipId, f32, f32)>,
+    /// a clip's pose laid on some joints alone (a hand's grip on its fingers): clip, time,
+    /// joints
+    pub masked: Option<(ClipId, f32, Arc<Vec<usize>>)>,
     deltas: Vec<(usize, Quat, Vec3)>,
 }
 
@@ -348,6 +351,7 @@ impl Animator {
             sounds: true,
             pending: Vec::new(),
             additive: Vec::new(),
+            masked: None,
             deltas: Vec::new(),
         }
     }
@@ -363,6 +367,11 @@ impl Animator {
     }
 
     /// What the base layer plays.
+    /// The overlay layer's clip and its weight (for logs).
+    pub fn overlay_state(&self) -> (Option<ClipId>, f32) {
+        (self.overlay.cur.map(|c| c.clip), self.overlay.weight)
+    }
+
     pub fn current(&self) -> Option<Playing> {
         self.base.cur
     }
@@ -556,6 +565,17 @@ fn pose_animators(
         }
         a.pose();
         let a = a.into_inner();
+        // a pose on some joints alone (their rotations)
+        if let Some((clip, t, joints)) = a.masked.clone() {
+            a.rot_a.copy_from_slice(&a.rot);
+            a.trans_a.copy_from_slice(&a.trans);
+            a.lib.sample(clip, t, &mut a.rot_a, &mut a.trans_a);
+            for &j in joints.iter() {
+                if j < a.rot.len() {
+                    a.rot[j] = a.rot_a[j];
+                }
+            }
+        }
         // the additive layer (UE3's additive blending: each joint's rotation after the pose's,
         // its translation added)
         if !a.additive.is_empty() {

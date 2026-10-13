@@ -112,6 +112,9 @@ struct ArmClips {
     // left arm
     powers_idle: Option<ClipId>,
     gadgets_idle: Option<ClipId>,
+    /// the Heart's grip: its fingers about it (`Ply_Gadgets_Heart_as`, on the left hand's
+    /// fingers over the gadgets' hold)
+    heart_fingers: Option<ClipId>,
     blink: Option<ClipId>,
     windblast: Option<ClipId>,
     bend_time: Option<ClipId>,
@@ -201,6 +204,7 @@ impl ArmClips {
             swim: [lib.find("Empty_SwimN"), lib.find("Empty_SwimE"), lib.find("Empty_SwimS"), lib.find("Empty_SwimW")],
             powers_idle: lib.find("Powers_Idle"),
             gadgets_idle: lib.find("Gadgets_Idle"),
+            heart_fingers: lib.first(&["Gadgets_Heart_Fingers_Idle", "Gadgets_Heart_Fingers_Default"]),
             blink: lib.find("Powers_Cast_Blink_Out"),
             windblast: lib.find("Powers_Cast_Windblast"),
             bend_time: lib.find("Powers_Cast_BendTime"),
@@ -224,6 +228,8 @@ impl ArmClips {
 #[derive(Component)]
 struct ArmsAnim {
     clips: Arc<ArmClips>,
+    /// the left hand's finger joints (a held item's grip)
+    fingers_l: Arc<Vec<usize>>,
     /// camera_jnt's bind transform relative to the camera
     eye: Transform,
     /// the head's bob: its cycle (0-1) and weight (`align_arms`), and the breath's clip time
@@ -431,6 +437,17 @@ fn spawn_arms(
             animator,
             ArmsAnim {
                 clips: Arc::new(clips),
+                fingers_l: Arc::new(
+                    bones
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, b)| {
+                            let n = b.name.to_ascii_lowercase();
+                            n.ends_with("_l_jnt") && ["thumb_", "index_", "middle_", "ring_", "pinky_"].iter().any(|f| n.starts_with(f))
+                        })
+                        .map(|(i, _)| i)
+                        .collect(),
+                ),
                 eye,
                 bob_phase: 0.0,
                 bob_weight: 0.0,
@@ -588,7 +605,8 @@ fn animate_arms(
             }
         }
         base_busy = true;
-    } else if st.swimming {
+    } else if swim.swimming() {
+        // (only in the water: empty hands on land are the empty idle's, below)
         let local = Quat::from_rotation_y(-p.yaw) * p.velocity;
         let speed = local.length();
         let (cl, rate) = if speed < 0.5 {
@@ -868,13 +886,27 @@ fn animate_arms(
         st.selected = powers.selected;
     }
     let bow = matches!(powers.selected, Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt);
-    let idle = if ranged { if bow { c.wristbow_idle.or(c.gadgets_idle) } else { c.gadgets_idle } } else { c.powers_idle };
+    // (the Heart held up as the gadgets are, its fingers about it: not the open hand of a power)
+    let heart = powers.selected == Power::Heart;
+    anim.masked = c.heart_fingers.filter(|_| heart && !st.fingers_l.is_empty()).map(|f| (f, 0.0, st.fingers_l.clone()));
+    let idle = if heart {
+        c.gadgets_idle.or(c.powers_idle)
+    } else if ranged {
+        if bow { c.wristbow_idle.or(c.gadgets_idle) } else { c.gadgets_idle }
+    } else {
+        c.powers_idle
+    };
     let in_reload = c.reload.iter().any(|(_, cl)| anim.overlay_is(Some(*cl)));
     if !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision))) {
         match idle {
             Some(cl) if !st.choking && !st.blocking => anim.play_overlay(cl, true, 1.0, 0.25),
             _ => anim.stop_overlay(0.2),
         }
+    }
+    if std::env::var("DH_ARMS_LOG").is_ok() {
+        let name = |c: Option<ClipId>| c.map(|c| anim.lib.clip(c).name.clone()).unwrap_or_default();
+        let (ov, w) = anim.overlay_state();
+        info!("arms: base {} overlay {} ({w:.2}) selected {:?} empty {empty} vis {:?}", name(anim.current().map(|p| p.clip)), name(ov), powers.selected, *vis);
     }
     let _ = st.attach_l;
 }
