@@ -15,7 +15,8 @@ use std::path::Path;
 //      near radius and blocking.
 // 126: the player approach and loiter hooks' distances and times.
 // 127: attention's distance to lose sight.
-pub const SCENE_VERSION: u32 = 127;
+// 128: one-shot dialogue actors' speakers.
+pub const SCENE_VERSION: u32 = 128;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -476,6 +477,12 @@ pub struct KDialog {
     pub actor: u32,
     /// index into `dialog_trees`
     pub tree: u32,
+    /// a one-shot's speakers: the character speaking for it (`m_MeSpeaker.m_pAttachedActor`,
+    /// its spawner's actor) and the others (`m_OtherSpeakers`)
+    #[serde(default)]
+    pub me: Option<u32>,
+    #[serde(default)]
+    pub others: Vec<u32>,
 }
 
 /// A dialogue tree: its conversations, and the graph of hooks (Kismet inputs, the player

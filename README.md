@@ -973,8 +973,12 @@ fullscreen display, vertical sync and the crosshair.
   stayed within 6 m for 5-7 s, rolled anew each time, as roshan's r614/blink research decoded
   them.
   The trees' story-flag and conversation-had nodes give their negative output first (a flag
-  unset, a conversation not yet had). One-shot dialogue actors are spoken for by the
-  characters the scripts name with them (`DisSeqAct_DialogInputs` Target): talking to the
+  unset, a conversation not yet had). A one-shot dialogue actor's lines are said by the
+  character its speaker is attached to (`m_MeSpeaker.m_pAttachedActor`, a spawner: Havelock,
+  Lydia, Wallace), voiced from them and subtitled with their name, and its hooks measure the
+  player's distance to its characters (`m_OtherSpeakers` too). One-shot dialogue actors are
+  also spoken for by the characters the scripts name with them (`DisSeqAct_DialogInputs`
+  Target): talking to the
   Empress runs her one-shot's "player used" hook, and a tree's remote nodes raise the
   speaker's dialogue outputs first (her "Give_Letter").
 - **Scene animations**: a matinee group's own animation sets (`GroupAnimSets`: the

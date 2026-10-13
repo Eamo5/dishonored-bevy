@@ -1055,6 +1055,12 @@ impl Vm {
                     Some(KVal::Actor(a)) => Some(*a),
                     _ => None,
                 };
+                // (and the characters a one-shot's speakers are attached to)
+                for d in &g.dialogs {
+                    for p in d.me.iter().chain(d.others.iter()) {
+                        m.insert(*p, d.actor);
+                    }
+                }
                 for op in g.ops.iter().filter(|o| o.class == "DisSeqAct_DialogInputs" && !o.props.contains_key("m_pDialogTree")) {
                     let shots: Vec<u32> = op.vars.iter().filter(|l| l.desc == "DialogOneShot").flat_map(|l| l.vars.iter()).filter_map(actor_of).collect();
                     for p in op.vars.iter().filter(|l| l.desc == "Target").flat_map(|l| l.vars.iter()).filter_map(actor_of) {
@@ -4137,7 +4143,8 @@ impl Vm {
                     dhcook::format::KDialogStep::Voice(event) => {
                         // the speaker's voice; its length times the line
                         if !matches!(steps.get(c.3 + 1), Some(dhcook::format::KDialogStep::Line(_, s)) if mute(*s)) {
-                            self.effects.push(Effect::Voice(event.clone(), Some(Val::Actor(c.0))));
+                            let own = matches!(steps.get(c.3 + 1), Some(dhcook::format::KDialogStep::Line(_, 0)));
+                            self.effects.push(Effect::Voice(event.clone(), Some(Val::Actor(if own { self.voice_of(c.0) } else { c.0 }))));
                             voice_len = crate::audio::event_length(event);
                         }
                     }
@@ -4145,7 +4152,7 @@ impl Vm {
                     dhcook::format::KDialogStep::Line(text, speaker) => {
                         let dur = voice_len.take().map(|l| l + 0.25).unwrap_or(1.2 + text.chars().count() as f32 / 15.0);
                         // slot 0 is the tree's own speaker
-                        self.effects.push(Effect::Line(text.clone(), dur, (*speaker == 0).then_some(c.0)));
+                        self.effects.push(Effect::Line(text.clone(), dur, (*speaker == 0).then(|| self.voice_of(c.0))));
                         c.4 = dur;
                         if ending {
                             c.3 = steps.len();
@@ -4289,6 +4296,12 @@ impl Vm {
             KBranch::Fired(p) => self.fired_convs.contains(p) as usize,
         };
         Some((k, key, st))
+    }
+
+    /// Who says a conversation's own lines: a one-shot dialogue actor's character
+    /// (`m_MeSpeaker`), else the speaker itself.
+    fn voice_of(&self, actor: u32) -> u32 {
+        self.g.dialogs.iter().find(|d| d.actor == actor).and_then(|d| d.me).unwrap_or(actor)
     }
 
     /// Where a conversation's speaker stands: its character, or the characters answering for

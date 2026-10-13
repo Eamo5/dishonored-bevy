@@ -728,9 +728,19 @@ pub fn cook(levels: &[Arc<Package>], refs: &HashMap<ActorKey, KActor>) -> Kismet
     }
     for ((pi, o), actor) in dialog_actors {
         let pkg = &levels[pi];
-        let Some(tree) = read_props(pkg, o).and_then(|p| p.object("m_pDialogTree")).filter(|t| *t > 0) else { continue };
+        let Some(props) = read_props(pkg, o) else { continue };
+        let Some(tree) = props.object("m_pDialogTree").filter(|t| *t > 0) else { continue };
         let Some(&tree) = tree_ids.get(&(pi, tree)) else { continue };
-        ex.out.dialogs.push(crate::format::KDialog { actor, tree });
+        // (who speaks for a one-shot: the characters its speakers are attached to)
+        let attached = |s: &Props| s.object("m_pAttachedActor").filter(|a| *a > 0);
+        let me = match props.get("m_MeSpeaker") {
+            Some(Value::Struct(_, s)) => attached(&Props(s.clone())),
+            _ => None,
+        };
+        let others: Vec<i32> = struct_array(pkg, &props, "m_OtherSpeakers").iter().filter_map(attached).collect();
+        let me = me.map(|a| ex.actor(pi, a));
+        let others = others.into_iter().map(|a| ex.actor(pi, a)).collect();
+        ex.out.dialogs.push(crate::format::KDialog { actor, tree, me, others });
     }
     // objectives (their texts are cooked in English)
     for pkg in levels {
