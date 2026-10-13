@@ -231,6 +231,10 @@ fn script_goto(
 #[derive(Resource)]
 pub struct Scripted;
 
+/// (tests) Corvo unseen by the characters (`notarget`, as `DH_NOTARGET` from the start).
+#[derive(Resource)]
+pub struct NoTarget;
+
 #[derive(Resource)]
 struct Script {
     cmds: Vec<Vec<String>>,
@@ -914,6 +918,14 @@ fn run_script(
                     ui.location = Some(name);
                 }
             });
+        }
+        "notarget" => {
+            // notarget [0]: the characters stop seeing Corvo (0: they see him again)
+            if cmd.get(1).is_some_and(|s| s == "0") {
+                commands.remove_resource::<NoTarget>();
+            } else {
+                commands.insert_resource(NoTarget);
+            }
         }
         "aware" => {
             // aware 1,2,3,4,0: the awareness markers step through these levels (tests)

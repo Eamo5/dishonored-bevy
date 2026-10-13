@@ -70,6 +70,11 @@ pub struct BarkState {
     /// since it last stood easy: it has seen Corvo (it hunts him), it has gone to look
     hunted: bool,
     looked: bool,
+    /// how long it has fought Corvo out of its reach, and whether it has this fight
+    stuck: f32,
+    was_stuck: bool,
+    /// a taunt due, said once it can speak
+    taunt: bool,
     act_seen: u32,
     shot: f32,
 }
@@ -105,6 +110,15 @@ fn hook_output(class: &str, npc: &Npc) -> Option<usize> {
 
 /// Barks are heard (and subtitled) within this range (metres).
 const HEAR: f32 = 25.0;
+
+/// Others of its side within this (m) hear a character's call for help (`COMBAT_HELP`: a cry
+/// for help carries 15 m).
+const HELP_REACH: f32 = 15.0;
+
+/// Fighting Corvo out of its reach this long (s) brings its first taunt, then again each this
+/// long (the `UNREACH` hooks' refire, 8 s).
+const UNREACH_AFTER: f32 = 2.0;
+const UNREACH_EVERY: f32 = 8.0;
 
 /// A sighting nearer than this share of a character's sight is a near one
 /// (`DisTweaks_AIBrain.m_fVisualDetectionRatioNear`: `SEARCH_NEAR_VDETECTION`).
@@ -194,11 +208,14 @@ fn npc_barks(
     // (who a bolt or bullet struck this frame)
     let shot: Vec<Entity> = hits.read().filter(|h| matches!(h.kind, HitKind::Bolt | HitKind::Bullet | HitKind::ExplosiveBullet | HitKind::ExplosiveBolt)).map(|h| h.npc).collect();
     // (who stands where, for the barks said in a group: those of one side within reach)
-    let standing: Vec<(Entity, Vec3, String)> = npcs.iter().filter(|(_, n, ..)| !n.is_down()).map(|(e, n, t, ..)| (e, t.translation, n.faction.clone())).collect();
+    let standing: Vec<(Entity, Vec3, String, bool)> = npcs.iter().filter(|(_, n, ..)| !n.is_down()).map(|(e, n, t, ..)| (e, t.translation, n.faction.clone(), n.alert == Alert::Combat)).collect();
     // (and the bodies: dead or knocked out)
     let bodies: Vec<(Vec3, bool)> = npcs.iter().filter(|(_, n, ..)| n.is_down()).map(|(_, n, t, ..)| (t.translation, n.mode == Mode::Dead)).collect();
     for (e, npc, t, state, anim, clips) in &mut npcs {
         let Some(mut st) = state else {
+            if log {
+                info!("bark voice {} ({}, {} at {:.1}): {:?}", npc.name, npc.pawn, npc.faction, t.translation, npc.voice.and_then(|v| level.scene.barks.get(v as usize)).map(|v| &v.name));
+            }
             commands.entity(e).try_insert(BarkState {
                 alert: npc.alert,
                 down: npc.is_down(),
@@ -221,6 +238,9 @@ fn npc_barks(
                 witnessed_death: npc.witnessed_death,
                 hunted: false,
                 looked: false,
+                stuck: 0.0,
+                was_stuck: false,
+                taunt: false,
                 act_seen: npc.act.1,
                 shot: 10.0,
             });
@@ -236,7 +256,20 @@ fn npc_barks(
             st.next_chatter = st.next_chatter.min(WEEP_BARK[1]);
         }
         let d = t.translation.distance(pt.translation);
-        let grouped = standing.iter().any(|(o, at, f)| *o != e && *f == npc.faction && at.distance(t.translation) < GROUP_REACH);
+        let grouped = standing.iter().any(|(o, at, f, _)| *o != e && *f == npc.faction && at.distance(t.translation) < GROUP_REACH);
+        // (others of its side within call: not yet fighting, or fighting already)
+        let allies = |fighting: bool| standing.iter().any(|(o, at, f, c)| *o != e && *f == npc.faction && *c == fighting && at.distance(t.translation) < HELP_REACH);
+        // fighting Corvo out of its reach: no way to him over the navigation mesh (him up on a
+        // ledge or a roof, or down where it can't follow; the original's reachability, a path
+        // to him, as roshan's r614/blink research read it). Its taunts come after a moment and
+        // then each `UNREACH` refire (8 s)
+        let no_way = npc.nav.points.is_empty() && npc.nav.goal.is_some_and(|g| g.distance(pt.translation) < 1.0);
+        let unreachable = npc.mode == Mode::Combat && npc.sees_player && no_way && (pt.translation.y - t.translation.y).abs() > 1.2;
+        let stuck_was = st.stuck;
+        st.stuck = if unreachable { st.stuck + dt } else { 0.0 };
+        let beat = |x: f32| (x - UNREACH_AFTER).div_euclid(UNREACH_EVERY);
+        st.taunt = unreachable && (st.taunt || st.stuck >= UNREACH_AFTER && beat(stuck_was) != beat(st.stuck));
+        st.was_stuck |= st.stuck >= UNREACH_AFTER;
         // the line its clip cues as it passes it (`DishonoredNotify_FireDialogHook`)
         let mut cued: Option<String> = None;
         // (a cry its clip has still to cue)
@@ -325,6 +358,10 @@ fn npc_barks(
             // Corvo's magic before its eyes: gone from where it saw him, else a power seen
             // (`MAGIC_DISAPPEARED`, `WITNESSEDMAGIC`)
             want = Some(if magic == Some(crate::powers::Power::Blink) { (&["MAGIC_DISAPPEARED", "MAGIC_WITNESSED"], true) } else { (&["MAGIC_WITNESSED"], true) });
+        } else if !down && st.taunt && st.quiet <= 0.0 && clock.busy <= 0.0 {
+            // Corvo out of its reach (`UNREACH_TAUNT`, `UNREACH_BELOW`, `COMBAT_CANT_REACH`)
+            st.taunt = false;
+            want = Some((&["UNREACH_TAUNT", "UNREACH_BELOW", "COMBAT_CANT_REACH"], false));
         } else if !down && npc.witnessed_death && !st.witnessed_death && !npc.saw_body {
             // a death before its eyes (`SEARCH_WITNESS_DEATH`)
             want = Some((&["SEARCH_WITNESS_DEATH"], true));
@@ -349,18 +386,35 @@ fn npc_barks(
                 (true, false) => (&["SEARCH_ADETECTION", "ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"], false),
                 _ => (&["ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"], false),
             });
+        } else if !down && st.mode == Mode::Combat && npc.mode == Mode::Search && npc.alert == Alert::Combat {
+            // the fight lost him (it goes on looking, its alarm held): after he got out of its
+            // reach `UNREACH_GIVEUP`, else `COMBAT_LOST` (with others of its side about, their
+            // group's)
+            want = Some(match (st.was_stuck, grouped) {
+                (true, true) => (&["UNREACH_GIVEUP_WITHGROUP", "UNREACH_GIVEUP", "COMBAT_LOST_GROUP", "COMBAT_LOST"], true),
+                (true, false) => (&["UNREACH_GIVEUP", "COMBAT_LOST", "COMBAT_LOST_GROUP"], true),
+                (false, true) => (&["COMBAT_LOST_GROUP", "COMBAT_LOST"], true),
+                (false, false) => (&["COMBAT_LOST", "COMBAT_LOST_GROUP"], true),
+            });
         } else if !down && npc.alert != st.alert {
             want = match (st.alert, npc.alert) {
                 (Alert::Unaware, Alert::Suspicious) => Some((&["ATTENTION_NOTICE_BEGIN", "NOTICE_SUSPICIOUS_ACTIVITY", "ATTENTION_HEADTRACK", "ATTENTION_TRACKTARGET_BEGIN"], false)),
                 // (a weeper's voice has only its own: `WEEP_NOTICED_TARGET`)
                 (Alert::Unaware, Alert::Combat) => Some((&["COMBAT_SURPRISED", "COMBAT_THREAT", "WEEP_NOTICED_TARGET"], true)),
                 // (with others of its side about, their group's lines first)
-                // (an enemy it can't see: `COMBAT_THREAT_OFFSCREEN`)
+                // (joining a fight it can't see: `COMBAT_HELP_FOUND` with others of its side at it,
+                // else `COMBAT_THREAT_OFFSCREEN`)
+                (_, Alert::Combat) if !npc.sees_player && allies(true) => Some((&["COMBAT_HELP_FOUND", "COMBAT_THREAT_OFFSCREEN", "COMBAT_THREAT", "WEEP_NOTICED_TARGET"], true)),
                 (_, Alert::Combat) if !npc.sees_player => Some((&["COMBAT_THREAT_OFFSCREEN", "COMBAT_THREAT", "COMBAT_THREAT_GROUP", "WEEP_NOTICED_TARGET"], true)),
+                // (turning on him with others of its side about and not yet at it: a call for
+                // help, `COMBAT_HELP`)
+                (Alert::Unaware | Alert::Suspicious, Alert::Combat) if allies(false) => Some((&["COMBAT_HELP", "COMBAT_THREAT_GROUP", "COMBAT_THREAT", "WEEP_NOTICED_TARGET"], true)),
                 (_, Alert::Combat) if grouped => Some((&["COMBAT_THREAT_GROUP", "COMBAT_THREAT", "COMBAT_SURPRISED", "WEEP_NOTICED_TARGET"], true)),
                 (_, Alert::Combat) => Some((&["COMBAT_THREAT", "COMBAT_THREAT_GROUP", "COMBAT_SURPRISED", "WEEP_NOTICED_TARGET"], true)),
-                (Alert::Combat, _) if grouped => Some((&["COMBAT_LOST_GROUP", "COMBAT_LOST", "SEARCH_STOPHUNTING_GROUP", "SEARCH_STOPHUNTING"], false)),
-                (Alert::Combat, _) => Some((&["COMBAT_LOST", "SEARCH_STOPHUNTING", "SEARCH_GIVEUP_POSTCORPSE"], false)),
+                // (the search after a fight given up: `SEARCH_STOPHUNTING`, its group's among
+                // others, else going back, `COMBAT_GOING_HOME`)
+                (Alert::Combat, _) if grouped => Some((&["SEARCH_STOPHUNTING_GROUP", "SEARCH_STOPHUNTING", "COMBAT_GOING_HOME"], false)),
+                (Alert::Combat, _) => Some((&["SEARCH_STOPHUNTING", "COMBAT_GOING_HOME", "SEARCH_STOPHUNTING_GROUP"], false)),
                 // (a notice that came to nothing: `ATTENTION_NOTICE_END`)
                 // giving up: on a body found `SEARCH_GIVEUP_POSTCORPSE`, on Corvo seen
                 // `SEARCH_STOPHUNTING` (its group's among others), on a sound looked into
@@ -387,8 +441,9 @@ fn npc_barks(
         } else if !down && st.next_chatter <= 0.0 {
             st.next_chatter = if npc.alert == Alert::Combat { 6.0 + rand::random::<f32>() * 8.0 } else { 15.0 + rand::random::<f32>() * 30.0 };
             want = match npc.alert {
-                // (the taunt's line comes with its gesture, cued by its clip)
-                Alert::Combat if npc.mode == Mode::Combat => Some((&["COMBAT_ATTACK", "COMBAT_THREAT_VERSUS"], false)),
+                // (at him, in its sight; the taunt's line comes with its gesture, cued by its
+                // clip)
+                Alert::Combat if npc.mode == Mode::Combat && npc.sees_player => Some((&["COMBAT_ATTACK", "COMBAT_THREAT_VERSUS"], false)),
                 // (the patrol's chatter: `PATROL_MISC`, with others of its side about its group's)
                 Alert::Unaware if d < 12.0 && grouped => Some((&["PATROL_MISC_GROUP", "PATROL_MISC"], false)),
                 Alert::Unaware if d < 12.0 => Some((&["PATROL_MISC"], false)),
@@ -405,6 +460,9 @@ fn npc_barks(
         st.falling = !npc.grounded && npc.velocity.y < FALL_SPEED;
         st.saw_body = npc.saw_body;
         st.witnessed_death = npc.witnessed_death;
+        if npc.mode != Mode::Combat {
+            st.was_stuck = false;
+        }
         if npc.alert == Alert::Unaware {
             st.hunted = false;
             st.looked = false;

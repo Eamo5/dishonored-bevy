@@ -2244,12 +2244,12 @@ pub(crate) fn npc_perception(
     possession: Res<crate::possession::Possession>,
     mut found: Local<std::collections::HashSet<Entity>>,
     (froms, mut events): (Query<&FromSpawner>, MessageWriter<crate::interact::Interaction>),
-    (level, pvis, settings): (Option<Res<LevelInfo>>, Res<crate::stealth::PlayerVisibility>, Res<crate::settings::Settings>),
+    (level, pvis, settings, notarget): (Option<Res<LevelInfo>>, Res<crate::stealth::PlayerVisibility>, Res<crate::settings::Settings>, Option<Res<crate::script::NoTarget>>),
 ) {
     let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
     // inside a host, Corvo is the host
-    // (`DH_NOTARGET`: unseen, for watching the characters in tests)
-    let hidden = possession.host.is_some() || std::env::var("DH_NOTARGET").is_ok();
+    // (`DH_NOTARGET`, `notarget`: unseen, for watching the characters in tests)
+    let hidden = possession.host.is_some() || std::env::var("DH_NOTARGET").is_ok() || notarget.is_some();
     // (no time at all: paused)
     if dt_world <= 0.0 && dt_own <= 0.0 {
         return;
