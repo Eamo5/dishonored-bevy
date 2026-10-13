@@ -763,14 +763,21 @@ fullscreen display, vertical sync and the crosshair.
   pistol is aimed, and the weepers' own: `WEEP_NOTICED_TARGET` as one turns on him, then
   `WEEP_FOLLOWING` as it follows and `WEEP_STAND_STILL_WEEPING` standing, every 2-5 s
   (`m_fFollowingBark`, `m_fStandStillWeepingBark`).
-- **Finishers** (`DisTweaks_Fatality`): a sword blow that kills, the counter after a parry and
-  the Blood Thirst strike play the original paired finishers (`Sword_Ready_Fatality_<Front |
-  FastFront | SmallFront_<Side>>_*_Master` with `Generic_Fatality_..._Slave`, a target's
-  dramatic death for a target; a beheading one time in four: see Beheadings), set up as the
-  assassinations are. Their slow motion is the clips' own (`DisNotify_BendTime_Ranged` stretches:
-  Corvo's and the world's time scales, eased in and out): the dramatic deaths' always, the
-  finishers' (`..AdrenalineBendTime..`) for a Blood Thirst kill or as the `Kill Cam Mode`
-  option has it — Off, Normal (the last foe fighting him, else one in three) or Frequent.
+- **Finishers** (`DisTweaks_Fatality`): the counter after a parry, the Blood Thirst strike and a
+  sword blow that kills as a slow-motion finisher play the original paired finishers
+  (`Sword_Ready_Fatality_<Front | FastFront>_*_Master` with `Generic_Fatality_..._Slave`, a
+  target's dramatic death for a target; a beheading one time in four: see Beheadings), set up as
+  the assassinations are. They are paced as the sword's tweak has it (roshan's r614/blink
+  research decoded the rules): a killing blow is a slow-motion finisher three times in four
+  (`m_fSlomoFinisherRandomChance`) when the victim is the one foe on Corvo, not within 30 s of
+  the last (`m_fMinTimeBetweenRandomSlomoFinisher`), else an ordinary blow; a finisher is a full
+  one (`Front`) with no more than that one foe, no Bend Time, and its 4-8 fast ones
+  (`m_NumFinishersBeforeSlow`) spent or 90-120 s (`m_fTimeBeforeSlow`) gone since the last full
+  one, else a fast one (`FastFront`). Their slow motion is the clips' own
+  (`DisNotify_BendTime_Ranged` stretches: Corvo's and the world's time scales, eased in and
+  out): the dramatic deaths' always, the finishers' (`..AdrenalineBendTime..`) for a Blood
+  Thirst kill or a slow-motion finisher as the `Kill Cam Mode` option has it: Off never, Normal
+  one time in ten (`m_fChanceSlomoFinisherWillBeNormalSpeed` 0.9), Frequent always.
   Blood: the contact system's sword against a body (`Pfx_BloodMotion` spurting along the blow,
   held to the body; within 5 m one time in three `blood_light` on the lens) on every blade hit,
   and in the finishers and assassinations at their clips' own moments

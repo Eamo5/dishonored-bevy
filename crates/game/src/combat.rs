@@ -20,6 +20,7 @@ impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Specials>()
             .init_resource::<Versus>()
+            .init_resource::<FinisherPace>()
             .add_systems(OnEnter(GameState::InGame), spawn_view_model.after(LevelSpawnSet).after(crate::player::spawn_player))
             .add_systems(
                 Update,
@@ -380,7 +381,7 @@ fn behead_chance(data: &crate::gamedata::Data) -> f32 {
     }
 }
 
-fn fatality_pair(lib: &crate::anim::CharAnims, swing_right: bool, behind: bool, behead: f32) -> Option<(String, String)> {
+fn fatality_pair(lib: &crate::anim::CharAnims, full: bool, behind: bool, behead: f32) -> Option<(String, String)> {
     if let Some(slave) = lib.find_like("DramaticDeath_Front_", "_Slave") {
         return Some((format!("Sword_{}", slave.replace("_Slave", "_Master")), slave));
     }
@@ -398,14 +399,88 @@ fn fatality_pair(lib: &crate::anim::CharAnims, swing_right: bool, behind: bool, 
             return Some((format!("Sword_Ready_Fatality_{pick}_Master"), slave));
         }
     }
-    let side = if swing_right { "Right" } else { "Left" };
-    let mut options: Vec<String> = ["Front_A", "Front_B", "FastFront_A", "FastFront_B", "FastFront_C", "FastFront_D"].iter().map(|s| s.to_string()).collect();
-    options.push(format!("SmallFront_{side}_A"));
-    options.push(format!("SmallFront_{side}_B"));
-    let pick = &options[(rand::random::<f32>() * options.len() as f32) as usize % options.len()];
-    let slave = format!("Generic_Fatality_{pick}_Slave");
-    lib.find(&slave)?;
-    Some((format!("Sword_Ready_Fatality_{pick}_Master"), slave))
+    // Corvo's sword's set (`m_Front` and `m_Front_Fast`: his other sides have none): a full
+    // finisher or a fast one, else the other kind where the victim has no part in it
+    let has = |set: &[&str]| -> Vec<String> { set.iter().map(|k| k.to_string()).filter(|k| lib.find(&format!("Generic_Fatality_{k}_Slave")).is_some()).collect() };
+    let (fulls, fasts) = (has(&["Front_A", "Front_B"]), has(&["FastFront_A", "FastFront_B", "FastFront_C", "FastFront_D"]));
+    let (want, other) = if full { (fulls, fasts) } else { (fasts, fulls) };
+    let options = if want.is_empty() { other } else { want };
+    let pick = options.get(rand::random_range(0..options.len().max(1)))?;
+    Some((format!("Sword_Ready_Fatality_{pick}_Master"), format!("Generic_Fatality_{pick}_Slave")))
+}
+
+/// Corvo's finishers' pacing (`DisItemContext_Finisher`, as roshan's r614/blink research
+/// decoded it): the fast ones left before a full one (`m_NumFinishersBeforeSlow`, 4-8), the
+/// time after which a full one is due anyway once a fast one has played (`m_fTimeBeforeSlow`,
+/// 90-120 s), when the last full one played and when the last in slow motion.
+#[derive(Resource, Default)]
+pub struct FinisherPace {
+    fast_left: i32,
+    full_after: f32,
+    last_full: f32,
+    seen_fast: bool,
+    last_slomo: Option<f32>,
+    primed: bool,
+}
+
+/// A blow's finisher rolls: a slow-motion finisher (`m_fSlomoFinisherRandomChance`, not within
+/// `m_fMinTimeBetweenRandomSlomoFinisher` of the last, and only with the one foe on Corvo; never
+/// for Blood Thirst's), and whether one would play at normal speed after all
+/// (`m_fChanceSlomoFinisherWillBeNormalSpeed`).
+#[derive(Clone, Copy)]
+struct FinisherRoll {
+    slomo: bool,
+    realtime: bool,
+}
+
+impl FinisherPace {
+    fn reset(&mut self, data: &crate::gamedata::Data, now: f32) {
+        let (lo, hi) = (data.pawn("finisher.m_NumFinishersBeforeSlow_Min", 4.0), data.pawn("finisher.m_NumFinishersBeforeSlow_Max", 8.0));
+        self.fast_left = (lo + rand::random::<f32>() * (hi - lo)) as i32;
+        let (lo, hi) = (data.pawn("finisher.m_fTimeBeforeSlow_Min", 90.0), data.pawn("finisher.m_fTimeBeforeSlow_Max", 120.0));
+        self.full_after = lo + rand::random::<f32>() * (hi - lo);
+        self.last_full = now;
+        self.seen_fast = false;
+        self.primed = true;
+    }
+
+    fn roll(&mut self, data: &crate::gamedata::Data, now: f32, one_foe: bool, blood_thirst: bool) -> FinisherRoll {
+        if !self.primed {
+            self.reset(data, now);
+        }
+        let recent = self.last_slomo.is_some_and(|t| now - t < data.pawn("fatality.m_fMinTimeBetweenRandomSlomoFinisher", 30.0));
+        let slomo = !blood_thirst && !recent && one_foe && rand::random::<f32>() <= data.pawn("fatality.m_fSlomoFinisherRandomChance", 0.75);
+        FinisherRoll { slomo, realtime: rand::random::<f32>() <= data.pawn("fatality.m_fChanceSlomoFinisherWillBeNormalSpeed", 0.9) }
+    }
+
+    /// A full finisher, not a fast one: no more than the one foe on Corvo, no Bend Time, and
+    /// the fast ones spent or the time come after one.
+    fn full(&self, now: f32, one_foe: bool, bending: bool) -> bool {
+        one_foe && !bending && (self.fast_left <= 0 || (self.seen_fast && now - self.last_full >= self.full_after))
+    }
+
+    fn played(&mut self, data: &crate::gamedata::Data, now: f32, full: bool, slomo: bool) {
+        if full {
+            self.reset(data, now);
+        } else {
+            self.fast_left -= 1;
+            self.seen_fast = true;
+        }
+        if slomo {
+            self.last_slomo = Some(now);
+        }
+    }
+}
+
+/// Whether a slow-motion finisher's clip slows time (`PSI_Gameplay_KillCamMode`): Off never,
+/// Normal unless it rolled to play at normal speed, Frequent always.
+fn finisher_dilates(mode: u8, roll: FinisherRoll) -> bool {
+    roll.slomo
+        && match mode {
+            0 => false,
+            1 => !roll.realtime,
+            _ => true,
+        }
 }
 
 /// A synchronized kill begun (an assassination, a finisher): the victim's clip given it, Corvo's
@@ -455,6 +530,7 @@ fn sword_input(
         MessageWriter<crate::particles::SpawnEffect>,
         Option<Res<crate::level::LevelInfo>>,
     ),
+    (mut pace, clock): (ResMut<FinisherPace>, Res<crate::gameplay::TimeControl>),
 ) {
     if paused.0 { return; }
     let Ok((pe, pt, mut p, mut sword)) = player.single_mut() else { return };
@@ -599,10 +675,14 @@ fn sword_input(
             msgs.push("Fatality");
             // (the finisher played out, as the counters' are)
             let behind = npcs.get(e).is_ok_and(|(_, n, t)| n.forward().dot((pt.translation - t.translation).with_y(0.0).normalize_or_zero()) < -0.2);
-            let pair = rigs.get(e).ok().filter(|_| npcs.get(e).is_ok_and(|(_, n, _)| n.kind != crate::npc::Kind::Creature)).and_then(|a| fatality_pair(&a.lib, sword.swing_dir > 0.0, behind, behead_chance(&data)));
+            let (now, one_foe) = (time.elapsed_secs(), !others_fighting(&npcs, e, pt.translation));
+            let roll = pace.roll(&data, now, one_foe, true);
+            let full = pace.full(now, one_foe, clock.bend_remaining > 0.0);
+            let pair = rigs.get(e).ok().filter(|_| npcs.get(e).is_ok_and(|(_, n, _)| n.kind != crate::npc::Kind::Creature)).and_then(|a| fatality_pair(&a.lib, full, behind, behead_chance(&data)));
             if let Some((master, slave)) = pair {
-                let last = !others_fighting(&npcs, e, pt.translation);
-                begin_sync_kill(&mut commands, pe, &mut sword, &mut p, e, master, slave, (kill_cam(settings.kill_cam, last), true));
+                // (its clip's adrenaline slow motion plays whatever the rolls)
+                pace.played(&data, now, full, roll.slomo);
+                begin_sync_kill(&mut commands, pe, &mut sword, &mut p, e, master, slave, (finisher_dilates(settings.kill_cam, roll), true));
             } else {
                 sfx.write(crate::audio::PostEvent::named("Snd_Imp_Sword_on_Body_cue_ak", Some(pt.translation + Vec3::Y)));
                 sword.swing = 0.001;
@@ -627,20 +707,26 @@ fn sword_input(
             // r614/blink research decoded it)
             let swept = targets_within(eye, fwd, reach, 0.55, npcs.iter());
             if let Some(&(e, _)) = swept.first() {
+                // (a finisher's rolls as the blow begins: one that kills is a finisher only in
+                // slow motion, one after Corvo's parry always)
+                let (now, one_foe) = (time.elapsed_secs(), !others_fighting(&npcs, e, pt.translation));
+                let roll = pace.roll(&data, now, one_foe, false);
                 let (_, mut npc, nt) = npcs.get_mut(e).unwrap();
                 let to_player = (pt.translation - nt.translation).with_y(0.0).normalize_or_zero();
                 let behind = npc.forward().dot(to_player) < -0.2;
                 if assassinable(&npc) {
                     hits.write(NpcHit { npc: e, damage: 999.0, kind: HitKind::Assassinate, from: pt.translation });
-                } else if npc.stagger > 1.0 || (attrs.sword_damage >= npc.health && npc.min_health <= 0.0 && npc.kind != crate::npc::Kind::Creature) {
-                    // off balance after Corvo's parry (or dazed), or a blow that kills: a
-                    // finisher (`DisTweaks_Fatality`), its pair played out where it can be
+                } else if npc.stagger > 1.0 || (roll.slomo && attrs.sword_damage >= npc.health && npc.min_health <= 0.0 && npc.kind != crate::npc::Kind::Creature) {
+                    // off balance after Corvo's parry (or dazed), or a blow that kills as a
+                    // slow-motion finisher: a finisher (`DisTweaks_Fatality`), its pair played
+                    // out where it can be
                     hits.write(NpcHit { npc: e, damage: 999.0, kind: HitKind::Fatality, from: pt.translation });
                     let human = npc.kind != crate::npc::Kind::Creature;
                     npc.attack_t = None;
-                    if let Some((master, slave)) = rigs.get(e).ok().filter(|_| human).and_then(|a| fatality_pair(&a.lib, sword.swing_dir > 0.0, behind, behead_chance(&data))) {
-                        let last = !others_fighting(&npcs, e, pt.translation);
-                        begin_sync_kill(&mut commands, pe, &mut sword, &mut p, e, master, slave, (kill_cam(settings.kill_cam, last), false));
+                    let full = pace.full(now, one_foe, clock.bend_remaining > 0.0);
+                    if let Some((master, slave)) = rigs.get(e).ok().filter(|_| human).and_then(|a| fatality_pair(&a.lib, full, behind, behead_chance(&data))) {
+                        pace.played(&data, now, full, roll.slomo);
+                        begin_sync_kill(&mut commands, pe, &mut sword, &mut p, e, master, slave, (finisher_dilates(settings.kill_cam, roll), false));
                         return;
                     }
                 } else if can_lock(&npc, nt, pt.translation, fwd, |d| (-0.02..VERSUS_ZONE).contains(&d)) {
@@ -736,6 +822,46 @@ fn sword_input(
     }
     if sword.blocking {
         sword.block_t += dt;
+    }
+}
+
+#[cfg(test)]
+mod finisher_tests {
+    use super::*;
+    use crate::gamedata::Data;
+
+    #[test]
+    fn fast_finishers_run_out_before_a_full_one() {
+        let data = Data::default();
+        let mut pace = FinisherPace::default();
+        pace.roll(&data, 0.0, true, false);
+        let fasts = pace.fast_left;
+        assert!((4..=8).contains(&fasts));
+        for i in 0..fasts {
+            assert!(!pace.full(i as f32, true, false));
+            pace.played(&data, i as f32, false, false);
+        }
+        assert!(pace.full(10.0, true, false));
+        // not with another foe on Corvo, nor in Bend Time
+        assert!(!pace.full(10.0, false, false));
+        assert!(!pace.full(10.0, true, true));
+        pace.played(&data, 10.0, true, false);
+        assert!(!pace.full(11.0, true, false));
+        // a full one is due anyway once its time has come after a fast one
+        pace.played(&data, 12.0, false, false);
+        assert!(pace.full(131.0, true, false));
+    }
+
+    #[test]
+    fn slow_motion_wants_the_one_foe_and_waits_its_time() {
+        let data = Data::default();
+        let mut pace = FinisherPace::default();
+        assert!(!(0..50).any(|_| pace.roll(&data, 0.0, false, false).slomo));
+        assert!(!(0..50).any(|_| pace.roll(&data, 0.0, true, true).slomo));
+        assert!((0..50).any(|_| pace.roll(&data, 0.0, true, false).slomo));
+        pace.played(&data, 0.0, false, true);
+        assert!(!(0..50).any(|_| pace.roll(&data, 20.0, true, false).slomo));
+        assert!((0..50).any(|_| pace.roll(&data, 31.0, true, false).slomo));
     }
 }
 

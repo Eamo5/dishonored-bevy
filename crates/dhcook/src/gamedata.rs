@@ -802,9 +802,23 @@ fn arms(game: &Package, startup: &Package, d: &mut GameData) {
     for p in fat.iter().flatten() {
         let Some(Value::Struct(_, sub)) = p.get("m_FatalityMoveSets") else { continue };
         let set = Props(sub.clone());
-        for n in ["m_fBeheadRandomChance", "m_fGenericFatalityChance", "m_fSlomoFinisherRandomChance"] {
+        for n in ["m_fBeheadRandomChance", "m_fGenericFatalityChance", "m_fSlomoFinisherRandomChance", "m_fMinTimeBetweenRandomSlomoFinisher", "m_fChanceSlomoFinisherWillBeNormalSpeed"] {
             if let Some(v) = set.float(n) {
                 d.pawn.insert(format!("fatality.{n}"), v);
+            }
+        }
+    }
+    // how many fast finishers, or how long, before a full one (`DisTweaks_Finisher`, the class's
+    // under Corvo's sword's)
+    for p in [game.find_export("Default__DisTweaks_Finisher").and_then(|i| props(game, i)), startup.find_export(corvo_fatality).and_then(|i| props(startup, i))].iter().flatten() {
+        for n in ["m_NumFinishersBeforeSlow_Min", "m_NumFinishersBeforeSlow_Max"] {
+            if let Some(v) = p.int(n) {
+                d.pawn.insert(format!("finisher.{n}"), v as f32);
+            }
+        }
+        for n in ["m_fTimeBeforeSlow_Min", "m_fTimeBeforeSlow_Max"] {
+            if let Some(v) = p.float(n) {
+                d.pawn.insert(format!("finisher.{n}"), v);
             }
         }
     }
