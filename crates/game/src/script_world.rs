@@ -1008,7 +1008,7 @@ fn scripted_severs(vm: Option<ResMut<Vm>>, npcs: Query<(Entity, &FromSpawner), W
         let spawners: Vec<u32> = targets.iter().filter_map(|v| if let Val::Actor(a) = v { g.actors.get(*a as usize)?.spawner } else { None }).collect();
         for (e, from) in &npcs {
             if spawners.contains(&from.0) {
-                severs.write(crate::gore::SeverLimb { npc: e, bone: joint.clone(), impulse: 80.0 });
+                severs.write(crate::gore::SeverLimb { npc: e, bone: joint.clone(), impulse: 80.0, eaten: false });
             }
         }
     }

@@ -1132,7 +1132,7 @@ fn assassinating(
     // the victim's clip severs a limb as it passes its notify (the beheadings')
     if let Some(level) = level.as_ref() {
         for s in level.scene.npc_severs.iter().filter(|s| s.clip.eq_ignore_ascii_case(&a.slave) && s.time > t0 && s.time <= a.t) {
-            severs.write(crate::gore::SeverLimb { npc: a.npc, bone: s.bone.clone(), impulse: s.impulse });
+            severs.write(crate::gore::SeverLimb { npc: a.npc, bone: s.bone.clone(), impulse: s.impulse, eaten: false });
         }
     }
     p.velocity = Vec3::ZERO;

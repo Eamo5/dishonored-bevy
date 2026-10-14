@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 138;
+pub const SCENE_VERSION: u32 = 139;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -3174,6 +3174,9 @@ pub struct SeveredLimbs {
 pub struct SeveredLimb {
     pub bone: String,
     pub effects: Vec<(String, u32, bool)>,
+    /// as rats eat it (`m_bUseWhenEaten`: the rat gibs)
+    #[serde(default)]
+    pub eaten: Vec<(String, u32, bool)>,
 }
 
 /// The contact system's sword against a body.

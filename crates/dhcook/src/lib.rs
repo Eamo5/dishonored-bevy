@@ -5557,15 +5557,22 @@ impl<'a> Cooker<'a> {
         let mut out = SeveredLimbs::default();
         let (count, offset, size) = props.array("m_SeveredLimbInfo")?;
         for limb in parse_struct_array(&pkg, offset, size, count).unwrap_or_default() {
-            let mut sl = SeveredLimb { bone: limb.name("m_BoneBreakName").unwrap_or_default().to_string(), effects: Vec::new() };
+            let mut sl = SeveredLimb { bone: limb.name("m_BoneBreakName").unwrap_or_default().to_string(), ..Default::default() };
             if let Some((c, o, s)) = limb.array("m_ParticleEffects") {
                 for fx in parse_struct_array(&pkg, o, s, c).unwrap_or_default() {
-                    if !fx.bool("m_bUseWhenSevered").unwrap_or(false) {
+                    let (severed, eaten) = (fx.bool("m_bUseWhenSevered").unwrap_or(false), fx.bool("m_bUseWhenEaten").unwrap_or(false));
+                    if !severed && !eaten {
                         continue;
                     }
                     let Some(ps) = fx.object("m_pParticleEmitter").filter(|o| *o != 0).and_then(|o| self.assets.resolve(&pkg, o)) else { continue };
                     if let Some(id) = self.particle_system(&ps) {
-                        sl.effects.push((fx.name("m_LocationName").unwrap_or_default().to_string(), id, fx.bool("m_bAttach").unwrap_or(false)));
+                        let e = (fx.name("m_LocationName").unwrap_or_default().to_string(), id, fx.bool("m_bAttach").unwrap_or(false));
+                        if severed {
+                            sl.effects.push(e.clone());
+                        }
+                        if eaten {
+                            sl.eaten.push(e);
+                        }
                     }
                 }
             }

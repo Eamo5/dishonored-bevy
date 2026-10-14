@@ -45,11 +45,47 @@ fn feeding_required(data: &Data, swarm: &Swarm, spawner: Option<&dhcook::format:
     count.max(0.0) as usize
 }
 
-fn wild_feeding_duration(spawner: Option<&dhcook::format::RatSpawner>) -> f32 {
+/// A wild swarm's feeding on a body: its start-up, then a limb at a time, then one more interval
+/// to finish it (`m_fEatStartupDuration`, `m_fEatPerLimbDuration`: the spawner's, else
+/// `DisTweaks_RatSwarm`'s class defaults), as roshan's r614/blink research decoded the eat loop.
+fn wild_feeding_duration(spawner: Option<&dhcook::format::RatSpawner>, limbs: usize) -> f32 {
+    let (startup, per) = wild_feeding_steps(spawner);
+    startup + per * (limbs as f32 + 1.0)
+}
+
+fn wild_feeding_steps(spawner: Option<&dhcook::format::RatSpawner>) -> (f32, f32) {
     let param = |key, fallback| spawner.and_then(|s| s.params.get(key)).copied().unwrap_or(fallback).max(0.0);
-    // Preserve the current four-stage body approximation; the stage timings come
-    // from the actual swarm, with DisTweaks_RatSwarm class defaults as fallback.
-    param("m_fEatStartupDuration", 2.0) + param("m_fEatPerLimbDuration", 1.85) * 4.0
+    (param("m_fEatStartupDuration", 2.0), param("m_fEatPerLimbDuration", 1.85))
+}
+
+/// The limbs rats eat from a body in turn (`SLInfo_Default`'s, from a start of the body's own,
+/// round the limbs, the chest last), as roshan's r614/blink research decoded the eat loop.
+fn eat_order(limbs: &[String], body: Entity) -> Vec<String> {
+    let chest = limbs.iter().position(|b| b.eq_ignore_ascii_case("spine_1_jnt")).unwrap_or(limbs.len().saturating_sub(1));
+    let others: Vec<&String> = limbs.iter().enumerate().filter(|(i, _)| *i != chest).map(|(_, b)| b).collect();
+    let mut out: Vec<String> = Vec::with_capacity(limbs.len());
+    if !others.is_empty() {
+        let start = body.index_u32() as usize % others.len();
+        out.extend((0..others.len()).map(|k| others[(start + k) % others.len()].clone()));
+    }
+    if let Some(c) = limbs.get(chest) {
+        out.push(c.clone());
+    }
+    out
+}
+
+/// The limbs whose turn came as a feeding went from `t0` to `t` (s): each at the end of its
+/// interval after the start-up.
+fn limbs_eaten(order: &[String], startup: f32, per: f32, t0: f32, t: f32) -> Vec<String> {
+    order
+        .iter()
+        .enumerate()
+        .filter(|(k, _)| {
+            let at = startup + per * (*k as f32 + 1.0);
+            t0 < at && t >= at
+        })
+        .map(|(_, b)| b.clone())
+        .collect()
 }
 
 /// Only the portion of this world-time step after the post-kill delay can feed.
@@ -189,12 +225,28 @@ mod bite_tests {
     #[test]
     fn wild_feeding_respects_sewer_startup_override_and_class_defaults() {
         let mut spawner = dhcook::format::RatSpawner::default();
-        assert!((wild_feeding_duration(Some(&spawner)) - 9.4).abs() < 1e-5);
+        // (six limbs, then one more interval)
+        assert!((wild_feeding_duration(Some(&spawner), 6) - 14.95).abs() < 1e-5);
         spawner.params.insert("m_fEatStartupDuration".into(), 4.0);
         spawner.params.insert("m_fEatPerLimbDuration".into(), 2.5);
-        assert_eq!(wild_feeding_duration(Some(&spawner)), 14.0);
+        assert_eq!(wild_feeding_duration(Some(&spawner), 6), 21.5);
         spawner.params.insert("m_fEatStartupDuration".into(), 10.0);
-        assert_eq!(wild_feeding_duration(Some(&spawner)), 20.0);
+        assert_eq!(wild_feeding_duration(Some(&spawner), 6), 27.5);
+    }
+
+    #[test]
+    fn rats_eat_a_limb_at_a_time_round_from_a_start_and_the_chest_last() {
+        let limbs: Vec<String> = ["lower_leg_R_jnt", "lower_leg_L_jnt", "lower_arm_L_jnt", "lower_arm_R_jnt", "neck_jnt", "spine_1_jnt"].map(String::from).to_vec();
+        let order = eat_order(&limbs, Entity::from_raw_u32(7).unwrap());
+        assert_eq!(order.len(), 6);
+        assert_eq!(order.last().map(String::as_str), Some("spine_1_jnt"));
+        // 7 % 5 = 2: from the third of the others, round
+        assert_eq!(order[0], "lower_arm_L_jnt");
+        assert_eq!(order[4], "lower_leg_L_jnt");
+        // the first limb goes at the end of the first interval after the start-up
+        assert!(limbs_eaten(&order, 2.0, 1.0, 2.5, 2.9).is_empty());
+        assert_eq!(limbs_eaten(&order, 2.0, 1.0, 2.9, 3.1), vec!["lower_arm_L_jnt".to_string()]);
+        assert_eq!(limbs_eaten(&order, 2.0, 1.0, 0.0, 8.0).len(), 6);
     }
 
     #[test]
@@ -744,7 +796,7 @@ mod kill_tests {
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
             .init_resource::<Assets<Mesh>>().init_resource::<Data>().init_resource::<TimeControl>()
             .init_resource::<PlayerStats>().init_resource::<RatBites>().init_resource::<crate::settings::Settings>()
-            .add_message::<NpcHit>().add_message::<NpcStagger>().add_message::<PostEvent>()
+            .add_message::<NpcHit>().add_message::<NpcStagger>().add_message::<PostEvent>().add_message::<crate::gore::SeverLimb>()
             .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
             .add_systems(Last, swarm_brain);
         let player = app.world_mut().spawn((Transform::from_xyz(1.7, 0.0, 0.0), crate::player::Player {
@@ -1078,8 +1130,10 @@ fn swarm_brain(
     mut stagger: MessageWriter<NpcStagger>,
     mut sfx: MessageWriter<PostEvent>,
     (player, mut stats, mut bites): (Query<(&Transform, &crate::player::Player), (Without<Swarm>, Without<Npc>)>, ResMut<crate::gameplay::PlayerStats>, ResMut<RatBites>),
-    (level, settings): (Option<Res<LevelInfo>>, Res<crate::settings::Settings>),
+    (level, settings, mut severs): (Option<Res<LevelInfo>>, Res<crate::settings::Settings>, MessageWriter<crate::gore::SeverLimb>),
 ) {
+    // the limbs a body is eaten by (`SLInfo_Default`'s break bones)
+    let limbs: Vec<String> = level.as_ref().and_then(|l| l.scene.severed_limbs.as_ref()).map(|s| s.limbs.iter().map(|l| l.bone.clone()).collect()).unwrap_or_default();
     let dt = time.delta_secs() * tc.world_scale().max(0.0);
     let Ok(ctx) = rapier.single() else { return };
     let ground = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
@@ -1156,12 +1210,17 @@ fn swarm_brain(
                 if let Some((be, corpse, bt, _)) = body.and_then(|b| npcs.get(b).ok()) {
                     goal = Some(bt.translation);
                     busy = true;
-                    let t = if s.eating.map(|x| x.0) == Some(be) { s.eating.unwrap().1 } else { 0.0 };
+                    let t0 = if s.eating.map(|x| x.0) == Some(be) { s.eating.unwrap().1 } else { 0.0 };
                     let delay = spawner.and_then(|s| s.params.get("m_fEatStartupDelayAfterKill")).copied().unwrap_or(1.0);
                     let age = eaten_age(corpse);
-                    let t = if bt.translation.distance(center) < 1.2 { t + feeding_step(age, delay, dt) } else { t };
+                    let t = if bt.translation.distance(center) < 1.2 { t0 + feeding_step(age, delay, dt) } else { t0 };
                     s.eating = Some((be, t));
-                    if age >= delay.max(0.0) && t >= wild_feeding_duration(spawner) {
+                    // a limb at a time (its gibs where it was)
+                    let (startup, per) = wild_feeding_steps(spawner);
+                    for bone in limbs_eaten(&eat_order(&limbs, be), startup, per, t0, t) {
+                        severs.write(crate::gore::SeverLimb { npc: be, bone, impulse: 0.0, eaten: true });
+                    }
+                    if age >= delay.max(0.0) && t >= wild_feeding_duration(spawner, if limbs.is_empty() { 4 } else { limbs.len() }) {
                         eaten(&mut commands, &mut hits, be, corpse, center);
                         s.eating = None;
                     }
@@ -1251,15 +1310,19 @@ fn swarm_brain(
             match body.and_then(|b| npcs.get(b).ok()) {
                 Some((be, corpse, bt, _)) => {
                     goal = bt.translation;
-                    let t = if s.eating.map(|x| x.0) == Some(be) { s.eating.unwrap().1 } else { 0.0 };
+                    let t0 = if s.eating.map(|x| x.0) == Some(be) { s.eating.unwrap().1 } else { 0.0 };
                     let delay = summon_setting(&data, s.level, "m_fEatStartupDelayAfterKill", 1.0);
                     let age = eaten_age(corpse);
-                    let t = if bt.translation.distance(center) < 1.2 { t + feeding_step(age, delay, dt) } else { t };
+                    let t = if bt.translation.distance(center) < 1.2 { t0 + feeding_step(age, delay, dt) } else { t0 };
                     s.eating = Some((be, t));
-                    // startup then the limbs (`m_fEatStartupDuration`, `m_fEatPerLimbDuration`)
+                    // startup, a limb at a time, then one more interval (`m_fEatStartupDuration`,
+                    // `m_fEatPerLimbDuration`)
                     let default_duration = if s.level >= 2 { 0.75 } else { 1.5 };
-                    let eat = summon_setting(&data, s.level, "m_fEatStartupDuration", default_duration)
-                        + summon_setting(&data, s.level, "m_fEatPerLimbDuration", default_duration) * if s.level >= 2 { 3.0 } else { 5.0 };
+                    let (startup, per) = (summon_setting(&data, s.level, "m_fEatStartupDuration", default_duration), summon_setting(&data, s.level, "m_fEatPerLimbDuration", default_duration));
+                    for bone in limbs_eaten(&eat_order(&limbs, be), startup, per, t0, t) {
+                        severs.write(crate::gore::SeverLimb { npc: be, bone, impulse: 0.0, eaten: true });
+                    }
+                    let eat = startup + per * (if limbs.is_empty() { 6.0 } else { limbs.len() as f32 } + 1.0);
                     if age >= delay.max(0.0) && t >= eat {
                         eaten(&mut commands, &mut hits, be, corpse, center);
                         s.eating = None;

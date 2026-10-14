@@ -1927,9 +1927,12 @@ against the install's own data where it carries them, then implemented independe
   `cache/parity_rat_feeding_suite.log`). Wild feeding now also reads each spawner's
   startup/per-limb timings: the map audit found 414 common 4s/2.5s pairs, one prison
   sewer 10s/2.5s override, and three class-default 2s/1.85s pairs. All 71 game tests
-  pass (`cache/parity_wild_feeding_timing_suite.log`). The existing four-stage body
-  approximation remains; anatomical limb progression still needs original-behavior
-  alignment. Fresh corpses now respect `m_fEatStartupDelayAfterKill` (class default
+  pass (`cache/parity_wild_feeding_timing_suite.log`). Rats now eat a body as the
+  original's eat loop does (roshan's r614/blink research): after the start-up, one limb per
+  `m_fEatPerLimbDuration` from `SLInfo_Default`'s six (from a start of the body's own, round
+  the limbs, the chest last), each gone from the body with its rat gibs (`m_bUseWhenEaten`:
+  `ps_rat_gibs_leg` and the rest), then one more interval consumes it (a wild swarm's default
+  2 + 7 x 1.85 s; the Devouring Swarm's 12 s at level 1, 6 s at level 2). Fresh corpses now respect `m_fEatStartupDelayAfterKill` (class default
   1s), using wild-spawner and summoned-level settings. A separate world-time death
   clock survives saves, carrying and flight; older saves treat corpses as established.
   Boundary checks cover partial frames, old corpses, overrides and stopped time.

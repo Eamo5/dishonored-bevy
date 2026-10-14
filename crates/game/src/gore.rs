@@ -35,6 +35,8 @@ pub struct SeverLimb {
     pub npc: Entity,
     pub bone: String,
     pub impulse: f32,
+    /// eaten by rats: gone, no piece falls, its rat gibs play (`m_bUseWhenEaten`)
+    pub eaten: bool,
 }
 
 /// The bones a character has lost (by rig index): hidden from its body.
@@ -185,6 +187,29 @@ fn sever(
         }
         let Some(Ok((_, cut))) = rig.joint_at(b).map(|j| joints.get(j)) else { continue };
         let (_, cut_rot, cut_at) = cut.to_scale_rotation_translation();
+        // eaten: the limb goes from the body, its gibs where it was
+        if m.eaten {
+            match severed {
+                Some(mut s) => s.0.push(b),
+                None => {
+                    commands.entity(m.npc).try_insert(Severed(vec![b]));
+                }
+            }
+            if let Some(l) = level.scene.severed_limbs.as_ref().and_then(|i| i.limbs.iter().find(|l| l.bone.eq_ignore_ascii_case(&m.bone))) {
+                for (socket, system, _) in &l.eaten {
+                    let at = vis
+                        .skeleton
+                        .sockets
+                        .iter()
+                        .find(|s| s.name.eq_ignore_ascii_case(socket))
+                        .and_then(|s| rig.index(&s.bone).and_then(|sb| rig.joint_at(sb)).and_then(|j| joints.get(j).ok()).map(|(_, g)| g.mul_transform(Transform::from_translation(Vec3::from(s.translation))).translation()))
+                        .unwrap_or(cut_at);
+                    fx.write(crate::particles::SpawnEffect { system: Some(*system), secs: 4.0, ..crate::particles::SpawnEffect::at("", at) });
+                }
+            }
+            info!("gore: {} eaten at {}", m.bone, cut_at);
+            continue;
+        }
         // the piece: at the cut, tumbling off along the bone
         let push = (cut_rot * Vec3::X) * m.impulse.max(40.0) * UU + Vec3::Y * 0.8;
         let spin = Vec3::new(rand::random::<f32>() - 0.5, rand::random::<f32>() - 0.5, rand::random::<f32>() - 0.5) * 8.0;
