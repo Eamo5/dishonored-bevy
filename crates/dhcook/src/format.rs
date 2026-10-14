@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 141;
+pub const SCENE_VERSION: u32 = 142;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -202,6 +202,10 @@ pub struct Scene {
     /// the particle system spawned there
     #[serde(default)]
     pub contact_fx: Vec<(String, String, u32)>,
+    /// the contact system's decals, by what strikes and what is struck: each intersection's
+    /// decal, and what it draws if it ever does (it has `m_Materials`)
+    #[serde(default)]
+    pub contact_decals: Vec<(String, String, Option<Decal>)>,
     /// the characters' clips that sever a limb (`DishonoredNotify_SeverLimb`: the beheading
     /// finishers)
     #[serde(default)]
@@ -1030,15 +1034,15 @@ pub struct NpcType {
     pub body_variation: Vec<Vec<(u32, f32)>>,
     /// the pool its body bleeds (`m_pBodyTweaks`' `m_BloodDecal`)
     #[serde(default)]
-    pub blood_pool: Option<BloodPool>,
+    pub blood_pool: Option<Decal>,
 }
 
-/// A body's blood pool (a `DishonoredDecalInfo`): the materials it's drawn with (one at
-/// random), the bones it may spread under, its least and most size (uu), and its growth: a step
-/// each time step (uu, s) when it stretches (`DCL_STRETCH`; else its most size at once); done,
-/// it goes once unseen for its lifetime (s).
+/// A decal (a `DishonoredDecalInfo`): the materials it's drawn with (one at random), the bones
+/// it may spread under (a body's pool), its least and most size (uu), and its growth: a step
+/// each time step (uu, s) when it stretches (`DCL_STRETCH`; else its most size at once); the
+/// least speed of a contact it marks (uu/s); done, it goes once unseen for its lifetime (s).
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub struct BloodPool {
+pub struct Decal {
     pub materials: Vec<u32>,
     pub bones: Vec<String>,
     pub min: [f32; 2],
@@ -1047,6 +1051,8 @@ pub struct BloodPool {
     pub time_step: f32,
     pub stretch: bool,
     pub lifetime: f32,
+    #[serde(default)]
+    pub min_velocity: f32,
 }
 
 /// A character's numbers and arms. Its attributes are those of its pawn's attribute tweak

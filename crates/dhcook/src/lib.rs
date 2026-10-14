@@ -5552,11 +5552,20 @@ impl<'a> Cooker<'a> {
     }
 
     /// A body's blood pool (`DisTweaks_NPCPawn_Body.m_BloodDecal`).
-    fn blood_pool(&mut self, body: &Obj) -> Option<BloodPool> {
+    fn blood_pool(&mut self, body: &Obj) -> Option<Decal> {
         let ch = self.chain(body);
         let (pkg, Value::Struct(_, s)) = ch.get_pkg("m_BloodDecal")? else { return None };
         let (pkg, d) = (pkg.clone(), Props(s.clone()));
-        let materials: Vec<u32> = object_array(&pkg, &d, "m_Materials").into_iter().filter(|o| *o != 0).filter_map(|o| self.assets.resolve(&pkg, o)).map(|m| self.material(&m)).collect();
+        self.decal(&pkg, &d).filter(|d| !d.bones.is_empty())
+    }
+
+    /// A `DishonoredDecalInfo`, if it ever draws: only one with `m_Materials` does (its
+    /// `m_pMaterial` alone never), as roshan's r614/blink research decoded the original's.
+    fn decal(&mut self, pkg: &Arc<upk::Package>, d: &Props) -> Option<Decal> {
+        let materials: Vec<u32> = object_array(pkg, d, "m_Materials").into_iter().filter(|o| *o != 0).filter_map(|o| self.assets.resolve(pkg, o)).map(|m| self.material(&m)).collect();
+        if materials.is_empty() {
+            return None;
+        }
         let mut bones = Vec::new();
         if let Some((n, offset, _)) = d.array("m_BoneNames") {
             let mut r = Reader::at(&pkg.data, offset);
@@ -5564,11 +5573,8 @@ impl<'a> Cooker<'a> {
                 bones.extend(pkg.read_name(&mut r).ok());
             }
         }
-        if materials.is_empty() || bones.is_empty() {
-            return None;
-        }
         let size = |n: &str| d.int(n).unwrap_or(0) as f32;
-        Some(BloodPool {
+        Some(Decal {
             materials,
             bones,
             min: [size("m_MinWidth"), size("m_MinHeight")],
@@ -5577,7 +5583,43 @@ impl<'a> Cooker<'a> {
             time_step: d.float("m_fTimeStep").unwrap_or(0.0),
             stretch: d.name("m_Behaviour") == Some("DCL_STRETCH"),
             lifetime: d.float("m_fLifetime").unwrap_or(0.0),
+            min_velocity: d.float("m_fMinVelocity").unwrap_or(0.0),
         })
+    }
+
+    /// The contact system's decals for what bullets strike and what bodies are thrown against
+    /// (the ragdolls' `RGDL_Body` and `RGDL_Limb` are `Limb`): each intersection's decal, and
+    /// what it draws if it ever does.
+    fn contact_decals(&mut self) -> Vec<(String, String, Option<Decal>)> {
+        const STRIKERS: &[&str] = &["Bullet", "Limb"];
+        let Some(cs) = self.assets.find("Phy_ContactSystem.ContactSystem.Dis_ContactSystem") else { return Vec::new() };
+        let Ok(props) = cs.props() else { return Vec::new() };
+        let Some((count, offset, size)) = props.array("m_Intersections") else { return Vec::new() };
+        let pkg = cs.pkg.clone();
+        let name = |o: Option<i32>| o.filter(|o| *o != 0).map(|o| pkg.obj_path(o)).map(|p| p.rsplit('.').next().unwrap_or(&p).trim_start_matches("DisContactType_").to_string()).unwrap_or_default();
+        let mut out = Vec::new();
+        for it in parse_struct_array(&pkg, offset, size, count).unwrap_or_default() {
+            let (striker, struck) = (name(it.object("m_pStriker")), name(it.object("m_pStruck")));
+            if !STRIKERS.contains(&striker.as_str()) || struck.is_empty() {
+                continue;
+            }
+            let Some((c, o, s)) = it.array("m_SubIntersections") else { continue };
+            for sub in parse_struct_array(&pkg, o, s, c).unwrap_or_default() {
+                if name(sub.object("m_pClass")) != "DisContactSub_Decal" {
+                    continue;
+                }
+                let Some(obj) = sub.object("m_pSubIntersectObj").filter(|o| *o != 0).and_then(|o| self.assets.resolve(&pkg, o)) else { continue };
+                let decal = match self.chain(&obj).get_pkg("m_DecalInfo") {
+                    Some((dpkg, Value::Struct(_, s))) => {
+                        let (dpkg, d) = (dpkg.clone(), Props(s.clone()));
+                        self.decal(&dpkg, &d)
+                    }
+                    _ => None,
+                };
+                out.push((striker.clone(), struck.clone(), decal));
+            }
+        }
+        out
     }
 
     /// `NPC_Common.SeveredLimbsInfo.SLInfo_Default`: each break bone's blood when the limb is
@@ -6717,6 +6759,7 @@ impl<'a> Cooker<'a> {
         // a blade in flesh: its blood (the contact system's sword against a body)
         self.scene.blade_blood = self.blade_blood();
         self.scene.contact_fx = self.contact_fx();
+        self.scene.contact_decals = self.contact_decals();
         self.scene.severed_limbs = self.severed_limbs();
         // the first-person arms: a skinned rig exposed as the "player_arms" character type
         // (Corvo's; Daud's on The Knife of Dunwall's maps: his pawn's `m_pSkeletalMesh`, his

@@ -996,7 +996,13 @@ fn use_power(
         Query<(Entity, &GlobalTransform), (With<crate::possession::Host>, Without<crate::possession::Possessed>)>,
         Res<crate::possession::PossessOverrides>,
     ),
-    (mut swarm, mut gadget, mut blast, mut kill_cams): (MessageWriter<crate::swarm::SummonSwarm>, MessageWriter<crate::gadgets::UseGadget>, MessageWriter<crate::gadgets::Explosion>, MessageWriter<crate::killcam::StartKillCam>),
+    (mut swarm, mut gadget, mut blast, mut kill_cams, mut decals): (
+        MessageWriter<crate::swarm::SummonSwarm>,
+        MessageWriter<crate::gadgets::UseGadget>,
+        MessageWriter<crate::gadgets::Explosion>,
+        MessageWriter<crate::killcam::StartKillCam>,
+        MessageWriter<crate::decals::SpawnDecal>,
+    ),
     (mut aim, held, paused, mut summon, nav, mut fx, muzzles, mut tagged): (
         ResMut<crate::aim::Aim>,
         Res<crate::props::Held>,
@@ -1424,6 +1430,8 @@ fn use_power(
                 if let Some(level) = level_info.as_ref() {
                     let what = if npcs.get(hit).is_ok() { "Body" } else { crate::impacts::struck(surface) };
                     crate::impacts::spawn(&mut fx, &level.scene, crate::impacts::BULLET, what, at, if what == "Body" { -dir } else { normal });
+                    // (and its hole)
+                    crate::impacts::mark(&mut decals, &level.scene, crate::impacts::BULLET, what, at, normal, dir, f32::INFINITY);
                 }
                 if explosive {
                     // `Twk_Proj_Bullet_Explosive`: 500 uu reach, 200 uu full, 50 damage

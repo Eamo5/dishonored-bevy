@@ -258,15 +258,22 @@ fullscreen display, vertical sync and the crosshair.
   mesh's `m_MaterialsToBodyParts`: whose piece, which cut, a cap shown once cut), so both show
   their stump's cap; `SLInfo_Default`'s blood plays at `Gore_Neck` and `Gore_Head`, and lands on
   the lens nearby (`blood_heavy`). Cuts are saved.
-- **Blood pools** (`blood.rs`): a body lying still bleeds a pool on the floor under one of its
-  bones (its `m_pBodyTweaks`' `m_BloodDecal`: `Splat_01/02/03_INST` at random, under
-  `spine_3_jnt`, `spine_1_jnt` or `head_jnt`, drawn with the original splat shader), spreading
-  from 20 to 200 uu a unit every 0.05 s (`DCL_STRETCH`); none in water or for those burnt to ash.
-  As roshan's r614/blink research decoded `DishonoredDecalComponent` and `DisDecalManager`, at
+- **Blood pools and decals** (`blood.rs`, `decals.rs`): a body lying still bleeds a pool on
+  the floor under one of its bones (its `m_pBodyTweaks`' `m_BloodDecal`: `Splat_01/02/03_INST`
+  at random, under `spine_3_jnt`, `spine_1_jnt` or `head_jnt`, drawn with the original splat
+  shader), spreading from 20 to 200 uu a unit every 0.05 s (`DCL_STRETCH`), no further than the
+  floor lies level round it (ours lies flat where the original's projects); none in water or for
+  those burnt to ash. The level's dead (`Pwn_Dead*`) and a saved game's bodies, lying still from
+  the start, have bled already. The contact system's decals mark the world too
+  (`DisContactSub_Decal`): a pistol bullet leaves its 8 uu hole (`Bullet` x `Environment`:
+  `Bullet_Impact_Metal_01_INST`; wood, metal and glass have their own decals, which never draw),
+  and a limp body that strikes the world faster than 750 uu/s leaves a 150 uu blood splatter
+  there, along the way it came (`Limb` x `Environment`: `blood_splatter_decal_INST`; the
+  ragdolls' physical materials are `Limb`). As roshan's r614/blink research decoded
+  `DishonoredDecalComponent` and `DisDecalManager`, only a decal with `m_Materials` draws, at
   most ten are live (a new one takes the place of the first unseen for 0.2 s, else there's
-  none), and a grown one goes once unseen for its 10 s lifetime. The level's dead
-  (`Pwn_Dead*`) and a saved game's bodies, lying still from the start, have bled already. Ours lies flat on the floor where
-  the original's projects on what's there.
+  none), and a grown one goes once unseen for its 10 s lifetime. Ours lie flat on the
+  surface where the original's project on what's there.
 - **Character LODs** (`npc.rs` `model_details`): the skinned meshes' lesser LODs are cooked
   (each `FStaticLODModel` read as the first) and shown with distance as UE3 picks them: LOD n
   once its `LODInfo.DisplayFactor` exceeds the screen radius / 320 (about 24 m for a guard at
