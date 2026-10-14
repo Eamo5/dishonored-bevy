@@ -18,7 +18,7 @@ pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Slide>().init_resource::<AutoCrouch>();
+        app.init_resource::<Slide>().init_resource::<AutoCrouch>().init_resource::<MantleEdge>();
         app.init_resource::<VirtualInput>()
             .init_resource::<MantleSpot>()
             .add_systems(OnEnter(GameState::InGame), spawn_player.after(LevelSpawnSet))
@@ -691,6 +691,14 @@ fn player_move(
 #[derive(Resource, Default)]
 pub struct MantleSpot(pub bool);
 
+/// The mantle under way: its edge's height above his feet (m), and whether only a crouch fits
+/// on top (the finder's crouch flag, from a standing box).
+#[derive(Resource, Default)]
+pub struct MantleEdge {
+    pub h: f32,
+    pub crouch: bool,
+}
+
 /// The original's mantles (`DishonoredMantleEdgeFinderComponent` and `StatePlayerMasterMantle`, as
 /// roshan's r614/blink research decoded them): edges up to `m_MantleMaxEdgeHeight` 230 uu, at least
 /// 55 (155 falling faster than 1000 uu/s, none faster than 2000); up to 120 an instant step-up,
@@ -714,11 +722,12 @@ fn mantle_time(h: f32, crouch: bool) -> f32 {
     }
 }
 
-/// Where a mantle from `t` facing `yaw` would put Corvo, the ledge's height above his feet, and
-/// whether only a crouch fits there.
-pub(crate) fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, t: &Transform, yaw: f32, fall: f32) -> Option<(Vec3, f32, bool)> {
+/// Where a mantle from `t` facing `yaw` would put Corvo (standing, or `crouched` sneaking: he
+/// stays down), the ledge's height above his feet, and whether only a crouch fits there (the
+/// finder's crouch flag, from a standing box).
+pub(crate) fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, t: &Transform, yaw: f32, fall: f32, crouched: bool) -> Option<(Vec3, f32, bool)> {
     let fwd = Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
-    let feet = t.translation - Vec3::Y * (STAND_HALF + RADIUS);
+    let feet = t.translation - Vec3::Y * (if crouched { CROUCH_HALF } else { STAND_HALF } + RADIUS);
     let filter = QueryFilter::default().exclude_collider(e).exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     // wall in front at waist height?
     let (_, wall) = ctx.cast_ray_and_get_normal(feet + Vec3::Y * 0.7, fwd, RADIUS + 0.6, true, filter)?;
@@ -756,6 +765,9 @@ pub(crate) fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity
         });
         (!blocked).then_some(at)
     };
+    if crouched {
+        return fits(CROUCH_HALF).map(|at| (at, h, fits(STAND_HALF).is_none()));
+    }
     if let Some(at) = fits(STAND_HALF) {
         return Some((at, h, false));
     }
@@ -770,7 +782,7 @@ fn mantle(
     stats: Res<PlayerStats>,
     attrs: Res<crate::gamedata::Attrs>,
     mut q: Query<(Entity, &mut Player, &mut Transform, &mut Collider), Without<PlayerCamera>>,
-    (mut spot, mut auto): (ResMut<MantleSpot>, ResMut<AutoCrouch>),
+    (mut spot, mut auto, mut edge): (ResMut<MantleSpot>, ResMut<AutoCrouch>, ResMut<MantleEdge>),
 ) {
     spot.0 = false;
     if paused.0 { return; }
@@ -778,7 +790,7 @@ fn mantle(
     if let Some((from, to, k)) = p.mantle {
         // Acrobat modifies MantleAnimRate; the head's additive mantle clip uses
         // this same progress, keeping its motion in step with the faster climb.
-        let dur = mantle_time(to.y - from.y + if p.crouched { STAND_HALF - CROUCH_HALF } else { 0.0 }, p.crouched).max(0.3);
+        let dur = mantle_time(edge.h, edge.crouch).max(0.3);
         let nk = (k + time.delta_secs() * attrs.mantle_rate.max(0.01) / dur).min(1.0);
         // up first, then forward
         let up = (nk / 0.6).min(1.0);
@@ -794,12 +806,12 @@ fn mantle(
         }
         return;
     }
-    if p.locked || p.noclip || stats.dead || p.crouched {
+    if p.locked || p.noclip || stats.dead {
         return;
     }
     let Ok(ctx) = rapier.single() else { return };
     let fall = if p.grounded { 0.0 } else { (-p.velocity.y).max(0.0) };
-    let found = mantle_dest(&ctx, e, &t, p.yaw, fall);
+    let found = mantle_dest(&ctx, e, &t, p.yaw, fall, p.crouched);
     spot.0 = found.is_some_and(|(_, h, _)| h > 0.9);
     // (the Jump press, or Jump held while falling: no forward needed)
     let wants = keys.just_pressed(bind.key(crate::bindings::Act::Jump)) || (!p.grounded && keys.pressed(bind.key(crate::bindings::Act::Jump)));
@@ -807,6 +819,7 @@ fn mantle(
         return;
     }
     let Some((dest, h, crouch)) = found else { return };
+    *edge = MantleEdge { h, crouch };
     info!("mantle: {h:.2} m edge, {:.3} s{}", mantle_time(h, crouch), if crouch { ", crouched" } else { "" });
     if crouch {
         // (into a space too low to stand: crouched by it, not by choice)

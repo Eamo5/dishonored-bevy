@@ -1258,7 +1258,7 @@ fn run_script(
                     }
                     for k in 0..16 {
                         let yaw = k as f32 * std::f32::consts::TAU / 16.0;
-                        if let Some((_, h, crouch)) = crate::player::mantle_dest(&ctx, pe, &stand, yaw, 0.0).filter(|(_, h, c)| (lo..=hi).contains(h) && (!low_room || *c)) {
+                        if let Some((_, h, crouch)) = crate::player::mantle_dest(&ctx, pe, &stand, yaw, 0.0, false).filter(|(_, h, c)| (lo..=hi).contains(h) && (!low_room || *c)) {
                             found = Some((stand.translation, yaw, h, crouch));
                             break 'search;
                         }

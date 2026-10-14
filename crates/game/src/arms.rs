@@ -589,7 +589,7 @@ fn animate_arms(
     mut arms: Query<(&mut Animator, &mut ArmsAnim, &mut Visibility), With<ArmsRoot>>,
     mut held: Query<&mut Visibility, Without<ArmsRoot>>,
     (swim, mut carry, peek, cine, scene_arms): (Res<crate::swim::Swim>, ResMut<crate::carry::Carry>, Res<crate::keyhole::Peek>, Res<crate::script_world::Cinematic>, Res<crate::matinee::SceneArms>),
-    (versus, slide): (Res<crate::combat::Versus>, Res<crate::player::Slide>),
+    (versus, slide, edge): (Res<crate::combat::Versus>, Res<crate::player::Slide>, Res<crate::player::MantleEdge>),
 ) {
     let (Ok((p, sword, choking, grabbed)), Ok((mut anim, mut st, mut vis))) = (player.single(), arms.single_mut()) else { return };
     let st = &mut *st;
@@ -681,10 +681,9 @@ fn animate_arms(
     // ones into a space too low to stand; empty-handed or sword in hand), at Acrobat's rate
     // (`MantleAnimRate`): each lasts as long as its climb
     match p.mantle.filter(|_| !base_busy) {
-        Some((from, to, _)) => {
+        Some(_) => {
             if !st.mantling {
-                let h = to.y - from.y + if p.crouched { crate::player::STAND_HALF - crate::player::CROUCH_HALF } else { 0.0 };
-                let ty = if h <= 1.2 { 0 } else if h <= 1.7 { 1 } else { 2 };
+                let ty = if edge.h <= 1.2 { 0 } else if edge.h <= 1.7 { 1 } else { 2 };
                 if let Some(cl) = c.mantle[!empty as usize][p.crouched as usize][ty] {
                     anim.restart(cl, false, attrs.mantle_rate.max(0.01), 0.08);
                     st.oneshot = true;
