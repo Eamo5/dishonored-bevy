@@ -3844,7 +3844,15 @@ fn npc_move(
         if crossed && near && npc.anim_speed > 0.4 && npc.grounded && !npc.is_down() {
             use crate::footsteps::{Footfall, Gait, Walker};
             let n = npc.name.to_ascii_lowercase();
-            let who = if n.contains("wolf") || n.contains("hound") { Walker::Wolfhound } else if n.contains("rat") && !n.contains("pirate") { Walker::Rat } else { Walker::Guard };
+            let who = if n.contains("wolf") || n.contains("hound") {
+                Walker::Wolfhound
+            } else if n.contains("rat") && !n.contains("pirate") {
+                Walker::Rat
+            } else if n.contains("tallboy") {
+                Walker::Tallboy
+            } else {
+                Walker::Guard
+            };
             let gait = if npc.anim_speed > 3.0 { Gait::Sprint } else { Gait::Walk };
             steps.write(Footfall { pos: t.translation, gait, who });
         }

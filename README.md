@@ -1241,6 +1241,9 @@ fullscreen display, vertical sync and the crosshair.
   feeding it (the shipped levels' five towers have neither: they run on).
   Saves and kept level states preserve each tank's remaining charge and the devices'
   rewiring and script-controlled power state.
+- **Tallboys' steps**: a tallboy's stilt coming down is the contact system's `Footfall_Tallboy`, not a
+  guard's footstep: its thump (`FS_TBoy_Base`, `FS_TBoy_Base_Wet` in water) and its dust
+  (`Vfx_PhysMat.FootSteps.fsteps_tallboy`).
 - **Tallboys** carry their tanks and shields on their sockets (`m_pAttachmentsTweaks`): the
   breakable parts wear down, break at once to the blows their tweak names (a bullet or bolt in
   a tank) and shrug off others (Wind Blast); a tank bursts with its blast and kills its tallboy. Their

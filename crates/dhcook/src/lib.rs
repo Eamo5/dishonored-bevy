@@ -6504,6 +6504,8 @@ impl<'a> Cooker<'a> {
             ("shadow_kill", "Vfx_GamePlay.ShadowKill.ps_SK_Leg_Arms"),
             ("electrified", "Vfx_GamePlay.WallLight.ps_electrified"),
             ("rat_gibs", "NPC_Body_Eaten.FX.ps_rat_gibs_body"),
+            // (a tallboy's stilt coming down: `Footfall_Tallboy` x `Environment`)
+            ("tallboy_step", "Vfx_PhysMat.FootSteps.fsteps_tallboy"),
             ("blood_limb", "Vfx_PhysMat.Blood.SeveredLimbs.Pfx_BloodSLimbBody"),
             ("blood_throat", "Vfx_PhysMat.Blood.Fatalities.Pfx_BloodThroat"),
             ("blood_lunge", "Vfx_PhysMat.Blood.Fatalities.Pfx_BloodLunge"),

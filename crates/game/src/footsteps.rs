@@ -59,6 +59,7 @@ pub enum Walker {
     Guard,
     Wolfhound,
     Rat,
+    Tallboy,
 }
 
 /// A foot touching the ground at `pos`.
@@ -132,6 +133,7 @@ fn play_footfalls(
     rapier: ReadRapierContext,
     surfaces: Query<&ColliderSurfaces>,
     mut out: MessageWriter<PostEvent>,
+    mut fx: MessageWriter<crate::particles::SpawnEffect>,
 ) {
     let Ok(ctx) = rapier.single() else {
         msgs.clear();
@@ -145,6 +147,14 @@ fn play_footfalls(
             Walker::Wolfhound => "Wolfhound",
             Walker::Rat => {
                 out.write(PostEvent::named("FS_Rat_Walk", Some(f.pos)));
+                continue;
+            }
+            Walker::Tallboy => {
+                // a stilt coming down (the contact system's `Footfall_Tallboy`: its thump, wet on
+                // wet ground, and its dust)
+                let wet = surface_below(&ctx, &surfaces, f.pos, 2.5).is_some_and(|s| SURFACES.get(s as usize) == Some(&"Water"));
+                out.write(PostEvent::named(if wet { "FS_TBoy_Base_Wet" } else { "FS_TBoy_Base" }, Some(f.pos)));
+                fx.write(crate::particles::SpawnEffect { secs: 2.0, ..crate::particles::SpawnEffect::at("tallboy_step", f.pos) });
                 continue;
             }
         };
