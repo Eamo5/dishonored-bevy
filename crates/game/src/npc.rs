@@ -1287,15 +1287,23 @@ fn model_details(
 #[derive(Message)]
 pub struct SpawnRequest(pub u32);
 
-/// An NPC fired at Corvo (sound, tracer).
+/// An NPC fired at Corvo (or at whom its script names): from where, at what, and whether it
+/// missed.
 #[derive(Message, Clone, Copy)]
 pub struct NpcShot {
     pub from: Vec3,
     pub to: Vec3,
     pub bow: bool,
+    pub miss: bool,
 }
 
-/// Gun and bow shots: the sound and a brief tracer.
+/// How far a missed bullet flies on (m).
+const MISS_REACH: f32 = 80.0;
+
+/// Gun and bow shots: the sound, and a gun's flash and its bullet's tracer (its pistol's
+/// `Twk_Proj_Bullet`, Corvo's own: `m_pBulletTracerFX`). A missed bullet flies on past its mark,
+/// to one side, and strikes the world as Corvo's do (its effect, its hole).
+#[allow(clippy::too_many_arguments)]
 fn npc_shots(
     mut shots: MessageReader<NpcShot>,
     mut sfx: MessageWriter<crate::audio::PostEvent>,
@@ -1303,15 +1311,35 @@ fn npc_shots(
     mut gizmos: Gizmos,
     mut recent: Local<Vec<(NpcShot, f32)>>,
     time: Res<Time>,
+    (level, rapier, surfaces, mut decals): (Option<Res<LevelInfo>>, ReadRapierContext, Query<&crate::footsteps::ColliderSurfaces>, MessageWriter<crate::decals::SpawnDecal>),
 ) {
     for s in shots.read() {
         let ev = if s.bow { "Snd_AI_TBoy_Bow_Fire" } else { "Snd_Weapon_Gun_Elite_Fire_cue_ak" };
         sfx.write(crate::audio::PostEvent::named(ev, Some(s.from)));
-        if !s.bow {
-            let dir = (s.to - s.from).normalize_or(Vec3::NEG_Z);
-            fx.write(crate::particles::SpawnEffect { rot: Quat::from_rotation_arc(Vec3::X, dir), secs: 0.5, ..crate::particles::SpawnEffect::at("npc_pistol_muzzle", s.from + dir * 0.3) });
+        if s.bow {
+            recent.push((*s, 0.06));
+            continue;
         }
-        recent.push((*s, 0.06));
+        let dir = (s.to - s.from).normalize_or(Vec3::NEG_Z);
+        fx.write(crate::particles::SpawnEffect { rot: Quat::from_rotation_arc(Vec3::X, dir), secs: 0.5, ..crate::particles::SpawnEffect::at("npc_pistol_muzzle", s.from + dir * 0.3) });
+        let mut end = s.to;
+        if s.miss {
+            // (wide of its mark by half a metre or more, to either side, and a little high or low)
+            let side = dir.cross(Vec3::Y).normalize_or(Vec3::X) * if rand::random::<bool>() { 1.0 } else { -1.0 };
+            let past = s.to + side * (0.5 + rand::random::<f32>() * 0.7) + Vec3::Y * (rand::random::<f32>() - 0.4) * 0.8;
+            let way = (past - s.from).normalize_or(dir);
+            end = s.from + way * MISS_REACH;
+            if let (Some(level), Ok(ctx)) = (level.as_ref(), rapier.single()) {
+                let world = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
+                if let Some((_, toi, surface, normal)) = crate::footsteps::ray_surface_normal(&ctx, &surfaces, s.from, way, MISS_REACH, world) {
+                    end = s.from + way * toi;
+                    let struck = crate::impacts::struck(surface);
+                    crate::impacts::spawn(&mut fx, &level.scene, crate::impacts::BULLET, struck, end, normal);
+                    crate::impacts::mark(&mut decals, &level.scene, crate::impacts::BULLET, struck, end, normal, way, f32::INFINITY);
+                }
+            }
+        }
+        fx.write(crate::particles::SpawnEffect { beam_to: Some(end), rot: Quat::from_rotation_arc(Vec3::X, dir), secs: 0.6, ..crate::particles::SpawnEffect::at("pistol_tracer", s.from + dir * 0.3) });
     }
     for (s, t) in recent.iter_mut() {
         *t -= time.delta_secs();
@@ -3338,7 +3366,7 @@ pub(crate) fn npc_brain(
                             if hit {
                                 hit_writer.write(PlayerHit { npc: e, from: pos, damage: npc.arms.ranged, kick: false, big: false, push: false, unblockable: false });
                             }
-                            shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: npc.ranged >= 2 });
+                            shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: npc.ranged >= 2, miss: !hit });
                         }
                         npc.shots += 1;
                         if npc.ranged == 1 {
@@ -3475,12 +3503,13 @@ pub(crate) fn npc_brain(
                             let to = (ppos - pos).with_y(0.0);
                             let in_front = to.normalize_or_zero().dot(npc.forward()) > 0.5;
                             let shot = kind == Some(MoveKind::UnderGun);
-                            if to.length() < reach && (ppos.y - pos.y).abs() < 1.5 && in_front {
+                            let struck = to.length() < reach && (ppos.y - pos.y).abs() < 1.5 && in_front;
+                            if struck {
                                 let damage = if kick { 0.0 } else if shot { npc.arms.ranged } else { npc.arms.melee };
                                 hit_writer.write(PlayerHit { npc: e, from: pos, damage, kick, big, push: false, unblockable: under });
                             }
                             if shot {
-                                shots.write(NpcShot { from: pos + Vec3::Y * 0.2, to: ppos, bow: false });
+                                shots.write(NpcShot { from: pos + Vec3::Y * 0.2, to: ppos, bow: false, miss: !struck });
                                 noise.write(Noise { pos, radius: 40.0, kind: NoiseKind::Danger });
                             } else {
                                 noise.write(Noise { pos, radius: 8.0, kind: NoiseKind::Threatening });

@@ -449,7 +449,10 @@ fullscreen display, vertical sync and the crosshair.
   within 9 m, and kills with a head shot (`m_bKillOnHeadshot`); a crossbow bolt deals the
   crossbow's 20, doubled on someone unaware (`m_fDamageMultiplier_Stealth`). Characters'
   shots hit at their `m_MaxAccuracy` close, falling to `m_MinAccuracy` at the end of their
-  reach; the hurt regenerate `m_HealthRegenAmount` every `m_HealthRegenRate` s up to
+  reach. A guard's pistol fires Corvo's own bullet (`Twk_Proj_Bullet`), drawing its tracer
+  (`Ps_Pistol_StdTracer_01`), and a miss flies on past him, half a metre or more to one side,
+  striking the world with the contact system's effect and its hole. The
+  hurt regenerate `m_HealthRegenAmount` every `m_HealthRegenRate` s up to
   `m_HealthRegenLimit` once `m_HealthRegenInitialDelay` has passed. Overseers throw grenades
   as their grenade weapon's contexts do: lobbed at Corvo 10-40 m off
   (`DisTweaks_NPCLobGrenadeAtUnreachable`, 25 m/s, every 7-12 s, 3-5 s while he's out of
