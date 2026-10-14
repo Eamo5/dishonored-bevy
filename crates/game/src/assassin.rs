@@ -111,6 +111,7 @@ fn whaler_powers(
                     info!("whaler {} pull ends: {d:.1} m, {left:.1} s left, fighting {fighting}, attacking {}", npc.name, npc.attack_t.is_some());
                 }
                 w.pulling = None;
+                npc.casting = false;
                 w.pull_cd = rand_in(PULL_COOLDOWN);
                 // pulled in to it: the coup de grace (`DisTweaks_NPCAttractSpellCoupDeGrace`:
                 // within 2.7 m, from any angle, a big slash with its "big attack" bark)
@@ -120,12 +121,13 @@ fn whaler_powers(
                         npc.yaw = flat.x.atan2(flat.z);
                     }
                     npc.attack_t = Some(0.0);
-                    npc.swing = Some(crate::npc::Swing { kind: crate::npc::MoveKind::Short, big: true, len: 0.9, hit: 0.3, reach: COUP_RANGE, lunge: 0.0, no_versus: true, more: Vec::new() });
+                    npc.swing = Some(crate::npc::Swing { kind: crate::npc::MoveKind::Attract, big: true, len: 0.9, hit: 0.3, reach: COUP_RANGE, lunge: 0.0, no_versus: true, more: Vec::new() });
                     npc.bark_req = (npc.bark_req.0.wrapping_add(1), "COMBAT_BIG_ATTACK");
                     info!("whaler {} strikes the pulled Corvo ({d:.1} m)", npc.name);
                 }
             } else {
                 w.pulling = Some((left - dt, total));
+                npc.casting = true;
                 // (its blade waits for the coup de grace)
                 npc.attack_cd = npc.attack_cd.max(0.3);
                 npc.attack_t = None;

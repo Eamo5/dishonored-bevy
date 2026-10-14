@@ -223,6 +223,8 @@ pub struct Npc {
     pub body_check: bool,
     /// Corvo has just come out of it (its possession over): reeling to come
     pub unpossessed: bool,
+    /// casting its Attract spell, Corvo drawn in to it (a whaler's pull, `assassin.rs`)
+    pub casting: bool,
     /// its bearing about Corvo while it waits outside the ring of those at him (radians)
     pub flank: Option<f32>,
     pub taunt_hold: f32,
@@ -409,6 +411,25 @@ pub struct Swing {
     pub more: Vec<f32>,
 }
 
+/// A gun's or bow's reach, facing and cooldowns (its `DisTweaks_NPCFire` context; without one,
+/// a pistol's, an assassin's wrist bow's).
+fn fire_context(npc: &Npc) -> dhcook::format::FireContext {
+    npc.arms.fire.clone().unwrap_or(dhcook::format::FireContext {
+        range: [2.5, 30.0, 6.5],
+        angle: 25.0,
+        cooldown: if npc.ranged == 3 { [3.0, 6.0] } else { [10.0, 20.0] },
+        cooldown_unreachable: if npc.ranged == 3 { [2.0, 5.0] } else { [1.0, 2.0] },
+    })
+}
+
+/// A shot's chance to hit `d` m away: its accuracy, `m_MaxAccuracy` close, falling to
+/// `m_MinAccuracy` at the end of its reach (less `miss`, the difficulty's for guns).
+fn shot_chance(npc: &Npc, ctx: &dhcook::format::FireContext, d: f32, miss: f32) -> f32 {
+    let [near, far, _] = ctx.range;
+    let k = ((d - near) / (far - near).max(0.1)).clamp(0.0, 1.0);
+    (npc.arms.accuracy[0] + (npc.arms.accuracy[1] - npc.arms.accuracy[0]) * k) * (1.0 - miss)
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum MoveKind {
     Short,
@@ -420,6 +441,10 @@ pub enum MoveKind {
     ThrowWhiskey,
     /// a thing thrown with the bare hand at Corvo out of reach (`Sword_ThrowRock_*`)
     Throw,
+    /// a whaler's coup de grace on Corvo its Attract spell drew in (`Sword_Power_Attract_Attack`)
+    Attract,
+    /// an assassin's wrist bow shot (`Sword_RangedAttack`), its bolt loosed at the clip's cue
+    Ranged,
     Medium,
     Long,
     Bash,
@@ -1637,6 +1662,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         taunt_cd: 5.0 + rand::random::<f32>() * 10.0,
         body_check: false,
         unpossessed: false,
+        casting: false,
         flank: None,
         taunt_hold: 0.0,
         search_run: false,
@@ -1972,6 +1998,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 swarm_t: f32::INFINITY,
                 swarm_phase: 0,
                 unpossess_next: None,
+                attract_phase: 0,
+                counter: None,
                 gun_phase: GunPhase::Away,
                 gun_t: 0.0,
                 gun_out: false,
@@ -3224,6 +3252,12 @@ pub(crate) fn npc_brain(
                     alerts.push((pos, ppos));
                 }
                 let d = pos.distance(ppos);
+                // casting its Attract spell (a whaler's pull, `assassin.rs`, which faces it to
+                // Corvo): it stands for it, its blade and wrist bow waiting
+                if npc.casting {
+                    npc.target = None;
+                    continue;
+                }
                 // lying in wait (`DisTweaks_NPCAmbush`): Corvo gone from its sight close by, it
                 // holds round the corner (`Sword_Ambush_In` / `_Loop`) and springs at him
                 // (`_Out`) as he comes within the context's reach, or gives it up (`_Cancel`)
@@ -3442,12 +3476,7 @@ pub(crate) fn npc_brain(
                     npc.shoot_cd -= dt;
                     let to = ppos - pos;
                     let unreachable = (ppos.y - pos.y).abs() > 1.6 || d > 6.0;
-                    let ctx = npc.arms.fire.clone().unwrap_or(dhcook::format::FireContext {
-                        range: [2.5, 30.0, 6.5],
-                        angle: 25.0,
-                        cooldown: if npc.ranged == 3 { [3.0, 6.0] } else { [10.0, 20.0] },
-                        cooldown_unreachable: if npc.ranged == 3 { [2.0, 5.0] } else { [1.0, 2.0] },
-                    });
+                    let ctx = fire_context(&npc);
                     let [near, far, _] = ctx.range;
                     let facing = to.with_y(0.0).normalize_or_zero().dot(npc.forward()) > ctx.angle.to_radians().cos();
                     // a pistol is aimed before it fires (`DisAISubStateFirePistol`: the first shot
@@ -3507,10 +3536,19 @@ pub(crate) fn npc_brain(
                     if ready && (aimed || (npc.ranged != 1 && facing)) {
                         let cd = if unreachable { ctx.cooldown_unreachable } else { ctx.cooldown };
                         npc.shoot_cd = cd[0] + rand::random::<f32>() * (cd[1] - cd[0]).max(0.0);
-                        // its accuracy: `m_MaxAccuracy` close, falling to `m_MinAccuracy` at the
-                        // end of its reach
-                        let k = ((d - near) / (far - near).max(0.1)).clamp(0.0, 1.0);
-                        let chance = (npc.arms.accuracy[0] + (npc.arms.accuracy[1] - npc.arms.accuracy[0]) * k) * if npc.ranged == 1 { 1.0 - attrs.npc_gun_miss } else { 1.0 };
+                        // an assassin's wrist bow: a shot of its own (`Sword_RangedAttack`), standing
+                        // for it, its bolt loosed at the clip's cue (the blow's, below)
+                        if npc.ranged == 3 {
+                            npc.attack_t = Some(0.0);
+                            npc.swing = Some(Swing { kind: MoveKind::Ranged, big: false, len: 1.37, hit: 0.73, reach: far, lunge: 0.0, no_versus: true, more: Vec::new() });
+                            npc.target = None;
+                            if to.with_y(0.0).length() > 0.1 {
+                                npc.yaw = (-to.x).atan2(-to.z);
+                            }
+                            info!("{} raises its wrist bow {d:.1} m away", npc.name);
+                            continue;
+                        }
+                        let chance = shot_chance(&npc, &ctx, d, if npc.ranged == 1 { attrs.npc_gun_miss } else { 0.0 });
                         let hit = rand::random::<f32>() < chance;
                         info!("{} shoots {d:.1} m ({})", npc.name, if hit { "hit" } else { "miss" });
                         if npc.ranged == 2 {
@@ -3657,6 +3695,18 @@ pub(crate) fn npc_brain(
                         let blows = std::iter::once(hit_at).chain(npc.swing.as_ref().map(|s| s.more.clone()).unwrap_or_default());
                         for b in blows {
                             if !(t_att < b && t_new >= b) {
+                                continue;
+                            }
+                            // an assassin's bolt, as its accuracy has it
+                            if kind == Some(MoveKind::Ranged) {
+                                let hit = npc.sees_player && rand::random::<f32>() < shot_chance(&npc, &fire_context(&npc), d, 0.0);
+                                info!("{} shoots {d:.1} m ({})", npc.name, if hit { "hit" } else { "miss" });
+                                if hit {
+                                    hit_writer.write(PlayerHit { npc: e, from: pos, damage: npc.arms.ranged, kick: false, big: false, push: false, unblockable: false, missile: false });
+                                }
+                                shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: true, miss: !hit });
+                                npc.shots += 1;
+                                noise.write(Noise { pos, radius: 40.0, kind: NoiseKind::Danger });
                                 continue;
                             }
                             // a thing thrown with the bare hand at him
@@ -4274,6 +4324,13 @@ pub struct NpcClips {
     /// Corvo out of it: thrown off as he comes out, then dazed or retching
     /// (`Empty_Unpossess_Eject`, `_Dizzy` with its line, `_Puke` with its sick)
     unpossess: [Option<ClipId>; 3],
+    /// a whaler's Attract spell: its hand raised, held, its coup de grace, let go
+    /// (`Sword_Power_Attract_In`, `_Loop`, `_Attack`, `_Cancel`)
+    attract: [Option<ClipId>; 4],
+    /// an assassin's wrist bow shot
+    wrist_shot: Option<ClipId>,
+    /// an assassin's slash out of its dodge to the left, right (`Sword_SideStepLeft_DodgeAttack_Small`)
+    dodge_attack: [Option<ClipId>; 2],
     /// Corvo gone before its eyes by magic (`Empty_Magic_OutOfSight`, `Sword_Magic_OutOfSight`:
     /// the original's `DisBehaviorMagicResponse`, its Awe slot)
     magic: [Vec<ClipId>; 2],
@@ -4430,8 +4487,12 @@ impl NpcClips {
             ],
             gun: [lib.find("Sword_Gun_Draw"), lib.find("Sword_Gun_Idle"), lib.find("Sword_Gun_Fire"), lib.find("Sword_Gun_Undraw")],
             gun_reload: lib.find("Sword_Gun_Reload"),
-            dodge: [lib.all(&["Sword_SideStep_Left"]), lib.all(&["Sword_SideStep_Right"]), lib.all(&["Sword_SideStep_Back"])],
+            // (an assassin's: `Sword_SideStepLeft_DodgeIn`, its slash after, and `Sword_BackStep`)
+            dodge: [lib.all(&["Sword_SideStep_Left", "Sword_SideStepLeft_DodgeIn"]), lib.all(&["Sword_SideStep_Right", "Sword_SideStepRight_DodgeIn"]), lib.all(&["Sword_SideStep_Back", "Sword_BackStep"])],
             unpossess: [lib.first(&["Empty_Unpossess_Eject", "Patrol_Unpossess_Eject"]), lib.first(&["Empty_Unpossess_Dizzy", "Patrol_Unpossess_Dizzy"]), lib.first(&["Empty_Unpossess_Puke", "Patrol_Unpossess_Puke"])],
+            attract: ["In", "Loop", "Attack", "Cancel"].map(|p| lib.find(&format!("Sword_Power_Attract_{p}"))),
+            wrist_shot: lib.find("Sword_RangedAttack"),
+            dodge_attack: [lib.find("Sword_SideStepLeft_DodgeAttack_Small"), lib.find("Sword_SideStepRight_DodgeAttack_Small")],
             magic: [lib.all(&["Empty_Magic_OutOfSight", "Sword_Magic_OutOfSight"]), lib.all(&["Sword_Magic_OutOfSight", "Empty_Magic_OutOfSight"])],
             swarm: [["Empty_", "Sword_"], ["Sword_", "Empty_"]].map(|sets| ["In", "Loop", "Out"].map(|p| sets.iter().find_map(|s| lib.find(&format!("{s}SwarmAttack_{p}"))))),
             turn: [["Sword_Patrol_Turn", "Empty_Turn", "Patrol_Turn"], ["Sword_Turn", "Empty_Turn", "Sword_Patrol_Turn"]].map(|sets| {
@@ -4530,6 +4591,10 @@ pub struct NpcAnim {
     swarm_phase: u8,
     /// its reeling after Corvo came out of it: the clip still to come
     unpossess_next: Option<ClipId>,
+    /// how far into casting its Attract spell (0 not, 1 its hand raised, 2 held)
+    attract_phase: u8,
+    /// dodging to a side (its clip) with its slash to come
+    counter: Option<(usize, ClipId)>,
     gun_phase: GunPhase,
     gun_t: f32,
     gun_out: bool,
@@ -4763,7 +4828,7 @@ fn npc_select_anim(
         anim.time_scale = scale;
         // turning where it stands, it is shown turned as far as its turn has gone (in plain idle
         // only: anything else shows its facing as it is)
-        let plain = !npc.is_down() && npc.attack_t.is_none() && npc.aim.is_none() && npc.gun_hold <= 0.0 && npc.grab.is_none() && !st.oneshot && npc.anim_speed < 0.3;
+        let plain = !npc.is_down() && !npc.casting && npc.attack_t.is_none() && npc.aim.is_none() && npc.gun_hold <= 0.0 && npc.grab.is_none() && !st.oneshot && npc.anim_speed < 0.3;
         if !plain || !st.shown_yaw.is_finite() {
             st.turn = None;
             st.shown_yaw = npc.yaw;
@@ -4999,8 +5064,77 @@ fn npc_select_anim(
             continue;
         }
         st.grab_seen = None;
+        // an assassin's dodge to the side (`Sword_SideStepLeft_DodgeIn`): its slash out of it
+        // (`_DodgeAttack_Small`) with Corvo still in its reach (its set has no way out of the dodge
+        // without it, `DodgeLeftOut`, so our reading is every dodge ends in it)
+        if let Some((side, dodged)) = st.counter {
+            if npc.attack_t.is_some() {
+                // (a blow straight out of it: the swing below takes the slash's clip)
+            } else if anim.current().is_none_or(|p| p.clip != dodged) || npc.is_down() || npc.stagger > 0.0 {
+                st.counter = None;
+            } else if anim.finished() {
+                st.counter = None;
+                let near = (ppos - t.translation).with_y(0.0).length() < 3.0 && (ppos.y - t.translation.y).abs() < 1.5;
+                if let Some(c) = clips.dodge_attack[side].filter(|_| near && npc.mode == Mode::Combat) {
+                    let hit = st.marks.get(&c).and_then(|m| m.zone).map(|(z, d)| (z + d - 0.12).max(z)).unwrap_or(0.3);
+                    npc.attack_t = Some(0.0);
+                    npc.swing = Some(Swing { kind: MoveKind::Short, big: false, len: lib.duration(c).max(hit + 0.1), hit, reach: 2.6, lunge: 0.0, no_versus: false, more: Vec::new() });
+                    let to = (ppos - t.translation).with_y(0.0);
+                    if to.length() > 0.1 {
+                        npc.yaw = (-to.x).atan2(-to.z);
+                    }
+                    if std::env::var("DH_MELEE_LOG").is_ok() {
+                        info!("melee: {} slashes out of its dodge: hit {hit:.2}", npc.name);
+                    }
+                    st.attacking = true;
+                    anim.restart(c, false, 1.0, 0.05);
+                    st.last_mode = npc.mode;
+                    st.last_alert = npc.alert;
+                    continue;
+                }
+            }
+        }
+        // a whaler's Attract spell: its hand raised (`Sword_Power_Attract_In`) and held while
+        // Corvo is drawn in (`_Loop`), then its coup de grace (`_Attack`, the swing's below) or,
+        // the spell broken off, let go (`_Cancel`), standing for it
+        if clips.attract[1].is_some() {
+            if npc.casting && !npc.is_down() {
+                // (its blade waits: the coup de grace starts afresh)
+                st.attacking = false;
+                if st.attract_phase == 0 {
+                    match clips.attract[0] {
+                        Some(c) => {
+                            anim.restart(c, false, 1.0, 0.12);
+                            st.attract_phase = 1;
+                        }
+                        None => st.attract_phase = 1,
+                    }
+                } else if st.attract_phase == 1 && (anim.finished() || clips.attract[0].is_none()) {
+                    if let Some(c) = clips.attract[1] {
+                        anim.play(c, true, 1.0, 0.1);
+                    }
+                    st.attract_phase = 2;
+                }
+                st.hit_seen = npc.hit_react;
+                st.last_mode = npc.mode;
+                st.last_alert = npc.alert;
+                continue;
+            }
+            if std::mem::take(&mut st.attract_phase) > 0 && npc.attack_t.is_none() && !npc.is_down() {
+                if let Some(c) = clips.attract[3] {
+                    anim.restart(c, false, 1.0, 0.1);
+                    npc.stagger = npc.stagger.max(lib.duration(c));
+                    st.oneshot = true;
+                    st.hit_seen = npc.hit_react;
+                    st.last_mode = npc.mode;
+                    st.last_alert = npc.alert;
+                    continue;
+                }
+            }
+        }
         // melee swing: the move's clip, fitted to its duration
         if npc.attack_t.is_some() {
+            let counter = st.counter.take();
             if !st.attacking {
                 st.attacking = true;
                 let (kind, big, len) = npc.swing.as_ref().map(|s| (s.kind, s.big, s.len)).unwrap_or((MoveKind::Short, false, 0.95));
@@ -5022,7 +5156,46 @@ fn npc_select_anim(
                     MoveKind::WhiskeyFire => clips.bottle_fire[0].or(clips.bottle_fire[1]),
                     MoveKind::ThrowWhiskey => clips.bottle_throw,
                     MoveKind::Throw => pick(&clips.throw_rock),
+                    MoveKind::Attract => clips.attract[2].or_else(|| pick(&clips.attack_short_big)),
+                    MoveKind::Ranged => clips.wrist_shot,
                 };
+                // (a blade's blow straight out of a dodge to the side: its slash out of it,
+                // `_DodgeAttack_Small`)
+                let own = match counter {
+                    Some((side, _)) if matches!(kind, MoveKind::Short | MoveKind::StepBack | MoveKind::Medium | MoveKind::Long) => clips.dodge_attack[side].or(own),
+                    _ => own,
+                };
+                // an assassin's wrist bow shot, its bolt loosed at the clip's
+                // `DishonoredNotify_FireProjectile` (or its fire sound's cue,
+                // `AI_Assassin_Ranged_Attack_Fire`, 0.73 s)
+                if kind == MoveKind::Ranged {
+                    if let (Some(c), Some(s)) = (own, npc.swing.as_mut()) {
+                        s.hit = st.marks.get(&c).and_then(|m| m.fires.first().copied()).unwrap_or(0.73);
+                        s.len = lib.duration(c).max(s.hit + 0.1);
+                        anim.restart(c, false, 1.0, 0.1);
+                    }
+                    st.last_mode = npc.mode;
+                    st.last_alert = npc.alert;
+                    continue;
+                }
+                // a whaler's coup de grace: its clip as authored, carried at Corvo as far as the
+                // clip steps (short of him) until its blow, which lands at its zone's close (or
+                // where the spell's sound stops, `AI_Assassin_Pwr_Attract_Loop_Stop`, 0.59 s)
+                if let (Some(c), Some(s)) = (own.filter(|_| kind == MoveKind::Attract), npc.swing.as_mut()) {
+                    let hit = st.marks.get(&c).and_then(|m| m.zone).map(|(z, d)| (z + d - 0.12).max(z)).unwrap_or(0.59);
+                    let room = (ppos - t.translation).with_y(0.0).length() - 1.1;
+                    let step = (lib.root_speed(c) * lib.duration(c)).min(room).max(0.0);
+                    s.hit = hit;
+                    s.len = lib.duration(c).max(hit + 0.1);
+                    s.lunge = step / hit.max(0.05);
+                    if std::env::var("DH_MELEE_LOG").is_ok() {
+                        info!("melee: coup de grace by its clip: hit {hit:.2}, len {:.2}, step {step:.2} m", s.len);
+                    }
+                    anim.restart(c, false, 1.0, 0.08);
+                    st.last_mode = npc.mode;
+                    st.last_alert = npc.alert;
+                    continue;
+                }
                 // (a throw with the bare hand: let go at the clip's `DishonoredNotify_FireProjectile`)
                 if let (Some(c), Some(s)) = (own.filter(|_| kind == MoveKind::Throw), npc.swing.as_mut()) {
                     s.hit = st.marks.get(&c).and_then(|m| m.fires.first().copied()).unwrap_or(lib.duration(c) * 0.6);
@@ -5353,6 +5526,9 @@ fn npc_select_anim(
                 // gone by magic)
                 if matches!(npc.act.0, 14 | 18 | 19 | 20) {
                     npc.stagger = npc.stagger.max(anim.lib.duration(c));
+                }
+                if matches!(npc.act.0, 15 | 16) && clips.dodge_attack[npc.act.0 as usize - 15].is_some() {
+                    st.counter = Some((npc.act.0 as usize - 15, c));
                 }
                 // (the lock's struggle holds until it ends)
                 let hold = npc.act.0 == 4;

@@ -1006,6 +1006,16 @@ fullscreen display, vertical sync and the crosshair.
   blades till he arrives for the coup de grace (`DisTweaks_NPCAttractSpellCoupDeGrace`: a big
   slash within 2.7 m, from any angle, that no sword lock can catch: its `m_bDisableVersus`), and shoot their wrist bows (`DisTweaks_NPCFireBow`,
   damage by difficulty).
+  - The spell has its clips: the hand raised (`Sword_Power_Attract_In`), held while he comes
+    (`_Loop`), standing for it. Then the coup de grace (`_Attack`, carried at him as far as the clip
+    steps), or the spell let go (`_Cancel`). Their sounds play at the clips' cues.
+  - A wrist bow shot is a clip of its own (`Sword_RangedAttack`), standing for it. The bolt leaves
+    at the clip's cue (0.73 s), hitting as the bow's accuracy has it then.
+  - Their dodges step with their own clips: `Sword_SideStepLeft_DodgeIn`, `_Right_`, and
+    `Sword_BackStep` (3 m, like their `m_fBackStepDistance`). A dodge to the side ends in a
+    slash out of it (`_DodgeAttack_Small`): the next blow, if it comes straight out of the dodge,
+    or else one of its own with Corvo still in reach. Their set has no way out of the dodge
+    without it (`DodgeLeftOut`), so we read it as every time.
 - **Script-made pickups**: the level scripts' actor factories (`SeqAct_ActorFactory` + `DisActorFactoryTweakObj`) make runes, bone charms, coin pouches, elixirs and notes at their spawn points (the Hound Pits' tutorial rune, the Hub's rewards); each is cooked as a pickup with a hidden instance of its mesh that the script's spawn moves into place. Pickup names standing for their item ("`i", "`k") show the item's name.
 - **Whale oil tanks** (`DisWhaleOilBattery` + `DisTweaks_WhaleOilBattery`): physics props seated in their receptacles; picked up, carried and thrown like any prop, they burst on a hard knock or a blow (their break step's `m_pExplosion`: 8 m, 50 damage), and a receptacle runs its device only while a tank sits in its seat. Holding a tank at an empty receptacle: "[F] Insert Whale Oil Tank". Explosions reach only what they can see.
 - **Cinematic mode** (`SeqAct_ToggleCinematicMode`): the HUD hides (`bHideHUD`), Corvo is held (`bDisableMovement`/`bDisableInput`) and his arms hidden (`bHidePlayer`), each as the op says; released after a minute at most should a script never let go.
