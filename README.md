@@ -399,6 +399,10 @@ fullscreen display, vertical sync and the crosshair.
   Alert characters walk and run the way they go relative to where they face
   (`AnimNodeBlendDirectional`'s four ways: `WalkN/E/S/W`, the sword sets' `_Revert` clips played
   backwards for south and west, by root motion), the quarter held 10 degrees past its edge.
+  Standing, a turn of more than 40 degrees plays its turn's clip, for the nearest of 45, 90, 135
+  or 180 degrees to its side (`Sword_Patrol_Turn*` / `Empty_Turn*` relaxed, `Sword_Turn*` on
+  edge), the body shown turning across the clip (its facing for the game turned at once); less,
+  it glides round.
   A patrolling or guarding character plays an ambient idle of the set it stands in (a guard's
   `Sword_Patrol_Idle_0x`, empty hands' `Empty_Idle_0x`) every 30-60 s on its upper body, walking
   as well as standing (the patrol and guard behaviours' `DisTweaks_AISubProcess_AmbientAnims`,

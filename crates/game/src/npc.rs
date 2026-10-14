@@ -1964,6 +1964,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 gun,
                 gun_hand,
                 gun_holster,
+                shown_yaw: f32::NAN,
+                turn: None,
                 gun_phase: GunPhase::Away,
                 gun_t: 0.0,
                 gun_out: false,
@@ -4253,6 +4255,9 @@ pub struct NpcClips {
     /// a dodge's step (left, right, back: `Sword_SideStep_*`), the alarm's lever pulled
     /// (`Sword_TriggerAlarm`), a body found looked over (`Sword_CorpseCheck`)
     dodge: [Vec<ClipId>; 3],
+    /// turning where it stands, left then right, by 45, 90, 135 and 180 degrees: relaxed
+    /// (`Sword_Patrol_Turn*`, `Empty_Turn*`) and on edge (`Sword_Turn*`)
+    turn: [[[Option<ClipId>; 4]; 2]; 2],
     trigger_alarm: Vec<ClipId>,
     corpse_check: Vec<ClipId>,
     /// striking under a table, with the blade and with the pistol
@@ -4402,6 +4407,9 @@ impl NpcClips {
             gun: [lib.find("Sword_Gun_Draw"), lib.find("Sword_Gun_Idle"), lib.find("Sword_Gun_Fire"), lib.find("Sword_Gun_Undraw")],
             gun_reload: lib.find("Sword_Gun_Reload"),
             dodge: [lib.all(&["Sword_SideStep_Left"]), lib.all(&["Sword_SideStep_Right"]), lib.all(&["Sword_SideStep_Back"])],
+            turn: [["Sword_Patrol_Turn", "Empty_Turn", "Patrol_Turn"], ["Sword_Turn", "Empty_Turn", "Sword_Patrol_Turn"]].map(|sets| {
+                ["Left", "Right"].map(|side| ["45", "90", "135", "180"].map(|a| sets.iter().find_map(|s| lib.find(&format!("{s}{side}{a}")))))
+            }),
             trigger_alarm: lib.all(&["Sword_TriggerAlarm"]),
             corpse_check: lib.all(&["Sword_CorpseCheck"]),
             under: [lib.find("Sword_Attack_UnderTable"), lib.find("Sword_Gun_AttackUnderTable")],
@@ -4485,6 +4493,10 @@ pub struct NpcAnim {
     gun: Vec<Entity>,
     gun_hand: Option<(Entity, Transform)>,
     gun_holster: Option<(Entity, Transform)>,
+    /// the facing it is shown turned to (radians), and its turn where it stands: from, by how
+    /// much, how far through, how long
+    shown_yaw: f32,
+    turn: Option<(f32, f32, f32, f32)>,
     gun_phase: GunPhase,
     gun_t: f32,
     gun_out: bool,
@@ -4714,10 +4726,18 @@ fn npc_select_anim(
         let scale = tc.npc_scale(npc.out_of_bend).max(0.0);
         let dt = time.delta_secs() * scale;
         anim.time_scale = scale;
+        // turning where it stands, it is shown turned as far as its turn has gone (in plain idle
+        // only: anything else shows its facing as it is)
+        let plain = !npc.is_down() && npc.attack_t.is_none() && npc.aim.is_none() && npc.gun_hold <= 0.0 && npc.grab.is_none() && !st.oneshot && npc.anim_speed < 0.3;
+        if !plain || !st.shown_yaw.is_finite() {
+            st.turn = None;
+            st.shown_yaw = npc.yaw;
+        }
+        let lag = (st.shown_yaw - npc.yaw + PI).rem_euclid(TAU) - PI;
         // the clips carry the whole body motion (falls included)
         for c in children.iter() {
             if let Ok(mut vt) = visuals.get_mut(c) {
-                let face = Quat::from_rotation_y(FRAC_PI_2);
+                let face = Quat::from_rotation_y(lag + FRAC_PI_2);
                 if vt.rotation != face || vt.translation != Vec3::ZERO {
                     vt.rotation = face;
                     vt.translation = Vec3::ZERO;
@@ -5323,6 +5343,38 @@ fn npc_select_anim(
                 if let Some(c) = pick(&clips.idle_fidgets) {
                     anim.restart_upper(c, false, 1.0, 0.3);
                 }
+            }
+        }
+        // turning where it stands: a turn of more than 40 degrees with its turn's clip for the
+        // nearest of 45, 90, 135 or 180 degrees, its body shown turning across it; less, gliding
+        if sp < 0.3 {
+            let off = (npc.yaw - st.shown_yaw + PI).rem_euclid(TAU) - PI;
+            match st.turn {
+                Some((from, by, t, len)) => {
+                    let t = t + dt;
+                    if t >= len {
+                        st.turn = None;
+                        st.shown_yaw = from + by;
+                    } else {
+                        st.turn = Some((from, by, t, len));
+                        st.shown_yaw = from + by * ease(t / len);
+                        continue;
+                    }
+                }
+                None if off.abs() > 40f32.to_radians() => {
+                    let edge = (npc.alert != Alert::Unaware || st.drawn) as usize;
+                    let i = ((off.abs().to_degrees() / 45.0).round() as usize).clamp(1, 4) - 1;
+                    // (a turn to the left is a rising yaw)
+                    let side = (off < 0.0) as usize;
+                    if let Some(c) = clips.turn[edge][side][i].or(clips.turn[1 - edge][side][i]) {
+                        let len = lib.duration(c).max(0.2);
+                        anim.restart(c, false, 1.0, 0.15);
+                        st.turn = Some((st.shown_yaw, off, 0.0, len));
+                        continue;
+                    }
+                    st.shown_yaw = npc.yaw;
+                }
+                None => st.shown_yaw += off.clamp(-6.0 * dt, 6.0 * dt),
             }
         }
         if sp < 0.3 {
