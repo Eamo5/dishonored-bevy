@@ -261,6 +261,9 @@ pub struct Npc {
     /// a live explosive it makes off from (`DisBehaviorEscapeExplosion`): where it is, and how
     /// long it keeps away yet
     pub escape: Option<(Vec3, f32)>,
+    /// out of a plague carrier's cloud it's in (`DisBehaviorEscapePlague`'s `GetOuttaHere`):
+    /// where it makes for, and how long yet
+    pub plague_escape: Option<(Vec3, f32)>,
     /// robbed while it stood: how long until it misses what was taken (`DisBehaviorStolen`)
     pub robbed: Option<f32>,
     /// caught panicking with Corvo upon it: how long it has begged, and how long he has been
@@ -1553,6 +1556,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         caught: None,
         rat_help: None,
         escape: None,
+        plague_escape: None,
         robbed: None,
         rising: 0.0,
         watch: None,
@@ -2633,7 +2637,11 @@ fn escape_explosions(
         let dt = time.delta_secs() * if npc.out_of_bend { tc.own_scale() } else { tc.world_scale() };
         if npc.is_down() || npc.kind == Kind::Story {
             npc.escape = None;
+            npc.plague_escape = None;
             continue;
+        }
+        if let Some((to, left)) = npc.plague_escape {
+            npc.plague_escape = (left - dt > 0.0).then_some((to, left - dt));
         }
         if let Some((at, left)) = npc.escape {
             // the one it keeps from, followed; gone off, a moment more
@@ -2764,6 +2772,12 @@ pub(crate) fn npc_brain(
             npc.target = (pos.distance(at) < ESCAPE_CLEARANCE).then(|| at + away * ESCAPE_CLEARANCE);
             npc.attack_t = None;
             npc.aim = None;
+            continue;
+        }
+        // in a plague carrier's cloud: out of it (`DisBehaviorEscapePlague`)
+        if let Some((to, _)) = npc.plague_escape {
+            npc.target = (pos.with_y(0.0).distance(to.with_y(0.0)) > 0.4).then_some(to);
+            npc.attack_t = None;
             continue;
         }
         // feuds: an enemy faction's NPC in sight gets fought (Corvo comes first)
@@ -3663,7 +3677,7 @@ fn npc_move(
         }
         let pos = t.translation;
         let speed = match npc.mode {
-            _ if npc.alarm_run.is_some() || npc.escape.is_some() => npc.gait[2],
+            _ if npc.alarm_run.is_some() || npc.escape.is_some() || npc.plague_escape.is_some() => npc.gait[2],
             Mode::Combat | Mode::Flee => npc.gait[2],
             // searching, its walk or run slowed (`SearchSword` / `SearchEmpty`: x 0.8), as roshan's
             // r614/blink research read the locomotion modifiers

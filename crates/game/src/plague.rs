@@ -29,6 +29,9 @@ impl Plugin for PlaguePlugin {
     }
 }
 
+/// How long a character struck by a cloud keeps making for its way out (s: our reading).
+const PLAGUE_ESCAPE: f32 = 2.0;
+
 /// A cough's cloud, on its carrier: how long it lasts yet, until it next harms, and whether it
 /// has shown Corvo its lens effect.
 #[derive(Component)]
@@ -202,7 +205,7 @@ fn clouds(
     tc: Res<crate::gameplay::TimeControl>,
     rapier: ReadRapierContext,
     mut carriers: Query<(Entity, &Npc, &Transform, &mut Cloud)>,
-    others: Query<(Entity, &Npc, &Transform), Without<Cloud>>,
+    mut others: Query<(Entity, &mut Npc, &Transform), Without<Cloud>>,
     player: Query<&Transform, With<Player>>,
     (mut stats, mut msgs, attrs): (ResMut<PlayerStats>, ResMut<HudMessages>, Res<crate::gamedata::Attrs>),
     (mut hits, mut sfx): (MessageWriter<NpcHit>, MessageWriter<PostEvent>),
@@ -256,11 +259,15 @@ fn clouds(
                 info!("plague: {}'s cloud strikes Corvo for {damage}", npc.name);
             }
         }
-        for (oe, o, ot) in &others {
+        for (oe, mut o, ot) in &mut others {
             if oe == e || o.is_down() || o.arms.plague.is_some() || !reaches(ot.translation) {
                 continue;
             }
             hits.write(NpcHit { npc: oe, damage: pl.per_tick, kind: HitKind::ByOthers, from: t.translation });
+            // it gets out of the cloud (`DisBehaviorEscapePlague`'s `GetOuttaHere`): straight
+            // away from the mouth, a metre past its reach
+            let away = (ot.translation - mouth).with_y(0.0).normalize_or(-fwd);
+            o.plague_escape = Some((mouth.with_y(ot.translation.y) + away * (pl.radius + 1.0), PLAGUE_ESCAPE));
             if log {
                 info!("plague: {}'s cloud strikes {}", npc.name, o.name);
             }
