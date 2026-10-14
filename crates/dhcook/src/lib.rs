@@ -6506,6 +6506,16 @@ impl<'a> Cooker<'a> {
             ("rat_gibs", "NPC_Body_Eaten.FX.ps_rat_gibs_body"),
             // (a tallboy's stilt coming down: `Footfall_Tallboy` x `Environment`)
             ("tallboy_step", "Vfx_PhysMat.FootSteps.fsteps_tallboy"),
+            // (Wind Blast's gust by its level, and under water: `DisTweaks_WindBlast
+            // .m_EffectTemplate`, `m_UnderwaterEffectTemplate`; where it meets the world:
+            // `Windblast_Wall` / `_Floor` / `_Ceil` x `Environment`, and under Corvo,
+            // `Windblast_Ground` x `Environment` / `Env_Water`)
+            ("windblast_1", "Vfx_GamePlay.Windblast.Windblast_lvl1"),
+            ("windblast_2", "Vfx_GamePlay.Windblast.Windblast_lvl2"),
+            ("windblast_underwater", "Vfx_GamePlay.Windblast.Windblast_UndWater_lvl1"),
+            ("windblast_impact", "Vfx_GamePlay.Windblast.Windblast_GroundImpact_01"),
+            ("windblast_dirt", "Vfx_GamePlay.Windblast.Windblast_PLayerDirt_01"),
+            ("windblast_water", "Vfx_GamePlay.Windblast.Windblast_PLayerWater_01"),
             ("blood_limb", "Vfx_PhysMat.Blood.SeveredLimbs.Pfx_BloodSLimbBody"),
             ("blood_throat", "Vfx_PhysMat.Blood.Fatalities.Pfx_BloodThroat"),
             ("blood_lunge", "Vfx_PhysMat.Blood.Fatalities.Pfx_BloodLunge"),

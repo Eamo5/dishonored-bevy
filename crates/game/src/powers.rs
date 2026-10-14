@@ -324,7 +324,16 @@ pub struct Gust {
     from: Vec3,
     level: u8,
     targets: Option<Vec<(Entity, f32)>>,
+    /// where it meets the world, how far from the eye: each its puff as the front reaches it
+    impacts: Vec<(Vec3, f32)>,
 }
+
+/// The directions Wind Blast's gust is traced along for the world it meets: its middle and two
+/// rings within its cone, as fractions of the half angle (our reading of its sweep).
+const GUST_RINGS: [(f32, usize); 3] = [(0.0, 1), (0.45, 6), (0.85, 8)];
+/// The least distance between two of its puffs where it meets the world (m: our reading, the
+/// puff's dust metres across, so one wall takes a few, not one a ray).
+const GUST_IMPACT_SPACING: f32 = 2.0;
 
 /// The cast clip's `DisNotify_WindBlast` (s): when the blast starts (roshan's r614/blink
 /// research).
@@ -1267,7 +1276,7 @@ fn use_power(
             powers.cooldown = 1.0;
             sfx.write(PostEvent::named(data.power_sound("Windblast", level, "m_pWindBlastSoundEvent").unwrap_or("Snd_Pwr_P_Windblast_Lvl_1"), None));
             // (the blast itself starts at the cast clip's `DisNotify_WindBlast`: `windblast_gusts`)
-            powers.gusts.push(Gust { t: 0.0, eye, dir, from: pt.translation, level, targets: None });
+            powers.gusts.push(Gust { t: 0.0, eye, dir, from: pt.translation, level, targets: None, impacts: Vec::new() });
         }
         Power::Possess => {
             let range = data.power_f("Possess", level, "m_fPossessRange", 1000.0) * UU;
@@ -1503,6 +1512,7 @@ fn windblast_gusts(
     (mut world_hits, mut door_blast, mut props): (MessageWriter<WorldDamage>, MessageWriter<crate::interact::DoorBlast>, MessageWriter<crate::props::PropGust>),
     (mut grenades, held): (Query<(Entity, &mut crate::gadgets::Grenade, &Transform)>, Res<crate::props::Held>),
     (mut arrows, mut spits, mut bolts): (Query<(&mut crate::tallboy::Arrow, &Transform)>, Query<(&mut crate::krust::Spit, &Transform)>, Query<(&mut Projectile, &Transform)>),
+    (mut fx, mut sfx, waters): (MessageWriter<crate::particles::SpawnEffect>, MessageWriter<PostEvent>, Option<Res<crate::swim::Waters>>),
 ) {
     if powers.gusts.is_empty() {
         return;
@@ -1542,6 +1552,39 @@ fn windblast_gusts(
             (k > 0.0).then_some((d, k, near))
         };
         if g.targets.is_none() {
+            use crate::particles::SpawnEffect;
+            // its gust from his left hand (`m_HandEffectSocketName` LeftHandWpn), by its level, or
+            // under water its own (`m_EffectTemplate`, `m_UnderwaterEffectTemplate`)
+            let wet = |p: Vec3| waters.as_ref().is_some_and(|w| w.at(p).is_some());
+            let side = dir.cross(Vec3::Y).normalize_or(Vec3::X);
+            let hand = eye + dir * 0.45 - side * 0.2 - Vec3::Y * 0.2;
+            let gust = if wet(eye) { "windblast_underwater" } else if level >= 2 { "windblast_2" } else { "windblast_1" };
+            fx.write(SpawnEffect { rot: Quat::from_rotation_arc(Vec3::X, dir), secs: 3.0, ..SpawnEffect::at(gust, hand) });
+            // the ground under him kicked up (`Windblast_Ground`: dirt, or water with its burst),
+            // its Y along the blast (the contact's `DCO_VELOCITY_DIRECTION`)
+            if let Some((_, toi)) = ctx.cast_ray(g.from, Vec3::NEG_Y, 2.5, true, filter) {
+                let at = g.from - Vec3::Y * toi;
+                let water = wet(at + Vec3::Y * 0.05);
+                if water {
+                    sfx.write(PostEvent::named("Snd_Phys_Water_Expl", Some(at)));
+                }
+                fx.write(SpawnEffect { rot: Quat::from_rotation_arc(Vec3::Z, dir), secs: 3.0, ..SpawnEffect::at(if water { "windblast_water" } else { "windblast_dirt" }, at) });
+            }
+            // where it meets the world in its cone, met by its front in turn
+            let across = side.cross(dir).normalize_or(Vec3::Y);
+            for (frac, n) in GUST_RINGS {
+                for k in 0..n {
+                    let a = k as f32 / n as f32 * std::f32::consts::TAU;
+                    let off = (side * a.cos() + across * a.sin()) * (half_angle * frac).tan();
+                    let ray = (dir + off).normalize_or(dir);
+                    if let Some((_, toi)) = ctx.cast_ray(eye, ray, reach, true, filter) {
+                        let at = eye + ray * toi;
+                        if g.impacts.iter().all(|(p, _)| p.distance(at) >= GUST_IMPACT_SPACING) {
+                            g.impacts.push((at, toi));
+                        }
+                    }
+                }
+            }
             // it starts: gathered once; the scripts' candles and fires it blows out, the
             // things it knocks over, the doors (the wooden ones break), the loose props
             g.targets = Some(npcs.iter().filter(|(_, _, n)| !n.is_down()).filter_map(|(e, t, _)| factor(t.translation).map(|(d, _, _)| (e, d))).collect());
@@ -1582,6 +1625,16 @@ fn windblast_gusts(
             noise.write(Noise { pos: g.from, radius: 15.0, kind: NoiseKind::Danger });
         }
         let front = (g.t - WINDBLAST_NOTIFY) * speed;
+        // (its puffs where the front has reached the world: `Windblast_GroundImpact_01`, its Y
+        // along the blast across the ground, `DCO_VELOCITY_DIRECTION_2D`)
+        let flat_dir = dir.with_y(0.0).normalize_or(dir);
+        g.impacts.retain(|&(at, d)| {
+            if d > front {
+                return true;
+            }
+            fx.write(crate::particles::SpawnEffect { rot: Quat::from_rotation_arc(Vec3::Z, flat_dir), secs: 3.0, ..crate::particles::SpawnEffect::at("windblast_impact", at) });
+            false
+        });
         let Some(targets) = g.targets.as_mut() else { continue };
         targets.retain(|&(e, d0)| {
             if d0 > front {
@@ -1614,7 +1667,7 @@ fn windblast_gusts(
             false
         });
     }
-    powers.gusts.retain(|g| g.targets.as_ref().is_none_or(|t| !t.is_empty()) && g.t < 3.0);
+    powers.gusts.retain(|g| (g.targets.as_ref().is_none_or(|t| !t.is_empty()) || !g.impacts.is_empty()) && g.t < 3.0);
 }
 
 fn out_of_mana(powers: &mut Powers, sfx: &mut MessageWriter<PostEvent>, msgs: &mut HudMessages) {

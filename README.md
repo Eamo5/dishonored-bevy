@@ -95,8 +95,13 @@ fullscreen display, vertical sync and the crosshair.
 - **Powers** (levels, ranges, durations from the original tweaks): Blink (its target marked as
   `Twk_Blink` marks it: `Blink_Ground_01` on the ground, `Blink_Mantle_01` on a ledge it will
   climb, `Blink_Fall_01` in the air it will fall from), Dark Vision, Bend
-  Time, Wind Blast (it turns back every projectile in its cone, as the original's gathers every
-  actor (roshan's r614/blink research): grenades, a tallboy's arrows, a krust's spit, bolts),
+  Time, Wind Blast (its gust from his left hand by its level, its own under water
+  (`m_EffectTemplate`, `m_UnderwaterEffectTemplate`), the ground under him kicked up, dirt or
+  water with its burst (`Windblast_Ground`), and a puff where its front meets the world in its
+  cone (`Windblast_Wall` / `_Floor` / `_Ceil`: `Windblast_GroundImpact_01`, traced along its
+  middle and two rings, the puffs at least 2 m apart, our reading of its sweep); it turns back every projectile in its cone, as
+  the original's gathers every actor (roshan's r614/blink research): grenades, a tallboy's
+  arrows, a krust's spit, bolts),
   Possession (animals, and unaware people at level 2; inside a wolfhound,
   a swarm's rat or a fish Corvo has its body, `DisTweaks_Possessable`'s size and speeds: a rat
   keeps to the surface of water, a fish swims anywhere in its water without breathing; a river
