@@ -4237,6 +4237,8 @@ pub struct NpcClips {
     /// the pistol drawn, aimed, fired and put away (`Npc_EliteGuard_Gun_as`: `Sword_Gun_Draw`,
     /// `Sword_Gun_Idle`, `Sword_Gun_Fire`, `Sword_Gun_Undraw`)
     gun: [Option<ClipId>; 4],
+    /// the pistol reloaded after each shot (`Sword_Gun_Reload`: `DisAIPistolState_Reloading`)
+    gun_reload: Option<ClipId>,
     /// striking under a table, with the blade and with the pistol
     under: [Option<ClipId>; 2],
     /// its taunts (each cueing its line, `COMBAT_TAUNT_WITH_GESTURE`)
@@ -4382,6 +4384,7 @@ impl NpcClips {
                 lib.find("Generic_Assassination_DropRight_Slave"),
             ],
             gun: [lib.find("Sword_Gun_Draw"), lib.find("Sword_Gun_Idle"), lib.find("Sword_Gun_Fire"), lib.find("Sword_Gun_Undraw")],
+            gun_reload: lib.find("Sword_Gun_Reload"),
             under: [lib.find("Sword_Attack_UnderTable"), lib.find("Sword_Gun_AttackUnderTable")],
             // (a wolfhound's: its barks, `Attack_IdleBark01`-`04`, each with its own bark)
             taunt: lib.all(&["Sword_TauntA", "Sword_TauntB", "Sword_TauntC", "Attack_IdleBark01", "Attack_IdleBark02", "Attack_IdleBark03", "Attack_IdleBark04"]),
@@ -4528,6 +4531,7 @@ enum GunPhase {
     Drawing,
     Aiming,
     Firing,
+    Reloading,
     Holstering,
 }
 
@@ -5088,7 +5092,18 @@ fn npc_select_anim(
                         }
                         to = GunPhase::Aiming;
                     }
-                    GunPhase::Aiming | GunPhase::Firing if npc.aim.is_none() && (st.gun_phase == GunPhase::Aiming || anim.finished()) => {
+                    // (each shot reloaded: `DisAIPistolState_Reloading`, `Sword_Gun_Reload` with
+                    // its sound and `DisNotify_ReloadAmmo`; no shot before it ends)
+                    GunPhase::Firing if anim.finished() && clips.gun_reload.is_some() => {
+                        if let Some(c) = clips.gun_reload {
+                            anim.restart(c, false, 1.0, 0.1);
+                            // (standing for it, as for the shot)
+                            npc.shoot_cd = npc.shoot_cd.max(lib.duration(c));
+                            npc.gun_hold = npc.gun_hold.max(lib.duration(c));
+                        }
+                        to = GunPhase::Reloading;
+                    }
+                    GunPhase::Aiming | GunPhase::Firing | GunPhase::Reloading if npc.aim.is_none() && (st.gun_phase == GunPhase::Aiming || anim.finished()) => {
                         match undraw {
                             Some(c) => {
                                 anim.restart(c, false, 1.0, 0.1);
@@ -5097,7 +5112,7 @@ fn npc_select_anim(
                             None => to = GunPhase::Away,
                         }
                     }
-                    GunPhase::Firing if anim.finished() => {
+                    GunPhase::Firing | GunPhase::Reloading if anim.finished() => {
                         if let Some(c) = idle {
                             anim.play(c, true, 1.0, 0.1);
                         }

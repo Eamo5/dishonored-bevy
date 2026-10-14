@@ -1747,7 +1747,9 @@ against the install's own data where it carries them, then implemented independe
   from a standstill.
   - The officers' pistol (`Twk_Inv_PistolEliteGuard`'s `Wpn_EliteGun`) hangs in its holster
     across the chest (`HolsterGun`). To shoot they draw it into the left hand (`Sword_Gun_Draw`,
-    0.67 s), aim (`Sword_Gun_Idle`), fire (`Sword_Gun_Fire`, 1 s) and put it back
+    0.67 s), aim (`Sword_Gun_Idle`), fire (`Sword_Gun_Fire`, 1 s), reload after each shot
+    (`Sword_Gun_Reload`, 1.27 s, its sound and its `DisNotify_ReloadAmmo`: the original's
+    `DisAIPistolState_Reloading`; no shot before it ends) and put it back
     (`Sword_Gun_Undraw`, 1 s), standing for the shot; with the next shot at Corvo out of reach
     due, the gun stays up. Moving, struck or downed, it goes straight back. Aimed and firing,
     the arm follows Corvo: the nine aim offsets (`ADD_Sword_Gun_AimIdle_*`, additive clips) are
