@@ -330,6 +330,10 @@ pub struct PlayerStats {
     /// where the last blow came from (the HUD's directional damage)
     #[serde(skip)]
     pub hit_from: Option<Vec3>,
+    /// the blows taken (a count) and the side the last came from (0 ahead, 1 behind, 2 left,
+    /// 3 right): the arms' reaction
+    #[serde(skip)]
+    pub blow: (u32, u8),
     /// the campaign's chaos level (`DisSeqVar_DarknessLevel`): the step of the player tweak's
     /// `m_DarknessLevels` its score reaches (see `campaign::notify_deed`)
     pub chaos_level: i32,
@@ -654,6 +658,7 @@ impl Default for PlayerStats {
             game_over: None,
             damage_flash: 0.0,
             hit_from: None,
+            blow: (0, 0),
             chaos_level: 0,
             chaos_high: false,
             chaos_score: 0,

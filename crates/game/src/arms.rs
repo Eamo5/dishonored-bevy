@@ -106,7 +106,8 @@ struct ArmClips {
     parry_idle: Option<ClipId>,
     parry_out: Option<ClipId>,
     parry: Vec<ClipId>,
-    hit: Vec<ClipId>,
+    /// thrown by a blow, by its side: ahead, behind, left, right (`Sword_BigHit_*`)
+    hit: [Option<ClipId>; 4],
     choke_in: Option<ClipId>,
     choke_loop: Option<ClipId>,
     choke_win: Option<ClipId>,
@@ -192,7 +193,7 @@ impl ArmClips {
             parry_idle: lib.find("Sword_Ready_ParryIdle"),
             parry_out: lib.find("Sword_Ready_ParryIdle_Out"),
             parry: lib.all(&["Sword_Ready_Parry_A", "Sword_Ready_Parry_B", "Sword_Ready_Parry_C"]),
-            hit: lib.all(&["Sword_BigHit_Front", "Sword_BigHit_Left", "Sword_BigHit_Right"]),
+            hit: ["Front", "Back", "Left", "Right"].map(|s| lib.find(&format!("Sword_BigHit_{s}"))),
             choke_in: lib.find("Sword_Choke_In_Master"),
             choke_loop: lib.find("Sword_Choke_Loop_Master"),
             choke_win: lib.find("Sword_Choke_Win_Master"),
@@ -272,6 +273,8 @@ struct ArmsAnim {
     airborne: bool,
     parry_flash: f32,
     damage_flash: f32,
+    /// the blows seen (`PlayerStats::blow`)
+    blow_seen: u32,
     cast_seq: u32,
     /// the reload clips seen asked for
     reload_seq: u32,
@@ -499,6 +502,7 @@ fn spawn_arms(
                 mantling: false,
                 parry_flash: 0.0,
                 damage_flash: 0.0,
+                blow_seen: 0,
                 cast_seq: powers.as_ref().map(|p| p.cast_seq).unwrap_or(0),
                 reload_seq: powers.as_ref().map(|p| p.reload_anim.0).unwrap_or(0),
                 selected: Power::Pistol,
@@ -817,8 +821,15 @@ fn animate_arms(
                 st.oneshot = true;
             }
         }
-        if stats.damage_flash > st.damage_flash + 1e-3 {
-            if let Some(cl) = pick(&c.hit, st.next_attack) {
+        // a blow: the arms thrown from its side (a kick too, harmless as it is); other harm, as
+        // from ahead
+        let blow = stats.blow.0 != st.blow_seen;
+        if blow || stats.damage_flash > st.damage_flash + 1e-3 {
+            let side = if blow { stats.blow.1 as usize } else { 0 };
+            if std::env::var("DH_ARMS_LOG").is_ok() {
+                info!("arms: hit from side {side} (blow {blow})");
+            }
+            if let Some(cl) = c.hit[side.min(3)].or(c.hit[0]) {
                 anim.restart(cl, false, 1.4, 0.05);
                 st.oneshot = true;
             }
@@ -845,6 +856,7 @@ fn animate_arms(
     }
     st.parry_flash = sword.parry_flash;
     st.damage_flash = stats.damage_flash;
+    st.blow_seen = stats.blow.0;
     // touching down: the landing for how hard and how he stands (a hard one past
     // `StatePlayerMasterFalling.m_fFall_Stun_Vel`, 2200 uu/s), as roshan's r614/blink research
     // decoded the landing's actions

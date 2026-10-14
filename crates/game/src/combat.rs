@@ -72,6 +72,21 @@ fn can_lock(npc: &Npc, nt: &Transform, at: Vec3, fwd: Vec3, dt_hit: impl Fn(f32)
     fwd.with_y(0.0).normalize_or_zero().dot(to_npc) > 20f32.to_radians().cos() && npc.forward().dot(-to_npc) > 45f32.to_radians().cos()
 }
 
+/// The side a blow from `from` comes at Corvo (at `at`, facing `yaw`): 0 ahead, 1 behind,
+/// 2 left, 3 right (`ECardinalDirection`, as the hit reactions are chosen).
+pub fn side_of(from: Vec3, at: Vec3, yaw: f32) -> u8 {
+    let to = (from - at).with_y(0.0);
+    let fwd = Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
+    let (f, r) = (to.dot(fwd), to.dot(fwd.cross(Vec3::Y)));
+    if f.abs() >= r.abs() {
+        if f >= 0.0 { 0 } else { 1 }
+    } else if r >= 0.0 {
+        3
+    } else {
+        2
+    }
+}
+
 /// The blades lock: the guard's blow is spent, both hold.
 fn lock_blades(v: &mut Versus, e: Entity, npc: &mut Npc, at: Vec3, sfx: &mut MessageWriter<crate::audio::PostEvent>, noise: &mut MessageWriter<Noise>) {
     v.npc = Some(e);
@@ -870,6 +885,22 @@ mod finisher_tests {
 
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
+mod side_tests {
+    use super::*;
+
+    #[test]
+    fn a_blow_comes_from_ahead_behind_left_or_right() {
+        // facing -Z (yaw 0)
+        assert_eq!(side_of(Vec3::new(0.2, 1.0, -1.0), Vec3::ZERO, 0.0), 0);
+        assert_eq!(side_of(Vec3::new(0.0, 0.0, 1.0), Vec3::ZERO, 0.0), 1);
+        assert_eq!(side_of(Vec3::new(-1.0, 0.0, 0.3), Vec3::ZERO, 0.0), 2);
+        assert_eq!(side_of(Vec3::new(1.0, 0.0, 0.0), Vec3::ZERO, 0.0), 3);
+        // facing +X (a quarter turn right): what was to the right is ahead
+        assert_eq!(side_of(Vec3::new(1.0, 0.0, 0.0), Vec3::ZERO, -std::f32::consts::FRAC_PI_2), 0);
+    }
+}
+
+#[cfg(test)]
 mod pause_tests {
     use super::*;
 
@@ -1126,6 +1157,7 @@ fn receive_hits(
             sword.blocking = false;
             sword.recoil = 0.8;
             stats.hit_from = Some(h.from);
+            stats.blow = (stats.blow.0.wrapping_add(1), side_of(h.from, pt.translation, p.yaw));
             sfx.write(PostEvent::named("Snd_Imp_Fist_on_Body_cue_ak", None));
             noise.write(Noise { pos: pt.translation, radius: 15.0, kind: NoiseKind::Help });
             continue;
@@ -1174,6 +1206,7 @@ fn receive_hits(
         stats.take_damage(damage);
         stats.damage_flash = 1.0;
         stats.hit_from = Some(h.from);
+        stats.blow = (stats.blow.0.wrapping_add(1), side_of(h.from, pt.translation, p.yaw));
         sfx.write(PostEvent::named("Snd_Imp_Sword_on_Body_cue_ak", None));
         // a big blow leaves him reeling (`m_fVulnerableTime_BigHit_Dizzy` 0.9 s: no blocking),
         // knocked back a step

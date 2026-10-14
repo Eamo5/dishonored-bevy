@@ -451,7 +451,8 @@ fullscreen display, vertical sync and the crosshair.
   `Sword_PushBack_*`, with its "personal space" bark);
   his blows coming, they may step aside or back out of reach (`DisTweaks_NPCSideStep` 2.5 m,
   `..BackStep` 3 m, every 12-15 s at most; how readily is read from `m_DodgeLevel`, a tenth
-  a level). A big blow leaves Corvo reeling for `m_fVulnerableTime_BigHit_Dizzy`; his perfect
+  a level). A blow (a kick too) throws his arms from the side it came (`Sword_BigHit_Front`,
+  `_Back`, `_Left`, `_Right`); other harm, as from ahead. A big blow leaves Corvo reeling for `m_fVulnerableTime_BigHit_Dizzy`; his perfect
   parry is a block begun within `m_fTapForPerfectParryWindow` (0.2 s), within his sword's
   `m_fBlockAngle` (50 degrees). When his blow and a guard's land together (their attack
   zones within `m_fVersusZoneMaxTime`, each facing the other) the blades lock
