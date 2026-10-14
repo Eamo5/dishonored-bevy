@@ -112,7 +112,7 @@ impl Plugin for SwarmPlugin {
             .add_message::<KillRats>()
             .add_systems(OnEnter(GameState::InGame), level_swarms.after(crate::level::LevelSpawnSet))
             .add_systems(Update, restore_swarms.after(crate::save::restore_npcs).before(summon).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (summon, scripted_swarms, color_rats, swarm_brain, move_rats, npc_stomps, kill_rats).chain().after(crate::npc::age_corpses).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (summon, scripted_swarms, color_rats, swarm_brain, move_rats, rat_calls, npc_stomps, kill_rats).chain().after(crate::npc::age_corpses).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -583,6 +583,64 @@ fn scripted_swarms(mut commands: Commands, vm: Option<ResMut<crate::kismet::Vm>>
         info!("level scripts: rat swarm {} ({} rats)", def.name, def.count);
         spawn_wild(&mut commands, vis, level.scene.rat_type, def, slot, i);
     }
+}
+
+/// A character set upon by a swarm calls for help this far (m: `DisTweaks_NPCPawn_Combat`'s
+/// `m_SwarmCallForHelpLoudness`, `EAINoiseLoudness20m`), at most once a second.
+const RAT_CALL: f32 = 20.0;
+
+/// A rat this near a character (m) is on it.
+const RAT_ON: f32 = 1.5;
+
+/// A guard set upon by rats calls for help (a rat-swarm noise, as roshan's r614/blink research
+/// decoded it): others of its side that fight rats (`DisBehaviorCombatRatSwarm`: guards, thugs,
+/// Overseers, whose brains commit at once) come to the nearest rat on it and stamp on it; they
+/// give it up as the swarm leaves it be or it goes down.
+fn rat_calls(
+    time: Res<Time>,
+    swarms: Query<&Swarm>,
+    rats: Query<&Transform, With<Rat>>,
+    mut npcs: Query<(Entity, &mut Npc, &Transform), (Without<Rat>, Without<crate::possession::Possessed>)>,
+    mut called: Local<std::collections::HashMap<Entity, f32>>,
+) {
+    let now = time.elapsed_secs();
+    // who is set upon now: the victim, its side, where it stands, the rat nearest it
+    let mut victims: Vec<(Entity, String, Vec3, Vec3)> = Vec::new();
+    for s in &swarms {
+        let Some(v) = s.target else { continue };
+        let Ok((_, n, t)) = npcs.get(v) else { continue };
+        if n.is_down() || !n.fighter() {
+            continue;
+        }
+        let near = s.rats.iter().filter_map(|r| rats.get(*r).ok()).map(|rt| rt.translation).filter(|p| p.distance(t.translation) < RAT_ON + 1.0).min_by(|a, b| a.distance(t.translation).total_cmp(&b.distance(t.translation)));
+        if let Some(at) = near {
+            victims.push((v, n.faction.clone(), t.translation, at));
+        }
+    }
+    let calling: Vec<(Entity, String, Vec3, Vec3)> = victims
+        .iter()
+        .filter(|(v, ..)| called.get(v).is_none_or(|t| now - t >= 1.0))
+        .cloned()
+        .collect();
+    for (v, ..) in &calling {
+        called.insert(*v, now);
+    }
+    for (e, mut n, t) in &mut npcs {
+        // answering: on to the rat still on the comrade, else given up
+        if let Some((v, _)) = n.rat_help {
+            n.rat_help = victims.iter().find(|x| x.0 == v).map(|x| (v, x.3));
+        }
+        if n.rat_help.is_some() || n.is_down() || !n.fighter() || n.mode == Mode::Combat {
+            continue;
+        }
+        if let Some((v, _, _, at)) = calling.iter().find(|(v, f, p, _)| *v != e && *f == n.faction && p.distance(t.translation) < RAT_CALL) {
+            n.rat_help = Some((*v, *at));
+            if std::env::var("DH_RAT_LOG").is_ok() {
+                info!("rats: {} answers a call for help against rats ({:.1} m)", n.name, at.distance(t.translation));
+            }
+        }
+    }
+    called.retain(|_, t| now - *t < 10.0);
 }
 
 /// How near a rat must come to be stamped on (`DisTweaks_NPCStomp`: 250 units), when the heel

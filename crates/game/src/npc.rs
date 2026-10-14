@@ -255,6 +255,9 @@ pub struct Npc {
     pub tether: Vec<u32>,
     /// the flee point it runs to (`aiworld::AiWorld::flee_target`)
     pub flee_to: Option<usize>,
+    /// a comrade set upon by rats whose call for help it answers, and the rat on it to stamp
+    /// on (`DisBehaviorCombatRatSwarm`)
+    pub rat_help: Option<(Entity, Vec3)>,
     /// caught panicking with Corvo upon it: how long it has begged, and how long he has been
     /// back off; then the seconds left getting up again
     pub caught: Option<(f32, f32)>,
@@ -1543,6 +1546,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         tether: sp.tether.clone(),
         flee_to: None,
         caught: None,
+        rat_help: None,
         rising: 0.0,
         watch: None,
         watched: Vec::new(),
@@ -2744,6 +2748,12 @@ pub(crate) fn npc_brain(
         }
         // on its way to ring an alarm bell: nothing else (the bell's slot, Alert, is above
         // Combat's)
+        // a comrade's call for help against rats answered (its rat-swarm combat, outranked by a
+        // fight with Corvo): to the rat on it, the stamp coming as it's in reach
+        if let Some((_, at)) = npc.rat_help.filter(|_| npc.mode != Mode::Combat) {
+            npc.target = Some(at);
+            continue;
+        }
         if let Some(bell) = npc.alarm_run {
             npc.target = Some(bell);
             npc.attack_t = None;
