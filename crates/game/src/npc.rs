@@ -219,6 +219,8 @@ pub struct Npc {
     pub under_cd: [f32; 2],
     /// until it may taunt again, and how long its taunt holds it
     pub taunt_cd: f32,
+    /// its bearing about Corvo while it waits outside the ring of those at him (radians)
+    pub flank: Option<f32>,
     pub taunt_hold: f32,
     /// investigating or searching at a run (`TweaksBehavior_Search_Default`'s `m_bShouldRun`:
     /// danger, help, alarm and death-rattle noises, corpses, sightings), else at a walk
@@ -376,11 +378,13 @@ pub struct Arms {
     /// the moves it uses only from outside the ring of those at Corvo (or with him out of
     /// reach): turned off by its attack pattern, not by its outer one (a thug's bottle thrown)
     pub outer_only: Vec<String>,
+    /// where it keeps outside that ring: its outer pattern's reach (m) and flank (degrees)
+    pub outer_place: Option<(f32, f32)>,
 }
 
 impl Default for Arms {
     fn default() -> Self {
-        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, throwing: None, outer_only: Vec::new() }
+        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, throwing: None, outer_only: Vec::new(), outer_place: None }
     }
 }
 
@@ -505,12 +509,23 @@ impl Arms {
         a.grenades = st.grenades.clone();
         a.moves = st.melee.clone();
         a.whiskey = st.whiskey.clone();
+        // (its outer pattern's place: the ideal reach of the move it names, a projectile's that of
+        // its firearm, its bottle or its throw)
+        let drawn = (seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as usize;
+        if let Some(shape) = (!st.outer_shapes.is_empty()).then(|| &st.outer_shapes[drawn % st.outer_shapes.len()]) {
+            let reach = if shape.ideal == "Projectile" {
+                st.melee.iter().find(|m| matches!(m.kind.as_str(), "ThrowWhiskey" | "Throw")).map(|m| m.range[2]).or(st.fire.as_ref().map(|f| f.range[2]))
+            } else {
+                st.melee.iter().find(|m| m.kind == shape.ideal).map(|m| m.range[2])
+            };
+            a.outer_place = reach.filter(|r| *r > 1.5).map(|r| (r, shape.flank));
+        }
         a.throwing = st.throwing.clone();
         // its attack pattern, one of its combat behaviour's: the moves it may use, and how soon
         // again (a pattern's 0-0 cooldown leaving the move's own, our reading); and its outer
         // one's, for the moves it turns off but the outer one doesn't (used from outside the
         // ring of those at Corvo)
-        let draw = |all: &[Vec<dhcook::format::PatternOverride>]| (!all.is_empty()).then(|| all[(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as usize % all.len()].clone());
+        let draw = |all: &[Vec<dhcook::format::PatternOverride>]| (!all.is_empty()).then(|| all[drawn % all.len()].clone());
         let on = |p: &Option<Vec<dhcook::format::PatternOverride>>, kind: &str| p.as_ref().is_none_or(|p| p.iter().find(|o| o.kind == kind).is_none_or(|o| o.enabled));
         let outer = draw(&st.outer_patterns);
         if let Some(pattern) = draw(&st.attack_patterns) {
@@ -1616,6 +1631,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         gun_hold: 0.0,
         under_cd: [0.0; 2],
         taunt_cd: 5.0 + rand::random::<f32>() * 10.0,
+        flank: None,
         taunt_hold: 0.0,
         search_run: false,
         witnessed_death: false,
@@ -2808,6 +2824,13 @@ pub(crate) fn npc_brain(
     let mut alerts: Vec<(Vec3, Vec3)> = Vec::new();
     // attack tokens: swings already in progress count against the limit
     let mut attackers = npcs.iter().filter(|(_, n, _)| n.attack_t.is_some()).count();
+    // the ring at Corvo: of those fighting him, as many as the cap, the nearest; the others wait
+    // outside it
+    let ring: Vec<Entity> = {
+        let mut fighting: Vec<(Entity, f32)> = npcs.iter().filter(|(_, n, _)| n.mode == Mode::Combat && n.hostile() && !n.is_down()).map(|(e, _, t)| (e, t.translation.distance_squared(ppos))).collect();
+        fighting.sort_by(|a, b| a.1.total_cmp(&b.1));
+        fighting.into_iter().take(max_attackers).map(|(e, _)| e).collect()
+    };
     // one weeper at a time grabs Corvo
     let grab_active = npcs.iter().any(|(_, n, _)| n.grab.is_some());
     // (after any weeper's grab, none for a while: `DisGlobalCombatManager.m_fInhibitionTimeWeeperArmGrab`)
@@ -3251,6 +3274,24 @@ pub(crate) fn npc_brain(
                 }
                 if npc.sees_player {
                     npc.target = Some(ppos);
+                    // outside the ring of those at him (no blow of its own coming), it keeps its
+                    // outer pattern's place: its ideal reach, off to its flank, a side each
+                    // (`m_pIdealRangeSource`, `m_fFlankAngleDegrees`: our reading of how it
+                    // skirmishes)
+                    match npc.arms.outer_place.filter(|_| !ring.contains(&e) && npc.attack_t.is_none()) {
+                        Some((reach, flank)) => {
+                            let side = if npc.spawner % 2 == 0 { 1.0 } else { -1.0 };
+                            if npc.flank.is_none() && std::env::var("DH_MELEE_LOG").is_ok() {
+                                info!("melee: {} waits outside the ring, {reach:.1} m off, {:.0} degrees to its flank", npc.name, side * flank);
+                            }
+                            let bearing = *npc.flank.get_or_insert_with(|| {
+                                let from = (pos - ppos).with_y(0.0);
+                                from.x.atan2(from.z) + side * flank.to_radians()
+                            });
+                            npc.target = Some(ppos.with_y(pos.y) + Vec3::new(bearing.sin(), 0.0, bearing.cos()) * reach);
+                        }
+                        None => npc.flank = None,
+                    }
                     // a wolfhound with Corvo out of its reach (above it or below) keeps where it can
                     // bark at him, just past its bark's least reach (our reading of its
                     // `DisNavMeshGoal_WolfhoundBarkPosition`)
@@ -3650,10 +3691,10 @@ pub(crate) fn npc_brain(
                         if npc.attack_t.is_none() {
                             npc.swing = None;
                         }
-                    } else if npc.attack_cd <= 0.0 && npc.stagger <= 0.0 && npc.sees_player && (attackers < max_attackers || !npc.arms.outer_only.is_empty()) && npc.may_melee() && pace_ready(&npc) {
+                    } else if npc.attack_cd <= 0.0 && npc.stagger <= 0.0 && npc.sees_player && (attackers < max_attackers || (!npc.arms.outer_only.is_empty() && (!ring.contains(&e) || (ppos.y - pos.y).abs() > 1.6))) && npc.may_melee() && pace_ready(&npc) {
                         // (outside the ring of those at Corvo, or with him out of reach, only the
                         // moves for there)
-                        let outer = attackers >= max_attackers || (!npc.arms.outer_only.is_empty() && (ppos.y - pos.y).abs() > 1.6 && (ppos - pos).with_y(0.0).length() > 2.5);
+                        let outer = !ring.contains(&e) || (!npc.arms.outer_only.is_empty() && (ppos.y - pos.y).abs() > 1.6 && (ppos - pos).with_y(0.0).length() > 2.5);
                         // the move for the distance and its facing (its blade's
                         // `DisTweaks_NPCAttackShort` / `Medium` / `Long`), a block answered with a
                         // kick (`DisTweaks_NPCBash`); without them, a blow at arm's length
@@ -5360,6 +5401,20 @@ mod wear_tests {
         let st = NpcStats { outer_patterns: Vec::new(), ..st };
         let a = super::Arms::of(&st, 1, 7);
         assert!(a.outer_only.is_empty() && !a.moves.iter().any(|m| m.kind == "ThrowWhiskey"));
+    }
+
+    #[test]
+    fn outer_patterns_place_by_their_ideal_move() {
+        use dhcook::format::{MeleeMove, NpcStats, PatternShape};
+        let mv = |kind: &str, ideal: f32| MeleeMove { kind: kind.into(), range: [0.0, ideal * 2.0, ideal], ..Default::default() };
+        // (a thug's `TwkAttackPattern_Ranged`: its throw's ideal reach; a flanker's, its long lunge's)
+        let st = NpcStats { melee: vec![mv("Short", 1.5), mv("Long", 5.25), mv("ThrowWhiskey", 10.0)], outer_shapes: vec![PatternShape { ideal: "Projectile".into(), flank: 60.0 }], ..Default::default() };
+        assert_eq!(super::Arms::of(&st, 1, 3).outer_place, Some((10.0, 60.0)));
+        let st = NpcStats { outer_shapes: vec![PatternShape { ideal: "Long".into(), flank: 45.0 }], ..st };
+        assert_eq!(super::Arms::of(&st, 1, 3).outer_place, Some((5.25, 45.0)));
+        // (none it can keep: none)
+        let st = NpcStats { outer_shapes: vec![PatternShape { ideal: "Jump".into(), flank: 45.0 }], ..st };
+        assert_eq!(super::Arms::of(&st, 1, 3).outer_place, None);
     }
 
     #[test]

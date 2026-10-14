@@ -481,7 +481,12 @@ fullscreen display, vertical sync and the crosshair.
   the move's own, our reading); and once one of them uses a move on Corvo no other uses it for
   a while (`DisGlobalCombatManager.m_fInhibitionTime*`: the short blow 2 s, the step back and
   the lunge 1 s, the long lunge 0.8 s, the charge 3 s, a step aside 6 s, back 8 s, as roshan's
-  r614/blink research found them used). They answer
+  r614/blink research found them used). Those waiting outside the ring of those at Corvo
+  (`DefaultAI.ini` `m_InnerSkirmishCaps`) keep their outer pattern's place about him, each to a
+  side: the ideal reach of the move it names (`m_pIdealRangeSource`: a sword's flanker and
+  strategist the long lunge's, 5.25 m; `TwkAttackPattern_Ranged` its firearm's or throw's) off
+  to its flank (`m_fFlankAngleDegrees`: 15-60 degrees), rather than queueing at him (our
+  reading of how they skirmish). They answer
   Corvo's block with a kick (`DisTweaks_NPCBash`: it breaks the block and shoves him back);
   a guard who parries plays its parry (`Sword_Ready_ParryWin_*`) and strikes back straight
   after (`DisTweaks_NPCRiposte`), one whose blow Corvo parries reels (`..ParryLost_*`), and

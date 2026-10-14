@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 151;
+pub const SCENE_VERSION: u32 = 152;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -1100,6 +1100,9 @@ pub struct NpcStats {
     /// (`m_OuterSkirmishAttackPatterns`)
     #[serde(default)]
     pub outer_patterns: Vec<Vec<PatternOverride>>,
+    /// where each of those outer patterns places it about Corvo
+    #[serde(default)]
+    pub outer_shapes: Vec<PatternShape>,
     /// what it throws at Corvo with its bare hand (its move `Throw` among the blade's)
     #[serde(default)]
     pub throwing: Option<NpcThrowing>,
@@ -1225,6 +1228,15 @@ pub struct PatternOverride {
     pub kind: String,
     pub enabled: bool,
     pub cooldown: [f32; 2],
+}
+
+/// Where an attack pattern places its character about Corvo: at the ideal reach of one of its
+/// moves (`m_pIdealRangeSource`: a move's kind, or `Projectile` for its firearm's or throw's),
+/// off to its flank (`m_fFlankAngleDegrees`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct PatternShape {
+    pub ideal: String,
+    pub flank: f32,
 }
 
 /// A musical Overseer's tunes.

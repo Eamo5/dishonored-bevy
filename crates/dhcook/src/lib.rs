@@ -3469,6 +3469,48 @@ impl<'a> Cooker<'a> {
         Vec::new()
     }
 
+    /// Where each of a combat behaviour's attack patterns places its character
+    /// (`m_pIdealRangeSource`, `m_fFlankAngleDegrees`), as `attack_patterns` lists them.
+    fn pattern_shapes(&mut self, pawn: &Obj, list: &str) -> Vec<PatternShape> {
+        let Some(brain) = self.tweak_obj(pawn, "m_pBrainTweak") else { return Vec::new() };
+        let Some((pkg, Value::Array { count, offset, size })) = self.tweak_prop(&brain, "m_BehaviorTweak", 0, 0) else { return Vec::new() };
+        let behaviours: Vec<Obj> = parse_struct_array(&pkg, offset, size, count)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|b| match b.get_idx("m_Difficulty", 1) {
+                Some(Value::Object(o)) if *o != 0 => self.assets.resolve(&pkg, *o),
+                _ => None,
+            })
+            .filter(|b| b.class().contains("Combat"))
+            .collect();
+        for b in behaviours {
+            let patterns = self.tweak_objs(&b, list);
+            if patterns.is_empty() {
+                continue;
+            }
+            return patterns
+                .iter()
+                .map(|p| {
+                    let ideal = match self.tweak_prop(p, "m_pIdealRangeSource", 0, 0) {
+                        Some((pp, Value::Object(o))) if o != 0 => {
+                            let path = pp.obj_path(o);
+                            let name = path.rsplit('.').next().unwrap_or(&path).to_string();
+                            // (a firearm's, a bow's, a throw's: the projectile's)
+                            if name.ends_with("ProjectileAttack") || name.ends_with("FireGun") || name.ends_with("FireBow") {
+                                "Projectile".to_string()
+                            } else {
+                                Self::melee_kind(&name).unwrap_or("").to_string()
+                            }
+                        }
+                        _ => String::new(),
+                    };
+                    PatternShape { ideal, flank: self.tweak_float(p, "m_fFlankAngleDegrees", 0).unwrap_or(0.0) }
+                })
+                .collect();
+        }
+        Vec::new()
+    }
+
     /// What an attack pattern says of the blade's moves (`m_ItemContextOverrides`).
     fn pattern_overrides(&mut self, p: &Obj) -> Vec<PatternOverride> {
         let Some((pkg, Value::Array { count, offset, size })) = self.tweak_prop(p, "m_ItemContextOverrides", 0, 0) else { return Vec::new() };
@@ -3749,6 +3791,7 @@ impl<'a> Cooker<'a> {
                 st.melee = self.melee_moves(&w);
                 st.attack_patterns = self.attack_patterns(pawn, "m_AttackPatterns");
                 st.outer_patterns = self.attack_patterns(pawn, "m_OuterSkirmishAttackPatterns");
+                st.outer_shapes = self.pattern_shapes(pawn, "m_OuterSkirmishAttackPatterns");
             }
             st.weapons.push(wep);
         }
