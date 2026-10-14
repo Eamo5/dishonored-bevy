@@ -233,7 +233,7 @@ fn npc_barks(
     stats: Res<PlayerStats>,
     mut man: ResMut<BarkMan>,
     player: Query<&Transform, With<Player>>,
-    mut npcs: Query<(Entity, &Npc, &Transform, Option<&mut BarkState>, Option<&crate::anim::Animator>, Option<&crate::npc::NpcAnim>)>,
+    mut npcs: Query<(Entity, &Npc, &Transform, Option<&mut BarkState>, Option<&crate::anim::Animator>, Option<&crate::npc::NpcAnim>, Has<crate::audio::Speaking>)>,
     mut out: MessageWriter<PostEvent>,
     mut subs: MessageWriter<Subtitle>,
     data: Res<crate::gamedata::Data>,
@@ -273,7 +273,7 @@ fn npc_barks(
     let standing: Vec<(Entity, Vec3, String, bool)> = npcs.iter().filter(|(_, n, ..)| !n.is_down()).map(|(e, n, t, ..)| (e, t.translation, n.faction.clone(), n.alert == Alert::Combat)).collect();
     // (and the bodies: dead or knocked out)
     let bodies: Vec<(Vec3, bool)> = npcs.iter().filter(|(_, n, ..)| n.is_down()).map(|(_, n, t, ..)| (t.translation, n.mode == Mode::Dead)).collect();
-    for (e, npc, t, state, anim, clips) in &mut npcs {
+    for (e, npc, t, state, anim, clips, speaking) in &mut npcs {
         let Some(mut st) = state else {
             if log {
                 info!("bark voice {} ({}, {} at {:.1}): {:?}", npc.name, npc.pawn, npc.faction, t.translation, npc.voice.and_then(|v| level.scene.barks.get(v as usize)).map(|v| &v.name));
@@ -558,7 +558,9 @@ fn npc_barks(
         let playing = man.firing.iter().find(|f| f.who == e);
         let free = match playing {
             Some(f) => flags & INTERRUPTS != 0 && f.flags & NOT_INTERRUPTIBLE == 0,
-            None => true,
+            // (mid-line in a conversation or the scripts: a conversation outranks a bark, which
+            // takes the speaker only if it interrupts)
+            None => !speaking || flags & INTERRUPTS != 0,
         };
         let shut = man.locked.get(&(group, quiet)).is_some_and(|until| *until > now);
         let again = man.next.get(&(e, bark.hook.clone())).is_some_and(|at| *at > now);
