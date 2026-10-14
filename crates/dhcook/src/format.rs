@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 140;
+pub const SCENE_VERSION: u32 = 141;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -1028,6 +1028,25 @@ pub struct NpcType {
     pub head_variation: Vec<Vec<(u32, f32)>>,
     #[serde(default)]
     pub body_variation: Vec<Vec<(u32, f32)>>,
+    /// the pool its body bleeds (`m_pBodyTweaks`' `m_BloodDecal`)
+    #[serde(default)]
+    pub blood_pool: Option<BloodPool>,
+}
+
+/// A body's blood pool (a `DishonoredDecalInfo`): the materials it's drawn with (one at
+/// random), the bones it may spread under, its least and most size (uu), and its growth: a step
+/// each time step (uu, s) when it stretches (`DCL_STRETCH`; else its most size at once); done,
+/// it goes once unseen for its lifetime (s).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct BloodPool {
+    pub materials: Vec<u32>,
+    pub bones: Vec<String>,
+    pub min: [f32; 2],
+    pub max: [f32; 2],
+    pub step: [f32; 2],
+    pub time_step: f32,
+    pub stretch: bool,
+    pub lifetime: f32,
 }
 
 /// A character's numbers and arms. Its attributes are those of its pawn's attribute tweak

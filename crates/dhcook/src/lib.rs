@@ -3012,6 +3012,7 @@ impl<'a> Cooker<'a> {
         attachments.extend(self.npc_accessories(&ch));
         let ragdoll = ch.obj(self.assets, "m_pPhysicsAsset").filter(|p| p.class() == "PhysicsAsset").and_then(|p| self.ragdoll(&p));
         let lineage = self.tweak_lineage(tweak).iter().map(|p| p.rsplit('.').next().unwrap_or(p).to_string()).collect();
+        let blood_pool = ch.obj(self.assets, "m_pBodyTweaks").and_then(|b| self.blood_pool(&b));
         self.scene.npc_types.push(NpcType {
             name,
             kind: kind.into(),
@@ -3038,6 +3039,7 @@ impl<'a> Cooker<'a> {
             variants: Vec::new(),
             head_variation: heads.first().map(|h| h.2.clone()).unwrap_or_default(),
             body_variation,
+            blood_pool,
         });
         // its other heads: types alike but for the head (its mesh, materials, face, variations)
         if heads.len() > 1 {
@@ -5290,6 +5292,7 @@ impl<'a> Cooker<'a> {
             variants: Vec::new(),
             head_variation: Vec::new(),
             body_variation: Vec::new(),
+            blood_pool: None,
             name: body.path(),
             kind: "device".into(),
             skeleton: Some(skeleton),
@@ -5546,6 +5549,35 @@ impl<'a> Cooker<'a> {
             }
         }
         out
+    }
+
+    /// A body's blood pool (`DisTweaks_NPCPawn_Body.m_BloodDecal`).
+    fn blood_pool(&mut self, body: &Obj) -> Option<BloodPool> {
+        let ch = self.chain(body);
+        let (pkg, Value::Struct(_, s)) = ch.get_pkg("m_BloodDecal")? else { return None };
+        let (pkg, d) = (pkg.clone(), Props(s.clone()));
+        let materials: Vec<u32> = object_array(&pkg, &d, "m_Materials").into_iter().filter(|o| *o != 0).filter_map(|o| self.assets.resolve(&pkg, o)).map(|m| self.material(&m)).collect();
+        let mut bones = Vec::new();
+        if let Some((n, offset, _)) = d.array("m_BoneNames") {
+            let mut r = Reader::at(&pkg.data, offset);
+            for _ in 0..n {
+                bones.extend(pkg.read_name(&mut r).ok());
+            }
+        }
+        if materials.is_empty() || bones.is_empty() {
+            return None;
+        }
+        let size = |n: &str| d.int(n).unwrap_or(0) as f32;
+        Some(BloodPool {
+            materials,
+            bones,
+            min: [size("m_MinWidth"), size("m_MinHeight")],
+            max: [size("m_MaxWidth"), size("m_MaxHeight")],
+            step: [d.float("m_fWidthStep").unwrap_or(0.0), d.float("m_fHeightStep").unwrap_or(0.0)],
+            time_step: d.float("m_fTimeStep").unwrap_or(0.0),
+            stretch: d.name("m_Behaviour") == Some("DCL_STRETCH"),
+            lifetime: d.float("m_fLifetime").unwrap_or(0.0),
+        })
     }
 
     /// `NPC_Common.SeveredLimbsInfo.SLInfo_Default`: each break bone's blood when the limb is
@@ -6829,6 +6861,7 @@ impl<'a> Cooker<'a> {
                             variants: Vec::new(),
                             head_variation: Vec::new(),
                             body_variation: Vec::new(),
+                            blood_pool: None,
                             name: "player_arms".into(),
                             kind: "player".into(),
                             skeleton: Some(skeleton),
@@ -6892,6 +6925,7 @@ impl<'a> Cooker<'a> {
                                 variants: Vec::new(),
                                 head_variation: Vec::new(),
                                 body_variation: Vec::new(),
+                                blood_pool: None,
                                 name: "rat".into(),
                                 kind: "rat".into(),
                                 skeleton: Some(skeleton),

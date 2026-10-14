@@ -75,6 +75,17 @@ impl Ragdoll {
         Ragdoll { rest, ..default() }
     }
 
+    /// It lies still now.
+    pub fn lying_still(&self) -> bool {
+        self.parts.is_empty() && !self.rest.is_empty()
+    }
+
+    /// It was lying still from the start (a saved body or one the level has dead, never limp
+    /// since).
+    pub fn saved(&self) -> bool {
+        self.lying_still() && self.t == 0.0
+    }
+
     /// Its body bones in the character's frame (for saves): where they lay, or where its
     /// bodies are now.
     pub fn pose(&self, owner: &GlobalTransform, rig: &NpcRig, joints: &Query<&GlobalTransform>) -> Vec<(usize, Transform)> {

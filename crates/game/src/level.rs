@@ -480,6 +480,10 @@ pub struct GameAssets {
     pub npc_types: Vec<Option<NpcVisual>>,
     /// materials the scripts put on characters, by scene material
     pub npc_mat_swaps: HashMap<u32, PartMat>,
+    /// the materials of the pools bodies bleed (`m_BloodDecal`), by scene material, and the
+    /// quad they lie on
+    pub blood_pool_materials: HashMap<u32, PartMat>,
+    pub blood_pool_quad: Option<Handle<Mesh>>,
     pub props: std::collections::HashMap<String, VisualParts>,
     /// sprite materials of the particle emitters (original shaders, or unlit
     /// approximations), by scene material id
@@ -1736,6 +1740,26 @@ fn spawn_level(
         if let Some(m) = m {
             game_assets.npc_mat_swaps.insert(id, m);
         }
+    }
+    // the pools bodies bleed
+    let pool_ids: Vec<u32> = scene.npc_types.iter().flat_map(|t| t.blood_pool.iter().flat_map(|b| b.materials.iter().copied())).collect();
+    for id in pool_ids {
+        if game_assets.blood_pool_materials.contains_key(&id) {
+            continue;
+        }
+        let m = match mb.ue3_material(id, Policy::NoLightMap, &mut image_assets, &mut ue_assets, &mut ue_programs, &mut shader_assets) {
+            Some(h) => Some(PartMat::Ue3(h)),
+            None => match mb.material(id, &mut image_assets, &mut mat_assets, &mut sky_assets) {
+                Some(MatHandle::Std(h)) => Some(PartMat::Std(h)),
+                _ => None,
+            },
+        };
+        if let Some(m) = m {
+            game_assets.blood_pool_materials.insert(id, m);
+        }
+    }
+    if !game_assets.blood_pool_materials.is_empty() {
+        game_assets.blood_pool_quad = Some(mesh_assets.add(crate::blood::quad()));
     }
     lap("characters and props");
     // particle materials: unlit, texture x tint x particle colour
