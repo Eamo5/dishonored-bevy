@@ -1415,6 +1415,12 @@ against the install's own data where it carries them, then implemented independe
   `Sword_Ready_JumpLandSmall`, crouched `Sword_Sneak_JumpLandSmall`, and past
   `m_fFall_Stun_Vel` (22 m/s) the hard `Generic_JumpLandBig`. None stops him moving (as roshan's
   r614/blink research found). Agility plays them half again as fast (`LandAnimRate` +50%).
+  A mantle plays the arms' climb from `Ply_Player_Mantle_at` (in the full-body picker): low,
+  medium or high by the edge's height (to 1.2 m, 1.7 m, `m_LowMantleMaxEdgeHeight` /
+  `m_MediumMantleMaxEdgeHeight`), the sneaking ones into a space too low to stand, empty-handed
+  (`Empty_Mantle*`, `Empty_Sneak_Mantle*`) or sword in hand (`Sword_Ready_Mantle*`,
+  `Sword_Sneak_Mantle*`), each as long as its climb and at Acrobat's `MantleAnimRate`; the left
+  hand keeps what it holds. Edges to 1.2 m are stepped onto at once (`m_bLowMantleUseStepUp`).
 - **Conversations.** Random branches pick by their percentage weights and avoid repeating
   their last pick; in-turn branches stay on their last output unless they loop; a shuffled turn
   ends on "Depleted". A conversation breaks off on its speaker's death or change of behaviour,

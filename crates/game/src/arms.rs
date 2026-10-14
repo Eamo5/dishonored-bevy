@@ -96,6 +96,9 @@ struct ArmClips {
     land: Option<ClipId>,
     land_sneak: Option<ClipId>,
     land_big: Option<ClipId>,
+    /// a mantle (`Ply_Player_Mantle_at`): empty-handed or sword in hand, standing or sneaking,
+    /// low, medium or high
+    mantle: [[[Option<ClipId>; 3]; 2]; 2],
     attack_right: Vec<ClipId>,
     attack_left: Vec<ClipId>,
     sneak_attack: Option<ClipId>,
@@ -180,6 +183,8 @@ impl ArmClips {
             land: lib.find("Sword_Ready_JumpLandSmall"),
             land_sneak: lib.find("Sword_Sneak_JumpLandSmall"),
             land_big: lib.find("Generic_JumpLandBig"),
+            mantle: [["Empty_Mantle", "Empty_Sneak_Mantle"], ["Sword_Ready_Mantle", "Sword_Sneak_Mantle"]]
+                .map(|ways| ways.map(|w| ["Low", "Medium", "High"].map(|h| lib.find(&format!("{w}{h}"))))),
             attack_right: lib.all(&["Sword_Ready_AttackRight_A_Big", "Sword_Ready_AttackRight_B_Big"]),
             attack_left: lib.all(&["Sword_Ready_AttackLeft_A_Big", "Sword_Ready_AttackLeft_B_Big"]),
             sneak_attack: lib.find("Sword_Sneak_Attack_Small"),
@@ -261,6 +266,8 @@ struct ArmsAnim {
     choking: bool,
     grabbed: bool,
     oneshot: bool,
+    /// mantling (as last seen)
+    mantling: bool,
     /// in the air long enough that touching down is a landing
     airborne: bool,
     parry_flash: f32,
@@ -489,6 +496,7 @@ fn spawn_arms(
                 grabbed: false,
                 oneshot: false,
                 airborne: false,
+                mantling: false,
                 parry_flash: 0.0,
                 damage_flash: 0.0,
                 cast_seq: powers.as_ref().map(|p| p.cast_seq).unwrap_or(0),
@@ -656,6 +664,27 @@ fn animate_arms(
             anim.play(cl, true, rate.clamp(0.6, 1.8), 0.3);
         }
         base_busy = true;
+    }
+    // a mantle: the arms reach for the edge and haul him over (`Ply_Player_Mantle_at`, in the
+    // full-body picker: low, medium or high by the edge's height, to 1.2 and 1.7 m; the sneaking
+    // ones into a space too low to stand; empty-handed or sword in hand), at Acrobat's rate
+    // (`MantleAnimRate`): each lasts as long as its climb
+    match p.mantle.filter(|_| !base_busy) {
+        Some((from, to, _)) => {
+            if !st.mantling {
+                let h = to.y - from.y + if p.crouched { crate::player::STAND_HALF - crate::player::CROUCH_HALF } else { 0.0 };
+                let ty = if h <= 1.2 { 0 } else if h <= 1.7 { 1 } else { 2 };
+                if let Some(cl) = c.mantle[!empty as usize][p.crouched as usize][ty] {
+                    anim.restart(cl, false, attrs.mantle_rate.max(0.01), 0.08);
+                    st.oneshot = true;
+                }
+            }
+            // (no landing after it, though it began in the air)
+            st.airborne = false;
+            st.mantling = true;
+            base_busy = true;
+        }
+        None => st.mantling = false,
     }
     // the sword drawn again: its equip clip plays through
     if stats.sheathed != st.sheathed {
