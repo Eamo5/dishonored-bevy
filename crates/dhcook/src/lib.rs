@@ -6627,6 +6627,22 @@ impl<'a> Cooker<'a> {
                 Err(e) => log::warn!("music box rig: {e:#}"),
             }
         }
+        // Corvo's held guns, skinned with their own sets (`CorvoGun_as`: the hammer, the fast
+        // reload; `Crossbow_as`: its arms, string, cart and bolt)
+        if !daud {
+            for (name, mesh, set) in [
+                ("pistol", "CorvoGuns.CorvoGun_01", "CorvoGun_as.CorvoGun_as"),
+                ("crossbow", "Crossbows.crossbow_01", "Crossbows_as.Crossbow_as"),
+            ] {
+                let (Some(m), Some(s)) = (self.assets.find(mesh), self.assets.find(set)) else { continue };
+                match self.cook_device(&m, vec![s]) {
+                    Ok(id) => {
+                        self.scene.prop_rigs.insert(name.to_string(), id);
+                    }
+                    Err(e) => log::warn!("{name} rig: {e:#}"),
+                }
+            }
+        }
         // a blade in flesh: its blood (the contact system's sword against a body)
         self.scene.blade_blood = self.blade_blood();
         self.scene.contact_fx = self.contact_fx();

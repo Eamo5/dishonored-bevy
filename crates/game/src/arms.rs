@@ -26,7 +26,7 @@ pub struct ArmsPlugin;
 impl Plugin for ArmsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(GameState::InGame), spawn_arms.after(spawn_view_model))
-            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_effects.after(ArmsAnimSet), pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_effects.after(ArmsAnimSet), animate_held.after(ArmsAnimSet), pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, (align_arms.in_set(ArmsAlign), arm_pitch).after(AnimPose).before(TransformSystems::Propagate));
     }
 }
@@ -55,6 +55,10 @@ pub struct ArmsRoot;
 /// `Ps_Muzzle_Socket`): where its flash plays, its tracer leaves from.
 #[derive(Component)]
 pub struct Muzzle(pub Power);
+
+/// A held item's own rig (its prop's name): it moves with the hand's clips.
+#[derive(Component)]
+struct HeldRig(&'static str);
 
 #[derive(Component)]
 struct ArmRig {
@@ -446,11 +450,44 @@ fn spawn_arms(
                 let Some(parts) = a.props.get(prop) else { continue };
                 let (hand, at) = if prop == "crossbow" { wrist.unwrap_or((hand, at)) } else { (hand, at) };
                 let holder = commands.spawn((at, Visibility::Hidden, RenderLayers::layer(VIEW_LAYER))).id();
-                for (mesh, mat) in &parts.view_parts {
-                    let mut m = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), NotShadowCaster, RenderLayers::layer(VIEW_LAYER)));
-                    mat.apply(&mut m);
-                    let m = m.id();
-                    commands.entity(holder).add_child(m);
+                // its own rig where the map has it cooked (its parts move with the hand's
+                // clips), else the item at rest
+                let rig = level.as_ref().and_then(|l| l.scene.prop_rigs.get(prop)).and_then(|t| a.npc_types.get(*t as usize)).and_then(|v| v.as_ref());
+                if let Some(rv) = rig {
+                    let bones = &rv.skeleton.bones;
+                    let rj: Vec<Entity> = bones
+                        .iter()
+                        .map(|b| commands.spawn((Transform::from_translation(Vec3::from(b.translation)).with_rotation(Quat::from_array(b.rotation).normalize()), Visibility::Inherited)).id())
+                        .collect();
+                    for (i, b) in bones.iter().enumerate() {
+                        let parent = if b.parent >= 0 && (b.parent as usize) < i { rj[b.parent as usize] } else { holder };
+                        commands.entity(parent).add_child(rj[i]);
+                    }
+                    for (mesh, mat) in &rv.parts.view_parts {
+                        let mut m = commands.spawn((
+                            Mesh3d(mesh.clone()),
+                            MeshTag(slot),
+                            SkinnedMesh { inverse_bindposes: rv.inverse_bindposes.clone(), joints: rj.clone() },
+                            NotShadowCaster,
+                            NoFrustumCulling,
+                            RenderLayers::layer(VIEW_LAYER),
+                        ));
+                        mat.apply(&mut m);
+                        let m = m.id();
+                        commands.entity(holder).add_child(m);
+                    }
+                    if let Some(lib) = rv.anims.clone() {
+                        let mut anim = Animator::new(lib, &rv.skeleton, rj);
+                        anim.sounds = false;
+                        commands.entity(holder).insert((HeldRig(prop), anim));
+                    }
+                } else {
+                    for (mesh, mat) in &parts.view_parts {
+                        let mut m = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), NotShadowCaster, RenderLayers::layer(VIEW_LAYER)));
+                        mat.apply(&mut m);
+                        let m = m.id();
+                        commands.entity(holder).add_child(m);
+                    }
                 }
                 if let Some(at) = parts.muzzle {
                     let m = commands.spawn((Muzzle(power), at, Visibility::Inherited)).id();
@@ -1116,6 +1153,45 @@ fn animate_arms(
         info!("arms: base {} overlay {} ({w:.2}) selected {:?} empty {empty} vis {:?}", name(anim.current().map(|p| p.clip)), name(ov), powers.selected, *vis);
     }
     let _ = st.attach_l;
+}
+
+/// The held guns' rigs move with the hand: the pistol's hammer falls as it fires and its fast
+/// reload plays (`CorvoGun_Fire_Hammer`, `CorvoGun_FastReload`); the crossbow plays the hand's clip of
+/// its own name (its shot, reloads, the shot through the optics), else rests loaded or, with no
+/// bolts left, empty (`Crossbow_Idle`, `Crossbow_OutOfAmmo_Idle`).
+fn animate_held(
+    arms: Query<&Animator, With<ArmsRoot>>,
+    mut held: Query<(&HeldRig, &mut Animator, &Visibility), Without<ArmsRoot>>,
+    (powers, stats): (Res<Powers>, Res<PlayerStats>),
+) {
+    let Ok(arms) = arms.single() else { return };
+    let arm = arms.overlay_state().0.map(|c| arms.lib.clip(c).name.clone()).unwrap_or_default();
+    let t = arms.overlay_time().unwrap_or(0.0);
+    for (rig, mut anim, vis) in &mut held {
+        if *vis == Visibility::Hidden {
+            continue;
+        }
+        let lib = anim.lib.clone();
+        let (clip, synced) = match rig.0 {
+            "pistol" => match arm.as_str() {
+                "Pistol_Fire" | "Pistol_Fire_Accurate" | "Pistol_Spyglass_Fire" | "Pistol_Spyglass_FireAccurate" => ("CorvoGun_Fire_Hammer", true),
+                "Pistol_FastReload" => ("CorvoGun_FastReload", true),
+                _ => ("CorvoGun_Idle", false),
+            },
+            _ => match arm.as_str() {
+                a @ ("Crossbow_Fire" | "Crossbow_Fire_FastReload" | "Crossbow_RapidReload" | "Crossbow_Reload_In" | "Crossbow_Spyglass_Fire") => (a, true),
+                _ if powers.selected.ammo(&stats).unwrap_or(1) == 0 => ("Crossbow_OutOfAmmo_Idle", false),
+                _ => ("Crossbow_Idle", false),
+            },
+        };
+        let Some(c) = lib.find(clip) else { continue };
+        if anim.current().map(|q| q.clip) != Some(c) {
+            anim.restart(c, !synced, 1.0, 0.05);
+        }
+        if synced {
+            anim.seek(t);
+        }
+    }
 }
 
 /// The clip a cast plays on the left arm (`ArmClips::resolve`).

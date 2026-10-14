@@ -1556,6 +1556,10 @@ against the install's own data where it carries them, then implemented independe
     the pistol in 0.426 + 0.75 / `ReloadSpeed` + 0.302 s, the crossbow in 1.3 s.
   - `FastReload` replaces that with its own quick action: the pistol's second upgrade 1 s, the
     crossbow's 0.3 s.
+  - The guns move in the hand: each is its own rig with its own clips, played with the hand's
+    (the pistol's hammer falls as it fires and its fast reload plays, `CorvoGun_as`; the
+    crossbow plays the hand's shot, reloads and zoomed shot by the same names, `Crossbow_as`,
+    and rests loaded or, with no bolts left, empty: `Crossbow_Idle`, `Crossbow_OutOfAmmo_Idle`).
 - **What characters wear.** Hats and masks are drawn on their sockets (`m_HatMeshes`,
   `m_MaskMeshes`), worn at `m_RandomAccessoryInfo`'s chance, one picked by `m_fRandomChance`. So is
   armour (`m_PotentialNPCArmor`: city and elite guards' helmets, caps), as its dropped item's mesh.
