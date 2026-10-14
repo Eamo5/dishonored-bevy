@@ -6565,14 +6565,40 @@ impl<'a> Cooker<'a> {
             ("arcmine", &[(0, "DLC06_ArcMine.DLC06_ArcMinePlayer_Lethal_Inst"), (1, "DLC06_ArcMine.DLC06_ArcMine_Armed_Inst")]),
             ("stunmine", &[(0, "DLC06_ArcMine.DLC06_ArcMinePlayer_Stun_Inst"), (1, "DLC06_ArcMine.DLC06_ArcMine_Armed_Inst")]),
         ];
-        let props: Vec<(&str, &str)> = GAME_PROPS
+        let mut props: Vec<(String, String)> = GAME_PROPS
             .iter()
             .map(|&(n, p)| DAUD_PROPS.iter().find(|d| daud && d.0 == n).copied().unwrap_or((n, p)))
             .chain(DAUD_PROPS.iter().copied().filter(|d| daud && !GAME_PROPS.iter().any(|g| g.0 == d.0)))
+            .map(|(n, p)| (n.to_string(), p.to_string()))
             .collect();
+        // the guns' upgrades as they show on them (`DisTweaks_Upgrade.m_pAttachMesh`: the
+        // pistol's cylinder, sights, drum and loader; the crossbow's scope, limbs and winder),
+        // as "upgrade:<gun>:<upgrade>"
+        const UPGRADE_PARTS: &[(&str, &str)] = &[
+            ("pistol", "Twk_Upgrade_Pistol"),
+            ("pistol", "Twk_Upgrade_Pistol_Accuracy1"),
+            ("pistol", "Twk_Upgrade_Pistol_Accuracy2"),
+            ("pistol", "Twk_Upgrade_PistolMagazine1"),
+            ("pistol", "Twk_Upgrade_PistolMagazine2"),
+            ("pistol", "Twk_Upgrade_PistolMagazine3"),
+            ("pistol", "Twk_Upgrade_PistolReloadSpeed1"),
+            ("pistol", "Twk_Upgrade_PistolReloadSpeed2"),
+            ("crossbow", "Twk_Upgrade_Crossbow_Accuracy"),
+            ("crossbow", "Twk_Upgrade_Crossbow_Range"),
+            ("crossbow", "Twk_Upgrade_Crossbow_ReloadSpeed"),
+        ];
+        if !daud {
+            for (gun, id) in UPGRADE_PARTS {
+                let Some(u) = self.assets.find(&format!("Twk_Upgrades.{id}")) else { continue };
+                if let Some(m) = self.chain(&u).obj(self.assets, "m_pAttachMesh") {
+                    props.push((format!("upgrade:{gun}:{id}"), m.path()));
+                }
+            }
+        }
         for (name, path) in props.iter() {
+            let (name, path) = (name.as_str(), path.as_str());
             let Some(obj) = self.assets.find(path) else {
-                if *name == "musicbox" {
+                if name == "musicbox" {
                     log::debug!("prop {path} not on this map");
                 } else {
                     log::warn!("prop {path} not found");
@@ -6601,7 +6627,7 @@ impl<'a> Cooker<'a> {
                     None => 0,
                 })
                 .collect();
-            for (slot, mpath) in PROP_MATERIALS.iter().filter(|p| p.0 == *name).flat_map(|p| p.1.iter()) {
+            for (slot, mpath) in PROP_MATERIALS.iter().filter(|p| p.0 == name).flat_map(|p| p.1.iter()) {
                 if let (Some(m), Some(o)) = (mats.get_mut(*slot), self.assets.find(mpath)) {
                     *m = self.material(&o);
                 }

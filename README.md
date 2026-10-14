@@ -1560,6 +1560,10 @@ against the install's own data where it carries them, then implemented independe
     (the pistol's hammer falls as it fires and its fast reload plays, `CorvoGun_as`; the
     crossbow plays the hand's shot, reloads and zoomed shot by the same names, `Crossbow_as`,
     and rests loaded or, with no bolts left, empty: `Crossbow_Idle`, `Crossbow_OutOfAmmo_Idle`).
+  - Their upgrades show on them (`DisTweaks_Upgrade.m_pAttachMesh`): the pistol's sights,
+    loaders and drums (the cylinder its own, each magazine's drum replacing the last as
+    `m_RevertedUpgrades` has it, none with explosive rounds loaded:
+    `m_RevertedUpgradesForExplosive`), the crossbow's scope, limbs and winder.
 - **What characters wear.** Hats and masks are drawn on their sockets (`m_HatMeshes`,
   `m_MaskMeshes`), worn at `m_RandomAccessoryInfo`'s chance, one picked by `m_fRandomChance`. So is
   armour (`m_PotentialNPCArmor`: city and elite guards' helmets, caps), as its dropped item's mesh.

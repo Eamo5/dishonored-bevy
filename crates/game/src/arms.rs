@@ -26,7 +26,7 @@ pub struct ArmsPlugin;
 impl Plugin for ArmsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(GameState::InGame), spawn_arms.after(spawn_view_model))
-            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_effects.after(ArmsAnimSet), animate_held.after(ArmsAnimSet), pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_effects.after(ArmsAnimSet), animate_held.after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, (align_arms.in_set(ArmsAlign), arm_pitch).after(AnimPose).before(TransformSystems::Propagate));
     }
 }
@@ -59,6 +59,33 @@ pub struct Muzzle(pub Power);
 /// A held item's own rig (its prop's name): it moves with the hand's clips.
 #[derive(Component)]
 struct HeldRig(&'static str);
+
+/// An upgrade as it shows on a gun (`DisTweaks_Upgrade.m_pAttachMesh`), and whether that gun is
+/// the one loaded with explosive rounds.
+#[derive(Component)]
+struct UpgradePart {
+    id: String,
+    explosive: bool,
+}
+
+/// The pistol's upgrades that don't show with explosive rounds loaded
+/// (`Twk_Inv_PistolCorvo.m_RevertedUpgradesForExplosive`: its cylinder and the magazines' drums).
+const EXPLOSIVE_REVERTS: &[&str] = &["Twk_Upgrade_Pistol", "Twk_Upgrade_PistolMagazine1", "Twk_Upgrade_PistolMagazine2", "Twk_Upgrade_PistolMagazine3"];
+
+/// The guns' upgrades show on them while owned and not given way to a later one
+/// (`m_RevertedUpgrades`: the magazines' drums in place of the cylinder, each the next's);
+/// the cylinder is Corvo's pistol's own (`Twk_Upgrade_Pistol`).
+fn show_upgrades(stats: Res<PlayerStats>, data: Res<crate::gamedata::Data>, mut parts: Query<(&UpgradePart, &mut Visibility)>) {
+    let owned = |id: &str| id == "Twk_Upgrade_Pistol" || stats.upgrades.iter().any(|u| u == id);
+    for (p, mut v) in &mut parts {
+        let replaced = data.0.upgrades.iter().any(|u| owned(&u.id) && u.replaces.iter().any(|r| *r == p.id));
+        let show = owned(&p.id) && !replaced && !(p.explosive && EXPLOSIVE_REVERTS.contains(&p.id.as_str()));
+        let want = if show { Visibility::Inherited } else { Visibility::Hidden };
+        if *v != want {
+            *v = want;
+        }
+    }
+}
 
 #[derive(Component)]
 struct ArmRig {
@@ -492,6 +519,18 @@ fn spawn_arms(
                 if let Some(at) = parts.muzzle {
                     let m = commands.spawn((Muzzle(power), at, Visibility::Inherited)).id();
                     commands.entity(holder).add_child(m);
+                }
+                // (a gun's upgrades on it, each shown while owned: `show_upgrades`)
+                for (key, up) in a.props.iter().filter(|(k, _)| k.strip_prefix("upgrade:").and_then(|r| r.split_once(':')).is_some_and(|(g, _)| g == prop)) {
+                    let id = key.rsplit(':').next().unwrap_or_default().to_string();
+                    let part = commands.spawn((Transform::IDENTITY, Visibility::Hidden, RenderLayers::layer(VIEW_LAYER), UpgradePart { id, explosive: power == Power::ExplosiveBullet })).id();
+                    for (mesh, mat) in &up.view_parts {
+                        let mut m = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), NotShadowCaster, RenderLayers::layer(VIEW_LAYER)));
+                        mat.apply(&mut m);
+                        let m = m.id();
+                        commands.entity(part).add_child(m);
+                    }
+                    commands.entity(holder).add_child(part);
                 }
                 commands.entity(hand).add_child(holder);
                 held.push((power, holder));
