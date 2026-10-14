@@ -145,11 +145,16 @@ fn summoned_bite_damage(data: &Data, level: u8, rats: usize) -> f32 {
 #[derive(Resource, Default)]
 pub struct RatBites(pub u32);
 
+/// A swarm is on someone, eating them alive (each frame it is): they fight it off.
+#[derive(Message, Clone, Copy)]
+pub struct SwarmOn(pub Entity);
+
 impl Plugin for SwarmPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RatBites>().init_resource::<SwarmRestore>();
         app.add_message::<SummonSwarm>()
             .add_message::<KillRats>()
+            .add_message::<SwarmOn>()
             .add_systems(OnEnter(GameState::InGame), level_swarms.after(crate::level::LevelSpawnSet))
             .add_systems(Update, restore_swarms.after(crate::save::restore_npcs).before(summon).run_if(in_state(GameState::InGame)))
             .add_systems(Update, (summon, scripted_swarms, color_rats, swarm_brain, move_rats, rat_calls, npc_stomps, kill_rats).chain().after(crate::npc::age_corpses).run_if(in_state(GameState::InGame)));
@@ -807,7 +812,7 @@ mod kill_tests {
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
             .init_resource::<Assets<Mesh>>().init_resource::<Data>().init_resource::<TimeControl>()
             .init_resource::<PlayerStats>().init_resource::<RatBites>().init_resource::<crate::settings::Settings>()
-            .add_message::<NpcHit>().add_message::<NpcStagger>().add_message::<PostEvent>().add_message::<crate::gore::SeverLimb>()
+            .add_message::<NpcHit>().add_message::<NpcStagger>().add_message::<PostEvent>().add_message::<crate::gore::SeverLimb>().add_message::<SwarmOn>()
             .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
             .add_systems(Last, swarm_brain);
         let player = app.world_mut().spawn((Transform::from_xyz(1.7, 0.0, 0.0), crate::player::Player {
@@ -1138,7 +1143,7 @@ fn swarm_brain(
     mut swarms: Query<(Entity, &mut Swarm, &mut Transform)>,
     npcs: Query<(Entity, &Npc, &Transform, Option<&Visibility>), Without<Swarm>>,
     mut hits: MessageWriter<NpcHit>,
-    mut stagger: MessageWriter<NpcStagger>,
+    (mut stagger, mut on): (MessageWriter<NpcStagger>, MessageWriter<SwarmOn>),
     mut sfx: MessageWriter<PostEvent>,
     (player, mut stats, mut bites): (Query<(&Transform, &crate::player::Player), (Without<Swarm>, Without<Npc>)>, ResMut<crate::gameplay::PlayerStats>, ResMut<RatBites>),
     (level, settings, mut severs): (Option<Res<LevelInfo>>, Res<crate::settings::Settings>, MessageWriter<crate::gore::SeverLimb>),
@@ -1218,6 +1223,7 @@ fn swarm_brain(
                     goal = Some(tt);
                     busy = true;
                     if tt.distance(center) < 1.3 {
+                        on.write(SwarmOn(te));
                         let swarm = &mut *s;
                         let count = advance_bites(&mut swarm.delay, &mut swarm.bite_t, dt, w.bite_interval);
                         if count > 0 {
@@ -1320,6 +1326,7 @@ fn swarm_brain(
         if let Some((te, _, tt, _)) = s.target.and_then(alive) {
             goal = tt.translation;
             if tt.translation.distance(center) < 1.3 {
+                on.write(SwarmOn(te));
                 let interval = summon_setting(&data, s.level, "m_fDamageTimeInterval", 0.5);
                 let swarm = &mut *s;
                 let count = advance_bites(&mut swarm.delay, &mut swarm.bite_t, dt, interval);

@@ -1966,6 +1966,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 gun_holster,
                 shown_yaw: f32::NAN,
                 turn: None,
+                swarm_t: f32::INFINITY,
+                swarm_phase: 0,
                 gun_phase: GunPhase::Away,
                 gun_t: 0.0,
                 gun_out: false,
@@ -4255,6 +4257,8 @@ pub struct NpcClips {
     /// a dodge's step (left, right, back: `Sword_SideStep_*`), the alarm's lever pulled
     /// (`Sword_TriggerAlarm`), a body found looked over (`Sword_CorpseCheck`)
     dodge: [Vec<ClipId>; 3],
+    /// fighting off a swarm on it, empty-handed and sword drawn: in, its loop, out
+    swarm: [[Option<ClipId>; 3]; 2],
     /// turning where it stands, left then right, by 45, 90, 135 and 180 degrees: relaxed
     /// (`Sword_Patrol_Turn*`, `Empty_Turn*`) and on edge (`Sword_Turn*`)
     turn: [[[Option<ClipId>; 4]; 2]; 2],
@@ -4407,6 +4411,7 @@ impl NpcClips {
             gun: [lib.find("Sword_Gun_Draw"), lib.find("Sword_Gun_Idle"), lib.find("Sword_Gun_Fire"), lib.find("Sword_Gun_Undraw")],
             gun_reload: lib.find("Sword_Gun_Reload"),
             dodge: [lib.all(&["Sword_SideStep_Left"]), lib.all(&["Sword_SideStep_Right"]), lib.all(&["Sword_SideStep_Back"])],
+            swarm: [["Empty_", "Sword_"], ["Sword_", "Empty_"]].map(|sets| ["In", "Loop", "Out"].map(|p| sets.iter().find_map(|s| lib.find(&format!("{s}SwarmAttack_{p}"))))),
             turn: [["Sword_Patrol_Turn", "Empty_Turn", "Patrol_Turn"], ["Sword_Turn", "Empty_Turn", "Sword_Patrol_Turn"]].map(|sets| {
                 ["Left", "Right"].map(|side| ["45", "90", "135", "180"].map(|a| sets.iter().find_map(|s| lib.find(&format!("{s}{side}{a}")))))
             }),
@@ -4497,6 +4502,10 @@ pub struct NpcAnim {
     /// much, how far through, how long
     shown_yaw: f32,
     turn: Option<(f32, f32, f32, f32)>,
+    /// how long since a swarm was last on it, and how far into fighting it off (0 not, 1 its
+    /// start, 2 its loop)
+    swarm_t: f32,
+    swarm_phase: u8,
     gun_phase: GunPhase,
     gun_t: f32,
     gun_out: bool,
@@ -4720,8 +4729,10 @@ fn npc_select_anim(
     player: Query<&Transform, With<Player>>,
     mut npcs: Query<(Entity, &mut Npc, &mut NpcAnim, &mut Animator, &Transform, &Children, Option<&DropKilled>, Option<&AssassinClip>, Option<&mut FinisherClip>, Option<&crate::carry::Falling>, (Has<crate::ragdoll::Ragdoll>, Has<crate::ragdoll::GoLimp>, Has<crate::musicbox::TunePlaying>)), Without<ScriptedAnim>>,
     mut visuals: Query<&mut Transform, (With<NpcVisual>, Without<Npc>, Without<Player>)>,
+    mut swarmed: MessageReader<crate::swarm::SwarmOn>,
 ) {
     let ppos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
+    let swarmed: std::collections::HashSet<Entity> = swarmed.read().map(|s| s.0).collect();
     for (e, mut npc, mut st, mut anim, t, children, dropped, assassin, finisher, falling, (limp, going_limp, tune)) in &mut npcs {
         let scale = tc.npc_scale(npc.out_of_bend).max(0.0);
         let dt = time.delta_secs() * scale;
@@ -5204,6 +5215,52 @@ fn npc_select_anim(
                 st.last_mode = npc.mode;
                 st.last_alert = npc.alert;
                 continue;
+            }
+        }
+
+        // a swarm on it, eating it alive: it fights it off (`Sword_SwarmAttack_In`, `_Loop` while
+        // they stay, `_Out` once they are gone; `Empty_` with its hands empty), above its flinches
+        if swarmed.contains(&e) {
+            st.swarm_t = 0.0;
+        } else {
+            st.swarm_t += dt;
+        }
+        let [swarm_in, swarm_loop, swarm_out] = if st.drawn { clips.swarm[1] } else { clips.swarm[0] };
+        if !npc.is_down() && swarm_loop.is_some() {
+            match (st.swarm_t < 0.4, st.swarm_phase) {
+                (true, 0) => {
+                    match swarm_in {
+                        Some(c) => {
+                            anim.restart(c, false, 1.0, 0.1);
+                            st.swarm_phase = 1;
+                        }
+                        None => st.swarm_phase = 2,
+                    }
+                    st.hit_seen = npc.hit_react;
+                    continue;
+                }
+                (true, 1) if anim.finished() => {
+                    if let Some(c) = swarm_loop {
+                        anim.play(c, true, 1.0, 0.1);
+                    }
+                    st.swarm_phase = 2;
+                    st.hit_seen = npc.hit_react;
+                    continue;
+                }
+                (true, _) => {
+                    st.hit_seen = npc.hit_react;
+                    continue;
+                }
+                (false, p) if p > 0 => {
+                    st.swarm_phase = 0;
+                    if let Some(c) = swarm_out {
+                        anim.restart(c, false, 1.0, 0.15);
+                        st.oneshot = true;
+                        st.hit_seen = npc.hit_react;
+                        continue;
+                    }
+                }
+                _ => {}
             }
         }
 
