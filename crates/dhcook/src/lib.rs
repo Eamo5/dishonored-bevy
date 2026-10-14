@@ -2469,7 +2469,10 @@ impl<'a> Cooker<'a> {
             }
         }
         self.actor_ref(actor).lights.push(index);
+        // a fire's light the rats shun (`DisPointLightToggleable.m_pRatLightComponent`)
+        let rat_light = ach.obj(self.assets, "m_pRatLightComponent").map(|r| self.chain(&r).float("m_fRadius").unwrap_or(100.0) * UNIT);
         self.scene.lights.push(Light {
+            rat_light,
             dominant,
             kind,
             position: pos.to_array(),

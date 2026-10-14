@@ -235,6 +235,17 @@ mod bite_tests {
     }
 
     #[test]
+    fn a_swarm_keeps_out_of_a_lit_fire() {
+        let fire = [(Vec3::new(0.0, 1.5, 0.0), 1.0)];
+        // inside its reach: pushed to its edge, at its own height
+        let at = repel(None, &fire, Vec3::new(0.4, 0.0, 0.0));
+        assert!((at - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-5);
+        // out of it, or a floor apart: left be
+        assert_eq!(repel(None, &fire, Vec3::new(2.0, 0.0, 0.0)), Vec3::new(2.0, 0.0, 0.0));
+        assert_eq!(repel(None, &fire, Vec3::new(0.4, 6.0, 0.0)), Vec3::new(0.4, 6.0, 0.0));
+    }
+
+    #[test]
     fn rats_eat_a_limb_at_a_time_round_from_a_start_and_the_chest_last() {
         let limbs: Vec<String> = ["lower_leg_R_jnt", "lower_leg_L_jnt", "lower_arm_L_jnt", "lower_arm_R_jnt", "neck_jnt", "spine_1_jnt"].map(String::from).to_vec();
         let order = eat_order(&limbs, Entity::from_raw_u32(7).unwrap());
@@ -1131,7 +1142,24 @@ fn swarm_brain(
     mut sfx: MessageWriter<PostEvent>,
     (player, mut stats, mut bites): (Query<(&Transform, &crate::player::Player), (Without<Swarm>, Without<Npc>)>, ResMut<crate::gameplay::PlayerStats>, ResMut<RatBites>),
     (level, settings, mut severs): (Option<Res<LevelInfo>>, Res<crate::settings::Settings>, MessageWriter<crate::gore::SeverLimb>),
+    (lights, mut shunned_seen): (Query<(&crate::level::LevelLight, &Visibility)>, Local<usize>),
 ) {
+    // the lit lights the rats shun (`DisRatLightComponent`): where, and how far
+    let shunned: Vec<(Vec3, f32)> = level
+        .as_ref()
+        .map(|l| {
+            // (a light's passes carry its index too)
+            let lit: std::collections::BTreeSet<u32> = lights.iter().filter(|(_, v)| **v != Visibility::Hidden).map(|(ll, _)| ll.0).collect();
+            lit.into_iter()
+                .filter_map(|i| l.scene.lights.get(i as usize))
+                .filter_map(|li| li.rat_light.map(|r| (Vec3::from(li.position), r)))
+                .collect()
+        })
+        .unwrap_or_default();
+    if shunned.len() != *shunned_seen {
+        *shunned_seen = shunned.len();
+        info!("rats: {} lit lights shunned", shunned.len());
+    }
     // the limbs a body is eaten by (`SLInfo_Default`'s break bones)
     let limbs: Vec<String> = level.as_ref().and_then(|l| l.scene.severed_limbs.as_ref()).map(|s| s.limbs.iter().map(|l| l.bone.clone()).collect()).unwrap_or_default();
     let dt = time.delta_secs() * tc.world_scale().max(0.0);
@@ -1251,7 +1279,7 @@ fn swarm_brain(
             let to = (goal - center).with_y(0.0);
             let speed = if busy { 3.4 } else { 1.6 };
             let step = to.normalize_or_zero() * (speed * dt).min(to.length());
-            let desired = repel(level.as_deref(), center + step);
+            let desired = repel(level.as_deref(), &shunned, center + step);
             let mut next = rat_ground_step(&ctx, center, desired - center);
             if let Some((_, toi)) = ctx.cast_ray(next + Vec3::Y * 1.0, Vec3::NEG_Y, 3.0, true, ground) {
                 next.y = next.y + 1.0 - toi;
@@ -1341,7 +1369,7 @@ fn swarm_brain(
         // the swarm moves as one, over the ground
         let to = (goal - center).with_y(0.0);
         let step = to.normalize_or_zero() * (3.6 * dt).min(to.length().max(0.0));
-        let desired = repel(level.as_deref(), center + step);
+        let desired = repel(level.as_deref(), &shunned, center + step);
         let mut next = rat_ground_step(&ctx, center, desired - center);
         if let Some((_, toi)) = ctx.cast_ray(next + Vec3::Y * 1.0, Vec3::NEG_Y, 3.0, true, ground) {
             next.y = next.y + 1.0 - toi;
@@ -1390,15 +1418,15 @@ fn swarm_target_visible(ctx: &RapierContext, center: Vec3, target: Vec3) -> bool
         QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP))).is_none()
 }
 
-/// A swarm's step kept out of the level's rat repulsors (pushed back to their edge).
-fn repel(level: Option<&LevelInfo>, at: Vec3) -> Vec3 {
-    let Some(level) = level else { return at };
+/// A swarm's step kept out of the level's rat repulsors and the lit lights the rats shun
+/// (pushed back to their edge).
+fn repel(level: Option<&LevelInfo>, shunned: &[(Vec3, f32)], at: Vec3) -> Vec3 {
     let mut at = at;
-    for r in &level.scene.rat_repulsors {
-        let c = Vec3::from(r.position);
+    let repulsors = level.into_iter().flat_map(|l| l.scene.rat_repulsors.iter()).map(|r| (Vec3::from(r.position), r.radius));
+    for (c, radius) in repulsors.chain(shunned.iter().copied()) {
         let flat = (at - c).with_y(0.0);
-        if (at.y - c.y).abs() < 4.0 && flat.length() < r.radius {
-            at = c.with_y(at.y) + flat.normalize_or(Vec3::X) * r.radius;
+        if (at.y - c.y).abs() < 4.0 && flat.length() < radius {
+            at = c.with_y(at.y) + flat.normalize_or(Vec3::X) * radius;
         }
     }
     at

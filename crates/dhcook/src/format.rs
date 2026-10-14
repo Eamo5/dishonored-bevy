@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 143;
+pub const SCENE_VERSION: u32 = 144;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -1851,6 +1851,9 @@ pub struct Light {
     /// one for characters only (`LightingChannels.Static` off)
     #[serde(default)]
     pub live: bool,
+    /// the rats keep out of it while it's lit (its actor's `DisRatLightComponent`): how far (m)
+    #[serde(default)]
+    pub rat_light: Option<f32>,
 }
 
 /// A light's shafts (`LightComponent`'s): how far the occlusion reaches (m), the bloom's scale,

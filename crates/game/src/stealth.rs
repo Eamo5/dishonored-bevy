@@ -286,6 +286,7 @@ mod tests {
             dominant: false,
             shafts: None,
             live: true,
+            rat_light: None,
         }
     }
 
