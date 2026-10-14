@@ -902,7 +902,10 @@ fullscreen display, vertical sync and the crosshair.
   [J] to read").
 - **Pickpocketing**: what a character carries (its spawner's `m_pStealablePickup`: a coin
   purse, a key) hangs at its belt; Corvo can take it from behind someone who hasn't noticed
-  him, or from the body.
+  him, or from the body. Robbed while it stands, a character misses it a while later
+  (`DisBehaviorStolen`, at its 100% occurrence; 4 s is our reading): if nothing has set it on
+  edge it stops and checks its pockets (the guards' `Empty_CheckPockets`) and says so
+  (`ROBBED`: "Hey, I got snaked.", "How did I lose that? It was right here.").
 - **River krusts**: the Flooded District's shellfish (`DisRiverKrust`) play their tweak's
   states (`m_AnimSequences`): shut in the shell, opening when someone comes within range and
   in sight, spitting volleys of acid that arc and lead a moving target (damage by

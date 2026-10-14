@@ -261,6 +261,8 @@ pub struct Npc {
     /// a live explosive it makes off from (`DisBehaviorEscapeExplosion`): where it is, and how
     /// long it keeps away yet
     pub escape: Option<(Vec3, f32)>,
+    /// robbed while it stood: how long until it misses what was taken (`DisBehaviorStolen`)
+    pub robbed: Option<f32>,
     /// caught panicking with Corvo upon it: how long it has begged, and how long he has been
     /// back off; then the seconds left getting up again
     pub caught: Option<(f32, f32)>,
@@ -1551,6 +1553,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         caught: None,
         rat_help: None,
         escape: None,
+        robbed: None,
         rising: 0.0,
         watch: None,
         watched: Vec::new(),
@@ -2737,6 +2740,21 @@ pub(crate) fn npc_brain(
         let limit = npc.arms.regen[2].min(npc.max_health);
         if npc.hurt_t > npc.arms.regen[0] && npc.health < limit {
             npc.health = (npc.health + npc.arms.regen[1] * dt).min(limit);
+        }
+        // robbed: a while later it misses what was taken (`DisBehaviorStolen`, in its reaction
+        // slot: given up to anything setting it on edge), checks its pockets and says so
+        // (`ROBBED`: "Hey, I got snaked.")
+        if let Some(left) = npc.robbed {
+            if npc.alert != Alert::Unaware || npc.mode == Mode::Combat {
+                npc.robbed = None;
+            } else if left - dt <= 0.0 {
+                npc.robbed = None;
+                npc.gesture(14);
+                npc.bark_req = (npc.bark_req.0.wrapping_add(1), "ROBBED");
+                info!("{} misses what was taken", npc.name);
+            } else {
+                npc.robbed = Some(left - dt);
+            }
         }
         // a live explosive by it (`DisBehaviorEscapeExplosion`, a reflex over any fight): it
         // makes off, as far from it as its clearance
@@ -3989,6 +4007,8 @@ pub struct NpcClips {
     music_box: [Option<ClipId>; 4],
     /// a weeper's cough (`DisNPCAnim_Weeper_Cough`)
     cough: Vec<ClipId>,
+    /// its pockets checked, robbed (`Empty_CheckPockets`: the guards')
+    check_pockets: Vec<ClipId>,
     /// its aim offsets (`ADD_Sword_Gun_AimIdle_*`): up, centre and down rows, left to right
     gun_aim: [Option<ClipId>; 9],
 }
@@ -4118,6 +4138,7 @@ impl NpcClips {
             under: [lib.find("Sword_Attack_UnderTable"), lib.find("Sword_Gun_AttackUnderTable")],
             taunt: lib.all(&["Sword_TauntA", "Sword_TauntB", "Sword_TauntC"]),
             cough: lib.all(&["Empty_Idle_Cough"]),
+            check_pockets: lib.all(&["Empty_CheckPockets"]),
             beg: [lib.find("Empty_Beg_Kneeling_In"), lib.find("Empty_Beg_Kneeling_Loop"), lib.find("Empty_Beg_Kneeling_Out")],
             music_box: [lib.find("Musicbox_Idle"), lib.find("MusicBox_PlayMusic_In"), lib.find("MusicBox_PlayMusic_Loop"), lib.find("MusicBox_PlayMusic_Out")],
             cower: lib.find("Empty_Idle_Panic_Recover"),
@@ -4856,9 +4877,14 @@ fn npc_select_anim(
                 11 => &clips.ambush[3],
                 12 => &clips.taunt,
                 13 => &clips.cough,
+                14 => &clips.check_pockets,
                 _ => &clips.push,
             };
             if let Some(c) = pick(pool) {
+                // (its pockets checked where it stands)
+                if npc.act.0 == 14 {
+                    npc.stagger = npc.stagger.max(anim.lib.duration(c));
+                }
                 // (the lock's struggle holds until it ends)
                 let hold = npc.act.0 == 4;
                 anim.restart(c, hold, if hold || npc.act.0 > 4 { 1.0 } else { 1.2 }, 0.08);

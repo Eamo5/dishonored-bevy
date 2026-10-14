@@ -13,7 +13,7 @@ pub struct PickpocketPlugin;
 
 impl Plugin for PickpocketPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (attach_pockets, script_pockets, follow_pockets).chain().run_if(in_state(GameState::InGame)));
+        app.add_systems(Update, (attach_pockets, script_pockets, follow_pockets, notice_thefts).chain().run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -105,6 +105,27 @@ fn script_pockets(
             }
         }
     }
+}
+
+/// How long after a theft its victim misses what was taken (s: our reading; the original's
+/// `DisBehaviorStolen` timing isn't in its data).
+const ROBBED_AFTER: f32 = 4.0;
+
+/// A pocket emptied while its wearer stands (`DisBehaviorStolen`, `m_fOccurencePercentage` 1):
+/// the wearer misses it a while later (`Npc::robbed`). One the scripts only take off its belt
+/// isn't a theft.
+fn notice_thefts(pockets: Query<(Entity, &Pocket)>, pickups: Query<(), With<Pickup>>, mut npcs: Query<&mut Npc>, mut worn: Local<std::collections::HashMap<Entity, Entity>>) {
+    for (pe, npc) in std::mem::take(&mut *worn) {
+        if pickups.contains(pe) {
+            continue;
+        }
+        if let Ok(mut n) = npcs.get_mut(npc) {
+            if !n.is_down() && n.robbed.is_none() {
+                n.robbed = Some(ROBBED_AFTER);
+            }
+        }
+    }
+    worn.extend(pockets.iter().map(|(pe, p)| (pe, p.npc)));
 }
 
 /// The purse rides at the belt: the right hip, a little behind.
