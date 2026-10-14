@@ -465,6 +465,11 @@ impl Animator {
         self.upper.cur.filter(|_| self.upper.target > 0.0).map(|c| c.clip)
     }
 
+    /// The upper-body layer's clip and how far into it (while it's on).
+    pub fn upper_playing(&self) -> Option<Playing> {
+        self.upper.cur.filter(|_| self.upper.target > 0.0)
+    }
+
     pub fn overlay_is(&self, clip: Option<ClipId>) -> bool {
         clip.is_some() && self.overlay.target > 0.0 && self.overlay.cur.map(|c| c.clip) == clip
     }

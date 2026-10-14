@@ -951,7 +951,10 @@ fullscreen display, vertical sync and the crosshair.
 - **Music boxes**: a musical Overseer carries its music box on its `MusicBox` socket, held in
   both hands as it walks or stands (`Musicbox_Idle` on its upper body) and cranked while it plays
   (`MusicBox_PlayMusic_In`, `_Loop`, `_Out`), as roshan's r614/blink research read `DisWepMusicBox`;
-  it fights by kicking (`MusicBox_Attack_KickMedium`).
+  it fights by kicking (`MusicBox_Attack_KickMedium`). The box is a rig of its own
+  (`Overseer_MusicBox`, five bones: its crank, levers and lid): it plays the clip of the name its
+  wearer's arms play, from the same time (`Overseer_MusicBox_as`), so the crank turns as the
+  Overseer cranks it, and it rests between (`Musicbox_Idle`).
   A musical Overseer fighting Corvo plays the protective tune, and so do the
   levels' tune sources (`DisProtectionTuneSource`): within 6 m the world sways, within 4 m
   Corvo's powers fail (`DisTweaks_Tune_Protection` radii and sounds, cooked from the music

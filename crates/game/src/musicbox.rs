@@ -21,7 +21,8 @@ impl Plugin for MusicBoxPlugin {
         app.init_resource::<Tune>()
             .add_systems(OnEnter(GameState::InGame), |mut t: ResMut<Tune>| *t = Tune::default())
             .add_systems(Update, (hear_tunes, combat_tunes, mark_playing).before(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, sway.after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, sway.after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)))
+            .add_systems(PostUpdate, follow_wearer.before(crate::anim::AnimPose).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -39,6 +40,77 @@ pub struct Tune {
     pub disorient: f32,
     in_disorient: bool,
     t: f32,
+}
+
+/// A music box's own rig, worn by a musical Overseer (`owner`): its parts move in the clip
+/// named as the one its wearer's arms play.
+#[derive(Component)]
+pub struct MusicBoxRig {
+    pub owner: Entity,
+}
+
+/// The music box's skinned rig under its wearer's `MusicBox` socket (`at` on `joint`), lit
+/// with its wearer (`slot`); its owner is set once the wearer is spawned.
+pub fn spawn_rig(commands: &mut Commands, vis: &crate::level::NpcVisual, joint: Entity, at: Transform, slot: u32) -> Entity {
+    use bevy::camera::visibility::DynamicSkinnedMeshBounds;
+    use bevy::mesh::skinning::SkinnedMesh;
+    use bevy::mesh::MeshTag;
+    let root = commands.spawn((at, Visibility::Inherited)).id();
+    commands.entity(joint).add_child(root);
+    let bones = &vis.skeleton.bones;
+    let joints: Vec<Entity> = bones
+        .iter()
+        .map(|b| commands.spawn(Transform::from_translation(Vec3::from(b.translation)).with_rotation(Quat::from_array(b.rotation).normalize())).id())
+        .collect();
+    for (i, b) in bones.iter().enumerate() {
+        let parent = if b.parent >= 0 && (b.parent as usize) < i { joints[b.parent as usize] } else { root };
+        commands.entity(parent).add_child(joints[i]);
+    }
+    for (mesh, mat) in &vis.parts.parts {
+        let mut ec = commands.spawn((
+            Mesh3d(mesh.clone()),
+            MeshTag(slot),
+            SkinnedMesh { inverse_bindposes: vis.inverse_bindposes.clone(), joints: joints.clone() },
+            DynamicSkinnedMeshBounds,
+            crate::fxlight::LitPart,
+        ));
+        mat.apply(&mut ec);
+        let m = ec.id();
+        commands.entity(root).add_child(m);
+    }
+    if let Some(lib) = vis.anims.clone() {
+        let mut anim = crate::anim::Animator::new(lib, &vis.skeleton, joints);
+        anim.sounds = false;
+        commands.entity(root).insert(anim);
+    }
+    root
+}
+
+/// A music box's parts follow its wearer's arms (the box's `DisWepMusicBox` mesh animated with
+/// them): the clip of the name its wearer plays (the upper body's, else the whole body's), at
+/// the same time in it; else the box at rest (`Musicbox_Idle`).
+fn follow_wearer(mut rigs: Query<(&MusicBoxRig, &mut crate::anim::Animator)>, wearers: Query<&crate::anim::Animator, Without<MusicBoxRig>>) {
+    for (rig, mut anim) in &mut rigs {
+        let Ok(w) = wearers.get(rig.owner) else { continue };
+        let lib = anim.lib.clone();
+        let same = |p: crate::anim::Playing| lib.find(&w.lib.clip(p.clip).name).map(|c| (c, p));
+        match w.upper_playing().and_then(same).or_else(|| w.current().and_then(same)) {
+            Some((c, p)) => {
+                if anim.current().map(|q| q.clip) != Some(c) {
+                    if std::env::var("DH_TUNE_LOG").is_ok() {
+                        info!("music box: {}", lib.clip(c).name);
+                    }
+                    anim.restart(c, p.looping, p.speed, 0.15);
+                }
+                anim.seek(p.t);
+            }
+            None => {
+                if let Some(c) = lib.find("Musicbox_Idle").filter(|c| anim.current().map(|q| q.clip) != Some(*c)) {
+                    anim.restart(c, true, 1.0, 0.2);
+                }
+            }
+        }
+    }
 }
 
 /// A musical Overseer playing its music box now (its arms crank it: `npc.rs`).

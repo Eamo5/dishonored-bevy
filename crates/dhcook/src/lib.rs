@@ -6618,6 +6618,15 @@ impl<'a> Cooker<'a> {
             });
             self.scene.props.push(PropDef { name: name.to_string(), mesh, materials, blade, muzzle });
         }
+        // the musical Overseers' music box, skinned: its crank turns, its levers and lid move,
+        // in clips named as its wearer's arms' (`Overseer_MusicBox_as`: `MusicBox_PlayMusic_Loop`
+        // and the rest)
+        if let (Some(mesh), Some(set)) = (self.assets.find("Musical_Overseer.Overseer_MusicBox"), self.assets.find("Musical_Overseer.Overseer_MusicBox_as")) {
+            match self.cook_device(&mesh, vec![set]) {
+                Ok(id) => self.scene.music_box = Some(id),
+                Err(e) => log::warn!("music box rig: {e:#}"),
+            }
+        }
         // a blade in flesh: its blood (the contact system's sword against a body)
         self.scene.blade_blood = self.blade_blood();
         self.scene.contact_fx = self.contact_fx();

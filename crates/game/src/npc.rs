@@ -1679,9 +1679,14 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
             }
         }
     }
-    // a musical Overseer's music box, on its `MusicBox` socket (`DisWepMusicBox`)
+    // a musical Overseer's music box, on its `MusicBox` socket (`DisWepMusicBox`): its own rig
+    // where the map has it cooked, else the box at rest
+    let mut music_rig = None;
     if ty.is_some_and(|t| t.stats.as_ref().is_some_and(|s| s.tunes.is_some())) || ty.is_some_and(|t| t.name.contains("MusicOverseer")) {
-        if let (Some((j, at)), Some(parts)) = (socket("MusicBox", &[], Transform::IDENTITY), assets.props.get("musicbox")) {
+        let rig = scene.music_box.and_then(|t| assets.npc_types.get(t as usize)).and_then(|v| v.as_ref());
+        if let (Some((j, at)), Some(rv)) = (socket("MusicBox", &[], Transform::IDENTITY), rig) {
+            music_rig = Some(crate::musicbox::spawn_rig(commands, rv, j, at, slot));
+        } else if let (Some((j, at)), Some(parts)) = (socket("MusicBox", &[], Transform::IDENTITY), assets.props.get("musicbox")) {
             for (mesh, mat) in &parts.parts {
                 let mut ec = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), at));
                 mat.apply(&mut ec);
@@ -1779,6 +1784,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         .id();
     if let (Some(&s0), Some(blade)) = (swords.first(), blade) {
         commands.entity(s0).insert(crate::trails::BladeTrail::new(blade, e, false));
+    }
+    if let Some(r) = music_rig {
+        commands.entity(r).insert(crate::musicbox::MusicBoxRig { owner: e });
     }
     for (holder, index, health) in breakable_parts {
         commands.entity(holder).insert(crate::npcparts::NpcAttached { npc: e, npc_type: tid, index, health: health.max(1.0) });

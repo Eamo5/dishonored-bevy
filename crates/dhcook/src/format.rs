@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 134;
+pub const SCENE_VERSION: u32 = 135;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -77,6 +77,10 @@ pub struct Scene {
     /// (parallel to the player_arms type's `body_materials`)
     #[serde(default)]
     pub arms_no_mark: Vec<u32>,
+    /// The musical Overseers' music box as a rig of its own (a "device" type: its crank, levers
+    /// and lid animated by `Overseer_MusicBox_as`), on the maps that have them.
+    #[serde(default)]
+    pub music_box: Option<u32>,
     /// Door sounds by door actor name.
     #[serde(default)]
     pub doors: std::collections::HashMap<String, DoorSounds>,
