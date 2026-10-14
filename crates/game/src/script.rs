@@ -261,6 +261,7 @@ fn key_of(s: &str) -> Option<KeyCode> {
         "x" => KeyCode::KeyX,
         "f" => KeyCode::KeyF,
         "c" => KeyCode::KeyC,
+        "v" => KeyCode::KeyV,
         "w" => KeyCode::KeyW,
         "a" => KeyCode::KeyA,
         "s" => KeyCode::KeyS,
@@ -572,11 +573,14 @@ fn run_script(
             info!("script: in the hideout at {:.2}", t.translation);
         }
         "rise" => {
-            // (tests) rise D: Corvo lifted D m where he stands, held there (as `fly`)
+            // (tests) rise D [drop]: Corvo lifted D m where he stands, held there (as `fly`), or
+            // let fall from there
             t.translation.y += f(1);
             p.velocity = Vec3::ZERO;
-            p.noclip = true;
-            info!("script: rise to {:.2}", t.translation);
+            let drop = cmd.get(2).is_some_and(|s| s == "drop");
+            p.noclip = !drop;
+            p.grounded = false;
+            info!("script: rise to {:.2}{}", t.translation, if drop { ", dropped" } else { "" });
         }
         "givepower" => {
             // givepower <Blink|DarkVision|...|Vitality|...> [level]

@@ -1444,7 +1444,10 @@ against the install's own data where it carries them, then implemented independe
   Touching down after a jump or fall plays the arms' landing (`DisTweaks_PlayerPawn_NavigationActions`):
   `Sword_Ready_JumpLandSmall`, crouched `Sword_Sneak_JumpLandSmall`, and past
   `m_fFall_Stun_Vel` (22 m/s) the hard `Generic_JumpLandBig`. None stops him moving (as roshan's
-  r614/blink research found). Agility plays them half again as fast (`LandAnimRate` +50%).
+  r614/blink research found). The hard one is `m_Action_JumpLandBig`, which stops him sneaking
+  (`m_bAutomaticallyStopSneaking`: he stands once there's room) and takes his left hand until
+  its clip's exit (`m_bActionUsesLeftHand`, 0.935 s): no power, gun or gadget until then.
+  Agility plays them half again as fast (`LandAnimRate` +50%).
   A mantle plays the arms' climb from `Ply_Player_Mantle_at` (in the full-body picker): low,
   medium or high by the edge's height (to 1.2 m, 1.7 m, `m_LowMantleMaxEdgeHeight` /
   `m_MediumMantleMaxEdgeHeight`), the sneaking ones while sneaking or into a space too low to

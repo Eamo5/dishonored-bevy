@@ -18,7 +18,7 @@ pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Slide>().init_resource::<AutoCrouch>().init_resource::<MantleEdge>();
+        app.init_resource::<Slide>().init_resource::<AutoCrouch>().init_resource::<MantleEdge>().init_resource::<HardLanding>();
         app.init_resource::<VirtualInput>()
             .init_resource::<MantleSpot>()
             .add_systems(OnEnter(GameState::InGame), spawn_player.after(LevelSpawnSet))
@@ -333,7 +333,7 @@ fn player_move(
     (mut msgs, attrs, zone): (ResMut<HudMessages>, Res<crate::gamedata::Attrs>, Res<crate::zones::ZonePush>),
     (swim, waters, carry, possession): (Res<crate::swim::Swim>, Option<Res<crate::swim::Waters>>, Res<crate::carry::Carry>, Res<crate::possession::Possession>),
     (mut climb, climbables, mut sfx): (ResMut<crate::climb::Climb>, Option<Res<crate::climb::Climbables>>, MessageWriter<crate::audio::PostEvent>),
-    (cine, settings, paused, tc, mut slide, mut auto): (Res<crate::script_world::Cinematic>, Res<crate::settings::Settings>, Res<Paused>, Res<crate::gameplay::TimeControl>, ResMut<Slide>, ResMut<AutoCrouch>),
+    (cine, settings, paused, tc, mut slide, mut auto, mut hard): (Res<crate::script_world::Cinematic>, Res<crate::settings::Settings>, Res<Paused>, Res<crate::gameplay::TimeControl>, ResMut<Slide>, ResMut<AutoCrouch>, ResMut<HardLanding>),
     mut q: Query<(
         Entity,
         &mut Player,
@@ -349,6 +349,7 @@ fn player_move(
         return;
     }
     let dt = time.delta_secs().min(0.05);
+    hard.0 = (hard.0 - dt).max(0.0);
     if keys.just_pressed(KeyCode::KeyV) {
         p.noclip = !p.noclip;
         info!("noclip {}", p.noclip);
@@ -468,6 +469,15 @@ fn player_move(
         if p.grounded && !was_grounded {
             // landing: noise and fall damage (by the height fallen)
             let v = p.fall_speed;
+            // a hard one (`m_Action_JumpLandBig`): he stops sneaking (`m_bAutomaticallyStopSneaking`:
+            // up once there's room) and his left hand is taken by it (`m_bActionUsesLeftHand`) until
+            // its clip's exit, at his landing rate; he moves on as before
+            if v > FALL_STUN {
+                hard.0 = LAND_BIG_EXIT / attrs.land_rate.max(0.1);
+                if p.crouched {
+                    auto.0 = true;
+                }
+            }
             let fell = v * v / (2.0 * GRAVITY);
             if fell > 0.24 {
                 let gait = if fell > 2.1 { Gait::LandHigh } else { Gait::LandSmall };
@@ -711,6 +721,17 @@ const MANTLE_STEP_UP: f32 = 1.2;
 /// room; he stands by himself once there is room.
 #[derive(Resource, Default)]
 pub struct AutoCrouch(pub bool);
+
+/// A hard landing's time left (s): his left hand busy with it.
+#[derive(Resource, Default)]
+pub struct HardLanding(pub f32);
+
+/// A landing harder than this is a hard one (m/s: `StatePlayerMasterFalling.m_fFall_Stun_Vel`
+/// 2200 uu/s, as roshan's r614/blink research decoded the landing's actions).
+pub const FALL_STUN: f32 = 22.0;
+/// The hard landing's clip leaves its state at this (s: `Generic_JumpLandBig`'s
+/// `DishonoredNotify_AnimStateExit`).
+const LAND_BIG_EXIT: f32 = 0.935;
 
 fn mantle_time(h: f32, crouch: bool) -> f32 {
     if h <= MANTLE_STEP_UP {

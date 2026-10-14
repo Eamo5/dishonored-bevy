@@ -978,7 +978,7 @@ const UU: f32 = 0.01;
 #[allow(clippy::too_many_arguments)]
 fn use_power(
     mut commands: Commands,
-    (time, mouse, cursor, scripted, settings): (Res<Time>, Res<ButtonInput<MouseButton>>, Single<&CursorOptions>, Option<Res<crate::script::Scripted>>, Res<crate::settings::Settings>),
+    (time, mouse, cursor, scripted, settings, hard): (Res<Time>, Res<ButtonInput<MouseButton>>, Single<&CursorOptions>, Option<Res<crate::script::Scripted>>, Res<crate::settings::Settings>, Res<crate::player::HardLanding>),
     rapier: ReadRapierContext,
     (assets, data, attrs, tune, level_info): (Option<Res<GameAssets>>, Res<Data>, Res<Attrs>, Res<crate::musicbox::Tune>, Option<Res<crate::level::LevelInfo>>),
     mut powers: ResMut<Powers>,
@@ -1048,7 +1048,8 @@ fn use_power(
         }
     }
     let grabbed = cursor.grab_mode != CursorGrabMode::None || scripted.is_some();
-    let can_act = grabbed && !stats.dead && !p.locked && !held.busy() && powers.blink.is_none() && tc.wheel >= 1.0;
+    // (a hard landing takes his left hand a moment: `m_bActionUsesLeftHand`)
+    let can_act = grabbed && !stats.dead && !p.locked && !held.busy() && powers.blink.is_none() && tc.wheel >= 1.0 && hard.0 <= 0.0;
     let sel = powers.selected;
     let level = sel.level(&stats);
     // possessing: the left hand only ends it
