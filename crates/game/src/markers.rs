@@ -223,7 +223,8 @@ fn update_markers(
             if text.0 != label {
                 text.0 = label.clone();
             }
-            let fs = bevy::text::FontSize::Px(TEXT_SIZE * s * scale);
+            // (a marker shrunk away: its text kept above nothing, not at size 0)
+            let fs = bevy::text::FontSize::Px((TEXT_SIZE * s * scale).max(0.5));
             if font.font_size != fs {
                 font.font_size = fs;
             }
@@ -357,7 +358,8 @@ fn heart_markers(
             if text.0 != label {
                 text.0 = label.clone();
             }
-            let fs = bevy::text::FontSize::Px(TEXT_SIZE * s * scale);
+            // (a marker shrunk away: its text kept above nothing, not at size 0)
+            let fs = bevy::text::FontSize::Px((TEXT_SIZE * s * scale).max(0.5));
             if font.font_size != fs {
                 font.font_size = fs;
             }
