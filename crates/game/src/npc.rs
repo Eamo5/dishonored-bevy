@@ -3251,6 +3251,13 @@ pub(crate) fn npc_brain(
                 }
                 if npc.sees_player {
                     npc.target = Some(ppos);
+                    // a wolfhound with Corvo out of its reach (above it or below) keeps where it can
+                    // bark at him, just past its bark's least reach (our reading of its
+                    // `DisNavMeshGoal_WolfhoundBarkPosition`)
+                    if let Some(tc) = npc.arms.taunt.as_ref().filter(|_| is_hound(&npc) && (ppos.y - pos.y).abs() > 1.6) {
+                        let away = (pos - ppos).with_y(0.0).normalize_or(-npc.forward());
+                        npc.target = Some(ppos.with_y(pos.y) + away * (tc.range[0] + 1.5));
+                    }
                     npc.trail_idx = trail.points.len();
                     npc.mode_timer = npc.mode_timer.min(1.0);
                 } else if let Some(ls) = npc.last_seen {
@@ -4335,7 +4342,8 @@ impl NpcClips {
             ],
             gun: [lib.find("Sword_Gun_Draw"), lib.find("Sword_Gun_Idle"), lib.find("Sword_Gun_Fire"), lib.find("Sword_Gun_Undraw")],
             under: [lib.find("Sword_Attack_UnderTable"), lib.find("Sword_Gun_AttackUnderTable")],
-            taunt: lib.all(&["Sword_TauntA", "Sword_TauntB", "Sword_TauntC"]),
+            // (a wolfhound's: its barks, `Attack_IdleBark01`-`04`, each with its own bark)
+            taunt: lib.all(&["Sword_TauntA", "Sword_TauntB", "Sword_TauntC", "Attack_IdleBark01", "Attack_IdleBark02", "Attack_IdleBark03", "Attack_IdleBark04"]),
             cough: lib.all(&["Empty_Idle_Cough"]),
             check_pockets: lib.all(&["Empty_CheckPockets"]),
             beg: [lib.find("Empty_Beg_Kneeling_In"), lib.find("Empty_Beg_Kneeling_Loop"), lib.find("Empty_Beg_Kneeling_Out")],

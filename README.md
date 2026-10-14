@@ -1025,7 +1025,11 @@ fullscreen display, vertical sync and the crosshair.
   difficulty) and pinning him (`DisTweaks_WHArmAttack`): its teeth take 5 every 0.75 s
   (`m_LoopSettings`) until he breaks free with 3 presses ("Mash [LMB] !", `DisTweaks_Minigame`).
   Up close they bite with their weapon's own moves (`DisTweaks_NPCAttackMedium`, `..Left90`,
-  `..Right90`). Script `spawn NAME` starts a level-script spawner (a kennel's hounds).
+  `..Right90`). Script `spawn NAME` starts a level-script spawner (a kennel's hounds). Seeing
+  Corvo they bark at him (their `DisTweaks_Item_WolfhoundBark`'s `DisTweaks_WHBark`, a taunt
+  of theirs: one of `Attack_IdleBark01`-`04`, each with its `Snd_Wolfhound_Bark`), standing
+  for it; with him out of their reach, above them or below, they keep where they can bark at
+  him, just past its least reach (our reading of `DisNavMeshGoal_WolfhoundBarkPosition`).
 - **Rats underfoot** (`DisBehaviorRatStomp`, `DisTweaks_NPCStomp` 2.5 m): people stamp on the rats that come near (their `..StompRat` clips and "rat" attack bark), killing those still under the heel. A guard set upon by a swarm calls for help (a rat-swarm noise, `m_SwarmCallForHelpLoudness` 20 m, at most once a second, as roshan's r614/blink research decoded it): others of its side within earshot that fight rats (`DisBehaviorCombatRatSwarm`: guards, thugs, Overseers, whose brains commit at once) come to the rat on it and stamp, until the swarm leaves it be; a fight with Corvo outranks it.
 - **Making off from grenades** (`DisBehaviorEscapeExplosion`, `AI_BhvrTwk_EscapeExplosion`'s default tweak): a character that sees a live grenade within 3 m (`m_fEscapeThreatRadius` 300 uu) and 45 degrees of its facing (`m_fDiscoveryAngle`) is startled (`m_fSurpriseChance` 1: `Empty_Surprised_Front` or, sword drawn, `Sword_Surprised_Front`, on its upper body) and runs to 6 m clear of it (`m_fExplosionClearance` 600 uu), above any fight, following a grenade that rolls, for at most 5 s (`m_fEscapeEndTimer`) and 1 s after it goes off (`m_fEscapeThreatTimerAfterExplosion`), with its "grenade!" bark (`ESCAPE_IMPENDING_EXPLOSION`). Not its thrower, nor one it's stuck to.
 - **Wall of light eyes**: the eye above each wall (`DisDetectionEye`) shows what it sees in its detection cylinder with its tweak's materials: white with nobody about, red at someone the wall would burn (with its detection sound), blue at someone it lets pass, dark when unpowered. A device's receptacle is the nearest of its name (sublevels reuse actor names). Script: `wall [D]`.

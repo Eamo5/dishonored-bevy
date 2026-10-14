@@ -3557,7 +3557,8 @@ impl<'a> Cooker<'a> {
 
     /// A weapon's taunt (its `DisTweaks_NPCTaunt`): when, how far and how often.
     fn taunt_context(&mut self, w: &Obj) -> Option<FireContext> {
-        let c = self.npc_contexts(w).into_iter().find(|c| c.class() == "DisTweaks_NPCTaunt")?;
+        // (a wolfhound's bark is its taunt: `DisTweaks_WHBark`, its `DisTweaks_Item_WolfhoundBark`'s)
+        let c = self.npc_contexts(w).into_iter().find(|c| matches!(c.class().as_str(), "DisTweaks_NPCTaunt" | "DisTweaks_WHBark"))?;
         if matches!(self.tweak_prop(&c, "m_bDisabled", 0, 0), Some((_, Value::Bool(true)))) {
             return None;
         }
