@@ -947,7 +947,11 @@ fullscreen display, vertical sync and the crosshair.
 - **Rats underfoot** (`DisBehaviorRatStomp`, `DisTweaks_NPCStomp` 2.5 m): people stamp on the rats that come near (their `..StompRat` clips and "rat" attack bark), killing those still under the heel.
 - **Wall of light eyes**: the eye above each wall (`DisDetectionEye`) shows what it sees in its detection cylinder with its tweak's materials: white with nobody about, red at someone the wall would burn (with its detection sound), blue at someone it lets pass, dark when unpowered. A device's receptacle is the nearest of its name (sublevels reuse actor names). Script: `wall [D]`.
 - **Tripwire traps**: the wires strung across passages (`DisTripwire`) snap when Corvo walks into them (jumping, Blinking or a small creature passes) and raise their `DisSeqEvent_Tripwire`; the level scripts fire the launchers (`DisSeqAct_ActivateProjectileLauncher`), which shoot at their target point on their sequence's fire notify: the whiskey launcher's explosive arrow bursts on what it strikes (`TrapArrowExplosion_twk`), the bolt launcher's bolt wounds. A launcher not yet fired can be disarmed for its ammunition (`m_HarvestedAmmo`: an incendiary bolt or a bolt). Sprung and disarmed traps, and broken or moved props, are kept in saves. A trap belongs to its sublevel: until a streamed sublevel loads (the trials' later rounds, say) its traps aren't there, hidden and inert, and they go when it streams out. Script: `trap [wire|launcher] [D]`, `stream NAME [out]`; `DH_TRAP_LOG`.
-- **Music boxes**: a musical Overseer fighting Corvo plays the protective tune, and so do the
+- **Music boxes**: a musical Overseer carries its music box on its `MusicBox` socket, held in
+  both hands as it walks or stands (`Musicbox_Idle` on its upper body) and cranked while it plays
+  (`MusicBox_PlayMusic_In`, `_Loop`, `_Out`), as roshan's r614/blink research read `DisWepMusicBox`;
+  it fights by kicking (`MusicBox_Attack_KickMedium`).
+  A musical Overseer fighting Corvo plays the protective tune, and so do the
   levels' tune sources (`DisProtectionTuneSource`): within 6 m the world sways, within 4 m
   Corvo's powers fail (`DisTweaks_Tune_Protection` radii and sounds, cooked from the music
   box's `DisTweaks_NPCTune_Protection`). Facing Corvo within 20 m and 45 degrees the Overseer

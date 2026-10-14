@@ -6543,6 +6543,9 @@ impl<'a> Cooker<'a> {
             ("heart", "Heart.Heart"),
             ("grenade", "Grenade.Grenade"),
             ("springrazor", "SpringRazor.SpringRazor"),
+            // (the musical Overseers' music box, `DisWepMusicBox` on their `MusicBox` socket:
+            // only on the maps that have them)
+            ("musicbox", "Musical_Overseer.Overseer_MusicBox"),
         ];
         // (Daud's sword, wristbow and its bolts on The Knife of Dunwall's maps)
         const DAUD_PROPS: &[(&str, &str)] = &[
@@ -6569,7 +6572,11 @@ impl<'a> Cooker<'a> {
             .collect();
         for (name, path) in props.iter() {
             let Some(obj) = self.assets.find(path) else {
-                log::warn!("prop {path} not found");
+                if *name == "musicbox" {
+                    log::debug!("prop {path} not on this map");
+                } else {
+                    log::warn!("prop {path} not found");
+                }
                 continue;
             };
             let d = match skeletal::read_skeletal_mesh(&obj.pkg, obj.idx) {

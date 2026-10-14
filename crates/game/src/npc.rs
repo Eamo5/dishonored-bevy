@@ -1675,6 +1675,17 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
             }
         }
     }
+    // a musical Overseer's music box, on its `MusicBox` socket (`DisWepMusicBox`)
+    if ty.is_some_and(|t| t.stats.as_ref().is_some_and(|s| s.tunes.is_some())) || ty.is_some_and(|t| t.name.contains("MusicOverseer")) {
+        if let (Some((j, at)), Some(parts)) = (socket("MusicBox", &[], Transform::IDENTITY), assets.props.get("musicbox")) {
+            for (mesh, mat) in &parts.parts {
+                let mut ec = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), at));
+                mat.apply(&mut ec);
+                let b = ec.id();
+                commands.entity(j).add_child(b);
+            }
+        }
+    }
     // its pistol on the hip, drawn into the left hand to shoot (the officers'
     // `Twk_Inv_PistolEliteGuard`: `Wpn_EliteGun` on `HolsterGun`, then `LeftHandWpn`)
     let gun_hand = socket("LeftHandWpn", &["handAttachment_L_jnt", "hand_L_jnt"], Transform::IDENTITY);
@@ -3880,6 +3891,9 @@ pub struct NpcClips {
     /// it stands (`Empty_Idle_Panic_Recover`, the cower sub-state's stance)
     beg: [Option<ClipId>; 3],
     cower: Option<ClipId>,
+    /// a musical Overseer's arms: holding its music box (`Musicbox_Idle`), and cranking it
+    /// (`MusicBox_PlayMusic_In`, `_Loop`, `_Out`)
+    music_box: [Option<ClipId>; 4],
     /// a weeper's cough (`DisNPCAnim_Weeper_Cough`)
     cough: Vec<ClipId>,
     /// its aim offsets (`ADD_Sword_Gun_AimIdle_*`): up, centre and down rows, left to right
@@ -4011,6 +4025,7 @@ impl NpcClips {
             taunt: lib.all(&["Sword_TauntA", "Sword_TauntB", "Sword_TauntC"]),
             cough: lib.all(&["Empty_Idle_Cough"]),
             beg: [lib.find("Empty_Beg_Kneeling_In"), lib.find("Empty_Beg_Kneeling_Loop"), lib.find("Empty_Beg_Kneeling_Out")],
+            music_box: [lib.find("Musicbox_Idle"), lib.find("MusicBox_PlayMusic_In"), lib.find("MusicBox_PlayMusic_Loop"), lib.find("MusicBox_PlayMusic_Out")],
             cower: lib.find("Empty_Idle_Panic_Recover"),
             gun_aim: ["UpLeft", "Up", "UpRight", "CenterLeft", "Center", "CenterRight", "DownLeft", "Down", "DownRight"].map(|d| lib.find(&format!("ADD_Sword_Gun_AimIdle_{d}"))),
             walk_dirs: [None; 3],
@@ -4022,6 +4037,21 @@ impl NpcClips {
             [lib.find(&format!("{prefix}{base}E")).map(|c| (c, 1.0)), way("S"), way("W")]
         };
         let c = NpcClips { walk_dirs: dirs(c.walk_alert, "Walk"), run_dirs: dirs(c.run, "Run"), ..c };
+        // (a musical Overseer kicks, its hands on its music box: `MusicBox_Attack_KickMedium`,
+        // its music box's set alone has it)
+        let c = match lib.first(&["MusicBox_Attack_KickMedium"]) {
+            Some(kick) => NpcClips {
+                attack: vec![kick],
+                attack_short: vec![kick],
+                attack_short_big: vec![kick],
+                attack_medium: vec![kick],
+                attack_long: vec![kick],
+                attack_long_big: vec![kick],
+                kick: Some(kick),
+                ..c
+            },
+            None => c,
+        };
         (c.idle.is_some() && c.walk.is_some()).then_some(c)
     }
 }
@@ -4281,11 +4311,11 @@ fn npc_select_anim(
     tc: Res<TimeControl>,
     mut commands: Commands,
     player: Query<&Transform, With<Player>>,
-    mut npcs: Query<(Entity, &mut Npc, &mut NpcAnim, &mut Animator, &Transform, &Children, Option<&DropKilled>, Option<&AssassinClip>, Option<&mut FinisherClip>, Option<&crate::carry::Falling>, (Has<crate::ragdoll::Ragdoll>, Has<crate::ragdoll::GoLimp>)), Without<ScriptedAnim>>,
+    mut npcs: Query<(Entity, &mut Npc, &mut NpcAnim, &mut Animator, &Transform, &Children, Option<&DropKilled>, Option<&AssassinClip>, Option<&mut FinisherClip>, Option<&crate::carry::Falling>, (Has<crate::ragdoll::Ragdoll>, Has<crate::ragdoll::GoLimp>, Has<crate::musicbox::TunePlaying>)), Without<ScriptedAnim>>,
     mut visuals: Query<&mut Transform, (With<NpcVisual>, Without<Npc>, Without<Player>)>,
 ) {
     let ppos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
-    for (e, mut npc, mut st, mut anim, t, children, dropped, assassin, finisher, falling, (limp, going_limp)) in &mut npcs {
+    for (e, mut npc, mut st, mut anim, t, children, dropped, assassin, finisher, falling, (limp, going_limp, tune)) in &mut npcs {
         let scale = tc.npc_scale(npc.out_of_bend).max(0.0);
         let dt = time.delta_secs() * scale;
         anim.time_scale = scale;
@@ -4322,8 +4352,36 @@ fn npc_select_anim(
 
         // (a fall, a blow, a gesture, a swing or anything setting it on edge takes the upper body
         // back from an ambient idle)
-        if anim.upper_on() && (npc.is_down() || npc.alert != Alert::Unaware || npc.hit_react > st.hit_seen + 1e-3 || npc.act.1 != st.act_seen || npc.attack_t.is_some() || npc.caught.is_some()) {
+        let [box_idle, box_in, box_loop, box_out] = st.clips.music_box;
+        let musical = box_idle.is_some() && (npc.arms.tunes.is_some() || npc.pawn.contains("MusicOverseer"));
+        if anim.upper_on() && (npc.is_down() || !musical && (npc.alert != Alert::Unaware || npc.hit_react > st.hit_seen + 1e-3 || npc.act.1 != st.act_seen || npc.attack_t.is_some() || npc.caught.is_some())) {
             anim.stop_upper(0.15);
+        }
+        // a musical Overseer's arms hold its music box, walking or standing (its pawn's walking
+        // upper-body desire, `MusicBoxIdle`), and crank it while it plays (`PlayMusic`: in, the
+        // loop, out), as roshan's r614/blink research read `DisWepMusicBox`
+        if musical && !npc.is_down() && !limp {
+            let on = |c: Option<ClipId>| c.is_some() && anim.upper_clip() == c;
+            if tune {
+                if !(on(box_in) || on(box_loop)) {
+                    if let Some(c) = box_in.or(box_loop) {
+                        anim.restart_upper(c, box_in.is_none(), 1.0, 0.2);
+                    }
+                } else if on(box_in) && anim.upper_finished() {
+                    if let Some(c) = box_loop {
+                        anim.restart_upper(c, true, 1.0, 0.15);
+                    }
+                }
+            } else if on(box_in) || on(box_loop) {
+                match box_out {
+                    Some(c) => anim.restart_upper(c, false, 1.0, 0.15),
+                    None => anim.stop_upper(0.2),
+                }
+            } else if !on(box_out) || anim.upper_finished() {
+                if let Some(c) = box_idle.filter(|_| !on(box_idle)) {
+                    anim.restart_upper(c, true, 1.0, 0.3);
+                }
+            }
         }
 
         // sword: drawn when alerted, holstered otherwise
@@ -4765,16 +4823,16 @@ fn npc_select_anim(
         // of the patrol and guard behaviours: every 30-60 s, `m_fMin/MaxAmbientAnimFrequency`, on
         // the upper body and walking too, `m_bCheckForMovement` false, as roshan's r614/blink
         // research found); the relaxed (civilians idling, wandering) have none
-        if anim.upper_on() && anim.upper_finished() {
+        if !musical && anim.upper_on() && anim.upper_finished() {
             anim.stop_upper(0.3);
         }
         if alert {
             // (a change of behaviour starts its ambient idles over)
             st.idle_time = rand::random::<f32>() * AMBIENT_IDLE[1];
-            if anim.upper_on() {
+            if anim.upper_on() && !musical {
                 anim.stop_upper(0.2);
             }
-        } else if npc.fighter() {
+        } else if npc.fighter() && !musical {
             st.idle_time -= dt;
             if st.idle_time <= 0.0 {
                 st.idle_time = AMBIENT_IDLE[0] + rand::random::<f32>() * (AMBIENT_IDLE[1] - AMBIENT_IDLE[0]);

@@ -20,7 +20,7 @@ impl Plugin for MusicBoxPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Tune>()
             .add_systems(OnEnter(GameState::InGame), |mut t: ResMut<Tune>| *t = Tune::default())
-            .add_systems(Update, (hear_tunes, combat_tunes).before(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (hear_tunes, combat_tunes, mark_playing).before(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)))
             .add_systems(Update, sway.after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
     }
 }
@@ -39,6 +39,25 @@ pub struct Tune {
     pub disorient: f32,
     in_disorient: bool,
     t: f32,
+}
+
+/// A musical Overseer playing its music box now (its arms crank it: `npc.rs`).
+#[derive(Component)]
+pub struct TunePlaying;
+
+/// Marks the musical Overseers playing their music boxes.
+fn mark_playing(mut commands: Commands, npcs: Query<(Entity, &Npc, &crate::npc::FromSpawner, Has<TunePlaying>)>, vm: Option<Res<crate::kismet::Vm>>) {
+    for (e, n, from, on) in &npcs {
+        if n.arms.tunes.is_none() && !n.pawn.contains("MusicOverseer") {
+            continue;
+        }
+        let p = plays(n, from.0, vm.as_deref());
+        if p && !on {
+            commands.entity(e).try_insert(TunePlaying);
+        } else if !p && on {
+            commands.entity(e).try_remove::<TunePlaying>();
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
