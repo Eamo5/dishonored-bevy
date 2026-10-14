@@ -16,7 +16,7 @@ pub struct BarksPlugin;
 impl Plugin for BarksPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Subtitle>()
-            .init_resource::<BarkClock>()
+            .init_resource::<BarkMan>()
             .init_resource::<BarkMemory>()
             .add_systems(Update, npc_barks.run_if(in_state(GameState::InGame)));
     }
@@ -39,8 +39,6 @@ pub struct BarkState {
     alert: Alert,
     down: bool,
     health: f32,
-    /// time until this NPC may bark again
-    quiet: f32,
     /// next combat taunt / idle mutter
     next_chatter: f32,
     victory: bool,
@@ -77,15 +75,55 @@ pub struct BarkState {
     taunt: bool,
     /// begging: time to its next plea
     beg: f32,
+    /// a blow under way (as last seen)
+    swinging: bool,
     act_seen: u32,
     shot: f32,
 }
 
-/// Global pacing: one voice at a time near the player.
+/// The barks' manager (`DisConvGlobalMan`, as roshan's r614/blink research decoded it): each
+/// frame's requests, by fire group and by whether the speaker is near (loud) or far (quiet),
+/// go out by weight (the nearest first) while their group and all the lines at once have room,
+/// the most important groups first; the rest are dropped, none waits.
 #[derive(Resource, Default)]
-struct BarkClock {
-    busy: f32,
+struct BarkMan {
+    /// lines playing
+    firing: Vec<Firing>,
+    /// a group's list (group, quiet) shut until then (s: its `m_fMinTimeBetweenFiring` after one
+    /// of its lines ends)
+    locked: HashMap<(u8, bool), f32>,
+    /// when a speaker may say a hook again (its row's refire, a random time between its two)
+    next: HashMap<(Entity, String), f32>,
 }
+
+/// A line playing: its speaker, fire group, list, whether Corvo set it off (its initiator),
+/// its hook's flags, and when it ends.
+struct Firing {
+    who: Entity,
+    group: u8,
+    quiet: bool,
+    corvo: bool,
+    flags: u32,
+    until: f32,
+}
+
+/// A bark asked for this frame: its speaker and the hook its voice has (index), the fire
+/// group, list, initiator, flags and refire of the hook, how far it is, and what the walk needs.
+struct Request {
+    who: Entity,
+    hook: usize,
+    group: u8,
+    quiet: bool,
+    corvo: bool,
+    flags: u32,
+    refire: [f32; 2],
+    d: f32,
+    out: Option<usize>,
+}
+
+/// Hook flags: it interrupts its speaker's line, and none interrupts it.
+const INTERRUPTS: u32 = 0x2;
+const NOT_INTERRUPTIBLE: u32 = 0x4;
 
 /// Falling this fast (m/s down) is a fall worth a cry.
 const FALL_SPEED: f32 = -6.0;
@@ -110,8 +148,8 @@ fn hook_output(class: &str, npc: &Npc) -> Option<usize> {
     }
 }
 
-/// Barks are heard (and subtitled) within this range (metres).
-const HEAR: f32 = 25.0;
+/// A bark nearer than this (m) is subtitled.
+const SUBTITLE_REACH: f32 = 15.0;
 
 /// Others of its side within this (m) hear a character's call for help (`COMBAT_HELP`: a cry
 /// for help carries 15 m).
@@ -193,7 +231,7 @@ fn npc_barks(
     time: Res<Time>,
     level: Option<Res<LevelInfo>>,
     stats: Res<PlayerStats>,
-    mut clock: ResMut<BarkClock>,
+    mut man: ResMut<BarkMan>,
     player: Query<&Transform, With<Player>>,
     mut npcs: Query<(Entity, &Npc, &Transform, Option<&mut BarkState>, Option<&crate::anim::Animator>, Option<&crate::npc::NpcAnim>)>,
     mut out: MessageWriter<PostEvent>,
@@ -206,7 +244,26 @@ fn npc_barks(
     let Some(level) = level else { return };
     let Ok(pt) = player.single() else { return };
     let dt = time.delta_secs();
-    clock.busy = (clock.busy - dt).max(0.0);
+    let now = time.elapsed_secs();
+    let rules = &data.0.bark_rules;
+    // (game data from before the manager's rules: the tweak's own figures)
+    let max_d = if rules.max_distance > 0.0 { rules.max_distance } else { 50.0 };
+    let loud_d = if rules.loud_distance > 0.0 { rules.loud_distance } else { 20.0 };
+    // lines ended: their groups' lists shut a while
+    let mut ended = Vec::new();
+    man.firing.retain(|f| {
+        let on = f.until > now;
+        if !on {
+            ended.push((f.group, f.quiet));
+        }
+        on
+    });
+    for (g, q) in ended {
+        if let Some(wait) = rules.groups.get(g as usize).map(|r| r.min_between).filter(|w| *w > 1e-4) {
+            man.locked.insert((g, q), now + wait);
+        }
+    }
+    let mut requests: Vec<Request> = Vec::new();
     let log = std::env::var("DH_AUDIO_LOG").is_ok();
     // a power Corvo used this frame (Blink: he vanishes from where they saw him)
     let magic = used.read().last().map(|u| u.0);
@@ -225,7 +282,6 @@ fn npc_barks(
                 alert: npc.alert,
                 down: npc.is_down(),
                 health: npc.health,
-                quiet: 2.0,
                 next_chatter: 8.0 + rand::random::<f32>() * 20.0,
                 victory: false,
                 bark_seen: npc.bark_req.0,
@@ -247,13 +303,13 @@ fn npc_barks(
                 was_stuck: false,
                 taunt: false,
                 beg: 0.0,
+                swinging: false,
                 act_seen: npc.act.1,
                 shot: 10.0,
             });
             continue;
         };
         let Some(voice) = npc.voice.and_then(|v| level.scene.barks.get(v as usize)) else { continue };
-        st.quiet -= dt;
         st.next_chatter -= dt;
         st.since += dt;
         st.shot = if shot.contains(&e) { 0.0 } else { st.shot + dt };
@@ -298,8 +354,8 @@ fn npc_barks(
             cued = None;
         }
         let one: [&str; 1];
-        // (hooks to try in order, urgent: ignores pacing)
-        let mut want: Option<(&[&str], bool)> = None;
+        // (hooks to try in order: the first its voice has)
+        let mut want: Option<&[&str]> = None;
         // (the hook node's output, where the moment decides it)
         let mut out_hint: Option<usize> = None;
         let down = npc.is_down();
@@ -323,12 +379,12 @@ fn npc_barks(
             st.cried |= cry(h) || st.dying.is_some();
             st.dying = None;
             one = [h];
-            want = Some((&one, true));
+            want = Some(&one);
         } else if let Some((left, hooks)) = st.dying {
             if left - dt <= 0.0 && !cry_coming {
                 st.dying = None;
                 st.cried = true;
-                want = Some((hooks, true));
+                want = Some(hooks);
             } else {
                 st.dying = Some((left - dt, hooks));
             }
@@ -336,132 +392,139 @@ fn npc_barks(
         } else if npc.bark_req.0 != st.bark_seen {
             // a bark asked for (a shove's "personal space")
             st.bark_seen = npc.bark_req.0;
-            want = Some((std::slice::from_ref(&npc.bark_req.1), true));
+            want = Some(std::slice::from_ref(&npc.bark_req.1));
         } else if !down && npc.health < st.health - 0.5 {
             let big = st.health - npc.health >= npc.arms.big_hit;
-            want = Some((if big { &["COMBAT_OUCH_BIG", "COMBAT_OUCH_SMALL"] } else { &["COMBAT_OUCH_SMALL", "COMBAT_OUCH_BIG"] }, true));
+            want = Some(if big { &["COMBAT_OUCH_BIG", "COMBAT_OUCH_SMALL"] } else { &["COMBAT_OUCH_SMALL", "COMBAT_OUCH_BIG"] });
         } else if !down && !npc.grounded && npc.velocity.y < FALL_SPEED && !st.falling {
             // falling (`FALLING`: off a ledge, thrown)
-            want = Some((&["FALLING"], true));
+            want = Some(&["FALLING"]);
         } else if !down && npc.act.1 != st.act_seen && npc.act.0 == 8 {
             // stamping on a rat (`PATROL_ATTACK_RATSINGLE`)
-            want = Some((&["PATROL_ATTACK_RATSINGLE"], false));
+            want = Some(&["PATROL_ATTACK_RATSINGLE"]);
         } else if !down && npc.aim.is_some() && !st.aiming {
             // drawing a bead on him (`COMBAT_RANGED_BEGIN`)
-            want = Some((&["COMBAT_RANGED_BEGIN"], false));
+            want = Some(&["COMBAT_RANGED_BEGIN"]);
         } else if !down && burning.contains(e) && !st.burning {
             // set alight (`COMBAT_IMMOLATED`)
-            want = Some((&["COMBAT_IMMOLATED"], true));
+            want = Some(&["COMBAT_IMMOLATED"]);
         } else if !down && npc.mode == Mode::Flee && st.mode != Mode::Flee {
             // a civilian starting to run (`PANIC_START`, `FLEEING`)
-            want = Some((&["PANIC_START", "FLEEING"], true));
+            want = Some(&["PANIC_START", "FLEEING"]);
         } else if !down && npc.caught.is_some() && st.beg <= 0.0 {
             // a civilian caught, on its knees, pleading (`COMBAT_BEGGING`: "Help me!")
             st.beg = BEG_BARK[0] + rand::random::<f32>() * (BEG_BARK[1] - BEG_BARK[0]);
-            want = Some((&["COMBAT_BEGGING", "PANIC_START"], true));
+            want = Some(&["COMBAT_BEGGING", "PANIC_START"]);
         } else if !down && npc.alarm_run.is_some() && !st.alarm {
             // off to ring the alarm (`ALARM_GO_TO_RING_ALARM`)
-            want = Some((&["ALARM_GO_TO_RING_ALARM", "ALARM_HEAR_AND_RESPOND"], true));
+            want = Some(&["ALARM_GO_TO_RING_ALARM", "ALARM_HEAR_AND_RESPOND"]);
         } else if !down && npc.hostile() && !st.grenade && grenades.iter().any(|g| g.translation.distance(t.translation) < 5.0) {
             // a grenade by it (`ESCAPE_IMPENDING_EXPLOSION`)
-            want = Some((&["ESCAPE_IMPENDING_EXPLOSION"], true));
+            want = Some(&["ESCAPE_IMPENDING_EXPLOSION"]);
         } else if !down && npc.hostile() && npc.sees_player && magic.is_some() {
             // Corvo's magic before its eyes: gone from where it saw him, else a power seen
             // (`MAGIC_DISAPPEARED`, `WITNESSEDMAGIC`)
-            want = Some(if magic == Some(crate::powers::Power::Blink) { (&["MAGIC_DISAPPEARED", "MAGIC_WITNESSED"], true) } else { (&["MAGIC_WITNESSED"], true) });
-        } else if !down && st.taunt && st.quiet <= 0.0 && clock.busy <= 0.0 {
-            // Corvo out of its reach (`UNREACH_TAUNT`, `UNREACH_BELOW`, `COMBAT_CANT_REACH`)
-            st.taunt = false;
-            want = Some((&["UNREACH_TAUNT", "UNREACH_BELOW", "COMBAT_CANT_REACH"], false));
+            want = Some(if magic == Some(crate::powers::Power::Blink) { &["MAGIC_DISAPPEARED", "MAGIC_WITNESSED"] } else { &["MAGIC_WITNESSED"] });
+        } else if !down && st.taunt {
+            // Corvo out of its reach (`UNREACH_TAUNT`, `UNREACH_BELOW`, `COMBAT_CANT_REACH`),
+            // asked for until it goes out
+            want = Some(&["UNREACH_TAUNT", "UNREACH_BELOW", "COMBAT_CANT_REACH"]);
         } else if !down && npc.witnessed_death && !st.witnessed_death && !npc.saw_body {
             // a death before its eyes (`SEARCH_WITNESS_DEATH`)
-            want = Some((&["SEARCH_WITNESS_DEATH"], true));
+            want = Some(&["SEARCH_WITNESS_DEATH"]);
         } else if !down && npc.saw_body && !st.saw_body {
             // a body found (`SEARCH_DETECT_CORPSE`: its `Hook_DeathMode` way for a dead one, or
             // one knocked out), the one it goes to
             let at = npc.target.unwrap_or(t.translation);
             let dead = bodies.iter().min_by(|a, b| a.0.distance(at).total_cmp(&b.0.distance(at))).is_none_or(|b| b.1);
             out_hint = Some(if dead { 0 } else { 1 });
-            want = Some((if npc.witnessed_death { &["SEARCH_WITNESS_DEATH", "SEARCH_DETECT_CORPSE"] } else { &["SEARCH_DETECT_CORPSE"] }, true));
+            want = Some(if npc.witnessed_death { &["SEARCH_WITNESS_DEATH", "SEARCH_DETECT_CORPSE"][..] } else { &["SEARCH_DETECT_CORPSE"][..] });
         } else if !down && npc.alert == Alert::Combat && st.alert == Alert::Combat && npc.mode == Mode::Combat && matches!(st.mode, Mode::Search | Mode::Investigate) {
             // found again while searching (`SEARCH_FIND_ENEMY`)
-            want = Some((&["SEARCH_FIND_ENEMY", "COMBAT_THREAT"], true));
+            want = Some(&["SEARCH_FIND_ENEMY", "COMBAT_THREAT"]);
         } else if !down && npc.alert == Alert::Suspicious && npc.mode == Mode::Investigate && st.mode != Mode::Investigate {
             // off to look (a guard says what set it off: Corvo seen near or far, by
             // `m_fVisualDetectionRatioNear` of its sight, or heard; others
             // `ATTENTION_INVESTIGATE`)
             let near = d < VISUAL_NEAR * sight_range(&level, &npc);
             want = Some(match (npc.hostile(), npc.sees_player) {
-                (true, true) if near => (&["SEARCH_NEAR_VDETECTION", "ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"], false),
-                (true, true) => (&["SEARCH_FAR_VDETECTION", "ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"], false),
-                (true, false) => (&["SEARCH_ADETECTION", "ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"], false),
-                _ => (&["ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"], false),
+                (true, true) if near => &["SEARCH_NEAR_VDETECTION", "ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"],
+                (true, true) => &["SEARCH_FAR_VDETECTION", "ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"],
+                (true, false) => &["SEARCH_ADETECTION", "ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"],
+                _ => &["ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"],
             });
         } else if !down && st.mode == Mode::Combat && npc.mode == Mode::Search && npc.alert == Alert::Combat {
             // the fight lost him (it goes on looking, its alarm held): after he got out of its
             // reach `UNREACH_GIVEUP`, else `COMBAT_LOST` (with others of its side about, their
             // group's)
             want = Some(match (st.was_stuck, grouped) {
-                (true, true) => (&["UNREACH_GIVEUP_WITHGROUP", "UNREACH_GIVEUP", "COMBAT_LOST_GROUP", "COMBAT_LOST"], true),
-                (true, false) => (&["UNREACH_GIVEUP", "COMBAT_LOST", "COMBAT_LOST_GROUP"], true),
-                (false, true) => (&["COMBAT_LOST_GROUP", "COMBAT_LOST"], true),
-                (false, false) => (&["COMBAT_LOST", "COMBAT_LOST_GROUP"], true),
+                (true, true) => &["UNREACH_GIVEUP_WITHGROUP", "UNREACH_GIVEUP", "COMBAT_LOST_GROUP", "COMBAT_LOST"],
+                (true, false) => &["UNREACH_GIVEUP", "COMBAT_LOST", "COMBAT_LOST_GROUP"],
+                (false, true) => &["COMBAT_LOST_GROUP", "COMBAT_LOST"],
+                (false, false) => &["COMBAT_LOST", "COMBAT_LOST_GROUP"],
             });
         } else if !down && npc.alert != st.alert {
             want = match (st.alert, npc.alert) {
-                (Alert::Unaware, Alert::Suspicious) => Some((&["ATTENTION_NOTICE_BEGIN", "NOTICE_SUSPICIOUS_ACTIVITY", "ATTENTION_HEADTRACK", "ATTENTION_TRACKTARGET_BEGIN"], false)),
+                (Alert::Unaware, Alert::Suspicious) => Some(&["ATTENTION_NOTICE_BEGIN", "NOTICE_SUSPICIOUS_ACTIVITY", "ATTENTION_HEADTRACK", "ATTENTION_TRACKTARGET_BEGIN"]),
                 // (a weeper's voice has only its own: `WEEP_NOTICED_TARGET`)
-                (Alert::Unaware, Alert::Combat) => Some((&["COMBAT_SURPRISED", "COMBAT_THREAT", "WEEP_NOTICED_TARGET"], true)),
+                (Alert::Unaware, Alert::Combat) => Some(&["COMBAT_SURPRISED", "COMBAT_THREAT", "WEEP_NOTICED_TARGET"]),
                 // (with others of its side about, their group's lines first)
                 // (joining a fight it can't see: `COMBAT_HELP_FOUND` with others of its side at it,
                 // else `COMBAT_THREAT_OFFSCREEN`)
-                (_, Alert::Combat) if !npc.sees_player && allies(true) => Some((&["COMBAT_HELP_FOUND", "COMBAT_THREAT_OFFSCREEN", "COMBAT_THREAT", "WEEP_NOTICED_TARGET"], true)),
-                (_, Alert::Combat) if !npc.sees_player => Some((&["COMBAT_THREAT_OFFSCREEN", "COMBAT_THREAT", "COMBAT_THREAT_GROUP", "WEEP_NOTICED_TARGET"], true)),
+                (_, Alert::Combat) if !npc.sees_player && allies(true) => Some(&["COMBAT_HELP_FOUND", "COMBAT_THREAT_OFFSCREEN", "COMBAT_THREAT", "WEEP_NOTICED_TARGET"]),
+                (_, Alert::Combat) if !npc.sees_player => Some(&["COMBAT_THREAT_OFFSCREEN", "COMBAT_THREAT", "COMBAT_THREAT_GROUP", "WEEP_NOTICED_TARGET"]),
                 // (turning on him with others of its side about and not yet at it: a call for
                 // help, `COMBAT_HELP`)
-                (Alert::Unaware | Alert::Suspicious, Alert::Combat) if allies(false) => Some((&["COMBAT_HELP", "COMBAT_THREAT_GROUP", "COMBAT_THREAT", "WEEP_NOTICED_TARGET"], true)),
-                (_, Alert::Combat) if grouped => Some((&["COMBAT_THREAT_GROUP", "COMBAT_THREAT", "COMBAT_SURPRISED", "WEEP_NOTICED_TARGET"], true)),
-                (_, Alert::Combat) => Some((&["COMBAT_THREAT", "COMBAT_THREAT_GROUP", "COMBAT_SURPRISED", "WEEP_NOTICED_TARGET"], true)),
+                (Alert::Suspicious, Alert::Combat) if allies(false) => Some(&["COMBAT_HELP", "COMBAT_THREAT_GROUP", "COMBAT_THREAT", "WEEP_NOTICED_TARGET"]),
+                (_, Alert::Combat) if grouped => Some(&["COMBAT_THREAT_GROUP", "COMBAT_THREAT", "COMBAT_SURPRISED", "WEEP_NOTICED_TARGET"]),
+                (_, Alert::Combat) => Some(&["COMBAT_THREAT", "COMBAT_THREAT_GROUP", "COMBAT_SURPRISED", "WEEP_NOTICED_TARGET"]),
                 // (the search after a fight given up: `SEARCH_STOPHUNTING`, its group's among
                 // others, else going back, `COMBAT_GOING_HOME`)
-                (Alert::Combat, _) if grouped => Some((&["SEARCH_STOPHUNTING_GROUP", "SEARCH_STOPHUNTING", "COMBAT_GOING_HOME"], false)),
-                (Alert::Combat, _) => Some((&["SEARCH_STOPHUNTING", "COMBAT_GOING_HOME", "SEARCH_STOPHUNTING_GROUP"], false)),
+                (Alert::Combat, _) if grouped => Some(&["SEARCH_STOPHUNTING_GROUP", "SEARCH_STOPHUNTING", "COMBAT_GOING_HOME"]),
+                (Alert::Combat, _) => Some(&["SEARCH_STOPHUNTING", "COMBAT_GOING_HOME", "SEARCH_STOPHUNTING_GROUP"]),
                 // (a notice that came to nothing: `ATTENTION_NOTICE_END`)
                 // giving up: on a body found `SEARCH_GIVEUP_POSTCORPSE`, on Corvo seen
                 // `SEARCH_STOPHUNTING` (its group's among others), on a sound looked into
                 // `SEARCH_MUSTHAVEBEENARAT`, a glance `ATTENTION_NOTICE_END`
-                (Alert::Suspicious, Alert::Unaware) if st.saw_body => Some((&["SEARCH_GIVEUP_POSTCORPSE", "SEARCH_STOPHUNTING", "ATTENTION_NOTICE_END"], false)),
-                (Alert::Suspicious, Alert::Unaware) if st.hunted && grouped => Some((&["SEARCH_STOPHUNTING_GROUP", "SEARCH_STOPHUNTING", "ATTENTION_NOTICE_END", "COMBAT_GOING_HOME"], false)),
-                (Alert::Suspicious, Alert::Unaware) if st.hunted => Some((&["SEARCH_STOPHUNTING", "ATTENTION_NOTICE_END", "COMBAT_GOING_HOME"], false)),
-                (Alert::Suspicious, Alert::Unaware) if st.looked => Some((&["SEARCH_MUSTHAVEBEENARAT", "ATTENTION_NOTICE_END", "SEARCH_STOPHUNTING"], false)),
-                (Alert::Suspicious, Alert::Unaware) => Some((&["ATTENTION_NOTICE_END", "SEARCH_MUSTHAVEBEENARAT", "SEARCH_STOPHUNTING"], false)),
+                (Alert::Suspicious, Alert::Unaware) if st.saw_body => Some(&["SEARCH_GIVEUP_POSTCORPSE", "SEARCH_STOPHUNTING", "ATTENTION_NOTICE_END"]),
+                (Alert::Suspicious, Alert::Unaware) if st.hunted && grouped => Some(&["SEARCH_STOPHUNTING_GROUP", "SEARCH_STOPHUNTING", "ATTENTION_NOTICE_END", "COMBAT_GOING_HOME"]),
+                (Alert::Suspicious, Alert::Unaware) if st.hunted => Some(&["SEARCH_STOPHUNTING", "ATTENTION_NOTICE_END", "COMBAT_GOING_HOME"]),
+                (Alert::Suspicious, Alert::Unaware) if st.looked => Some(&["SEARCH_MUSTHAVEBEENARAT", "ATTENTION_NOTICE_END", "SEARCH_STOPHUNTING"]),
+                (Alert::Suspicious, Alert::Unaware) => Some(&["ATTENTION_NOTICE_END", "SEARCH_MUSTHAVEBEENARAT", "SEARCH_STOPHUNTING"]),
                 _ => None,
             };
         } else if !down && npc.mode == Mode::Search && st.mode != Mode::Search && npc.alert != Alert::Combat {
             // a search begun (`SEARCH`, its group's among others)
-            want = Some(if grouped { (&["SEARCH_GROUP", "SEARCH"], false) } else { (&["SEARCH", "SEARCH_GROUP"], false) });
+            want = Some(if grouped { &["SEARCH_GROUP", "SEARCH"] } else { &["SEARCH", "SEARCH_GROUP"] });
         } else if !down && npc.alert == Alert::Combat && stats.dead && !st.victory {
             st.victory = true;
-            want = Some((&["COMBAT_VICTORY", "COMBAT_VICTORY_LOST_ALLIES"], false));
+            want = Some(&["COMBAT_VICTORY", "COMBAT_VICTORY_LOST_ALLIES"]);
+        } else if !down && npc.attack_t.is_some() && !st.swinging && npc.arms.plague.is_none() {
+            // a blow begun (its weapon's `m_AttackBark`: `COMBAT_ATTACK`)
+            want = Some(&["COMBAT_ATTACK"]);
+        } else if !down && npc.mode == Mode::Combat && npc.sees_player && npc.arms.plague.is_none() {
+            // fighting him in its sight, its threats asked for all the while (the original's
+            // combat barks sub-process) and paced by the manager: `COMBAT_THREAT`'s refire
+            // 5-13 s, one threat at a time near and one far (its group's with others of its side
+            // about)
+            want = Some(if grouped { &["COMBAT_THREAT_GROUP", "COMBAT_THREAT"] } else { &["COMBAT_THREAT", "COMBAT_THREAT_GROUP"] });
         } else if !down && st.next_chatter <= 0.0 && npc.arms.plague.is_some() && npc.alert == Alert::Combat {
             // a weeper after him moans as it follows or weeps standing (`m_fFollowingBark`,
             // `m_fStandStillWeepingBark`: every 2-5 s)
             st.next_chatter = WEEP_BARK[0] + rand::random::<f32>() * (WEEP_BARK[1] - WEEP_BARK[0]);
             let moving = npc.velocity.with_y(0.0).length() > 0.3;
-            want = Some(if moving { (&["WEEP_FOLLOWING", "WEEP_MOAN"], false) } else { (&["WEEP_STAND_STILL_WEEPING", "WEEP_MOAN"], false) });
+            want = Some(if moving { &["WEEP_FOLLOWING", "WEEP_MOAN"] } else { &["WEEP_STAND_STILL_WEEPING", "WEEP_MOAN"] });
         } else if !down && st.next_chatter <= 0.0 {
             st.next_chatter = if npc.alert == Alert::Combat { 6.0 + rand::random::<f32>() * 8.0 } else { 15.0 + rand::random::<f32>() * 30.0 };
             want = match npc.alert {
-                // (at him, in its sight; the taunt's line comes with its gesture, cued by its
-                // clip)
-                Alert::Combat if npc.mode == Mode::Combat && npc.sees_player => Some((&["COMBAT_ATTACK", "COMBAT_THREAT_VERSUS"], false)),
                 // (the patrol's chatter: `PATROL_MISC`, with others of its side about its group's)
-                Alert::Unaware if d < 12.0 && grouped => Some((&["PATROL_MISC_GROUP", "PATROL_MISC"], false)),
-                Alert::Unaware if d < 12.0 => Some((&["PATROL_MISC"], false)),
+                Alert::Unaware if d < 12.0 && grouped => Some(&["PATROL_MISC_GROUP", "PATROL_MISC"]),
+                Alert::Unaware if d < 12.0 => Some(&["PATROL_MISC"]),
                 _ => None,
             };
         }
         st.alert = npc.alert;
+        st.swinging = npc.attack_t.is_some();
         st.down = down;
         st.health = npc.health;
         st.mode = npc.mode;
@@ -483,44 +546,127 @@ fn npc_barks(
         }
         st.aiming = npc.aim.is_some();
         st.act_seen = npc.act.1;
-        let Some((hooks, urgent)) = want else { continue };
-        if d > HEAR || (!urgent && (st.quiet > 0.0 || clock.busy > 0.0)) {
-            continue;
-        }
+        let Some(hooks) = want else { continue };
         let Some((hi, bark)) = hooks.iter().find_map(|h| voice.hooks.iter().enumerate().find(|(_, x)| x.hook == *h)) else { continue };
-        // the hook node's output for what it knows, walked to a line (or to nothing said);
-        // without its graph, a line of that output's
-        let out_k = out_hint.or_else(|| hook_output(&bark.class, &npc));
-        let line = if bark.nodes.is_empty() {
-            let pool: Vec<usize> = match out_k.and_then(|k| bark.by_output.get(k)).filter(|o| !o.is_empty()) {
-                Some(o) => o.iter().map(|i| *i as usize).filter(|i| *i < bark.lines.len()).collect(),
-                None => (0..bark.lines.len()).collect(),
-            };
-            (!pool.is_empty()).then(|| pool[rand::random_range(0..pool.len())])
-        } else {
-            walk_bark(bark, (npc.voice.unwrap_or(0), hi), out_k.unwrap_or(0), (e, npc.alert != Alert::Unaware, &npc.story_group), vm.as_deref(), &mut memory, time.elapsed_secs())
+        let rule = rules.hooks.get(&bark.hook);
+        let (group, flags, refire) = rule.map(|r| (r.group, r.flags, r.refire)).unwrap_or((0, 0x80, [1.0, 1.0]));
+        let quiet = d >= loud_d;
+        let corvo = npc.alert != Alert::Unaware;
+        // asked for: not beyond the manager's reach, its group's list not shut, the hook's
+        // refire passed for this speaker, the speaker free (its line ended, else this hook
+        // interrupts one that may be), and its initiator's lines in the list within the cap
+        let playing = man.firing.iter().find(|f| f.who == e);
+        let free = match playing {
+            Some(f) => flags & INTERRUPTS != 0 && f.flags & NOT_INTERRUPTIBLE == 0,
+            None => true,
         };
-        let Some((event, text)) = line.and_then(|i| bark.lines.get(i)) else {
-            if log {
-                info!("bark {} {}: says nothing (output {out_k:?})", npc.name, bark.hook);
-            }
+        let shut = man.locked.get(&(group, quiet)).is_some_and(|until| *until > now);
+        let again = man.next.get(&(e, bark.hook.clone())).is_some_and(|at| *at > now);
+        let per_initiator = rules.groups.get(group as usize).map(|g| g.per_initiator[quiet as usize]).unwrap_or(-1);
+        let crowded = corvo && per_initiator > 0 && man.firing.iter().filter(|f| f.group == group && f.quiet == quiet && f.corvo).count() as i32 >= per_initiator;
+        if d > max_d || shut || again || !free || crowded {
             continue;
-        };
-        let len = event_length(event).unwrap_or(1.5);
-        if log {
-            info!("bark {} {:?}: {event} \"{text}\"", npc.name, hooks.first());
         }
-        out.write(PostEvent::named(event, Some(t.translation + Vec3::Y * 0.7)).spoken_by(e));
-        // sounds like *cough* are not subtitled
-        if !text.is_empty() && !text.starts_with('*') && d < HEAR * 0.6 {
-            // the character's own name ("Anton Sokolov"), else its kind ("City Watch Guard")
-            let (package, object) = npc.pawn.split_once('.').unwrap_or((&npc.pawn, &npc.pawn));
-            let speaker = data.0.pawn_names.get(object).or(data.0.pawn_names.get(package)).unwrap_or(&npc.name);
-            subs.write(Subtitle { text: format!("{speaker}: {text}"), secs: len + 0.3, priority: false, ambient: true });
+        requests.push(Request { who: e, hook: hi, group, quiet, corvo, flags, refire, d, out: out_hint.or_else(|| hook_output(&bark.class, &npc)) });
+    }
+    // the manager's turn: the groups from the most important down, near then far; each group's
+    // requests by weight (nearer first, a little random), while the group has room (its cap
+    // less its lines playing) and so does the whole (`m_MaxDialogHooksAtOnce`, unless the
+    // group ignores it)
+    let mut slots = rules.at_once.map(|n| if n > 0 { n } else { 5 });
+    let mut fired: Vec<(Entity, String)> = Vec::new();
+    for g in (0..rules.groups.len().max(1) as u8).rev() {
+        for quiet in [false, true] {
+            let cfg = rules.groups.get(g as usize);
+            let cap = cfg.map(|c| c.per_group[quiet as usize]).unwrap_or(-1);
+            let ignore = cfg.is_some_and(|c| c.ignore_global);
+            let per_initiator = cfg.map(|c| c.per_initiator[quiet as usize]).unwrap_or(-1);
+            let playing = man.firing.iter().filter(|f| f.group == g && f.quiet == quiet).count() as i32;
+            let mut room = if cap < 1 { i32::MAX } else { cap - playing };
+            if !ignore {
+                slots[quiet as usize] -= playing;
+            }
+            let mut pending: Vec<(f32, usize)> = requests
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.group == g && r.quiet == quiet)
+                .map(|(i, r)| (1.0 - (r.d / max_d).clamp(0.0, 1.0) + rand::random::<f32>() * rules.weight_rand, i))
+                .collect();
+            if room <= 0 || (slots[quiet as usize] < 1 && !ignore) || pending.is_empty() {
+                continue;
+            }
+            pending.sort_by(|a, b| b.0.total_cmp(&a.0));
+            for (w, i) in pending {
+                if room <= 0 || w < 1e-4 {
+                    break;
+                }
+                room -= 1;
+                let r = &requests[i];
+                // (its initiator's lines in the list, those just gone out too)
+                if r.corvo && per_initiator > 0 && man.firing.iter().filter(|f| f.group == g && f.quiet == quiet && f.corvo).count() as i32 >= per_initiator {
+                    continue;
+                }
+                let Ok((e, npc, t, ..)) = npcs.get(r.who) else { continue };
+                let Some(voice) = npc.voice.and_then(|v| level.scene.barks.get(v as usize)) else { continue };
+                let Some(bark) = voice.hooks.get(r.hook) else { continue };
+                let d = t.translation.distance(pt.translation);
+                // the hook node's output for what it knows, walked to a line (or to nothing
+                // said); without its graph, a line of that output's
+                let out_k = r.out;
+                let line = if bark.nodes.is_empty() {
+                    let pool: Vec<usize> = match out_k.and_then(|k| bark.by_output.get(k)).filter(|o| !o.is_empty()) {
+                        Some(o) => o.iter().map(|i| *i as usize).filter(|i| *i < bark.lines.len()).collect(),
+                        None => (0..bark.lines.len()).collect(),
+                    };
+                    (!pool.is_empty()).then(|| pool[rand::random_range(0..pool.len())])
+                } else {
+                    walk_bark(bark, (npc.voice.unwrap_or(0), r.hook), out_k.unwrap_or(0), (e, npc.alert != Alert::Unaware, &npc.story_group), vm.as_deref(), &mut memory, now)
+                };
+                let Some((event, text)) = line.and_then(|i| bark.lines.get(i)) else {
+                    if log {
+                        info!("bark {} {}: says nothing (output {out_k:?})", npc.name, bark.hook);
+                    }
+                    continue;
+                };
+                let len = event_length(event).unwrap_or(1.5);
+                if log {
+                    info!("bark {} {}: {event} \"{text}\" ({} {}, {d:.0} m)", npc.name, bark.hook, rules.groups.get(r.group as usize).map(|g| g.name.as_str()).unwrap_or("?"), if r.quiet { "quiet" } else { "loud" });
+                }
+                out.write(PostEvent::named(event, Some(t.translation + Vec3::Y * 0.7)).spoken_by(e));
+                // sounds like *cough* are not subtitled
+                if !text.is_empty() && !text.starts_with('*') && d < SUBTITLE_REACH {
+                    // the character's own name ("Anton Sokolov"), else its kind ("City Watch Guard")
+                    let (package, object) = npc.pawn.split_once('.').unwrap_or((&npc.pawn, &npc.pawn));
+                    let speaker = data.0.pawn_names.get(object).or(data.0.pawn_names.get(package)).unwrap_or(&npc.name);
+                    subs.write(Subtitle { text: format!("{speaker}: {text}"), secs: len + 0.3, priority: false, ambient: true });
+                }
+                // (an interrupted line of its own gives way)
+                man.firing.retain(|f| f.who != e);
+                man.firing.push(Firing { who: e, group: r.group, quiet: r.quiet, corvo: r.corvo, flags: r.flags, until: now + len });
+                let [lo, hi] = r.refire;
+                man.next.insert((e, bark.hook.clone()), now + lo + rand::random::<f32>() * (hi - lo).max(0.0));
+                fired.push((e, bark.hook.clone()));
+                if !ignore {
+                    slots[quiet as usize] -= 1;
+                    if slots[quiet as usize] < 1 {
+                        break;
+                    }
+                }
+            }
         }
-        st.quiet = len + 3.0;
-        st.since = 0.0;
-        clock.busy = len.min(2.5);
+    }
+    // what went out: a taunt said, the time since it last spoke
+    for (e, hook) in fired {
+        if let Ok((_, _, _, Some(mut st), ..)) = npcs.get_mut(e) {
+            st.since = 0.0;
+            if hook.starts_with("UNREACH_") || hook == "COMBAT_CANT_REACH" {
+                st.taunt = false;
+            }
+        }
+    }
+    // (speakers gone: their refires forgotten)
+    if man.next.len() > 4096 {
+        man.next.retain(|_, at| *at > now);
     }
 }
 

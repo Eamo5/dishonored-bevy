@@ -1,7 +1,7 @@
 //! Campaign-wide game data from the original tweak objects: Corvo's powers (active and
 //! passive), his attributes per difficulty, bone charms, upgrades and the stores.
 
-use crate::format::{AchievementDef, ActivePowerDef, ChallengeDef, AttrMod, CharmDef, GalleryItemDef, GameData, PassiveLevel, PassivePowerDef, StatInfoDef, StoreDef, StoreItem, UpgradeDef};
+use crate::format::{AchievementDef, ActivePowerDef, BarkGroup, BarkHookRule, BarkRules, ChallengeDef, AttrMod, CharmDef, GalleryItemDef, GameData, PassiveLevel, PassivePowerDef, StatInfoDef, StoreDef, StoreItem, UpgradeDef};
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -1247,6 +1247,93 @@ pub fn noise_loudness(cooked: &Path, game: &Package) -> BTreeMap<String, f32> {
     names.into_iter().zip(dists).collect()
 }
 
+/// The native hook table's rows (`eDisDialogHook` value, fire group, refire min, max, flags)
+/// where they differ from the common one (Casual, 1 s, 1 s, 0x80): built in code by the
+/// executable (`FUN_00c8d820`), as roshan's r614/blink research read it.
+const HOOK_ROWS: &[(u8, u8, f32, f32, u32)] = &[
+    (1, 12, 0.0, 0.0, 0x4000), (2, 12, 0.0, 0.0, 0), (3, 12, 1.0, 1.0, 0x2000), (4, 0, 1.0, 1.0, 0),
+    (5, 0, 1.0, 1.0, 0x2000), (6, 0, 1.0, 1.0, 0x10), (7, 0, 1.0, 1.0, 0x2010), (8, 0, 1.0, 1.0, 0),
+    (9, 0, 1.0, 1.0, 0), (10, 12, 0.0, 0.0, 0x500), (13, 0, 1.0, 1.0, 0xc0), (14, 0, 1.0, 1.0, 0xc0),
+    (15, 1, 1.0, 1.0, 0x80), (16, 7, 1.0, 1.0, 0x80), (17, 8, 1.0, 1.0, 0x80), (18, 8, 1.0, 1.0, 0x80),
+    (19, 8, 1.0, 1.0, 0x80), (20, 6, 1.0, 1.0, 0x80), (21, 5, 1.0, 1.0, 0x80), (22, 1, 1.0, 1.0, 0x80),
+    (23, 5, 1.0, 1.0, 0x80), (24, 1, 1.0, 1.0, 0x80), (25, 6, 1.0, 1.0, 0x82), (26, 5, 1.0, 1.0, 0x80),
+    (27, 5, 1.0, 1.0, 0x80), (28, 5, 1.0, 1.0, 0x80), (29, 5, 1.0, 1.0, 0x80), (30, 5, 1.0, 1.0, 0x80),
+    (31, 5, 1.0, 1.0, 0xa0), (32, 5, 1.0, 1.0, 0xa0), (33, 5, 1.0, 1.0, 0x80), (34, 5, 1.0, 1.0, 0x88),
+    (35, 5, 1.0, 1.0, 0x80), (36, 5, 1.0, 1.0, 0x80), (37, 1, 1.0, 1.0, 0x80), (38, 1, 1.0, 1.0, 0x80),
+    (39, 1, 1.0, 1.0, 0x80), (40, 8, 1.0, 1.0, 0x88), (41, 8, 1.0, 1.0, 0x88), (42, 11, 1.0, 1.0, 0x88),
+    (43, 8, 1.0, 1.0, 0x88), (44, 7, 1.0, 1.0, 0x80), (45, 7, 1.0, 1.0, 0x80), (46, 7, 8.0, 8.0, 0x80),
+    (47, 10, 1.0, 1.0, 0x88), (48, 12, 1.0, 1.0, 0x88), (49, 5, 1.0, 1.0, 0x80), (50, 5, 1.0, 1.0, 0x80),
+    (51, 7, 1.0, 1.0, 0x88), (52, 6, 1.0, 1.0, 0x88), (53, 6, 1.0, 1.0, 0x88), (54, 6, 1.0, 1.0, 0x88),
+    (55, 6, 1.0, 1.0, 0x8a), (56, 6, 1.0, 1.0, 0x89), (57, 4, 0.0, 0.0, 0x8e), (58, 4, 0.0, 0.0, 0x86),
+    (59, 4, 0.0, 0.0, 0x86), (60, 4, 0.0, 0.0, 0x8a), (61, 4, 0.0, 0.0, 0x8a), (62, 4, 1.0, 1.0, 0x8e),
+    (63, 7, 1.0, 1.0, 0x80), (64, 10, 1.0, 1.0, 0x88), (65, 7, 8.0, 8.0, 0x80), (66, 10, 1.0, 1.0, 0x88),
+    (67, 10, 1.0, 1.0, 0xc8), (68, 5, 1.0, 1.0, 0x80), (69, 9, 1.0, 1.0, 0x80), (70, 9, 1.0, 1.0, 0x80),
+    (71, 3, 1.0, 1.0, 0x80), (72, 12, 1.0, 1.0, 0x80), (73, 12, 1.0, 1.0, 0x80), (74, 3, 1.0, 1.0, 0x80),
+    (75, 3, 1.0, 1.0, 0x80), (76, 3, 1.0, 1.0, 0x80), (77, 3, 1.0, 1.0, 0x80), (78, 3, 1.0, 1.0, 0x80),
+    (79, 3, 1.0, 1.0, 0x80), (80, 3, 1.0, 1.0, 0x80), (81, 3, 1.0, 1.0, 0x8a), (82, 2, 1.0, 1.0, 0x80),
+    (83, 12, 1.0, 1.0, 0x88), (84, 12, 1.0, 1.0, 0x88), (85, 7, 1.0, 1.0, 0x88), (86, 7, 1.0, 1.0, 0x88),
+    (87, 8, 1.0, 1.0, 0x88), (88, 8, 1.0, 1.0, 0x88), (89, 6, 1.0, 1.0, 0x89), (90, 8, 1.0, 1.0, 0x88),
+    (91, 8, 1.0, 1.0, 0x88), (92, 8, 1.0, 1.0, 0x88), (93, 8, 1.0, 1.0, 0x88), (94, 8, 1.0, 1.0, 0x88),
+    (95, 8, 1.0, 1.0, 0x88), (96, 8, 1.0, 1.0, 0x88), (99, 6, 1.0, 1.0, 0x88), (100, 6, 1.0, 1.0, 0x88),
+    (101, 6, 1.0, 1.0, 0x88), (102, 6, 1.0, 1.0, 0x88), (103, 6, 1.0, 1.0, 0x88), (104, 6, 1.0, 1.0, 0x88),
+    (105, 6, 1.0, 1.0, 0x88), (106, 6, 1.0, 1.0, 0x88), (107, 2, 1.0, 1.0, 0x80), (108, 2, 1.0, 1.0, 0x1080),
+    (109, 2, 1.0, 1.0, 0x80), (110, 2, 1.0, 1.0, 0xa0), (111, 2, 1.0, 1.0, 0xa0), (112, 2, 1.0, 1.0, 0x80),
+    (113, 2, 1.0, 1.0, 0x80), (114, 2, 1.0, 1.0, 0x80), (115, 6, 1.0, 1.0, 0x88), (116, 6, 1.0, 1.0, 0x80),
+    (117, 3, 1.0, 1.0, 0x80), (118, 12, 0.0, 0.0, 0x300), (119, 12, 0.0, 0.0, 0xc04), (120, 12, 0.0, 0.0, 0xc04),
+    (121, 12, 0.0, 0.0, 0xc04), (122, 7, 1.0, 1.0, 0x86), (123, 7, 1.0, 1.0, 0x86), (124, 7, 1.0, 1.0, 0x86),
+    (125, 7, 1.0, 1.0, 0x86),
+];
+
+/// The barks' manager (`Default__DisTweaks_ConvSettings` over the native hook table).
+fn bark_rules(game: &Package) -> BarkRules {
+    let hooks = enum_names(game, "eDisDialogHook");
+    let groups = enum_names(game, "eDisDialogHookFireGroup");
+    let group_of = |n: &str| groups.iter().position(|g| g == n).map(|i| i as u8);
+    let mut r = BarkRules {
+        groups: groups.iter().map(|g| BarkGroup { name: g.trim_start_matches("eDisDialogHookFireGroup_").to_string(), ..Default::default() }).collect(),
+        ..Default::default()
+    };
+    for (i, h) in hooks.iter().enumerate() {
+        let Some(name) = h.strip_prefix("DDH_").filter(|n| *n != "NOT_SET" && *n != "INVALID") else { continue };
+        let (_, group, lo, hi, flags) = HOOK_ROWS.iter().copied().find(|row| row.0 as usize == i).unwrap_or((0, 0, 1.0, 1.0, 0x80));
+        r.hooks.insert(name.to_string(), BarkHookRule { group, refire: [lo, hi], flags });
+    }
+    let Some(p) = game.find_export("Default__DisTweaks_ConvSettings").and_then(|i| props(game, i)) else { return r };
+    r.at_once = [p.int("m_MaxDialogHooksAtOnce").unwrap_or(5), p.int("m_MaxDialogHooksAtOnce_Quiet").unwrap_or(5)];
+    r.max_distance = p.float("m_fMaxDialogDistance").unwrap_or(5000.0) * 0.01;
+    r.loud_distance = p.float("m_fDialogDistanceConsideredLoud").unwrap_or(2000.0) * 0.01;
+    r.weight_rand = p.float("m_fHookWeightRandRange").unwrap_or(0.2);
+    let structs = |n: &str| p.array(n).and_then(|(c, off, sz)| upk::props::parse_struct_array(game, off, sz, c).ok()).unwrap_or_default();
+    let int = |s: &Props, n: &str| match s.get(n) {
+        Some(Value::Int(i)) => *i,
+        _ => 0,
+    };
+    let float = |s: &Props, n: &str| match s.get(n) {
+        Some(Value::Float(f)) => *f,
+        _ => 0.0,
+    };
+    let en = |s: &Props, n: &str| match s.get(n) {
+        Some(Value::Enum(e)) => e.clone(),
+        _ => String::new(),
+    };
+    for s in structs("m_FireGroupConfig") {
+        let Some(g) = group_of(&en(&s, "m_FireGroup")).and_then(|g| r.groups.get_mut(g as usize)) else { continue };
+        g.per_group = [int(&s, "m_MaxPlaying_PerGroup"), int(&s, "m_MaxPlaying_PerGroup_Quiet")];
+        g.per_initiator = [int(&s, "m_MaxPlaying_PerInitiator"), int(&s, "m_MaxPlaying_PerInitiator_Quiet")];
+        g.ignore_global = matches!(s.get("m_bIgnoreGlobalCap"), Some(Value::Bool(true)));
+        g.min_between = float(&s, "m_fMinTimeBetweenFiring");
+    }
+    for s in structs("m_DialogHookOverrides") {
+        let hook = en(&s, "m_DialogHookToOverride");
+        let Some(h) = hook.strip_prefix("DDH_").and_then(|n| r.hooks.get_mut(n)) else { continue };
+        h.refire = [float(&s, "m_fRefire_DelayMin"), float(&s, "m_fRefire_DelayMax")];
+        if let Some(g) = group_of(&en(&s, "m_FireGroup")) {
+            h.group = g;
+        }
+    }
+    r
+}
+
 pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
     let game = Package::open(&cooked.join("DishonoredGame.upk")).context("DishonoredGame.upk")?;
     let startup = Package::open(&cooked.join("Startup.upk")).context("Startup.upk")?;
@@ -1261,6 +1348,7 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
     audiographs(cooked, &startup, &mut d);
     player_stats(&game, &startup, &mut d);
     challenges(&game, &mut d);
+    d.bark_rules = bark_rules(&game);
     // Summoned swarms have distinct level tweaks, inheriting the swarm defaults.
     for level in 1..=2 {
         let prefix = format!("swarm.{level}.");

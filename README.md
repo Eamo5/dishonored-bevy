@@ -806,6 +806,19 @@ fullscreen display, vertical sync and the crosshair.
   speaker's suspicion (`DisConv_CheckSpeakerSuspicionLevel`), its story group
   (`DisConv_SpeakerInStoryGroup`: a city guard's lines, a lower guard's), time limits and the
   story's state; a way that leads nowhere says nothing.
+  Who gets to speak is the barks' manager's (`DisConvGlobalMan`, as roshan's r614/blink research
+  decoded it; its figures read from `Default__DisTweaks_ConvSettings`, the hooks' rows from the
+  executable's table): each frame's requests go out by fire group, the most important first
+  (gameplay, combat, alarms, threats, cries, ... down to casual chatter), speakers within 20 m
+  (loud) apart from those further off, the nearest first with a little chance, while the group
+  has room (one threat at a time, five combat lines, three casual) and so do all (five at once
+  near, five far), from no further than 50 m. A line ended shuts its group a moment (casual 3 s,
+  agitated 2.5 s, attention 0.2 s), a speaker says a hook again only after its refire (patrol
+  chatter 5-12 s, a search 8-12 s, a threat 5-13 s), and a request not taken that frame is
+  dropped. A speaker mid-line starts nothing new unless the hook interrupts (a cry, a death)
+  and the line playing lets it. Fighting Corvo in its sight, a guard asks for its threat all the
+  while, as the original's combat barks do, and the manager paces them; each blow it starts
+  grunts its attack line.
 - **Finishers** (`DisTweaks_Fatality`): the counter after a parry, the Blood Thirst strike and a
   sword blow that kills as a slow-motion finisher play the original paired finishers
   (`Sword_Ready_Fatality_<Front | FastFront>_*_Master` with `Generic_Fatality_..._Slave`, a

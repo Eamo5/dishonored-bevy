@@ -2964,6 +2964,9 @@ pub struct GameData {
     /// the Dunwall City Trials' challenges (`DisDLC05GameInfo.m_Challenges`)
     #[serde(default)]
     pub challenges: Vec<ChallengeDef>,
+    /// how the barks share the air (`DisConvGlobalMan`)
+    #[serde(default)]
+    pub bark_rules: BarkRules,
     /// and the pieces of its gallery (`m_Gallery`)
     #[serde(default)]
     pub gallery: Vec<GalleryItemDef>,
@@ -3504,6 +3507,49 @@ pub struct ShapeBitmap {
 }
 
 /// A Dunwall City Trials challenge (`DisDLC05GameInfo.m_Challenges`): its names and words, its
+/// The barks' manager (`DisConvGlobalMan`): how many lines play at once near Corvo and further
+/// off, each fire group's room and spacing (`Default__DisTweaks_ConvSettings`, the only data:
+/// no tweak object of it ships), and each hook's group, refire and flags (the native hook
+/// table, as roshan's r614/blink research read it from the executable, with the tweak's
+/// `m_DialogHookOverrides`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct BarkRules {
+    /// most lines playing at once: loud, quiet (`m_MaxDialogHooksAtOnce`, `_Quiet`)
+    pub at_once: [i32; 2],
+    /// no bark from further than this (m: `m_fMaxDialogDistance`); a speaker nearer than this
+    /// is loud (`m_fDialogDistanceConsideredLoud`)
+    pub max_distance: f32,
+    pub loud_distance: f32,
+    /// the random spread of a request's weight (`m_fHookWeightRandRange`)
+    pub weight_rand: f32,
+    /// by fire group (`eDisDialogHookFireGroup`'s order)
+    pub groups: Vec<BarkGroup>,
+    /// by hook (its name without `DDH_`)
+    pub hooks: std::collections::BTreeMap<String, BarkHookRule>,
+}
+
+/// A fire group's room (`m_FireGroupConfig`): lines of it at once (loud, quiet; below 1 no
+/// limit), of one initiator's, whether it ignores the overall limit, and how long it is shut
+/// after one of its lines ends (s).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct BarkGroup {
+    pub name: String,
+    pub per_group: [i32; 2],
+    pub per_initiator: [i32; 2],
+    pub ignore_global: bool,
+    pub min_between: f32,
+}
+
+/// A hook's row: its fire group, how soon the same speaker may say it again (s, a random time
+/// between the two), and its flags (0x2 interrupts, 0x4 not interruptible, 0x8 battle sound,
+/// 0x20 search sound, 0x1000 notice sound, 0x80 an AI hook).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct BarkHookRule {
+    pub group: u8,
+    pub refire: [f32; 2],
+    pub flags: u32,
+}
+
 /// kind (`DDCT_Stealth`, `DDCT_Action`, `DDCT_Mobility`, `DDCT_Puzzle`), leaderboard, the scores
 /// of its three medals (normal and expert mode), its map (`m_LaunchCommand` "start <map>").
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
