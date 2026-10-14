@@ -296,6 +296,11 @@ pub struct SwordGrip;
 #[derive(Component)]
 pub struct SwordModel;
 
+/// Corvo's sword as its own rig (`PlySword_Anim_as`): it folds and unfolds with the arms'
+/// equip clips (`arms::animate_sword`).
+#[derive(Component)]
+pub struct SwordRig;
+
 /// Seconds of a chokehold before the victim goes limp, without `ChokeTime`: the choke's loop
 /// (`Sword_Choke_Loop_Master`, 5.03 s). The original's hold is `ChokeTime` (1.5 s, less with
 /// Strong Arms) and then the loop, about 6.5 s, as roshan's r614/blink research decoded it.
@@ -315,6 +320,7 @@ pub fn spawn_view_model(
     mut wl: Option<ResMut<WorldLighting>>,
     cam: Query<Entity, With<PlayerCamera>>,
     player: Query<Entity, With<Player>>,
+    level: Option<Res<crate::level::LevelInfo>>,
 ) {
     let Ok(cam) = cam.single() else { return };
     let slot = wl.as_mut().map(|w| w.alloc_slot()).unwrap_or(0);
@@ -341,11 +347,47 @@ pub fn spawn_view_model(
         commands.entity(root).add_child(grip);
         let model = commands.spawn((SwordModel, Transform::IDENTITY, Visibility::default(), RenderLayers::layer(VIEW_LAYER))).id();
         commands.entity(grip).add_child(model);
-        for (mesh, mat) in &parts.view_parts {
-            let mut m = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), NotShadowCaster, RenderLayers::layer(VIEW_LAYER)));
-            mat.apply(&mut m);
-            let m = m.id();
-            commands.entity(model).add_child(m);
+        // its own rig where the map has it cooked (the folding blade), else the sword at rest
+        let rig = level
+            .as_ref()
+            .and_then(|l| l.scene.prop_rigs.get("player_sword"))
+            .and_then(|t| assets.as_ref().and_then(|a| a.npc_types.get(*t as usize)))
+            .and_then(|v| v.as_ref());
+        if let Some(rv) = rig {
+            let bones = &rv.skeleton.bones;
+            let joints: Vec<Entity> = bones
+                .iter()
+                .map(|b| commands.spawn((Transform::from_translation(Vec3::from(b.translation)).with_rotation(Quat::from_array(b.rotation).normalize()), Visibility::Inherited)).id())
+                .collect();
+            for (i, b) in bones.iter().enumerate() {
+                let parent = if b.parent >= 0 && (b.parent as usize) < i { joints[b.parent as usize] } else { model };
+                commands.entity(parent).add_child(joints[i]);
+            }
+            for (mesh, mat) in &rv.parts.view_parts {
+                let mut m = commands.spawn((
+                    Mesh3d(mesh.clone()),
+                    MeshTag(slot),
+                    bevy::mesh::skinning::SkinnedMesh { inverse_bindposes: rv.inverse_bindposes.clone(), joints: joints.clone() },
+                    NotShadowCaster,
+                    bevy::camera::visibility::NoFrustumCulling,
+                    RenderLayers::layer(VIEW_LAYER),
+                ));
+                mat.apply(&mut m);
+                let m = m.id();
+                commands.entity(model).add_child(m);
+            }
+            if let Some(lib) = rv.anims.clone() {
+                let mut anim = crate::anim::Animator::new(lib, &rv.skeleton, joints);
+                anim.sounds = false;
+                commands.entity(model).insert((SwordRig, anim));
+            }
+        } else {
+            for (mesh, mat) in &parts.view_parts {
+                let mut m = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), NotShadowCaster, RenderLayers::layer(VIEW_LAYER)));
+                mat.apply(&mut m);
+                let m = m.id();
+                commands.entity(model).add_child(m);
+            }
         }
     }
 }

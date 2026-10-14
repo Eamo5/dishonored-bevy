@@ -6659,6 +6659,8 @@ impl<'a> Cooker<'a> {
             for (name, mesh, set) in [
                 ("pistol", "CorvoGuns.CorvoGun_01", "CorvoGun_as.CorvoGun_as"),
                 ("crossbow", "Crossbows.crossbow_01", "Crossbows_as.Crossbow_as"),
+                // (his folding sword: its blade snapping out as it's drawn, `PlySword_Anim_as`)
+                ("player_sword", "Wpn_PlySwords.Wpn_PlySword01", "PlySword_Anim_as.PlySword_Anim_as"),
             ] {
                 let (Some(m), Some(s)) = (self.assets.find(mesh), self.assets.find(set)) else { continue };
                 match self.cook_device(&m, vec![s]) {

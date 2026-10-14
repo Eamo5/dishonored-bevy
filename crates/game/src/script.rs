@@ -1459,6 +1459,11 @@ fn run_script(
             }
         }
         "god" => script.god = true,
+        "sheathe" => {
+            // (tests) sheathe [0]: the hands emptied as the scripts empty them
+            // (`DisSeqAct_EquipItemType`), or the sword drawn again
+            stats.sheathed = cmd.get(1).is_none_or(|v| v != "0");
+        }
         "health" => {
             // health N: set Corvo's health (tests: the near-death effects)
             script.god = false;

@@ -1564,6 +1564,9 @@ against the install's own data where it carries them, then implemented independe
     loaders and drums (the cylinder its own, each magazine's drum replacing the last as
     `m_RevertedUpgrades` has it, none with explosive rounds loaded:
     `m_RevertedUpgradesForExplosive`), the crossbow's scope, limbs and winder.
+  - Corvo's folding sword is its own rig too (`Wpn_PlySword01`, `PlySword_Anim_as`): its blade
+    snaps out and folds away with the arms' draws and sheathings of the same names (quick or
+    not, standing or sneaking, and the first time he takes it up), open in his hand otherwise.
 - **What characters wear.** Hats and masks are drawn on their sockets (`m_HatMeshes`,
   `m_MaskMeshes`), worn at `m_RandomAccessoryInfo`'s chance, one picked by `m_fRandomChance`. So is
   armour (`m_PotentialNPCArmor`: city and elite guards' helmets, caps), as its dropped item's mesh.

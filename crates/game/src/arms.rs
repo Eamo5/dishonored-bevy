@@ -26,7 +26,7 @@ pub struct ArmsPlugin;
 impl Plugin for ArmsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(GameState::InGame), spawn_arms.after(spawn_view_model))
-            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_effects.after(ArmsAnimSet), animate_held.after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_effects.after(ArmsAnimSet), (animate_held, animate_sword).after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, (align_arms.in_set(ArmsAlign), arm_pitch).after(AnimPose).before(TransformSystems::Propagate));
     }
 }
@@ -1229,6 +1229,28 @@ fn animate_held(
         }
         if synced {
             anim.seek(t);
+        }
+    }
+}
+
+/// Corvo's sword folds and unfolds with his arms: the arms' clip of the sword's own name (its
+/// draws and sheathings, quick or not, standing or sneaking, and the first time he takes it up:
+/// `PlySword_Anim_as`), at the arms' time; else open in his hand (`Sword_Ready_Idle`).
+fn animate_sword(arms: Query<&Animator, With<ArmsRoot>>, mut sword: Query<&mut Animator, (With<crate::combat::SwordRig>, Without<ArmsRoot>)>) {
+    let (Ok(arms), Ok(mut anim)) = (arms.single(), sword.single_mut()) else { return };
+    let lib = anim.lib.clone();
+    let now = arms.current().and_then(|p| lib.find(&arms.lib.clip(p.clip).name).map(|c| (c, p.t)));
+    match now {
+        Some((c, t)) => {
+            if anim.current().map(|q| q.clip) != Some(c) {
+                anim.restart(c, false, 1.0, 0.05);
+            }
+            anim.seek(t);
+        }
+        None => {
+            if let Some(c) = lib.find("Sword_Ready_Idle").filter(|c| anim.current().map(|q| q.clip) != Some(*c)) {
+                anim.restart(c, true, 1.0, 0.1);
+            }
         }
     }
 }
