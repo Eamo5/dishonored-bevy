@@ -162,6 +162,9 @@ struct ArmClips {
     bend_time: Option<ClipId>,
     switch: Option<ClipId>,
     crossbow_fire: Option<ClipId>,
+    /// the crossbow's shot reloading as it goes, with its reload upgrade
+    /// (`m_FireReloadFastCrossbow`: `Crossbow_Fire_FastReload`, at 1.5)
+    crossbow_fire_fast: Option<ClipId>,
     /// Daud's: summoning, Void Gaze opening, his wristbow raised
     summon: Option<ClipId>,
     dark_vision: Option<ClipId>,
@@ -266,6 +269,7 @@ impl ArmClips {
             bend_time: lib.find("Powers_Cast_BendTime"),
             switch: lib.find("Powers_Switch"),
             crossbow_fire: lib.find("Crossbow_Fire").or_else(|| lib.find("Wristbow_Fire")),
+            crossbow_fire_fast: lib.find("Crossbow_Fire_FastReload"),
             summon: lib.find("Powers_Cast_SummonAssassin_Out"),
             dark_vision: lib.find("Powers_Cast_DarkVision_In"),
             wristbow_idle: lib.find("Wristbow_Idle"),
@@ -1049,11 +1053,14 @@ fn animate_arms(
     let reloading = crate::aim::Weapon::of(powers.selected).is_some_and(|w| powers.reload[w as usize] > 0.0);
     if powers.reload_anim.0 != st.reload_seq {
         st.reload_seq = powers.reload_anim.0;
-        if let Some(&(name, cl)) = c.reload.iter().find(|(n, _)| *n == powers.reload_anim.1) {
+        // (the quick shot reloads as it goes: its rapid reload isn't played over it)
+        let quick = anim.overlay_is(c.crossbow_fire_fast) && !anim.overlay_finished();
+        if let Some(&(name, cl)) = c.reload.iter().find(|(n, _)| *n == powers.reload_anim.1).filter(|(n, _)| !(quick && *n == "Crossbow_RapidReload")) {
             anim.restart_overlay(cl, false, 1.0, 0.08);
             st.started.push(name.to_string());
         }
     }
+    let fast_bow = stats.upgrades.iter().any(|u| u == "Twk_Upgrade_Crossbow_ReloadSpeed");
     // (a gun raised to the eye through the optics: its own clips, `FirePistolZoom`,
     // `CrossbowFireZoom`; the pistol's accurate shot with `Twk_Upgrade_Pistol_Accuracy2`)
     let gun = crate::aim::Weapon::of(powers.selected).map(|w| w as usize);
@@ -1080,13 +1087,15 @@ fn animate_arms(
             Power::Empty | Power::Heart => c.switch,
             Power::Possess => c.possess,
             Power::DevouringSwarm => c.swarm,
-            Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt => gun_shot(1).or(c.crossbow_fire),
+            Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt => gun_shot(1).or(c.crossbow_fire_fast.filter(|_| fast_bow)).or(c.crossbow_fire),
             Power::Pistol | Power::ExplosiveBullet => gun_shot(0).or(c.pistol_fire),
             Power::Grenade | Power::StickyGrenade | Power::Chokedust => c.grenade_throw,
             Power::SpringRazor | Power::ArcMine | Power::StunMine => c.razor_place,
         };
         if let Some(cl) = cl {
-            anim.restart_overlay(cl, false, 1.0, 0.08);
+            // (`FireReloadFastCrossbow`'s `m_fPlayRateOverride` 1.5)
+            let rate = if Some(cl) == c.crossbow_fire_fast { 1.5 } else { 1.0 };
+            anim.restart_overlay(cl, false, rate, 0.08);
             st.started.push(cast_clip(powers.cast_power).to_string());
         }
     } else if powers.selected != st.selected {
@@ -1180,7 +1189,7 @@ fn animate_arms(
     }
     let aiming = aiming || cooking || raised;
     let spyglass_busy = c.spyglass.iter().flatten().any(|cl| anim.overlay_is(*cl)) || anim.overlay_is(c.pistol_fire_accurate);
-    if !aiming && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.grenade_reload) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision) || spyglass_busy)) {
+    if !aiming && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.crossbow_fire_fast) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.grenade_reload) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision) || spyglass_busy)) {
         match idle {
             Some(cl) if !st.choking && !st.blocking => anim.play_overlay(cl, true, 1.0, 0.25),
             _ => anim.stop_overlay(0.2),

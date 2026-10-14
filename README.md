@@ -1555,7 +1555,9 @@ against the install's own data where it carries them, then implemented independe
   - Emptied, a gun reloads after its fire action (0.4 s), playing the original's clips and sound:
     the pistol in 0.426 + 0.75 / `ReloadSpeed` + 0.302 s, the crossbow in 1.3 s.
   - `FastReload` replaces that with its own quick action: the pistol's second upgrade 1 s, the
-    crossbow's 0.3 s.
+    crossbow's 0.3 s. With its reload upgrade the crossbow's shot reloads as it goes
+    (`m_FireReloadFastCrossbow`: `Crossbow_Fire_FastReload` at its 1.5 rate, no rapid reload
+    played over it).
   - The guns move in the hand: each is its own rig with its own clips, played with the hand's
     (the pistol's hammer falls as it fires and its fast reload plays, `CorvoGun_as`; the
     crossbow plays the hand's shot, reloads and zoomed shot by the same names, `Crossbow_as`,
