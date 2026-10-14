@@ -1690,10 +1690,12 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         if !worn[ai] {
             continue;
         }
-        let (Some((joint, at)), Some(parts)) = (socket(&a.socket, &[], Transform::IDENTITY), assets.props.get(&a.prop)) else { continue };
+        // (armour with nothing of its own to draw, an overseer's mask: still worn)
+        let parts = assets.props.get(&a.prop);
+        let Some((joint, at)) = socket(&a.socket, &[], Transform::IDENTITY).filter(|_| parts.is_some() || !a.absorb.is_empty()) else { continue };
         let holder = commands.spawn((at, Visibility::default())).id();
         commands.entity(joint).add_child(holder);
-        for (mesh, mat) in &parts.parts {
+        for (mesh, mat) in parts.iter().flat_map(|p| &p.parts) {
             let mut ec = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), Transform::IDENTITY));
             mat.apply(&mut ec);
             let m = ec.id();
@@ -1702,8 +1704,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         if a.breaks.is_some() || !a.instant.is_empty() {
             commands.entity(holder).insert((Collider::ball(0.3), Sensor, CollisionGroups::new(GROUP_PROP, Group::ALL), crate::gameplay::Strikeable(holder)));
             breakable_parts.push((holder, ai, a.health));
-        } else if !a.knock_off.is_empty() {
-            // (armour: knocked off by its damage types, `npcparts::knock_off`)
+        } else if !a.knock_off.is_empty() || !a.absorb.is_empty() {
+            // (armour: knocked off by its damage types, `npcparts::knock_off`; taking those it
+            // absorbs, `npc_hits`)
             breakable_parts.push((holder, ai, a.health));
         }
     }
@@ -1849,7 +1852,7 @@ fn npc_hits(
     mut stances: ResMut<crate::script_world::SpawnerOverrides>,
     (level, mut vm): (Option<Res<LevelInfo>>, Option<ResMut<crate::kismet::Vm>>),
     (mut takedowns, marks, tc): (MessageWriter<crate::gameplay::PlayerTakedown>, Query<(Option<&HeadHit>, Option<&DropHeight>)>, Res<crate::gameplay::TimeControl>),
-    (data, mut knocks): (Res<crate::gamedata::Data>, MessageWriter<crate::npcparts::KnockOff>),
+    (data, mut knocks, attrs, parts): (Res<crate::gamedata::Data>, MessageWriter<crate::npcparts::KnockOff>, Res<crate::gamedata::Attrs>, Query<&crate::npcparts::NpcAttached>),
 ) {
     // how much sooner a sleep dart takes hold (`SleepDelayReduction`: the Combat Sleep Darts
     // upgrade)
@@ -1888,6 +1891,37 @@ fn npc_hits(
         npc.hit_from = Some(h.from);
         // (its armour may come off: a shot or a bolt to the head, Wind Blast, a flare)
         knocks.write(crate::npcparts::KnockOff { npc: e, kind: h.kind, head, from: h.from });
+        // its armour takes the blow in its place (`DisTweaks_Armor`'s `m_DamageTypesToAbsorb`,
+        // on its region, from its side: an overseer's mask a bolt, a dart or a bullet in the
+        // face, a music box anything to the chest from the front; U-500 in roshan's r614/blink
+        // research): no harm, no sleep, but it knows it was struck
+        let kind = crate::worlddamage::hit_type(h.kind, h.from.distance(t.translation), &attrs);
+        let front = (h.from - t.translation).with_y(0.0).dot(npc.forward()) > 0.0;
+        let worn = level.as_ref().and_then(|l| npc.npc_type.and_then(|i| l.scene.npc_types.get(i as usize)));
+        let absorbed = worn.is_some_and(|ty| {
+            parts.iter().filter(|p| p.npc == e).filter_map(|p| ty.attachments.get(p.index)).any(|a| {
+                a.absorb_head == head
+                    && (a.absorb_side == 0 || (a.absorb_side == 1) == front)
+                    && a.absorb.iter().any(|(t, exact)| if *exact { kind.eq_ignore_ascii_case(t) } else { crate::worlddamage::is_a(kind, t) })
+            })
+        });
+        let mut h = *h;
+        if absorbed {
+            if std::env::var("DH_HIT_LOG").is_ok() {
+                info!("hit {}: its armour takes the {:?}", npc.name, h.kind);
+            }
+            if h.kind == HitKind::SleepDart {
+                npc.hit_react = 0.35;
+                npc.last_seen = Some(h.from);
+                if npc.hostile() && npc.mode != Mode::Combat {
+                    npc.alert = Alert::Combat;
+                    npc.awareness = 1.0;
+                    npc.set_mode(Mode::Combat);
+                }
+                continue;
+            }
+            h.damage = 0.0;
+        }
         // those who can fight turn on Corvo when he hurts them (the Tower's guards too)
         if !npc.enemy && npc.fighter() && !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats | HitKind::Assassinate | HitKind::Fatality | HitKind::Choke | HitKind::SleepDart | HitKind::WallOfLight | HitKind::StunMine) {
             npc.enemy = true;
@@ -4789,7 +4823,7 @@ mod wear_tests {
     use dhcook::format::NpcAttachment;
 
     fn att(group: u8, chance: f32, weight: f32) -> NpcAttachment {
-        NpcAttachment { socket: "Helmet".into(), prop: String::new(), health: 0.0, instant: vec![], immune: vec![], breaks: None, chance, group, weight, knock_off: vec![] }
+        NpcAttachment { socket: "Helmet".into(), prop: String::new(), health: 0.0, instant: vec![], immune: vec![], breaks: None, chance, group, weight, knock_off: vec![], absorb: vec![], absorb_head: false, absorb_side: 0 }
     }
 
     #[test]

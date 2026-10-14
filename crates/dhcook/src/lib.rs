@@ -3215,6 +3215,9 @@ impl<'a> Cooker<'a> {
                 group: 0,
                 weight: 1.0,
                 knock_off: Vec::new(),
+                absorb: Vec::new(),
+                absorb_head: false,
+                absorb_side: 0,
             });
         }
         out
@@ -3258,6 +3261,9 @@ impl<'a> Cooker<'a> {
                     group: gi as u8 + 1,
                     weight: s.float("m_fRandomChance").unwrap_or(1.0),
                     knock_off: Vec::new(),
+                    absorb: Vec::new(),
+                    absorb_head: false,
+                    absorb_side: 0,
                 });
             }
         }
@@ -3265,8 +3271,16 @@ impl<'a> Cooker<'a> {
             for (k, s) in parse_struct_array(&pkg, offset, size, count).unwrap_or_default().into_iter().enumerate() {
                 let Some(armor) = s.object("m_pArmor").filter(|o| *o != 0).and_then(|o| self.assets.resolve(&pkg, o)) else { continue };
                 let ac = self.chain(&armor);
-                let Some(mesh) = ac.obj(self.assets, "m_pDoppedItemTweaks").and_then(|d| self.chain(&d).obj(self.assets, "m_pStaticMesh")).filter(|m| m.class() == "StaticMesh") else { continue };
-                let Some(prop) = prop_of(self, &mesh) else { continue };
+                // (drawn as its dropped item's mesh; an overseer's mask is its head's own, nothing
+                // more to draw)
+                let mesh = ac.obj(self.assets, "m_pDoppedItemTweaks").and_then(|d| self.chain(&d).obj(self.assets, "m_pStaticMesh")).filter(|m| m.class() == "StaticMesh");
+                let prop = match &mesh {
+                    Some(m) => match prop_of(self, m) {
+                        Some(p) => p,
+                        None => continue,
+                    },
+                    None => String::new(),
+                };
                 let mut knock_off = Vec::new();
                 if let Some((apkg, Value::Array { count, offset, size })) = ac.get_pkg("m_DamageTypesThatKnockOff").map(|(p, v)| (p.clone(), v.clone())) {
                     for d in parse_struct_array(&apkg, offset, size, count).unwrap_or_default() {
@@ -3278,6 +3292,25 @@ impl<'a> Cooker<'a> {
                         }
                     }
                 }
+                // what it takes in its wearer's place, where and from which side (an overseer's
+                // mask: a bolt or a bullet in the face)
+                let mut absorb = Vec::new();
+                if let Some((apkg, Value::Array { count, offset, size })) = ac.get_pkg("m_DamageTypesToAbsorb").map(|(p, v)| (p.clone(), v.clone())) {
+                    for d in parse_struct_array(&apkg, offset, size, count).unwrap_or_default() {
+                        if let Some(t) = d.object("m_pDamageType").filter(|o| *o != 0) {
+                            absorb.push((apkg.obj_path(t).rsplit('.').next().unwrap_or("").to_string(), matches!(d.get("m_bExactMatch"), Some(Value::Bool(true)))));
+                        }
+                    }
+                }
+                if prop.is_empty() && absorb.is_empty() {
+                    continue;
+                }
+                let absorb_head = matches!(ac.get("m_ProtectedBodyRegion"), Some(Value::Enum(r)) if r == "DHR_HEAD");
+                let absorb_side = match ac.get("m_ProtectedSide") {
+                    Some(Value::Enum(e)) if e.ends_with("Front") => 1,
+                    Some(Value::Enum(e)) if e.ends_with("Back") => 2,
+                    _ => 0,
+                };
                 out.push(NpcAttachment {
                     socket: ac.name("m_EquippedSocketName").unwrap_or("Helmet").to_string(),
                     prop,
@@ -3289,6 +3322,9 @@ impl<'a> Cooker<'a> {
                     group: 10 + k as u8,
                     weight: 1.0,
                     knock_off,
+                    absorb,
+                    absorb_head,
+                    absorb_side,
                 });
             }
         }

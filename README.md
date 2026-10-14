@@ -1521,6 +1521,11 @@ against the install's own data where it carries them, then implemented independe
     head material and 174 a body one.
   - Armour comes off to its `m_DamageTypesThatKnockOff`: a bullet or bolt to the head, Wind Blast
     or a flare anywhere. It falls away and stays off after a load.
+  - While worn, armour takes the blows it lists (`m_DamageTypesToAbsorb`) on its region from its
+    side (`m_ProtectedBodyRegion`, `m_ProtectedSide`), as roshan's r614/blink research decoded
+    the filter: an overseer's mask a bolt, a sleep dart or a bullet in the face from the front,
+    the music box overseer's armour anything to the chest from the front. Such a hit does no
+    harm and puts no one to sleep, but the wearer knows it was struck and turns on Corvo.
   - Severed limbs and dismemberment pieces keep the materials the character was given, as does a
     character the scripts undress.
 - **Movement.**

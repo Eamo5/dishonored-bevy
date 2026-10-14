@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 132;
+pub const SCENE_VERSION: u32 = 133;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -1187,6 +1187,15 @@ pub struct NpcAttachment {
     /// body or only on its region (`m_DamageTypesThatKnockOff`, `m_bDamagesAnyRegion`)
     #[serde(default)]
     pub knock_off: Vec<(String, bool)>,
+    /// and the damage it takes in its wearer's place (`m_DamageTypesToAbsorb`: each type, and
+    /// whether only exactly it, not its kinds too), where (`m_ProtectedBodyRegion`: the head,
+    /// else the body) and from which side (`m_ProtectedSide`: 1 the front, 2 the back, 0 any)
+    #[serde(default)]
+    pub absorb: Vec<(String, bool)>,
+    #[serde(default)]
+    pub absorb_head: bool,
+    #[serde(default)]
+    pub absorb_side: u8,
 }
 
 fn one() -> f32 {

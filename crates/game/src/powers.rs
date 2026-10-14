@@ -1802,19 +1802,25 @@ fn update_projectiles(
                     // never killing outright, and the flames 0.5 s on (as roshan's r614/blink
                     // research decoded them)
                     let stealthy = npc.alert != crate::npc::Alert::Combat || npc.mode == crate::npc::Mode::Flee;
+                    // (where it came from: back along its flight; the head marked for what it
+                    // wears there, an overseer's mask)
+                    let came = t.translation - step / len * 2.0;
+                    if head {
+                        commands.entity(hit).try_insert(crate::npc::HeadHit);
+                    }
                     match pr.kind {
                         HitKind::Bolt => {
                             let damage = attrs.bolt.damage(0.0, head, stealthy && !limb);
-                            hits.write(NpcHit { npc: hit, damage: if limb { damage.min(15.0) } else { damage }, kind: pr.kind, from: t.translation });
+                            hits.write(NpcHit { npc: hit, damage: if limb { damage.min(15.0) } else { damage }, kind: pr.kind, from: came });
                         }
                         HitKind::Fire => {
                             if !npc.is_down() {
-                                hits.write(NpcHit { npc: hit, damage: 50.0f32.min(npc.health - 1.0).max(0.0), kind: HitKind::Bolt, from: t.translation });
+                                hits.write(NpcHit { npc: hit, damage: 50.0f32.min(npc.health - 1.0).max(0.0), kind: HitKind::Bolt, from: came });
                             }
                             commands.entity(hit).try_insert(Ignite(0.5));
                         }
                         _ => {
-                            hits.write(NpcHit { npc: hit, damage: 0.0, kind: pr.kind, from: t.translation });
+                            hits.write(NpcHit { npc: hit, damage: 0.0, kind: pr.kind, from: came });
                         }
                     }
                 }
