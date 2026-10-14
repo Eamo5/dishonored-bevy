@@ -267,7 +267,7 @@ fn scripted_shots(
             // `m_bInstaDeath_NonPlayerToNPC`)
             match te {
                 None => {
-                    player_hits.write(crate::gameplay::PlayerHit { npc: se, from, damage: 20.0, kick: false, big: false, push: false, unblockable: false });
+                    player_hits.write(crate::gameplay::PlayerHit { npc: se, from, damage: 20.0, kick: false, big: false, push: false, unblockable: false, missile: false });
                 }
                 Some(e) => {
                     npc_hits.write(crate::gameplay::NpcHit { npc: e, damage: 999.0, kind: crate::gameplay::HitKind::Bullet, from });

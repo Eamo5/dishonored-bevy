@@ -371,6 +371,8 @@ pub struct Arms {
     pub plague: Option<dhcook::format::NpcPlague>,
     /// a thug's whiskey bottle (its fire breath, the bottle it throws)
     pub whiskey: Option<dhcook::format::NpcWhiskey>,
+    /// what it throws with its bare hand
+    pub throwing: Option<dhcook::format::NpcThrowing>,
     /// the moves it uses only from outside the ring of those at Corvo (or with him out of
     /// reach): turned off by its attack pattern, not by its outer one (a thug's bottle thrown)
     pub outer_only: Vec<String>,
@@ -378,7 +380,7 @@ pub struct Arms {
 
 impl Default for Arms {
     fn default() -> Self {
-        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, outer_only: Vec::new() }
+        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, throwing: None, outer_only: Vec::new() }
     }
 }
 
@@ -408,6 +410,8 @@ pub enum MoveKind {
     /// `Sword_ThrowBottle`)
     WhiskeyFire,
     ThrowWhiskey,
+    /// a thing thrown with the bare hand at Corvo out of reach (`Sword_ThrowRock_*`)
+    Throw,
     Medium,
     Long,
     Bash,
@@ -428,6 +432,7 @@ impl MoveKind {
             "StepBack" => MoveKind::StepBack,
             "WhiskeyFire" => MoveKind::WhiskeyFire,
             "ThrowWhiskey" => MoveKind::ThrowWhiskey,
+            "Throw" => MoveKind::Throw,
             "Medium" => MoveKind::Medium,
             "Long" => MoveKind::Long,
             "Bash" => MoveKind::Bash,
@@ -500,6 +505,7 @@ impl Arms {
         a.grenades = st.grenades.clone();
         a.moves = st.melee.clone();
         a.whiskey = st.whiskey.clone();
+        a.throwing = st.throwing.clone();
         // its attack pattern, one of its combat behaviour's: the moves it may use, and how soon
         // again (a pattern's 0-0 cooldown leaving the move's own, our reading); and its outer
         // one's, for the moves it turns off but the outer one doesn't (used from outside the
@@ -2782,7 +2788,7 @@ pub(crate) fn npc_brain(
     mut npcs: Query<(Entity, &mut Npc, &Transform), (Without<Player>, Without<crate::possession::Possessed>)>,
     (level, mut npc_hits, ai, mut fled): (Option<Res<LevelInfo>>, MessageWriter<NpcHit>, Res<crate::aiworld::AiWorld>, MessageWriter<crate::aiworld::FleePointReached>),
     (stances, settings, mut grab_inhibit, mut inhibited): (Res<crate::script_world::SpawnerOverrides>, Res<crate::settings::Settings>, Local<f32>, Local<std::collections::HashMap<String, (f32, Entity)>>),
-    (mut grenades, mut bottles, mut whiskey_fx): (MessageWriter<crate::gadgets::NpcGrenade>, MessageWriter<crate::whiskey::NpcBottle>, MessageWriter<crate::particles::SpawnEffect>),
+    (mut grenades, mut bottles, mut whiskey_fx, mut throws): (MessageWriter<crate::gadgets::NpcGrenade>, MessageWriter<crate::whiskey::NpcBottle>, MessageWriter<crate::particles::SpawnEffect>, MessageWriter<crate::thrown::NpcThrow>),
     (finishing, mut finishers, mut tallboy_shots): (Query<(), With<FinisherClip>>, MessageWriter<NpcFinisher>, MessageWriter<crate::tallboy::TallboyShot>),
 ) {
     let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
@@ -2958,7 +2964,7 @@ pub(crate) fn npc_brain(
                 npc.crowded = -0.2;
                 npc.gesture(3);
                 npc.bark_req = (npc.bark_req.0.wrapping_add(1), "PATROL_PERSONAL_SPACE");
-                hit_writer.write(PlayerHit { npc: e, from: pos, damage: 0.0, kick: false, big: false, push: true, unblockable: false });
+                hit_writer.write(PlayerHit { npc: e, from: pos, damage: 0.0, kick: false, big: false, push: true, unblockable: false, missile: false });
             }
         }
         // on its way to ring an alarm bell: nothing else (the bell's slot, Alert, is above
@@ -3439,7 +3445,7 @@ pub(crate) fn npc_brain(
                             tallboy_shots.write(crate::tallboy::TallboyShot { from: pos + Vec3::Y * 2.0, at: ppos, hit, source: e });
                         } else {
                             if hit {
-                                hit_writer.write(PlayerHit { npc: e, from: pos, damage: npc.arms.ranged, kick: false, big: false, push: false, unblockable: false });
+                                hit_writer.write(PlayerHit { npc: e, from: pos, damage: npc.arms.ranged, kick: false, big: false, push: false, unblockable: false, missile: false });
                             }
                             shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: npc.ranged >= 2, miss: !hit });
                         }
@@ -3576,6 +3582,16 @@ pub(crate) fn npc_brain(
                             if !(t_att < b && t_new >= b) {
                                 continue;
                             }
+                            // a thing thrown with the bare hand at him
+                            if let (Some(MoveKind::Throw), Some(th)) = (kind, npc.arms.throwing.as_ref()) {
+                                let from = pos + Vec3::Y * 0.8 + npc.forward() * 0.3;
+                                let vel = crate::gadgets::aim_throw(from, ppos, th.speed);
+                                throws.write(crate::thrown::NpcThrow { owner: e, from, vel, damage: th.damage[(settings.difficulty as usize).min(3)] });
+                                if std::env::var("DH_MELEE_LOG").is_ok() {
+                                    info!("melee: {} throws at {d:.1} m", npc.name);
+                                }
+                                continue;
+                            }
                             // a thug's whiskey: its fire breath along its line (as far as
                             // `m_fDamageRange`, within `m_fDamageRadius` of it and Corvo's body
                             // about it; unblockable, its smoke where it strikes), or its bottle
@@ -3590,7 +3606,7 @@ pub(crate) fn npc_brain(
                                     let clear = ctx.cast_ray(mouth, rel.normalize_or_zero(), rel.length(), true, wall_filter).is_none();
                                     let struck = along > 0.0 && along < w.fire_range && off < w.fire_radius + 0.35 && (ppos.y - pos.y).abs() < 1.5 && clear;
                                     if struck {
-                                        hit_writer.write(PlayerHit { npc: e, from: pos, damage: w.fire_damage, kick: false, big: false, push: false, unblockable: true });
+                                        hit_writer.write(PlayerHit { npc: e, from: pos, damage: w.fire_damage, kick: false, big: false, push: false, unblockable: true, missile: true });
                                     }
                                     let at = if struck { ppos + Vec3::Y * 0.6 } else { mouth + f * along.clamp(0.5, w.fire_range) };
                                     whiskey_fx.write(crate::particles::SpawnEffect { secs: w.blind.max(1.0), ..crate::particles::SpawnEffect::at("whiskey_smoke", at) });
@@ -3611,7 +3627,7 @@ pub(crate) fn npc_brain(
                             let struck = to.length() < reach && (ppos.y - pos.y).abs() < 1.5 && in_front;
                             if struck {
                                 let damage = if kick { 0.0 } else if shot { npc.arms.ranged } else { npc.arms.melee };
-                                hit_writer.write(PlayerHit { npc: e, from: pos, damage, kick, big, push: false, unblockable: under });
+                                hit_writer.write(PlayerHit { npc: e, from: pos, damage, kick, big, push: false, unblockable: under, missile: false });
                             }
                             if shot {
                                 shots.write(NpcShot { from: pos + Vec3::Y * 0.2, to: ppos, bow: false, miss: !struck });
@@ -3630,7 +3646,7 @@ pub(crate) fn npc_brain(
                     } else if npc.attack_cd <= 0.0 && npc.stagger <= 0.0 && npc.sees_player && (attackers < max_attackers || !npc.arms.outer_only.is_empty()) && npc.may_melee() && pace_ready(&npc) {
                         // (outside the ring of those at Corvo, or with him out of reach, only the
                         // moves for there)
-                        let outer = attackers >= max_attackers || (!npc.arms.outer_only.is_empty() && (ppos.y - pos.y).abs() > 1.6);
+                        let outer = attackers >= max_attackers || (!npc.arms.outer_only.is_empty() && (ppos.y - pos.y).abs() > 1.6 && (ppos - pos).with_y(0.0).length() > 2.5);
                         // the move for the distance and its facing (its blade's
                         // `DisTweaks_NPCAttackShort` / `Medium` / `Long`), a block answered with a
                         // kick (`DisTweaks_NPCBash`); without them, a blow at arm's length
@@ -3692,8 +3708,10 @@ pub(crate) fn npc_brain(
                                 // (the less aggressive, the longer: x1 at full aggression, x2 at none)
                                 // (a bottle thrown at him out of reach, sooner again:
                                 // `m_ContextCooldownWhenUnreachable`)
-                                let cd = match &npc.arms.whiskey {
-                                    Some(w) if moves[i].kind == "ThrowWhiskey" && (ppos.y - pos.y).abs() > 1.6 => w.cooldown_unreachable,
+                                let away = (ppos.y - pos.y).abs() > 1.6;
+                                let cd = match (&npc.arms.whiskey, &npc.arms.throwing) {
+                                    (Some(w), _) if moves[i].kind == "ThrowWhiskey" && away => w.cooldown_unreachable,
+                                    (_, Some(t)) if moves[i].kind == "Throw" && away => t.cooldown_unreachable,
                                     _ => moves[i].cooldown,
                                 };
                                 npc.melee_cd[i] = (cd[0] + rand::random::<f32>() * (cd[1] - cd[0]).max(0.0)) * ((1.0 - npc.aggression.clamp(0.0, 1.0)) * COOLDOWN_FACTOR + 1.0);
@@ -4119,6 +4137,8 @@ pub struct NpcClips {
     /// a thug's fire breath (its swig, the spitting, the end) and its bottle's throw
     bottle_fire: [Option<ClipId>; 3],
     bottle_throw: Option<ClipId>,
+    /// a throw with the bare hand (a rock from the floor, from the pocket)
+    throw_rock: Vec<ClipId>,
     kick: Option<ClipId>,
     /// the turning blows (left, right; at 90 and 180 degrees) and the charge
     attack_turn: [Vec<ClipId>; 4],
@@ -4229,6 +4249,7 @@ impl NpcClips {
             attack_step_back: lib.first(&["Sword_Attack_StepBackA"]),
             bottle_fire: [lib.find("Sword_Bottle_Fire_In"), lib.find("Sword_Bottle_Fire_Loop"), lib.find("Sword_Bottle_Fire_Out")],
             bottle_throw: lib.find("Sword_ThrowBottle"),
+            throw_rock: lib.all(&["Sword_ThrowRock_Floor", "Sword_ThrowRock_Pocket"]),
             kick: lib.first(&["Sword_Attack_KickMedium"]),
             attack_turn: [
                 lib.all(&["Sword_Attack_Left90BigA", "Sword_Attack_Left90SmallA"]),
@@ -4873,7 +4894,17 @@ fn npc_select_anim(
                     MoveKind::UnderGun => clips.under[1],
                     MoveKind::WhiskeyFire => clips.bottle_fire[0].or(clips.bottle_fire[1]),
                     MoveKind::ThrowWhiskey => clips.bottle_throw,
+                    MoveKind::Throw => pick(&clips.throw_rock),
                 };
+                // (a throw with the bare hand: let go at the clip's `DishonoredNotify_FireProjectile`)
+                if let (Some(c), Some(s)) = (own.filter(|_| kind == MoveKind::Throw), npc.swing.as_mut()) {
+                    s.hit = st.marks.get(&c).and_then(|m| m.fires.first().copied()).unwrap_or(lib.duration(c) * 0.6);
+                    s.len = lib.duration(c).max(s.hit + 0.1);
+                    anim.restart(c, false, 1.0, 0.1);
+                    st.last_mode = npc.mode;
+                    st.last_alert = npc.alert;
+                    continue;
+                }
                 // a thug's whiskey, its bottle drawn into its left hand: its fire breath's swig,
                 // spitting and end in turn, the flame striking at the spitting's
                 // `DisNotify_WhiskeyFireDamage`; or its throw, let go at the clip's

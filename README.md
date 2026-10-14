@@ -519,7 +519,20 @@ fullscreen display, vertical sync and the crosshair.
   `m_fThrowSpeed` 2500 uu/s, tumbling and trailing its flame (`ps_bottle_fly`); it bursts where
   it first strikes (`DisTweaks_WhiskeyBottle.m_pExplosionTweaks`: 30 within 2.5 m, Corvo within
   2 m, `ps_bottle_explosion`, `Imp_Glass_Bottle_Fire_Generic`). The fire setting people
-  alight (`m_bPutToFire`, `m_ImmolationParams`) is left out.
+  alight (`m_bPutToFire`, `m_ImmolationParams`) is left out. A thug's attack pattern
+  (`TwkAttackPattern_FireBreather`) turns the throw off, its outer ones
+  (`m_OuterSkirmishAttackPatterns`) don't: it throws only from outside the ring of those at
+  Corvo, or with him out of reach (above or below it, not beside it), and breathes fire up
+  close. Script `bottle`.
+- **Things thrown at Corvo out of reach** (`thrown.rs`): guards and thugs throw with their bare
+  hand (`Twk_Inv_ThrowingHand`'s `DisTweaks_NPCThrow`: from 7 to 30 m, every 6-10 s, 2.5-5 s
+  with Corvo out of reach), `Sword_ThrowRock_Floor` / `_Pocket` let go at the clips'
+  `DishonoredNotify_FireProjectile`, one of the throwables (`Twk_Thrown_CommonExterior`: a
+  piece of metal, a brick, a broken bottle) at 2500 uu/s, tumbling; it harms Corvo by the
+  hand's ranged damage (5/8/10/12 by difficulty) and sounds where it strikes as the contact
+  system's `ThrownRock`, falling to rest. Their attack patterns turn it off as for the thugs'
+  bottles (`..SwordBerserker`'s `NPCThrowObject`): from outside the ring or with him out of
+  reach only. Script `rock`.
 - **Stealth as the original measures it** (`stealth.rs`): each character sees with its pawn's
   `DisTweaks_Vision` (a focused cone, 45 degrees out to 35 m, and a peripheral one, 160 degrees
   out to 17 m, each looking far less up than down: rooftops hide) and pays attention with its

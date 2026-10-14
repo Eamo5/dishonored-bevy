@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 149;
+pub const SCENE_VERSION: u32 = 150;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -214,6 +214,10 @@ pub struct Scene {
     /// their sounds and noises
     #[serde(default)]
     pub corpse_impacts: Vec<Impact>,
+    /// the contact system's intersections of a thrown thing (`ThrownRock`: a character's rock,
+    /// brick or broken bottle) with what it strikes: their sounds
+    #[serde(default)]
+    pub thrown_impacts: Vec<Impact>,
     /// the characters' clips that sever a limb (`DishonoredNotify_SeverLimb`: the beheading
     /// finishers)
     #[serde(default)]
@@ -1096,6 +1100,9 @@ pub struct NpcStats {
     /// (`m_OuterSkirmishAttackPatterns`)
     #[serde(default)]
     pub outer_patterns: Vec<Vec<PatternOverride>>,
+    /// what it throws at Corvo with its bare hand (its move `Throw` among the blade's)
+    #[serde(default)]
+    pub throwing: Option<NpcThrowing>,
     /// a thug's whiskey bottle: its fire breath and the bottle it throws (its moves
     /// `WhiskeyFire` and `ThrowWhiskey` among the blade's)
     #[serde(default)]
@@ -1160,7 +1167,7 @@ pub struct FireContext {
 pub struct MeleeMove {
     /// `Short`, `StepBack` (a blow stepping back from someone too close), `Medium`, `Long`,
     /// `Bash`, `Jump` (a charge), a thug's `WhiskeyFire` and `ThrowWhiskey` (its bottle's,
-    /// `NpcWhiskey`), the turning blows at someone to
+    /// `NpcWhiskey`), `Throw` (its bare hand's, `NpcThrowing`), the turning blows at someone to
     /// its side or behind (`Left90`, `Right90`, `Left180`, `Right180`: `angle` about that
     /// side); or a dodge, `SideStep`, `BackStep`; a counter after its parry, `Riposte`; a shove
     /// at someone in its way, `Push`; lying in wait round a corner, `Ambush`
@@ -1196,6 +1203,18 @@ pub struct NpcWhiskey {
     pub throw_speed: f32,
     pub cooldown_unreachable: [f32; 2],
     pub blast: TrapBlast,
+}
+
+/// A character's throwing hand (`DisTweaks_WepThrowingHand`'s `DisTweaks_NPCThrow`): one of the
+/// throwables (`Twk_Thrown_CommonExterior`, `thrown_0..2` in the scene's props) thrown at Corvo
+/// at `m_fThrowSpeed` (m/s), sooner again with him out of reach
+/// (`m_ContextCooldownWhenUnreachable`), harming him by the hand's ranged damage (by
+/// difficulty).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct NpcThrowing {
+    pub speed: f32,
+    pub cooldown_unreachable: [f32; 2],
+    pub damage: [f32; 4],
 }
 
 /// What an AI attack pattern says of one of its character's blade moves

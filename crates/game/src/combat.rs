@@ -1293,7 +1293,9 @@ fn receive_hits(
         stats.damage_flash = 1.0;
         stats.hit_from = Some(h.from);
         stats.blow = (stats.blow.0.wrapping_add(1), side_of(h.from, pt.translation, p.yaw));
-        sfx.write(PostEvent::named("Snd_Imp_Sword_on_Body_cue_ak", None));
+        if !h.missile {
+            sfx.write(PostEvent::named("Snd_Imp_Sword_on_Body_cue_ak", None));
+        }
         // a big blow leaves him reeling (`m_fVulnerableTime_BigHit_Dizzy` 0.9 s: no blocking),
         // knocked back a step
         if h.big {

@@ -3399,6 +3399,7 @@ impl<'a> Cooker<'a> {
             "NPCAmbush" => "Ambush",
             "NPCWhiskeyFire" => "WhiskeyFire",
             "NPCThrowWhiskey" => "ThrowWhiskey",
+            "NPCThrow" | "NPCThrowObject" => "Throw",
             _ => return None,
         })
     }
@@ -3690,8 +3691,9 @@ impl<'a> Cooker<'a> {
                 }
             }
         }
-        // (a thug's bottle's moves, after its blade's)
+        // (a thug's bottle's moves and its bare hand's, after its blade's)
         let mut bottle_moves = Vec::new();
+        let mut hand_moves = Vec::new();
         for w in self.tweak_objs(pawn, "m_ContentInventoryLoadout") {
             if w.class() == "DisTweaks_WepWhiskeyBottle" && st.whiskey.is_none() {
                 st.whiskey = self.whiskey(&w);
@@ -3720,6 +3722,19 @@ impl<'a> Cooker<'a> {
             if w.class() == "DisTweaks_WepGrenade" {
                 st.grenades.extend(self.grenade_throws(&w));
             }
+            if w.class() == "DisTweaks_WepThrowingHand" && st.throwing.is_none() {
+                if let Some(t) = self.npc_contexts(&w).into_iter().find(|c| c.class() == "DisTweaks_NPCThrow") {
+                    let cooldown_unreachable = match self.tweak_prop(&t, "m_ContextCooldownWhenUnreachable", 0, 0) {
+                        Some((_, Value::Struct(_, r))) => {
+                            let p = Props(r);
+                            [p.float("m_fMinValue").unwrap_or(2.5), p.float("m_fMaxValue").unwrap_or(5.0)]
+                        }
+                        _ => [2.5, 5.0],
+                    };
+                    st.throwing = Some(NpcThrowing { speed: self.tweak_float(&t, "m_fThrowSpeed", 0).unwrap_or(2500.0) * UNIT, cooldown_unreachable, damage: wep.ranged });
+                    hand_moves = self.melee_moves(&w);
+                }
+            }
             if w.class() == "DisTweaks_WepMusicBox" {
                 st.tunes = self.music_box_tunes(&w);
             }
@@ -3743,6 +3758,7 @@ impl<'a> Cooker<'a> {
             }
         }
         st.melee.extend(bottle_moves);
+        st.melee.extend(hand_moves);
         if let Some((_, Value::Str(t))) = self.tweak_prop(pawn, "m_AsleepCrosshairText", 0, 0) {
             st.asleep_text = t;
         }
@@ -6752,6 +6768,11 @@ impl<'a> Cooker<'a> {
             ("thug_sword", "ThugSword.ThugSword"),
             // (a thug's whiskey bottle: `Twk_Inv_WhiskeyBottleThug`'s `m_pEquippedMesh`)
             ("thug_bottle", "Wpn_ThugBottle.Thug_Bottle"),
+            // (what characters throw with their bare hand: `Twk_Thrown_CommonExterior`'s
+            // `m_ThrownObjects`, a piece of metal, a brick, a broken bottle)
+            ("thrown_0", "Throwables.Throwables_metal_piece_sk"),
+            ("thrown_1", "Throwables.throwables_brick_sk"),
+            ("thrown_2", "Throwables.Throwables_brk_bottle_sk"),
             ("overseer_sword", "OverseerSword.OverseerSword"),
             ("assassin_sword", "AssassinSword.AssassinSword"),
             ("bolt", "Crossbows.bolt_01"),
@@ -6898,6 +6919,7 @@ impl<'a> Cooker<'a> {
         self.scene.contact_decals = self.contact_decals();
         self.scene.sword_impacts = self.impacts("DisContactType_Sword");
         self.scene.corpse_impacts = self.impacts("DisContactType_Corpse");
+        self.scene.thrown_impacts = self.impacts("DisContactType_ThrownRock");
         self.scene.severed_limbs = self.severed_limbs();
         // the first-person arms: a skinned rig exposed as the "player_arms" character type
         // (Corvo's; Daud's on The Knife of Dunwall's maps: his pawn's `m_pSkeletalMesh`, his

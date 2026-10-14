@@ -739,6 +739,24 @@ fn run_script(
                 info!("script: a thug's bottle from {from:.2}");
             });
         }
+        "rock" => {
+            // (tests) rock: the nearest character with a throwing hand throws at Corvo
+            let at = t.translation;
+            commands.queue(move |w: &mut World| {
+                let difficulty = w.get_resource::<crate::settings::Settings>().map_or(1, |s| s.difficulty);
+                let mut npcs = w.query::<(Entity, &Npc, &Transform)>();
+                let who = npcs
+                    .iter(w)
+                    .filter(|(_, n, _)| !n.is_down() && n.arms.throwing.is_some())
+                    .min_by(|a, b| a.2.translation.distance_squared(at).total_cmp(&b.2.translation.distance_squared(at)))
+                    .map(|(e, n, t)| (e, t.translation, n.arms.throwing.clone().unwrap_or_default()));
+                let Some((owner, pos, th)) = who else { return };
+                let from = pos + Vec3::Y * 0.8 + (at - pos).with_y(0.0).normalize_or_zero() * 0.3;
+                let vel = crate::gadgets::aim_throw(from, at, th.speed);
+                w.write_message(crate::thrown::NpcThrow { owner, from, vel, damage: th.damage[(difficulty as usize).min(3)] });
+                info!("script: a thrown thing from {from:.2}");
+            });
+        }
         "wallnpc" => {
             // (tests) wallnpc: the nearest character the nearest wall of light would strike, put
             // in it

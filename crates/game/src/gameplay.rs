@@ -237,6 +237,8 @@ pub struct PlayerHit {
     /// it can't be blocked, parried or met blade to blade (`DisItemAction.m_bUnblockable`: a
     /// blow under a table)
     pub unblockable: bool,
+    /// a thing thrown or a thug's fire: it sounds as itself, not as a blade
+    pub missile: bool,
 }
 
 /// Interrupt an NPC (parried, blinded...).
