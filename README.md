@@ -237,7 +237,12 @@ fullscreen display, vertical sync and the crosshair.
   The arms' own clips move the view the same way, as the original's camera has it (roshan's
   r614/blink research decoded it): it sits where the animated camera_jnt is and takes
   `DishonoredPlayerCamera.m_RollAmount` (0.7) of its turn from its rest pose. The clips seen so
-  far move it little (about 4 cm in the idle, 5 cm through a mantle).
+  far move it little (about 4 cm in the idle, 5 cm through a mantle). The arms aren't held
+  rigid to the view either: the look controls turn each collarbone by its hand's item's
+  `m_ArmPitch_OffsetKeys` for the view's pitch, eased between the keys by a cosine (the sword,
+  the powers, grenades and the Heart: the hand 10 degrees higher looking straight down, 15
+  lower looking straight up, nothing within 10 degrees of level; the pistol and crossbow 2 and
+  3), as roshan's research decoded them.
 - **Beheadings and severed limbs** (`gore.rs`): a finisher is a beheading now and then
   (`m_HeadChop`, `m_fBeheadRandomChance` 25%: `Sword_Ready_Fatality_Behead_A/B_Master` with the
   victim's `Generic_Fatality_Behead_*_Slave`); the victim's clip cuts at its

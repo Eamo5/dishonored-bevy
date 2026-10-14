@@ -2976,6 +2976,11 @@ pub struct GameData {
     /// how the barks share the air (`DisConvGlobalMan`)
     #[serde(default)]
     pub bark_rules: BarkRules,
+    /// how far each of Corvo's items turns his arm against the view's pitch, by its tweak
+    /// (`Twk_Inv_SwordCorvo`): its `m_ArmPitch_OffsetKeys` (view pitch, the arm's difference;
+    /// degrees)
+    #[serde(default)]
+    pub arm_pitch: std::collections::BTreeMap<String, Vec<[f32; 2]>>,
     /// and the pieces of its gallery (`m_Gallery`)
     #[serde(default)]
     pub gallery: Vec<GalleryItemDef>,

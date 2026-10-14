@@ -27,7 +27,7 @@ impl Plugin for ArmsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(GameState::InGame), spawn_arms.after(spawn_view_model))
             .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_effects.after(ArmsAnimSet), pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
-            .add_systems(PostUpdate, align_arms.in_set(ArmsAlign).after(AnimPose).before(TransformSystems::Propagate));
+            .add_systems(PostUpdate, (align_arms.in_set(ArmsAlign), arm_pitch).after(AnimPose).before(TransformSystems::Propagate));
     }
 }
 
@@ -68,6 +68,8 @@ struct ArmRig {
     left: Chain,
     attach: usize,
     camera: usize,
+    /// the collarbones (right, left): the view's look controls turn them
+    collar: [Option<usize>; 2],
     /// right-hand digit joints with their fist curl (local axis, angle)
     curl: Vec<(usize, Vec3, f32)>,
 }
@@ -517,6 +519,7 @@ fn spawn_arms(
         left,
         attach,
         camera: cam_j,
+        collar: [find("Collarbone_R_Jnt"), find("Collarbone_L_Jnt")],
     });
 }
 
@@ -1104,6 +1107,75 @@ fn align_arms(
         t.rotation = r;
         t.translation = tr;
     }
+}
+
+/// The arms turned against the view as the original's look controls turn them (as roshan's
+/// r614/blink research decoded them): each collarbone by its hand's item's pitch offset for the
+/// view's pitch (`m_ArmPitch_OffsetKeys`, eased between the keys by a cosine): the sword's and
+/// the powers' bring the hands up 10 degrees looking straight down and 15 down looking straight
+/// up, the pistol's and the crossbow's 2 and 3.
+#[allow(clippy::type_complexity)]
+fn arm_pitch(
+    rigs: Query<(&ArmRig, &Animator, &ArmsAnim, &Visibility), With<ArmsRoot>>,
+    player: Query<&Player>,
+    powers: Option<Res<Powers>>,
+    data: Res<crate::gamedata::Data>,
+    cine: Res<crate::script_world::Cinematic>,
+    mut joints: Query<&mut Transform, (Without<ArmsRoot>, Without<ViewModel>, Without<SwordGrip>, Without<crate::player::PlayerCamera>)>,
+) {
+    let (Ok(p), Some(powers)) = (player.single(), powers) else { return };
+    if cine.on {
+        return;
+    }
+    let left_item = match powers.selected {
+        Power::Pistol => "Twk_Inv_PistolCorvo",
+        Power::Crossbow => "Twk_Inv_CrossbowCorvo",
+        Power::Grenade | Power::StickyGrenade => "Twk_Inv_GrenadeCorvo",
+        Power::SpringRazor => "Twk_Inv_SpringRazorCorvo",
+        Power::Heart => "Twk_Inv_HeartCorvo",
+        _ => "Twk_Inv_Powers",
+    };
+    let pitch = p.pitch.to_degrees();
+    for (rig, anim, st, vis) in &rigs {
+        // (a pose not written this frame keeps the turn already laid on it)
+        if *vis == Visibility::Hidden || anim.frozen {
+            continue;
+        }
+        // the view's right, in the rig's frame (the camera bone at rest, less its place on the
+        // camera)
+        let camera = anim.bind_model(rig.camera).compute_affine() * st.eye.compute_affine().inverse();
+        let (_, cam_rot, _) = camera.to_scale_rotation_translation();
+        let right = cam_rot * Vec3::X;
+        for (side, item) in [(0, "Twk_Inv_SwordCorvo"), (1, left_item)] {
+            let Some(j) = rig.collar[side] else { continue };
+            let Some(keys) = data.0.arm_pitch.get(item).or_else(|| data.0.arm_pitch.get("Twk_Inv_Powers")) else { continue };
+            let off = pitch_offset(keys, pitch).to_radians();
+            if off.abs() < 1e-4 {
+                continue;
+            }
+            let parent = rig.bind_rot[j] * rig.bind_local[j].inverse();
+            if let Ok(mut t) = joints.get_mut(rig.joints[j]) {
+                t.rotation = Quat::from_axis_angle(parent.inverse() * right, off) * t.rotation;
+            }
+        }
+    }
+}
+
+/// An item's arm pitch difference (degrees) for the view's pitch (degrees, up positive): the
+/// keys' values, eased between the two around it by a cosine, held past the ends.
+fn pitch_offset(keys: &[[f32; 2]], pitch: f32) -> f32 {
+    let (Some(first), Some(last)) = (keys.first(), keys.last()) else { return 0.0 };
+    if pitch <= first[0] {
+        return first[1];
+    }
+    for w in keys.windows(2) {
+        if pitch <= w[1][0] {
+            let t = (pitch - w[0][0]) / (w[1][0] - w[0][0]).max(1e-3);
+            let e = (1.0 - (std::f32::consts::PI * t).cos()) * 0.5;
+            return w[0][1] + (w[1][1] - w[0][1]) * e;
+        }
+    }
+    last[1]
 }
 
 /// How much of the camera bone's turn the view takes (`DishonoredPlayerCamera.m_RollAmount`).

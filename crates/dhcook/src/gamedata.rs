@@ -1284,6 +1284,35 @@ const HOOK_ROWS: &[(u8, u8, f32, f32, u32)] = &[
     (125, 7, 1.0, 1.0, 0x86),
 ];
 
+/// Each player item's arm pitch keys (`DisTweaks_InventoryItem_PlayerSpecific` and the empty
+/// hands' `DisTweaks_ItemEmpty_PlayerSpecific`: `m_ArmPitch_OffsetKeys`), by the item's tweak.
+fn arm_pitch(startup: &Package) -> BTreeMap<String, Vec<[f32; 2]>> {
+    let mut out = BTreeMap::new();
+    for class in ["DisTweaks_InventoryItem_PlayerSpecific", "DisTweaks_ItemEmpty_PlayerSpecific"] {
+        for i in startup.exports_of_class(class).collect::<Vec<_>>() {
+            let Some(p) = props(startup, i) else { continue };
+            let Some((c, off, sz)) = p.array("m_ArmPitch_OffsetKeys") else { continue };
+            let keys: Vec<[f32; 2]> = upk::props::parse_struct_array(startup, off, sz, c)
+                .unwrap_or_default()
+                .iter()
+                .map(|k| {
+                    let f = |n: &str| match k.get(n) {
+                        Some(Value::Float(v)) => *v,
+                        _ => 0.0,
+                    };
+                    [f("m_fArmPitch"), f("m_fArmPitch_Difference")]
+                })
+                .collect();
+            let path = startup.obj_path(i);
+            let Some(item) = path.split('.').nth(1) else { continue };
+            if !keys.is_empty() {
+                out.insert(item.to_string(), keys);
+            }
+        }
+    }
+    out
+}
+
 /// The barks' manager (`Default__DisTweaks_ConvSettings` over the native hook table).
 fn bark_rules(game: &Package) -> BarkRules {
     let hooks = enum_names(game, "eDisDialogHook");
@@ -1349,6 +1378,7 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
     player_stats(&game, &startup, &mut d);
     challenges(&game, &mut d);
     d.bark_rules = bark_rules(&game);
+    d.arm_pitch = arm_pitch(&startup);
     // Summoned swarms have distinct level tweaks, inheriting the swarm defaults.
     for level in 1..=2 {
         let prefix = format!("swarm.{level}.");
