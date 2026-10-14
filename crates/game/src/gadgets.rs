@@ -281,6 +281,16 @@ pub struct Grenade {
 }
 
 impl Grenade {
+    /// The character who threw it (none: Corvo's, or taken from its thrower).
+    pub fn thrower(&self) -> Option<Entity> {
+        self.owner
+    }
+
+    /// The character it's stuck to.
+    pub fn stuck_on(&self) -> Option<Entity> {
+        self.stuck.map(|s| s.0)
+    }
+
     /// Caught in a Wind Blast (the original redirects the projectiles in its cone, as roshan's
     /// r614/blink research found): sent on along the blast at least as fast, the thrower's no
     /// more; one stuck to someone stays.

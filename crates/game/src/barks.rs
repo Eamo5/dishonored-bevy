@@ -237,7 +237,7 @@ fn npc_barks(
     mut out: MessageWriter<PostEvent>,
     mut subs: MessageWriter<Subtitle>,
     data: Res<crate::gamedata::Data>,
-    (mut used, burning, grenades): (MessageReader<crate::powers::PowerUsed>, Query<(), With<crate::powers::Ignite>>, Query<&Transform, With<crate::gadgets::Grenade>>),
+    (mut used, burning): (MessageReader<crate::powers::PowerUsed>, Query<(), With<crate::powers::Ignite>>),
     mut hits: MessageReader<crate::gameplay::NpcHit>,
     (mut memory, vm): (ResMut<BarkMemory>, Option<Res<crate::kismet::Vm>>),
 ) {
@@ -418,8 +418,8 @@ fn npc_barks(
         } else if !down && npc.alarm_run.is_some() && !st.alarm {
             // off to ring the alarm (`ALARM_GO_TO_RING_ALARM`)
             want = Some(&["ALARM_GO_TO_RING_ALARM", "ALARM_HEAR_AND_RESPOND"]);
-        } else if !down && npc.hostile() && !st.grenade && grenades.iter().any(|g| g.translation.distance(t.translation) < 5.0) {
-            // a grenade by it (`ESCAPE_IMPENDING_EXPLOSION`)
+        } else if !down && npc.hostile() && !st.grenade && npc.escape.is_some() {
+            // a grenade by it, making off (`ESCAPE_IMPENDING_EXPLOSION`)
             want = Some(&["ESCAPE_IMPENDING_EXPLOSION"]);
         } else if !down && npc.hostile() && npc.sees_player && magic.is_some() {
             // Corvo's magic before its eyes: gone from where it saw him, else a power seen
@@ -530,7 +530,7 @@ fn npc_barks(
         st.mode = npc.mode;
         st.burning = burning.contains(e);
         st.alarm = npc.alarm_run.is_some();
-        st.grenade = grenades.iter().any(|g| g.translation.distance(t.translation) < 5.0);
+        st.grenade = npc.escape.is_some();
         st.falling = !npc.grounded && npc.velocity.y < FALL_SPEED;
         st.saw_body = npc.saw_body;
         st.witnessed_death = npc.witnessed_death;

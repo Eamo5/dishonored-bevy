@@ -52,7 +52,7 @@ impl Plugin for NpcPlugin {
                     npc_shots,
                     npc_hearing,
                     npc_perception.run_if(|| !skip("perception")),
-                    attention_look,
+                    (attention_look, escape_explosions).chain(),
                     npc_brain.run_if(|| !skip("brain")),
                     npc_finishers,
                     weeper_grab,
@@ -258,6 +258,9 @@ pub struct Npc {
     /// a comrade set upon by rats whose call for help it answers, and the rat on it to stamp
     /// on (`DisBehaviorCombatRatSwarm`)
     pub rat_help: Option<(Entity, Vec3)>,
+    /// a live explosive it makes off from (`DisBehaviorEscapeExplosion`): where it is, and how
+    /// long it keeps away yet
+    pub escape: Option<(Vec3, f32)>,
     /// caught panicking with Corvo upon it: how long it has begged, and how long he has been
     /// back off; then the seconds left getting up again
     pub caught: Option<(f32, f32)>,
@@ -1547,6 +1550,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         flee_to: None,
         caught: None,
         rat_help: None,
+        escape: None,
         rising: 0.0,
         watch: None,
         watched: Vec::new(),
@@ -1827,6 +1831,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 holster,
                 grab_seen: None,
                 act_seen: 0,
+                escaping: false,
                 way: 0,
                 marks: std::sync::Arc::new(lib.marks(scene)),
                 blade,
@@ -2597,6 +2602,63 @@ fn attention_look(mut commands: Commands, npcs: Query<(Entity, &Npc, Has<AttnLoo
 }
 
 /// High level decisions: pick movement targets and attacks for each NPC.
+/// A live explosive sets a character making off (`AI_BhvrTwk_EscapeExplosion`'s
+/// `TweakBehaviors_EscapeExplosion_Default`): one within its threat radius (300 uu) and its
+/// discovery angle (45 degrees) in its sight.
+const ESCAPE_RADIUS: f32 = 3.0;
+const ESCAPE_ANGLE: f32 = 45.0;
+/// How far from it it makes for (m: `m_fExplosionClearance`, 600 uu).
+const ESCAPE_CLEARANCE: f32 = 6.0;
+/// How long it keeps away at most (`m_fEscapeEndTimer`), and once it has gone off
+/// (`m_fEscapeThreatTimerAfterExplosion`) (s).
+const ESCAPE_END: f32 = 5.0;
+const ESCAPE_AFTER: f32 = 1.0;
+
+/// Characters that see a live grenade by them make off from it (`DisBehaviorEscapeExplosion`):
+/// not its thrower, nor one it's stuck to; they keep away while it's there (a thrown one
+/// followed as it rolls), and a moment after it goes off.
+fn escape_explosions(
+    time: Res<Time>,
+    tc: Res<TimeControl>,
+    rapier: ReadRapierContext,
+    grenades: Query<(&crate::gadgets::Grenade, &Transform)>,
+    mut npcs: Query<(Entity, &mut Npc, &Transform), (Without<crate::possession::Possessed>, Without<ScriptedAnim>)>,
+) {
+    let Ok(ctx) = rapier.single() else { return };
+    let walls = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+    for (e, mut npc, t) in &mut npcs {
+        let dt = time.delta_secs() * if npc.out_of_bend { tc.own_scale() } else { tc.world_scale() };
+        if npc.is_down() || npc.kind == Kind::Story {
+            npc.escape = None;
+            continue;
+        }
+        if let Some((at, left)) = npc.escape {
+            // the one it keeps from, followed; gone off, a moment more
+            let live = grenades.iter().map(|(_, gt)| gt.translation).filter(|p| p.distance(at) < 1.5).min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)));
+            let left = if live.is_some() { left - dt } else { left.min(ESCAPE_AFTER) - dt };
+            npc.escape = (left > 0.0).then(|| (live.unwrap_or(at), left));
+            continue;
+        }
+        if dt <= 0.0 {
+            continue;
+        }
+        let eye = t.translation + Vec3::Y * 0.6;
+        let fwd = npc.forward();
+        let seen = grenades.iter().filter(|(g, _)| g.thrower() != Some(e) && g.stuck_on() != Some(e)).map(|(_, gt)| gt.translation).find(|p| {
+            let to = *p - eye;
+            let d = to.length();
+            d < ESCAPE_RADIUS
+                && to.with_y(0.0).normalize_or_zero().dot(fwd) >= ESCAPE_ANGLE.to_radians().cos()
+                // (short of the floor it lies on)
+                && ctx.cast_ray(eye, to / d.max(1e-3), (d - 0.25).max(0.0), true, walls).is_none()
+        });
+        if let Some(p) = seen {
+            info!("{} makes off from a grenade {:.1} m away", npc.name, p.distance(t.translation));
+            npc.escape = Some((p, ESCAPE_END));
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn npc_brain(
     time: Res<Time>,
@@ -2675,6 +2737,16 @@ pub(crate) fn npc_brain(
         let limit = npc.arms.regen[2].min(npc.max_health);
         if npc.hurt_t > npc.arms.regen[0] && npc.health < limit {
             npc.health = (npc.health + npc.arms.regen[1] * dt).min(limit);
+        }
+        // a live explosive by it (`DisBehaviorEscapeExplosion`, a reflex over any fight): it
+        // makes off, as far from it as its clearance
+        if let Some((at, _)) = npc.escape {
+            let away = (pos - at).with_y(0.0).normalize_or(-npc.forward());
+            // (clear of it already: it holds there)
+            npc.target = (pos.distance(at) < ESCAPE_CLEARANCE).then(|| at + away * ESCAPE_CLEARANCE);
+            npc.attack_t = None;
+            npc.aim = None;
+            continue;
         }
         // feuds: an enemy faction's NPC in sight gets fought (Corvo comes first)
         if npc.mode != Mode::Combat && npc.kind != Kind::Story {
@@ -3573,7 +3645,7 @@ fn npc_move(
         }
         let pos = t.translation;
         let speed = match npc.mode {
-            _ if npc.alarm_run.is_some() => npc.gait[2],
+            _ if npc.alarm_run.is_some() || npc.escape.is_some() => npc.gait[2],
             Mode::Combat | Mode::Flee => npc.gait[2],
             // searching, its walk or run slowed (`SearchSword` / `SearchEmpty`: x 0.8), as roshan's
             // r614/blink research read the locomotion modifiers
@@ -3889,6 +3961,9 @@ pub struct NpcClips {
     corpse: Vec<ClipId>,
     search: Vec<ClipId>,
     surprised: Option<ClipId>,
+    /// startled by a live explosive, sword sheathed or drawn (`Empty_Surprised_Front`,
+    /// `Sword_Surprised_Front`)
+    startled: [Option<ClipId>; 2],
     equip: Option<ClipId>,
     /// a weeper's arm grab
     grab_try: Option<ClipId>,
@@ -4026,6 +4101,7 @@ impl NpcClips {
             corpse: lib.all(&["Corpses_DeathPose_OnBack1", "Corpses_DeathPose_OnBack2", "Corpses_DeathPose_OnBack3"]),
             search: lib.all(&["Sword_OutOfSight", "Empty_OutOfSight", "Sword_PlayerCheck", "Empty_PlayerCheck", "Patrol_IdleSearch"]),
             surprised: lib.first(&["Sword_Surprised_Front", "Empty_Surprised_Front", "Attack_IdleBark_Short", "Empty_Taunt"]),
+            startled: [lib.find("Empty_Surprised_Front"), lib.find("Sword_Surprised_Front")],
             equip: lib.first(&["Sword_Patrol_Equip", "Sword_Equip"]),
             grab_try: lib.first(&["Empty_ArmGrab_Try"]),
             grab_in: lib.first(&["Empty_ArmGrab_In"]),
@@ -4102,6 +4178,8 @@ pub struct NpcAnim {
     grab_seen: Option<GrabPhase>,
     /// the gesture last played (its count)
     act_seen: u32,
+    /// making off from an explosive (as last seen)
+    escaping: bool,
     /// the way it last went relative to its facing (0 ahead, 1 right, 2 back, 3 left)
     way: u8,
     /// what its clips' notifies mark (the blows' zones, when an attack may be broken off, when
@@ -4379,6 +4457,15 @@ fn npc_select_anim(
         if anim.upper_on() && (npc.is_down() || !musical && (interrupted || fidget && npc.alert != Alert::Unaware)) {
             anim.stop_upper(0.15);
         }
+        // a live explosive discovered: startled (`m_fSurpriseChance` 1), on its upper body as its
+        // legs make off
+        if npc.escape.is_some() && !st.escaping && !npc.is_down() && !musical {
+            let [empty, sword] = clips.startled;
+            if let Some(c) = if st.drawn { sword.or(empty) } else { empty.or(sword) } {
+                anim.restart_upper(c, false, 1.2, 0.1);
+            }
+        }
+        st.escaping = npc.escape.is_some();
         // a musical Overseer's arms hold its music box, walking or standing (its pawn's walking
         // upper-body desire, `MusicBoxIdle`), and crank it while it plays (`PlayMusic`: in, the
         // loop, out), as roshan's r614/blink research read `DisWepMusicBox`
