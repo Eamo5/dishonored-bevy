@@ -2813,7 +2813,7 @@ pub(crate) fn npc_brain(
     (level, mut npc_hits, ai, mut fled): (Option<Res<LevelInfo>>, MessageWriter<NpcHit>, Res<crate::aiworld::AiWorld>, MessageWriter<crate::aiworld::FleePointReached>),
     (stances, settings, mut grab_inhibit, mut inhibited): (Res<crate::script_world::SpawnerOverrides>, Res<crate::settings::Settings>, Local<f32>, Local<std::collections::HashMap<String, (f32, Entity)>>),
     (mut grenades, mut bottles, mut whiskey_fx, mut throws): (MessageWriter<crate::gadgets::NpcGrenade>, MessageWriter<crate::whiskey::NpcBottle>, MessageWriter<crate::particles::SpawnEffect>, MessageWriter<crate::thrown::NpcThrow>),
-    (finishing, mut finishers, mut tallboy_shots): (Query<(), With<FinisherClip>>, MessageWriter<NpcFinisher>, MessageWriter<crate::tallboy::TallboyShot>),
+    (mut powers_used, finishing, mut finishers, mut tallboy_shots): (MessageReader<crate::powers::PowerUsed>, Query<(), With<FinisherClip>>, MessageWriter<NpcFinisher>, MessageWriter<crate::tallboy::TallboyShot>),
 ) {
     let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
     let max_attackers = INNER_SKIRMISH_CAPS[(settings.difficulty as usize).min(3)];
@@ -2832,6 +2832,16 @@ pub(crate) fn npc_brain(
     let mut alerts: Vec<(Vec3, Vec3)> = Vec::new();
     // attack tokens: swings already in progress count against the limit
     let mut attackers = npcs.iter().filter(|(_, n, _)| n.attack_t.is_some()).count();
+    // Corvo gone before their eyes by Blink: those who saw him, not yet fighting him, are taken
+    // aback (the original's `DisBehaviorMagicResponse`, its `Magic_OutOfSight` clip; their line
+    // is the barks'; in a fight, our reading, they keep at him)
+    if powers_used.read().any(|u| u.0 == crate::powers::Power::Blink) {
+        for (_, mut npc, _) in &mut npcs {
+            if npc.sees_player && npc.hostile() && npc.alert != Alert::Combat && !npc.is_down() && npc.attack_t.is_none() && npc.aim.is_none() && npc.grab.is_none() {
+                npc.gesture(20);
+            }
+        }
+    }
     // the ring at Corvo: of those fighting him, as many as the cap, the nearest; the others wait
     // outside it
     let ring: Vec<Entity> = {
@@ -4257,6 +4267,9 @@ pub struct NpcClips {
     /// a dodge's step (left, right, back: `Sword_SideStep_*`), the alarm's lever pulled
     /// (`Sword_TriggerAlarm`), a body found looked over (`Sword_CorpseCheck`)
     dodge: [Vec<ClipId>; 3],
+    /// Corvo gone before its eyes by magic (`Empty_Magic_OutOfSight`, `Sword_Magic_OutOfSight`:
+    /// the original's `DisBehaviorMagicResponse`, its Awe slot)
+    magic: [Vec<ClipId>; 2],
     /// fighting off a swarm on it, empty-handed and sword drawn: in, its loop, out
     swarm: [[Option<ClipId>; 3]; 2],
     /// turning where it stands, left then right, by 45, 90, 135 and 180 degrees: relaxed
@@ -4411,6 +4424,7 @@ impl NpcClips {
             gun: [lib.find("Sword_Gun_Draw"), lib.find("Sword_Gun_Idle"), lib.find("Sword_Gun_Fire"), lib.find("Sword_Gun_Undraw")],
             gun_reload: lib.find("Sword_Gun_Reload"),
             dodge: [lib.all(&["Sword_SideStep_Left"]), lib.all(&["Sword_SideStep_Right"]), lib.all(&["Sword_SideStep_Back"])],
+            magic: [lib.all(&["Empty_Magic_OutOfSight", "Sword_Magic_OutOfSight"]), lib.all(&["Sword_Magic_OutOfSight", "Empty_Magic_OutOfSight"])],
             swarm: [["Empty_", "Sword_"], ["Sword_", "Empty_"]].map(|sets| ["In", "Loop", "Out"].map(|p| sets.iter().find_map(|s| lib.find(&format!("{s}SwarmAttack_{p}"))))),
             turn: [["Sword_Patrol_Turn", "Empty_Turn", "Patrol_Turn"], ["Sword_Turn", "Empty_Turn", "Sword_Patrol_Turn"]].map(|sets| {
                 ["Left", "Right"].map(|side| ["45", "90", "135", "180"].map(|a| sets.iter().find_map(|s| lib.find(&format!("{s}{side}{a}")))))
@@ -5298,11 +5312,13 @@ fn npc_select_anim(
                 15..=17 => &clips.dodge[npc.act.0 as usize - 15],
                 18 => &clips.trigger_alarm,
                 19 => &clips.corpse_check,
+                20 => &clips.magic[st.drawn as usize],
                 _ => &clips.push,
             };
             if let Some(c) = pick(pool) {
-                // (its pockets checked where it stands; the alarm pulled, a body looked over)
-                if matches!(npc.act.0, 14 | 18 | 19) {
+                // (its pockets checked where it stands; the alarm pulled, a body looked over, Corvo
+                // gone by magic)
+                if matches!(npc.act.0, 14 | 18 | 19 | 20) {
                     npc.stagger = npc.stagger.max(anim.lib.duration(c));
                 }
                 // (the lock's struggle holds until it ends)

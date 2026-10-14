@@ -876,7 +876,9 @@ fullscreen display, vertical sync and the crosshair.
   noticing, threatening, losing Corvo, hurting, dying and victory, a civilian starting to run
   says its `PANIC_START` (`FLEEING`), a guard set alight `COMBAT_IMMOLATED`, off to a bell
   `ALARM_GO_TO_RING_ALARM`, a grenade by it `ESCAPE_IMPENDING_EXPLOSION`, Corvo's magic before
-  its eyes `MAGIC_WITNESSED` (Blink: `MAGIC_DISAPPEARED`), finding him again in a search
+  its eyes `MAGIC_WITNESSED` (Blink: `MAGIC_DISAPPEARED`; not yet fighting him, it is taken
+  aback, standing for its `Sword_Magic_OutOfSight` / `Empty_Magic_OutOfSight`: the original's
+  `DisBehaviorMagicResponse`), finding him again in a search
   `SEARCH_FIND_ENEMY`, and going to look again `ATTENTION_INVESTIGATE`. Also `FALLING` as one
   falls (faster than 6 m/s down), `COMBAT_STEALTHKILL_PROJECTILE` for one killed unaware by a
   bolt or bullet, `PATROL_ATTACK_RATSINGLE` stamping on a rat, `COMBAT_RANGED_BEGIN` as a
