@@ -781,6 +781,12 @@ fullscreen display, vertical sync and the crosshair.
   still for his clip. The targets and nobles die their own dramatic deaths instead
   (`Sword_DramaticDeath_Front_Campbell_Master` / `DramaticDeath_Front_Campbell_Slave`, Havelock,
   Martin, the Pendletons, the Lord Regent, Daud; `..._Back_A` from behind).
+- **The view's shake** (`player.rs` `CameraShake`): the eye's place on `DishonoredCamera_Shake`'s
+  spring (`m_StabilityConstants`: springiness 1200, damping 12), jolted by Corvo's blade striking a
+  wall (`m_fCamShake_OnHitEnv` 200 uu/s), his swing parried (`m_fCamShake_OnParry` 175) and a blow
+  he blocks (its damage times `m_fBlockCameraShakeScale` 6); each jolt a push in a direction at
+  random (our reading of the shake's input), a few centimetres that settle in a fraction of a
+  second.
 - **Swing trails** (`trails.rs`): the swings' clips mark when a blade trails (`DisNotify_Trails`:
   from its time, so long, on the small, fast and dodging attacks of Corvo and of the
   characters). The swords' melee extents give the trail (`Sword_Trail`, an AnimTrail emitter:

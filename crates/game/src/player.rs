@@ -19,6 +19,7 @@ pub struct PlayerPlugin;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Slide>().init_resource::<AutoCrouch>().init_resource::<MantleEdge>().init_resource::<HardLanding>();
+        app.init_resource::<CameraShake>().add_message::<ShakeCamera>();
         app.init_resource::<VirtualInput>()
             .init_resource::<MantleSpot>()
             .add_systems(OnEnter(GameState::InGame), spawn_player.after(LevelSpawnSet))
@@ -231,6 +232,23 @@ fn cursor_grab(
 #[cfg(test)]
 mod look_tests {
     use super::*;
+
+    #[test]
+    fn a_jolt_shakes_the_view_and_settles() {
+        let mut s = CameraShake::default();
+        s.jolt(200.0);
+        // (a few centimetres at most: 2 m/s against the spring's 34.6 rad/s)
+        let mut peak: f32 = 0.0;
+        for _ in 0..30 {
+            s.step(1.0 / 60.0);
+            peak = peak.max(s.offset.length());
+        }
+        assert!(peak > 0.02 && peak < 0.07, "{peak}");
+        for _ in 0..120 {
+            s.step(1.0 / 60.0);
+        }
+        assert_eq!(s.offset, Vec3::ZERO);
+    }
 
     #[test]
     fn smoothing_does_not_replay_motion_after_wheel_or_cursor_release() {
@@ -860,9 +878,11 @@ fn mantle(
     p.velocity = Vec3::ZERO;
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_camera_offset(
     time: Res<Time>,
     rapier: ReadRapierContext,
+    (mut shake, mut jolts): (ResMut<CameraShake>, MessageReader<ShakeCamera>),
     powers: Res<Powers>,
     stats: Res<PlayerStats>,
     mut q: Query<(Entity, &mut Player, &Transform), Without<PlayerCamera>>,
@@ -916,5 +936,56 @@ fn update_camera_offset(
         lean_off = allowed.min(max) * p.lean.signum();
     }
     let swing = (lean_off.abs() / pivot).clamp(0.0, 1.0).asin();
-    ct.translation = Vec3::new(lean_off, p.eye_height - pivot * (1.0 - swing.cos()), 0.0);
+    // (its shake on top)
+    for j in jolts.read() {
+        if std::env::var("DH_BOB_LOG").is_ok() {
+            info!("shake: a jolt of {:.0} uu/s", j.0);
+        }
+        shake.jolt(j.0);
+    }
+    shake.step(dt);
+    ct.translation = Vec3::new(lean_off, p.eye_height - pivot * (1.0 - swing.cos()), 0.0) + shake.offset;
+}
+
+/// A jolt to the view (uu/s: the shake's magnitude, `m_fCamShake_OnHitEnv`...).
+#[derive(Message, Clone, Copy)]
+pub struct ShakeCamera(pub f32);
+
+/// The view's shake (`DishonoredCamera_Shake`): the eye's place on a spring
+/// (`m_StabilityConstants`: springiness 1200, damping 12), each jolt a push of its magnitude (uu/s)
+/// in a direction at random (our reading of the shake's input).
+#[derive(Resource, Default)]
+pub struct CameraShake {
+    pub offset: Vec3,
+    velocity: Vec3,
+}
+
+/// The shake's spring (`DishonoredCamera_Shake.m_StabilityConstants`).
+const SHAKE_SPRING: f32 = 1200.0;
+const SHAKE_DAMPING: f32 = 12.0;
+/// Unreal units to metres.
+const SHAKE_UU: f32 = 0.01;
+
+impl CameraShake {
+    pub fn jolt(&mut self, magnitude: f32) {
+        let dir = Vec3::new(rand::random::<f32>() - 0.5, rand::random::<f32>() - 0.5, rand::random::<f32>() - 0.5).normalize_or(Vec3::Y);
+        self.velocity += dir * magnitude * SHAKE_UU;
+    }
+
+    /// The spring's step (a few small ones, so a long frame keeps it steady).
+    pub fn step(&mut self, dt: f32) {
+        if self.offset == Vec3::ZERO && self.velocity == Vec3::ZERO {
+            return;
+        }
+        let n = 4;
+        let h = dt.min(0.1) / n as f32;
+        for _ in 0..n {
+            let a = -SHAKE_SPRING * self.offset - SHAKE_DAMPING * self.velocity;
+            self.velocity += a * h;
+            self.offset += self.velocity * h;
+        }
+        if self.offset.length() < 1e-4 && self.velocity.length() < 1e-3 {
+            *self = CameraShake::default();
+        }
+    }
 }

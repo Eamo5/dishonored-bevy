@@ -62,6 +62,13 @@ const VERSUS_ZONE: f32 = 0.12;
 const PLAYER_HIT: f32 = 0.29;
 /// How far ahead of the eye a wall stops Corvo's blade (m: our reading of his swing's sweep).
 const BLADE_WALL_REACH: f32 = 1.3;
+/// The view's jolts (uu/s, `player::CameraShake`): his blade off a wall
+/// (`DisTweaks_MeleeAttackPlayer.m_fCamShake_OnHitEnv`), off a parrying blade
+/// (`DisTweaks_MeleeAttack.m_fCamShake_OnParry`), and a blocked blow's damage times
+/// `DisTweaks_MeleeBlockPlayer.m_fBlockCameraShakeScale`.
+const CAM_SHAKE_ON_HIT_ENV: f32 = 200.0;
+const CAM_SHAKE_PARRIED: f32 = 175.0;
+const CAM_SHAKE_BLOCK_SCALE: f32 = 6.0;
 
 /// The sound of Corvo's sword on what it struck: the contact system's for its surface, else the
 /// plain environment's.
@@ -604,7 +611,7 @@ fn sword_input(
         MessageWriter<crate::particles::SpawnEffect>,
         Option<Res<crate::level::LevelInfo>>,
     ),
-    (mut pace, clock, rapier, surfaces): (ResMut<FinisherPace>, Res<crate::gameplay::TimeControl>, ReadRapierContext, Query<&crate::footsteps::ColliderSurfaces>),
+    (mut pace, clock, rapier, surfaces, mut shake): (ResMut<FinisherPace>, Res<crate::gameplay::TimeControl>, ReadRapierContext, Query<&crate::footsteps::ColliderSurfaces>, MessageWriter<crate::player::ShakeCamera>),
 ) {
     if paused.0 { return; }
     let Ok((pe, pt, mut p, mut sword)) = player.single_mut() else { return };
@@ -830,9 +837,10 @@ fn sword_input(
                         crate::impacts::spawn(&mut fx, &level.scene, crate::impacts::SWORD, "Sword", pt.translation + Vec3::Y * 1.45 + to * 0.7, -to);
                     }
                     sword.recoil = 0.3;
-                    // (Corvo's swing bounces off its blade: `BigHit`)
+                    // (Corvo's swing bounces off its blade: `BigHit`, the view jolted)
                     sword.bounce_seq += 1;
                     sword.bounce_wall = false;
+                    shake.write(crate::player::ShakeCamera(CAM_SHAKE_PARRIED));
                     msgs.push("Blocked");
                 } else {
                     npc.parries = 0;
@@ -883,6 +891,7 @@ fn sword_input(
                             sfx.write(crate::audio::PostEvent::named(sound, Some(at)));
                         }
                         noise.write(Noise { pos: at, radius: 8.0, kind: NoiseKind::Threatening });
+                        shake.write(crate::player::ShakeCamera(CAM_SHAKE_ON_HIT_ENV));
                         sword.bounce_seq += 1;
                         sword.bounce_wall = true;
                         info!("sword: strikes {what} {toi:.2} m ahead");
@@ -1197,7 +1206,7 @@ fn receive_hits(
     mut sfx: MessageWriter<crate::audio::PostEvent>,
     (mut versus, mut npcs, cam): (ResMut<Versus>, Query<(&mut Npc, &Transform), Without<Player>>, Query<&GlobalTransform, With<PlayerCamera>>),
     attrs: Res<crate::gamedata::Attrs>,
-    (mut fx, level): (MessageWriter<crate::particles::SpawnEffect>, Option<Res<crate::level::LevelInfo>>),
+    (mut fx, level, mut shake): (MessageWriter<crate::particles::SpawnEffect>, Option<Res<crate::level::LevelInfo>>, MessageWriter<crate::player::ShakeCamera>),
 ) {
     use crate::audio::PostEvent;
     let Ok((pt, mut p, mut sword)) = player.single_mut() else { return };
@@ -1245,6 +1254,7 @@ fn receive_hits(
         let facing = fwd.dot(to_npc) > 50f32.to_radians().cos();
         if sword.blocking && facing && !h.unblockable {
             noise.write(Noise { pos: pt.translation, radius: 8.0, kind: NoiseKind::Threatening });
+            shake.write(crate::player::ShakeCamera(h.damage * CAM_SHAKE_BLOCK_SCALE));
             sfx.write(PostEvent::named("Snd_Imp_Sword_vs_Sword_ak", None));
             // (the blades' sparks where they meet)
             if let Some(level) = level.as_ref() {
