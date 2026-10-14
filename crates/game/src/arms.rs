@@ -118,6 +118,8 @@ struct ArmClips {
     /// fingers over the gadgets' hold)
     heart_fingers: Option<ClipId>,
     blink: Option<ClipId>,
+    /// Blink held: the hand comes up and holds (`Powers_Cast_Blink_In`, `_Loop`)
+    blink_aim: [Option<ClipId>; 2],
     windblast: Option<ClipId>,
     bend_time: Option<ClipId>,
     switch: Option<ClipId>,
@@ -208,6 +210,7 @@ impl ArmClips {
             gadgets_idle: lib.find("Gadgets_Idle"),
             heart_fingers: lib.first(&["Gadgets_Heart_Fingers_Idle", "Gadgets_Heart_Fingers_Default"]),
             blink: lib.find("Powers_Cast_Blink_Out"),
+            blink_aim: [lib.find("Powers_Cast_Blink_In"), lib.find("Powers_Cast_Blink_Loop")],
             windblast: lib.find("Powers_Cast_Windblast"),
             bend_time: lib.find("Powers_Cast_BendTime"),
             switch: lib.find("Powers_Switch"),
@@ -241,6 +244,8 @@ struct ArmsAnim {
     swinging: bool,
     next_attack: usize,
     blocking: bool,
+    /// aiming Blink (as last seen)
+    blink_aiming: bool,
     choking: bool,
     grabbed: bool,
     oneshot: bool,
@@ -457,6 +462,7 @@ fn spawn_arms(
                 swinging: false,
                 next_attack: 0,
                 blocking: false,
+                blink_aiming: false,
                 choking: false,
                 grabbed: false,
                 oneshot: false,
@@ -905,8 +911,25 @@ fn animate_arms(
     } else {
         c.powers_idle
     };
+    // aiming Blink: the hand comes up (`Powers_Cast_Blink_In`) and holds (`_Loop`) until it's
+    // let go and the cast plays
+    let [aim_in, aim_loop] = c.blink_aim;
+    let aiming = powers.aiming && powers.selected == Power::Blink && aim_loop.is_some();
+    if aiming {
+        if !st.blink_aiming {
+            if let Some(cl) = aim_in.or(aim_loop) {
+                anim.restart_overlay(cl, aim_in.is_none(), 1.0, 0.15);
+                st.started.push(anim.lib.clip(cl).name.clone());
+            }
+        } else if anim.overlay_finished() || !(anim.overlay_is(aim_in) || anim.overlay_is(aim_loop)) {
+            if let Some(cl) = aim_loop {
+                anim.play_overlay(cl, true, 1.0, 0.15);
+            }
+        }
+    }
+    st.blink_aiming = aiming;
     let in_reload = c.reload.iter().any(|(_, cl)| anim.overlay_is(Some(*cl)));
-    if !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision))) {
+    if !aiming && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision))) {
         match idle {
             Some(cl) if !st.choking && !st.blocking => anim.play_overlay(cl, true, 1.0, 0.25),
             _ => anim.stop_overlay(0.2),

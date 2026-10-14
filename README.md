@@ -242,7 +242,9 @@ fullscreen display, vertical sync and the crosshair.
   `m_ArmPitch_OffsetKeys` for the view's pitch, eased between the keys by a cosine (the sword,
   the powers, grenades and the Heart: the hand 10 degrees higher looking straight down, 15
   lower looking straight up, nothing within 10 degrees of level; the pistol and crossbow 2 and
-  3), as roshan's research decoded them.
+  3), as roshan's research decoded them. Holding Blink, the left hand comes up
+  (`Powers_Cast_Blink_In`, the Mark glowing) and holds (`_Loop`) while the marker shows; let go,
+  the cast (`_Out`) plays.
 - **Beheadings and severed limbs** (`gore.rs`): a finisher is a beheading now and then
   (`m_HeadChop`, `m_fBeheadRandomChance` 25%: `Sword_Ready_Fatality_Behead_A/B_Master` with the
   victim's `Generic_Fatality_Behead_*_Slave`); the victim's clip cuts at its
