@@ -235,6 +235,8 @@ struct ArmsAnim {
     clips: Arc<ArmClips>,
     /// the left hand's finger joints (a held item's grip)
     fingers_l: Arc<Vec<usize>>,
+    /// the left arm (`Collarbone_L_Jnt` and all below it): what the left hand's clips move
+    left_arm: Arc<Vec<bool>>,
     /// camera_jnt's bind transform relative to the camera
     eye: Transform,
     /// the head's bob: its cycle (0-1) and weight (`align_arms`), and the breath's clip time
@@ -455,6 +457,15 @@ fn spawn_arms(
                         .map(|(i, _)| i)
                         .collect(),
                 ),
+                left_arm: Arc::new({
+                    let mut on = vec![false; bones.len()];
+                    let root = find("Collarbone_L_Jnt");
+                    for (i, b) in bones.iter().enumerate() {
+                        // (parents come before their children)
+                        on[i] = Some(i) == root || (b.parent >= 0 && on.get(b.parent as usize).copied().unwrap_or(false));
+                    }
+                    on
+                }),
                 eye,
                 bob_phase: 0.0,
                 bob_weight: 0.0,
@@ -898,6 +909,10 @@ fn animate_arms(
         st.selected = powers.selected;
     }
     let bow = matches!(powers.selected, Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt);
+    // the left hand's clips move the left arm alone (`Ply_Player_at`'s `LeftArmFilter`, a
+    // blend per bone from `Collarbone_L_Jnt`: its casts, throws and guns, while the sword arm
+    // keeps its own); possession takes the whole body (its `FullBodyStatePicker`)
+    anim.overlay_mask = if anim.overlay_is(c.possess) || st.left_arm.iter().all(|on| !on) { None } else { Some(st.left_arm.clone()) };
     // (the Heart held up as the gadgets are, its fingers about it: not the open hand of a power)
     let heart = powers.selected == Power::Heart;
     anim.masked = c.heart_fingers.filter(|_| heart && !st.fingers_l.is_empty()).map(|f| (f, 0.0, st.fingers_l.clone()));

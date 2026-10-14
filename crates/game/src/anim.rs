@@ -325,6 +325,9 @@ pub struct Animator {
     /// a clip's pose laid on some joints alone (a hand's grip on its fingers): clip, time,
     /// joints
     pub masked: Option<(ClipId, f32, Arc<Vec<usize>>)>,
+    /// the joints the overlay layer may move (a branch's filter: the arms' left arm), else
+    /// all its clip keys
+    pub overlay_mask: Option<Arc<Vec<bool>>>,
     deltas: Vec<(usize, Quat, Vec3)>,
 }
 
@@ -352,6 +355,7 @@ impl Animator {
             pending: Vec::new(),
             additive: Vec::new(),
             masked: None,
+            overlay_mask: None,
             deltas: Vec::new(),
         }
     }
@@ -510,6 +514,15 @@ impl Animator {
                 self.trans_b.copy_from_slice(&self.trans);
                 self.lib.sample(p.clip, p.t, &mut self.rot_b, &mut self.trans_b);
                 mix(&mut self.rot_a, &mut self.trans_a, &self.rot_b, &self.trans_b, wprev);
+            }
+            // (the overlay's branch filter: the joints outside it keep the base pose)
+            if let (1, Some(mask)) = (li, self.overlay_mask.as_ref()) {
+                for (i, on) in mask.iter().enumerate().take(self.rot_a.len()) {
+                    if !on {
+                        self.rot_a[i] = self.rot[i];
+                        self.trans_a[i] = self.trans[i];
+                    }
+                }
             }
             if weight >= 1.0 {
                 self.rot.copy_from_slice(&self.rot_a);

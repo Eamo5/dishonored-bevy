@@ -244,7 +244,9 @@ fullscreen display, vertical sync and the crosshair.
   lower looking straight up, nothing within 10 degrees of level; the pistol and crossbow 2 and
   3), as roshan's research decoded them. Holding Blink, the left hand comes up
   (`Powers_Cast_Blink_In`, the Mark glowing) and holds (`_Loop`) while the marker shows; let go,
-  the cast (`_Out`) plays.
+  the cast (`_Out`) plays. The left hand's clips (casts, throws, the guns) move the left arm
+  alone, as the original's arm tree filters them (`LeftArmFilter`, from `Collarbone_L_Jnt`);
+  the sword arm keeps its own pose.
 - **Beheadings and severed limbs** (`gore.rs`): a finisher is a beheading now and then
   (`m_HeadChop`, `m_fBeheadRandomChance` 25%: `Sword_Ready_Fatality_Behead_A/B_Master` with the
   victim's `Generic_Fatality_Behead_*_Slave`); the victim's clip cuts at its
