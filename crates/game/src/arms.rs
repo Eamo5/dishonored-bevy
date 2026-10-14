@@ -26,7 +26,7 @@ pub struct ArmsPlugin;
 impl Plugin for ArmsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(GameState::InGame), spawn_arms.after(spawn_view_model))
-            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_effects.after(ArmsAnimSet), (animate_held, animate_sword).after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_effects.after(ArmsAnimSet), (animate_held, animate_sword, show_bolts).after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, (align_arms.in_set(ArmsAlign), arm_pitch).after(AnimPose).before(TransformSystems::Propagate));
     }
 }
@@ -59,6 +59,30 @@ pub struct Muzzle(pub Power);
 /// A held item's own rig (its prop's name): it moves with the hand's clips.
 #[derive(Component)]
 struct HeldRig(&'static str);
+
+/// A bolt on the crossbow's rig: the one loaded, or the next brought in as it reloads.
+#[derive(Component)]
+struct LoadedBolt {
+    reload: bool,
+}
+
+/// The crossbow's bolt shows while it's loaded (not from the shot until the reload brings the
+/// next, nor with none left); the reload's bolt while the reload plays.
+fn show_bolts(arms: Query<&Animator, With<ArmsRoot>>, mut bolts: Query<(&LoadedBolt, &mut Visibility)>, (powers, stats): (Res<Powers>, Res<PlayerStats>)) {
+    let Ok(arms) = arms.single() else { return };
+    let arm = arms.overlay_state().0.map(|c| arms.lib.clip(c).name.as_str()).unwrap_or("");
+    let t = arms.overlay_time().unwrap_or(0.0);
+    let reloading = matches!(arm, "Crossbow_Reload_In" | "Crossbow_RapidReload") || (arm == "Crossbow_Fire_FastReload" && t > 0.25);
+    let shot = matches!(arm, "Crossbow_Fire" | "Crossbow_Spyglass_Fire") || (arm == "Crossbow_Fire_FastReload" && t <= 0.25);
+    let none = powers.selected.ammo(&stats).unwrap_or(1) == 0;
+    for (b, mut v) in &mut bolts {
+        let show = if b.reload { reloading } else { !reloading && !shot && !none };
+        let want = if show { Visibility::Inherited } else { Visibility::Hidden };
+        if *v != want {
+            *v = want;
+        }
+    }
+}
 
 /// An upgrade as it shows on a gun (`DisTweaks_Upgrade.m_pAttachMesh`), and whether that gun is
 /// the one loaded with explosive rounds.
@@ -506,6 +530,29 @@ fn spawn_arms(
                         mat.apply(&mut m);
                         let m = m.id();
                         commands.entity(holder).add_child(m);
+                    }
+                    // the crossbow's bolt of the ammunition it shoots, loaded on its `Bolt_Socket`
+                    // (`m_ArrowSocketName`) and brought in on its `Bolt_Reload_Socket` as it reloads
+                    let bolt = match power {
+                        Power::SleepDart => "bolt_sleep",
+                        Power::IncendiaryBolt => "bolt_flare",
+                        Power::ExplosiveBolt => "bolt_explosive",
+                        _ => "bolt",
+                    };
+                    if let (true, Some(bp)) = (prop == "crossbow", a.props.get(bolt)) {
+                        for (socket, reload) in [("Bolt_Socket", false), ("Bolt_Reload_Socket", true)] {
+                            let Some(s) = rv.skeleton.sockets.iter().find(|s| s.name.eq_ignore_ascii_case(socket)) else { continue };
+                            let Some(bi) = bones.iter().position(|b| b.name.eq_ignore_ascii_case(&s.bone)) else { continue };
+                            let at = Transform::from_translation(Vec3::from(s.translation)).with_rotation(Quat::from_array(s.rotation).normalize());
+                            let part = commands.spawn((at, Visibility::Hidden, RenderLayers::layer(VIEW_LAYER), LoadedBolt { reload })).id();
+                            for (mesh, mat) in &bp.view_parts {
+                                let mut m = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), NotShadowCaster, RenderLayers::layer(VIEW_LAYER)));
+                                mat.apply(&mut m);
+                                let m = m.id();
+                                commands.entity(part).add_child(m);
+                            }
+                            commands.entity(rj[bi]).add_child(part);
+                        }
                     }
                     if let Some(lib) = rv.anims.clone() {
                         let mut anim = Animator::new(lib, &rv.skeleton, rj);

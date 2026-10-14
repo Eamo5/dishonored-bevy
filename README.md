@@ -1562,6 +1562,9 @@ against the install's own data where it carries them, then implemented independe
     (the pistol's hammer falls as it fires and its fast reload plays, `CorvoGun_as`; the
     crossbow plays the hand's shot, reloads and zoomed shot by the same names, `Crossbow_as`,
     and rests loaded or, with no bolts left, empty: `Crossbow_Idle`, `Crossbow_OutOfAmmo_Idle`).
+    The bolt it's loaded with sits on its `Bolt_Socket` (`m_ArrowSocketName`: a bolt, a sleep
+    dart or an incendiary one, as selected), gone from the shot until a reload brings the next
+    in on its `Bolt_Reload_Socket`, and not there with none left.
   - Their upgrades show on them (`DisTweaks_Upgrade.m_pAttachMesh`): the pistol's sights,
     loaders and drums (the cylinder its own, each magazine's drum replacing the last as
     `m_RevertedUpgrades` has it, none with explosive rounds loaded:
