@@ -219,6 +219,8 @@ pub struct Npc {
     pub under_cd: [f32; 2],
     /// until it may taunt again, and how long its taunt holds it
     pub taunt_cd: f32,
+    /// on its way to a body it found, to look it over
+    pub body_check: bool,
     /// its bearing about Corvo while it waits outside the ring of those at him (radians)
     pub flank: Option<f32>,
     pub taunt_hold: f32,
@@ -1631,6 +1633,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         gun_hold: 0.0,
         under_cd: [0.0; 2],
         taunt_cd: 5.0 + rand::random::<f32>() * 10.0,
+        body_check: false,
         flank: None,
         taunt_hold: 0.0,
         search_run: false,
@@ -2672,8 +2675,9 @@ pub(crate) fn npc_perception(
                             npc.awareness = npc.awareness.max(0.6);
                             npc.target = Some(*b);
                             npc.last_seen = Some(*b);
-                            // (a body: it runs to it)
+                            // (a body: it runs to it, and looks it over)
                             npc.search_run = true;
+                            npc.body_check = true;
                             npc.set_mode(Mode::Investigate);
                             break;
                         }
@@ -3052,6 +3056,10 @@ pub(crate) fn npc_brain(
                 let goal = npc.target.or(npc.last_seen).unwrap_or(npc.home);
                 npc.target = Some(goal);
                 if pos.distance(goal) < 1.6 || npc.mode_timer > 14.0 {
+                    // (come to a body it found: it looks it over, `Sword_CorpseCheck`)
+                    if std::mem::take(&mut npc.body_check) && pos.distance(goal) < 1.6 {
+                        npc.gesture(19);
+                    }
                     npc.set_mode(Mode::Search);
                 }
             }
@@ -3610,6 +3618,9 @@ pub(crate) fn npc_brain(
                                     -toward
                                 };
                                 npc.retreat = Some((pos + away * m.step.max(1.0), 0.45));
+                                // (its step's clip: left, right or back)
+                                let right = Vec3::new(-npc.forward().z, 0.0, npc.forward().x);
+                                npc.gesture(if m.kind != "SideStep" { 17 } else if away.dot(right) > 0.0 { 16 } else { 15 });
                                 if std::env::var("DH_MELEE_LOG").is_ok() {
                                     info!("melee: {} dodges ({}) at {d:.1} m", npc.name, m.kind);
                                 }
@@ -4239,6 +4250,11 @@ pub struct NpcClips {
     gun: [Option<ClipId>; 4],
     /// the pistol reloaded after each shot (`Sword_Gun_Reload`: `DisAIPistolState_Reloading`)
     gun_reload: Option<ClipId>,
+    /// a dodge's step (left, right, back: `Sword_SideStep_*`), the alarm's lever pulled
+    /// (`Sword_TriggerAlarm`), a body found looked over (`Sword_CorpseCheck`)
+    dodge: [Vec<ClipId>; 3],
+    trigger_alarm: Vec<ClipId>,
+    corpse_check: Vec<ClipId>,
     /// striking under a table, with the blade and with the pistol
     under: [Option<ClipId>; 2],
     /// its taunts (each cueing its line, `COMBAT_TAUNT_WITH_GESTURE`)
@@ -4385,6 +4401,9 @@ impl NpcClips {
             ],
             gun: [lib.find("Sword_Gun_Draw"), lib.find("Sword_Gun_Idle"), lib.find("Sword_Gun_Fire"), lib.find("Sword_Gun_Undraw")],
             gun_reload: lib.find("Sword_Gun_Reload"),
+            dodge: [lib.all(&["Sword_SideStep_Left"]), lib.all(&["Sword_SideStep_Right"]), lib.all(&["Sword_SideStep_Back"])],
+            trigger_alarm: lib.all(&["Sword_TriggerAlarm"]),
+            corpse_check: lib.all(&["Sword_CorpseCheck"]),
             under: [lib.find("Sword_Attack_UnderTable"), lib.find("Sword_Gun_AttackUnderTable")],
             // (a wolfhound's: its barks, `Attack_IdleBark01`-`04`, each with its own bark)
             taunt: lib.all(&["Sword_TauntA", "Sword_TauntB", "Sword_TauntC", "Attack_IdleBark01", "Attack_IdleBark02", "Attack_IdleBark03", "Attack_IdleBark04"]),
@@ -5199,11 +5218,14 @@ fn npc_select_anim(
                 12 => &clips.taunt,
                 13 => &clips.cough,
                 14 => &clips.check_pockets,
+                15..=17 => &clips.dodge[npc.act.0 as usize - 15],
+                18 => &clips.trigger_alarm,
+                19 => &clips.corpse_check,
                 _ => &clips.push,
             };
             if let Some(c) = pick(pool) {
-                // (its pockets checked where it stands)
-                if npc.act.0 == 14 {
+                // (its pockets checked where it stands; the alarm pulled, a body looked over)
+                if matches!(npc.act.0, 14 | 18 | 19) {
                     npc.stagger = npc.stagger.max(anim.lib.duration(c));
                 }
                 // (the lock's struggle holds until it ends)
@@ -5274,7 +5296,7 @@ fn npc_select_anim(
         st.last_mode = npc.mode;
         st.last_alert = npc.alert;
         let sp = npc.anim_speed;
-        if st.oneshot && !anim.finished() && (sp < 0.6 || npc.stagger > 0.0) {
+        if st.oneshot && !anim.finished() && (sp < 0.6 || npc.stagger > 0.0 || npc.retreat.is_some()) {
             continue;
         }
         st.oneshot = false;

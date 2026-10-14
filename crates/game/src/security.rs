@@ -1039,6 +1039,8 @@ fn alarms(
                             d.fighting_near += dt;
                             if d.fighting_near >= 0.25 {
                                 n.alarm_run = None;
+                                // (its lever pulled: `Sword_TriggerAlarm`)
+                                n.gesture(18);
                                 rung = true;
                             }
                         }

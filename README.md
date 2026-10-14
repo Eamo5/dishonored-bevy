@@ -494,7 +494,7 @@ fullscreen display, vertical sync and the crosshair.
   `Sword_PushBack_*`, with its "personal space" bark);
   his blows coming, they may step aside or back out of reach (`DisTweaks_NPCSideStep` 2.5 m,
   `..BackStep` 3 m, every 12-15 s at most; how readily is read from `m_DodgeLevel`, a tenth
-  a level). A blow (a kick too) throws his arms from the side it came (`Sword_BigHit_Front`,
+  a level), each with its step's clip (`Sword_SideStep_Left`, `_Right`, `_Back`). A blow (a kick too) throws his arms from the side it came (`Sword_BigHit_Front`,
   `_Back`, `_Left`, `_Right`); other harm, as from ahead. A big blow leaves Corvo reeling for `m_fVulnerableTime_BigHit_Dizzy`; his perfect
   parry is a block begun within `m_fTapForPerfectParryWindow` (0.2 s), within his sword's
   `m_fBlockAngle` (50 degrees). When his blow and a guard's land together (their attack
@@ -817,7 +817,8 @@ fullscreen display, vertical sync and the crosshair.
   `Corpses_CarryCorpse_*_Slave` clips in step, drawn with the view model), slower
   (`GroundSpeedCarryingCorpse`) and without sprinting or the sword; [F] puts the body down
   (the original drop clips) and attacking throws it. The level scripts hear of it
-  (`DisSeqEvent_Corpse`: picked up, dropped, discovered by a guard), and an unconscious body
+  (`DisSeqEvent_Corpse`: picked up, dropped, discovered by a guard; the guard who finds it runs
+  to it and looks it over, `Sword_CorpseCheck`, before searching about), and an unconscious body
   that ends up in water drowns (a kill).
 - **Assassinations**: attacking someone unaware of Corvo (from behind, or anyone who hasn't
   noticed him) plays the original paired clips by the side he takes them from — front, back,
@@ -1609,6 +1610,7 @@ against the install's own data where it carries them, then implemented independe
     its flee points go, it cowers there.
 - **The alarm bell.** A guard who has found Corvo, within `m_fNPCGoToAlarmCloseness` of a bell,
   runs to it (the nearest of them; not with Corvo on him) and rings it after `m_fWaitTimeBeforeRing`,
+  pulling its lever (`Sword_TriggerAlarm`, standing for it),
   when the sighting finds it alone (none of its own within `m_fCompanionRange`, 20 m:
   `TweaksBehavior_TriggerAlarm_Default`'s `m_fAlarmChanceUponSighting_Alone` 1, in a group 0) or it
   saw one of its own die (`m_fAlarmChanceUponWitnessDeath` 1); a body it comes upon later, or a
