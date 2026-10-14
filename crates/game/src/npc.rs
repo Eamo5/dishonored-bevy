@@ -196,6 +196,9 @@ pub struct Npc {
     pub progress_pos: Vec3,
     pub anim_phase: f32,
     pub anim_speed: f32,
+    /// how far its walk or run takes it in a loop of the clip, two steps (m: the clip's root
+    /// motion; 0 before it plays one)
+    pub stride: f32,
     pub hit_react: f32,
     pub down_t: f32,
     /// World-time seconds since death; separate from the short fall blend.
@@ -1546,6 +1549,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         sidestep: 0.0,
         progress_pos: pos,
         anim_phase: rand::random::<f32>() * TAU,
+        stride: 0.0,
         anim_speed: 0.0,
         hit_react: 0.0,
         down_t: if corpse { 1.0 } else { 0.0 },
@@ -3835,7 +3839,8 @@ fn npc_move(
         }
         let sp = new_h.length();
         npc.anim_speed += (sp - npc.anim_speed) * (10.0 * dt).min(1.0);
-        let stride = if npc.anim_speed > 3.0 { 2.4 } else { 1.5 };
+        // (a foot down twice a loop of its walk or run, or a man's stride before it plays one)
+        let stride = if npc.stride > 0.5 { npc.stride } else if npc.anim_speed > 3.0 { 2.4 } else { 1.5 };
         let before = npc.anim_phase;
         npc.anim_phase = (npc.anim_phase + npc.anim_speed * dt * TAU / stride).rem_euclid(TAU);
         // a foot down every half cycle (near the player only)
@@ -5076,6 +5081,12 @@ fn npc_select_anim(
             if let Some(c) = c {
                 let natural = lib.root_speed(c).max(0.3);
                 anim.play(c, true, sign * (sp / natural).clamp(0.5, 1.8), 0.25);
+                let stride = lib.root_speed(c) * lib.clip(c).duration;
+                if (stride - npc.stride).abs() > 0.01 && std::env::var("DH_LOCO_LOG").is_ok() {
+                    let k = lib.clip(c);
+                    info!("loco: {} strides {stride:.2} m a loop ({} {:.2} s, {:?})", npc.name, k.name, k.duration, k.sounds);
+                }
+                npc.stride = stride;
             }
         }
     }

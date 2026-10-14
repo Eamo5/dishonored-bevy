@@ -1249,6 +1249,9 @@ fullscreen display, vertical sync and the crosshair.
 - **Tallboys' steps**: a tallboy's stilt coming down is the contact system's `Footfall_Tallboy`, not a
   guard's footstep: its thump (`FS_TBoy_Base`, `FS_TBoy_Base_Wet` in water) and its dust
   (`Vfx_PhysMat.FootSteps.fsteps_tallboy`).
+- **Characters' steps in time with their feet**: a character's footfalls come twice a loop of the
+  walk or run it plays, its stride the clip's root motion (a guard's run 5.4 m a loop, a tallboy's
+  walk 4.3 m, its stilt sounds at 0.69 and 1.57 s of 2.03), not a man's stride for every gait.
 - **Tallboys** carry their tanks and shields on their sockets (`m_pAttachmentsTweaks`): the
   breakable parts wear down, break at once to the blows their tweak names (a bullet or bolt in
   a tank) and shrug off others (Wind Blast); a tank bursts with its blast and kills its tallboy. Their
