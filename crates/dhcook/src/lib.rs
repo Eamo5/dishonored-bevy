@@ -3397,6 +3397,8 @@ impl<'a> Cooker<'a> {
             "NPCRiposte" => "Riposte",
             "NPCPush" => "Push",
             "NPCAmbush" => "Ambush",
+            "NPCWhiskeyFire" => "WhiskeyFire",
+            "NPCThrowWhiskey" => "ThrowWhiskey",
             _ => return None,
         })
     }
@@ -3441,9 +3443,10 @@ impl<'a> Cooker<'a> {
     }
 
     /// The attack patterns a character's combat behaviour draws one of (its brain's
-    /// `m_BehaviorTweak`, at normal difficulty, the combat one's `m_AttackPatterns`): each
-    /// pattern's say over its blade's moves (`m_ItemContextOverrides`).
-    fn attack_patterns(&mut self, pawn: &Obj) -> Vec<Vec<PatternOverride>> {
+    /// `m_BehaviorTweak`, at normal difficulty, the combat one's `m_AttackPatterns`, or
+    /// `m_OuterSkirmishAttackPatterns`): each pattern's say over its blade's moves
+    /// (`m_ItemContextOverrides`).
+    fn attack_patterns(&mut self, pawn: &Obj, list: &str) -> Vec<Vec<PatternOverride>> {
         let Some(brain) = self.tweak_obj(pawn, "m_pBrainTweak") else { return Vec::new() };
         let Some((pkg, Value::Array { count, offset, size })) = self.tweak_prop(&brain, "m_BehaviorTweak", 0, 0) else { return Vec::new() };
         let behaviours: Vec<Obj> = parse_struct_array(&pkg, offset, size, count)
@@ -3456,7 +3459,7 @@ impl<'a> Cooker<'a> {
             .filter(|b| b.class().contains("Combat"))
             .collect();
         for b in behaviours {
-            let patterns = self.tweak_objs(&b, "m_AttackPatterns");
+            let patterns = self.tweak_objs(&b, list);
             if patterns.is_empty() {
                 continue;
             }
@@ -3616,6 +3619,41 @@ impl<'a> Cooker<'a> {
         out
     }
 
+    /// A thug's whiskey bottle: its fire breath and the bottle it throws (its NPC contexts
+    /// `DisTweaks_NPCWhiskeyFire`, `DisTweaks_NPCThrowWhiskey` and the thrown bottle's tweaks).
+    fn whiskey(&mut self, w: &Obj) -> Option<NpcWhiskey> {
+        let ctxs = self.npc_contexts(w);
+        let fire = ctxs.iter().find(|c| c.class() == "DisTweaks_NPCWhiskeyFire")?.clone();
+        let throw = ctxs.iter().find(|c| c.class() == "DisTweaks_NPCThrowWhiskey").cloned();
+        let f = |s: &mut Self, o: &Obj, n: &str, d: f32| s.tweak_float(o, n, 0).unwrap_or(d);
+        let mut out = NpcWhiskey {
+            socket: match self.tweak_prop(&fire, "m_DamageSocket", 0, 0) {
+                Some((_, Value::Name(n))) => n,
+                _ => "Puke_Spit".into(),
+            },
+            fire_range: f(self, &fire, "m_fDamageRange", 500.0) * UNIT,
+            fire_radius: f(self, &fire, "m_fDamageRadius", 45.0) * UNIT,
+            fire_damage: f(self, &fire, "m_fDamage", 5.0),
+            blind: f(self, &fire, "m_fBlindEffectTime", 2.0),
+            throw_speed: 25.0,
+            cooldown_unreachable: [2.0, 3.0],
+            blast: TrapBlast { radius: 2.5, full: 0.5, player_radius: 2.0, player_full: 0.25, damage: [30.0; 4], effect: None, sound: String::new() },
+        };
+        if let Some(t) = throw {
+            out.throw_speed = f(self, &t, "m_fThrowSpeed", 2500.0) * UNIT;
+            if let Some((_, Value::Struct(_, r))) = self.tweak_prop(&t, "m_ContextCooldownWhenUnreachable", 0, 0) {
+                let p = Props(r);
+                out.cooldown_unreachable = [p.float("m_fMinValue").unwrap_or(2.0), p.float("m_fMaxValue").unwrap_or(3.0)];
+            }
+            if let Some(proj) = self.tweak_obj(&t, "m_pProjectileType") {
+                if let Some(x) = self.tweak_obj(&proj, "m_pWhiskeyBottleTweaks").and_then(|b| self.tweak_obj(&b, "m_pExplosionTweaks")) {
+                    out.blast = self.blast(&x);
+                }
+            }
+        }
+        Some(out)
+    }
+
     /// What a character can take and deal: its attributes (the Normal slot's attribute
     /// tweak), its weapons and ammunition, its combat tweak's hit reactions.
     fn npc_stats(&mut self, pawn: &Obj) -> NpcStats {
@@ -3652,7 +3690,13 @@ impl<'a> Cooker<'a> {
                 }
             }
         }
+        // (a thug's bottle's moves, after its blade's)
+        let mut bottle_moves = Vec::new();
         for w in self.tweak_objs(pawn, "m_ContentInventoryLoadout") {
+            if w.class() == "DisTweaks_WepWhiskeyBottle" && st.whiskey.is_none() {
+                st.whiskey = self.whiskey(&w);
+                bottle_moves = self.melee_moves(&w);
+            }
             let mut wep = NpcWeapon { name: w.name().to_string(), class: w.class().to_string(), projectile_mult: 1.0, ..Default::default() };
             let item = match self.tweak_prop(&w, "m_pAttributeTweak", 1, 0) {
                 Some((pkg, Value::Object(o))) if o != 0 => self.assets.resolve(&pkg, o),
@@ -3687,7 +3731,8 @@ impl<'a> Cooker<'a> {
             }
             if st.melee.is_empty() && matches!(w.class().as_str(), "DisTweaks_WepSword" | "DisTweaks_WepSwordOfAssassin" | "DisTweaks_Item_WolfhoundBite") {
                 st.melee = self.melee_moves(&w);
-                st.attack_patterns = self.attack_patterns(pawn);
+                st.attack_patterns = self.attack_patterns(pawn, "m_AttackPatterns");
+                st.outer_patterns = self.attack_patterns(pawn, "m_OuterSkirmishAttackPatterns");
             }
             st.weapons.push(wep);
         }
@@ -3697,6 +3742,7 @@ impl<'a> Cooker<'a> {
                 st.ammo.push((kind, e.int("m_AmmoCount").unwrap_or(0)));
             }
         }
+        st.melee.extend(bottle_moves);
         if let Some((_, Value::Str(t))) = self.tweak_prop(pawn, "m_AsleepCrosshairText", 0, 0) {
             st.asleep_text = t;
         }
@@ -5765,7 +5811,8 @@ impl<'a> Cooker<'a> {
                             m.zone = Some((t, d));
                         }
                     }
-                    "DishonoredNotify_FireProjectile" => m.fires.push(t),
+                    // (and a thug's fire breath striking: `DisNotify_WhiskeyFireDamage`)
+                    "DishonoredNotify_FireProjectile" | "DisNotify_WhiskeyFireDamage" => m.fires.push(t),
                     "DishonoredNotify_StartPlague" => m.plague.push(t),
                     "AnimNotify_PlayParticleEffect" => {
                         let Ok(np) = upk::read_object(&seq.pkg, no).map(|o| o.props) else { continue };
@@ -6569,6 +6616,12 @@ impl<'a> Cooker<'a> {
             ("rat_gibs", "NPC_Body_Eaten.FX.ps_rat_gibs_body"),
             // (a tallboy's stilt coming down: `Footfall_Tallboy` x `Environment`)
             ("tallboy_step", "Vfx_PhysMat.FootSteps.fsteps_tallboy"),
+            // (a thug's whiskey: its thrown bottle's flame and burst, `Twk_Proj_WhiskeyBottle`'s
+            // `m_pTrailEffect` and its explosion's `m_pExplosionEffect`; its fire breath's smoke
+            // where it strikes, `DisTweaks_NPCWhiskeyFire.m_pSmokeEffect`)
+            ("whiskey_trail", "Vfx_GamePlay.SpittingFire.ps_bottle_fly"),
+            ("whiskey_burst", "Vfx_GamePlay.SpittingFire.ps_bottle_explosion"),
+            ("whiskey_smoke", "Vfx_GamePlay.SpittingFire.SpittingFire_Hit"),
             // (Wind Blast's gust by its level, and under water: `DisTweaks_WindBlast
             // .m_EffectTemplate`, `m_UnderwaterEffectTemplate`; where it meets the world:
             // `Windblast_Wall` / `_Floor` / `_Ceil` x `Environment`, and under Corvo,
@@ -6697,6 +6750,8 @@ impl<'a> Cooker<'a> {
             ("elite_gun", "Wpn_EliteGun.EliteGun"),
             ("city_sword", "Wpn_CitySword.Wpn_CitySword"),
             ("thug_sword", "ThugSword.ThugSword"),
+            // (a thug's whiskey bottle: `Twk_Inv_WhiskeyBottleThug`'s `m_pEquippedMesh`)
+            ("thug_bottle", "Wpn_ThugBottle.Thug_Bottle"),
             ("overseer_sword", "OverseerSword.OverseerSword"),
             ("assassin_sword", "AssassinSword.AssassinSword"),
             ("bolt", "Crossbows.bolt_01"),

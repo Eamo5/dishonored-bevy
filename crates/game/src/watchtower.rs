@@ -805,7 +805,7 @@ fn fly_arrows(
             Some(at) => {
                 if let Some(b) = level.scene.security.get(a.tower).and_then(|d| d.blast.as_ref()) {
                     let damage = b.damage[settings.difficulty.min(3) as usize];
-                    blasts.write(crate::gadgets::Explosion { at, radius: b.radius, full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]), kind: crate::gameplay::HitKind::Explosion });
+                    blasts.write(crate::gadgets::Explosion { at, radius: b.radius, full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]), kind: crate::gameplay::HitKind::Explosion, silent: false });
                 }
                 commands.entity(e).despawn();
             }

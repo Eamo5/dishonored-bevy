@@ -506,6 +506,20 @@ fullscreen display, vertical sync and the crosshair.
   a swordsman may lie in wait for him where it stands (`DisTweaks_NPCAmbush`; thugs crouch
   in `Sword_Ambush_In`/`_Loop`), springing at him with a lunging blow (`_Out`) as he comes
   within the context's 2.5 m, or giving it up after 8 s (`_Cancel`). Script `ambush [NAME]`.
+- **Bottle Street thugs' whiskey** (`whiskey.rs`, `npc.rs`): a thug carries its whiskey bottle
+  on its hip (`Twk_Inv_WhiskeyBottleThug`: `Wpn_ThugBottle` on `HolsterBottle`), drawn into its
+  left hand for two moves of its own among its blade's. Its fire breath
+  (`DisTweaks_NPCWhiskeyFire`, within 4 m, every 1-2 s): a swig (`Sword_Bottle_Fire_In`), the
+  flame spat through its lighter from its `Puke_Spit` socket (`Sword_Bottle_Fire_Loop` with its
+  flame and `Snd_Civ_Thug_SpitFire`), striking at the clip's `DisNotify_WhiskeyFireDamage` along
+  its line, 5 m long and 45 uu about it (`m_fDamage` 5, no blocking it), its smoke where it
+  strikes (`SpittingFire_Hit`), and the end (`_Out`). Its bottle thrown
+  (`DisTweaks_NPCThrowWhiskey`, from 6 to 20 m, every 10 s, 2-3 s with Corvo out of reach):
+  `Sword_ThrowBottle`, let go at the clip's `DishonoredNotify_FireProjectile`, at
+  `m_fThrowSpeed` 2500 uu/s, tumbling and trailing its flame (`ps_bottle_fly`); it bursts where
+  it first strikes (`DisTweaks_WhiskeyBottle.m_pExplosionTweaks`: 30 within 2.5 m, Corvo within
+  2 m, `ps_bottle_explosion`, `Imp_Glass_Bottle_Fire_Generic`). The fire setting people
+  alight (`m_bPutToFire`, `m_ImmolationParams`) is left out.
 - **Stealth as the original measures it** (`stealth.rs`): each character sees with its pawn's
   `DisTweaks_Vision` (a focused cone, 45 degrees out to 35 m, and a peripheral one, 160 degrees
   out to 17 m, each looking far less up than down: rooftops hide) and pays attention with its

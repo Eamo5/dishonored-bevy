@@ -298,7 +298,7 @@ fn prop_events(mut taken: ResMut<PropsTaken>, mut blasts: ResMut<TankBlasts>, mu
 fn burst_tanks(mut q: ResMut<TankBlasts>, settings: Res<crate::settings::Settings>, mut blasts: MessageWriter<crate::gadgets::Explosion>) {
     for (at, b) in q.0.drain(..) {
         let damage = b.damage[settings.difficulty.min(3) as usize];
-        blasts.write(crate::gadgets::Explosion { at, radius: b.radius.max(1.0), full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]), kind: HitKind::Explosion });
+        blasts.write(crate::gadgets::Explosion { at, radius: b.radius.max(1.0), full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]), kind: HitKind::Explosion, silent: false });
     }
 }
 

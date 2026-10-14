@@ -699,7 +699,7 @@ fn run_script(
             let d = cmd.get(1).and_then(|v| v.parse::<f32>().ok()).unwrap_or(5.0);
             let fwd = Quat::from_euler(EulerRot::YXZ, p.yaw, p.pitch, 0.0) * Vec3::NEG_Z;
             let at = t.translation + Vec3::Y * 0.3 + fwd * d;
-            explosions.write(crate::gadgets::Explosion { at, radius: 6.0, full: 2.0, damage: 0.0, effect: "grenade", player: None, kind: crate::gameplay::HitKind::Explosion });
+            explosions.write(crate::gadgets::Explosion { at, radius: 6.0, full: 2.0, damage: 0.0, effect: "grenade", player: None, kind: crate::gameplay::HitKind::Explosion, silent: false });
             info!("script: explode at {at:.1}");
         }
         "grenade" => {
@@ -720,6 +720,23 @@ fn run_script(
                     blast: dhcook::format::TrapBlast { radius: 3.5, full: 3.0, player_radius: 6.0, player_full: 1.5, damage: [50.0; 4], ..default() },
                 });
                 info!("script: enemy grenade at {from:.2}, fuse {fuse}");
+            });
+        }
+        "bottle" => {
+            // (tests) bottle: the nearest thug with a whiskey bottle throws one at Corvo
+            let at = t.translation;
+            commands.queue(move |w: &mut World| {
+                let mut npcs = w.query::<(Entity, &Npc, &Transform)>();
+                let thug = npcs
+                    .iter(w)
+                    .filter(|(_, n, _)| !n.is_down() && n.arms.whiskey.is_some())
+                    .min_by(|a, b| a.2.translation.distance_squared(at).total_cmp(&b.2.translation.distance_squared(at)))
+                    .map(|(e, n, t)| (e, t.translation, n.arms.whiskey.clone().unwrap_or_default()));
+                let Some((owner, pos, whiskey)) = thug else { return };
+                let from = pos + Vec3::Y * 0.7 + (at - pos).with_y(0.0).normalize_or_zero() * 0.4;
+                let vel = crate::gadgets::aim_throw(from, at - Vec3::Y * 0.8, whiskey.throw_speed);
+                w.write_message(crate::whiskey::NpcBottle { owner, from, vel, blast: whiskey.blast });
+                info!("script: a thug's bottle from {from:.2}");
             });
         }
         "wallnpc" => {

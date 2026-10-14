@@ -362,7 +362,7 @@ mod cover_tests {
             CollisionGroups::new(GROUP_WORLD, Group::ALL))).id();
         let blast = |app: &mut App| {
             app.world_mut().write_message(Explosion { at: Vec3::ZERO, radius: 3.0, full: 3.0, damage: 100.0,
-                effect: "", player: None, kind: HitKind::Explosion });
+                effect: "", player: None, kind: HitKind::Explosion, silent: false });
             app.update();
         };
         app.update();

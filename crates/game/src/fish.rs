@@ -287,7 +287,7 @@ mod cover_tests {
             let wall = app.world_mut().spawn((Collider::cuboid(0.01, 1.0, 1.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(group, Group::ALL))).id();
             let blast = |app: &mut App| {
                 app.world_mut().write_message(Explosion { at: Vec3::ZERO, radius: 3.0, full: 3.0, damage: 100.0,
-                    effect: "", player: None, kind: crate::gameplay::HitKind::Explosion });
+                    effect: "", player: None, kind: crate::gameplay::HitKind::Explosion, silent: false });
                 app.update();
             };
             app.update();

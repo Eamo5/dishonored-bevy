@@ -497,7 +497,7 @@ fn fly_darts(
         match &def.blast {
             Some(b) => {
                 let damage = b.damage[settings.difficulty.min(3) as usize];
-                blasts.write(crate::gadgets::Explosion { at, radius: b.radius, full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]), kind: crate::gameplay::HitKind::Explosion });
+                blasts.write(crate::gadgets::Explosion { at, radius: b.radius, full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]), kind: crate::gameplay::HitKind::Explosion, silent: false });
             }
             None => {
                 // a bolt: the original's damage

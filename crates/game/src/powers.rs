@@ -1445,7 +1445,7 @@ fn use_power(
                 }
                 if explosive {
                     // `Twk_Proj_Bullet_Explosive`: 500 uu reach, 200 uu full, 50 damage
-                    blast.write(crate::gadgets::Explosion { at: at - dir * 0.2, radius: 5.0, full: 2.0, damage: 50.0, effect: "explosive_bullet", player: None, kind: HitKind::ExplosiveBullet });
+                    blast.write(crate::gadgets::Explosion { at: at - dir * 0.2, radius: 5.0, full: 2.0, damage: 50.0, effect: "explosive_bullet", player: None, kind: HitKind::ExplosiveBullet, silent: false });
                 }
                 if let Ok((_, nt, n)) = npcs.get(hit) {
                     // the shot's damage by range, to the head (a kill), on the unaware
@@ -1789,6 +1789,7 @@ fn update_projectiles(
                     effect: "bolt_explosion",
                     player: player_reach,
                     kind: HitKind::ExplosiveBolt,
+                    silent: false,
                 });
             }
             commands.entity(e).despawn();

@@ -218,6 +218,8 @@ pub struct Explosion {
     pub player: Option<[f32; 2]>,
     /// Damage attribution survives the projectile, including a returned enemy grenade.
     pub kind: HitKind,
+    /// its maker plays its own sound (a whiskey bottle's `m_pSoundEvent`), not its kind's
+    pub silent: bool,
 }
 
 /// A grenade a character throws (an overseer's): from where, how fast, its fuse (and the most
@@ -726,7 +728,7 @@ fn fly_grenades(
             if g.kind == HitKind::Chokedust {
                 clouds.write(ChokeDust { at, radius: b[0], secs: b[4] });
             } else {
-                blasts.write(Explosion { at, radius: b[0], full: b[1], damage: b[4], effect: "grenade", player: Some([b[2], b[3]]), kind: g.kind });
+                blasts.write(Explosion { at, radius: b[0], full: b[1], damage: b[4], effect: "grenade", player: Some([b[2], b[3]]), kind: g.kind, silent: false });
                 // (stuck to someone: `m_fAttachedDamage` 75 more to them)
                 if let Some((who, _)) = g.stuck.filter(|(w, _)| npcs.get(*w).is_ok()) {
                     hits.write(NpcHit { npc: who, damage: 75.0, kind: g.kind, from: t.translation });
@@ -903,7 +905,9 @@ fn explode(
     };
     for b in blasts.read() {
         // (an explosive bolt's: `DLC06_DaudArrowExplosion.m_pSoundEvent`)
-        sfx.write(PostEvent::named(if b.kind == HitKind::ExplosiveBolt { "Snd_AI_TBoy_Arrow_Fire_Expl" } else { "Snd_Grenade_Explosion" }, Some(b.at)));
+        if !b.silent {
+            sfx.write(PostEvent::named(if b.kind == HitKind::ExplosiveBolt { "Snd_AI_TBoy_Arrow_Fire_Expl" } else { "Snd_Grenade_Explosion" }, Some(b.at)));
+        }
         rats.write(crate::swarm::KillRats { at: b.at, radius: b.full.max(2.0), by_player: !matches!(b.kind, HitKind::EnemyExplosion | HitKind::ByOthers), source: b.at });
         fx.write(SpawnEffect::at(b.effect, b.at));
         noise.write(Noise { pos: b.at, radius: 25.0, kind: NoiseKind::Threatening });

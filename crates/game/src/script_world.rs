@@ -1135,7 +1135,7 @@ fn script_blasts(
         let Some(o) = g.ops.get(op as usize) else { continue };
         let f = |k: &str| if let Some(KVal::Float(v)) = o.props.get(k) { *v } else { 0.0 };
         let radius = f("blast_radius").max(1.0);
-        blasts.write(crate::gadgets::Explosion { at, radius, full: f("blast_full"), damage: f("blast_damage"), effect: "", player: None, kind: crate::gameplay::HitKind::Explosion });
+        blasts.write(crate::gadgets::Explosion { at, radius, full: f("blast_full"), damage: f("blast_damage"), effect: "", player: None, kind: crate::gameplay::HitKind::Explosion, silent: false });
         if let Some(KVal::Int(e)) = o.props.get("blast_effect") {
             fx.write(crate::particles::SpawnEffect { system: Some(*e as u32), ..crate::particles::SpawnEffect::at("", at) });
         }

@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 148;
+pub const SCENE_VERSION: u32 = 149;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -889,7 +889,8 @@ pub struct ClipMarks {
     #[serde(default)]
     pub hooks: Vec<(f32, String)>,
     /// every blow's zone (`DishonoredNotify_AttackZone`: start, length) and every shot it fires
-    /// (`DishonoredNotify_FireProjectile`), in order
+    /// (`DishonoredNotify_FireProjectile`; a thug's fire breath, `DisNotify_WhiskeyFireDamage`),
+    /// in order
     #[serde(default)]
     pub zones: Vec<(f32, f32)>,
     #[serde(default)]
@@ -1091,6 +1092,14 @@ pub struct NpcStats {
     /// listed again weighing more): what each says of its blade's moves
     #[serde(default)]
     pub attack_patterns: Vec<Vec<PatternOverride>>,
+    /// and those it draws one of while it waits outside the ring of those at Corvo
+    /// (`m_OuterSkirmishAttackPatterns`)
+    #[serde(default)]
+    pub outer_patterns: Vec<Vec<PatternOverride>>,
+    /// a thug's whiskey bottle: its fire breath and the bottle it throws (its moves
+    /// `WhiskeyFire` and `ThrowWhiskey` among the blade's)
+    #[serde(default)]
+    pub whiskey: Option<NpcWhiskey>,
     /// a music box's tunes (`DisTweaks_WepMusicBox`'s `DisTweaks_NPCTune_Combat` and
     /// `DisTweaks_NPCTune_Protection`)
     #[serde(default)]
@@ -1150,7 +1159,8 @@ pub struct FireContext {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct MeleeMove {
     /// `Short`, `StepBack` (a blow stepping back from someone too close), `Medium`, `Long`,
-    /// `Bash`, `Jump` (a charge), the turning blows at someone to
+    /// `Bash`, `Jump` (a charge), a thug's `WhiskeyFire` and `ThrowWhiskey` (its bottle's,
+    /// `NpcWhiskey`), the turning blows at someone to
     /// its side or behind (`Left90`, `Right90`, `Left180`, `Right180`: `angle` about that
     /// side); or a dodge, `SideStep`, `BackStep`; a counter after its parry, `Riposte`; a shove
     /// at someone in its way, `Push`; lying in wait round a corner, `Ambush`
@@ -1166,6 +1176,26 @@ pub struct MeleeMove {
     /// a dodge's step (m: `m_fSideStepDistance`, `m_fBackStepDistance`)
     #[serde(default)]
     pub step: f32,
+}
+
+/// A thug's whiskey bottle (`DisTweaks_WepWhiskeyBottle`, on its `HolsterBottle` socket, drawn
+/// into `LeftHandWpn`). Its fire breath (`DisTweaks_NPCWhiskeyFire`): a swig spat through a flame
+/// from `m_DamageSocket`, as far as `m_fDamageRange` (m) within `m_fDamageRadius` (m) of its
+/// line, dealing `m_fDamage` and blinding Corvo for `m_fBlindEffectTime` (s). The bottle it
+/// throws (`DisTweaks_NPCThrowWhiskey`): at `m_fThrowSpeed` (m/s), sooner again with Corvo out
+/// of reach (`m_ContextCooldownWhenUnreachable`), bursting where it lands
+/// (`DisTweaks_WhiskeyBottle.m_pExplosionTweaks`). (Their effects are the scene's, by name:
+/// `whiskey_smoke`, `whiskey_trail`, `whiskey_burst`.)
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct NpcWhiskey {
+    pub socket: String,
+    pub fire_range: f32,
+    pub fire_radius: f32,
+    pub fire_damage: f32,
+    pub blind: f32,
+    pub throw_speed: f32,
+    pub cooldown_unreachable: [f32; 2],
+    pub blast: TrapBlast,
 }
 
 /// What an AI attack pattern says of one of its character's blade moves

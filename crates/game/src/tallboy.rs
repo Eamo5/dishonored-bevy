@@ -149,7 +149,7 @@ fn fly(
         match hit {
             Some(at) => {
                 info!("tallboy arrow bursts at {at:.2}{}", pp.map(|(p, _)| format!(", {:.1} m from Corvo", p.distance(at))).unwrap_or_default());
-                blasts.write(crate::gadgets::Explosion { at: at - dir * 0.1, radius: BLAST.2, full: BLAST.1, damage: BLAST.0, effect: "grenade", player: Some([BLAST.2, BLAST.1]), kind: HitKind::EnemyExplosion });
+                blasts.write(crate::gadgets::Explosion { at: at - dir * 0.1, radius: BLAST.2, full: BLAST.1, damage: BLAST.0, effect: "grenade", player: Some([BLAST.2, BLAST.1]), kind: HitKind::EnemyExplosion, silent: false });
                 commands.entity(e).despawn();
             }
             None => {
