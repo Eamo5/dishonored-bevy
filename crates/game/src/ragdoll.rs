@@ -262,8 +262,11 @@ fn start_ragdolls(
     let dt = time.delta_secs();
     for (e, mut npc, rig, mut limp, mut t, anim, st, (ashes, consumed)) in &mut npcs {
         let Some(def) = ragdoll_of(&level, &npc).filter(|_| !ashes && !consumed) else {
-            // (burnt to ash, eaten: never limp)
+            // (burnt to ash, eaten: never limp; knocked down without bodies, still standing)
             commands.entity(e).try_remove::<GoLimp>();
+            if std::mem::take(&mut npc.floored) {
+                commands.entity(e).try_remove::<ColliderDisabled>();
+            }
             if let Some(mut st) = st {
                 st.ragdoll = false;
             }
@@ -277,6 +280,9 @@ fn start_ragdolls(
         }
         commands.entity(e).try_remove::<GoLimp>();
         if bodies.len() < 2 {
+            if std::mem::take(&mut npc.floored) {
+                commands.entity(e).try_remove::<ColliderDisabled>();
+            }
             continue;
         }
         let parts = spawn_parts(&mut commands, e, def, rig, bodies, limp.vel, limp.clear_from, ctx.as_ref(), &limp.moved, dt);
@@ -385,7 +391,7 @@ fn end_ragdolls(
         }
     }
     for (e, npc, rd, scripted, ashes, consumed) in &npcs {
-        if !scripted && npc.is_down() && !ashes && !consumed {
+        if !scripted && (npc.is_down() || npc.floored) && !ashes && !consumed {
             continue;
         }
         for &(p, _) in &rd.parts {
@@ -447,7 +453,7 @@ fn pose_ragdolls(
     level: Option<Res<LevelInfo>>,
     waters: Option<Res<crate::swim::Waters>>,
     (mut stats, mut msgs): (ResMut<crate::gameplay::PlayerStats>, ResMut<crate::gameplay::HudMessages>),
-    mut npcs: Query<(Entity, &mut Npc, &mut Transform, &NpcRig, &Children, &mut Ragdoll), Without<ScriptedAnim>>,
+    mut npcs: Query<(Entity, &mut Npc, &mut Transform, &NpcRig, &Children, &mut Ragdoll, Option<&Animator>), Without<ScriptedAnim>>,
     parts: Query<(&Transform, &Velocity), (With<RagdollPart>, Without<Npc>)>,
     visuals: Query<&Transform, (With<NpcVisual>, Without<Npc>, Without<RagdollPart>)>,
     mut joints: Query<&mut Transform, (Without<Npc>, Without<RagdollPart>, Without<NpcVisual>)>,
@@ -456,7 +462,7 @@ fn pose_ragdolls(
     let dt = time.delta_secs().min(0.05) * tc.world_scale().clamp(0.0, 1.0);
     let kill_y = level.as_ref().map(|l| l.scene.kill_y).unwrap_or(-200.0);
     let mut world: Vec<Option<Transform>> = Vec::new();
-    for (_, mut npc, mut t, rig, children, mut rd) in &mut npcs {
+    for (e, mut npc, mut t, rig, children, mut rd, anim) in &mut npcs {
         // the body bones' world poses
         world.clear();
         world.resize(rig.len(), None);
@@ -498,7 +504,41 @@ fn pose_ragdolls(
                 }
             }
             let lost = hips.is_some_and(|h| h.y < kill_y || !h.is_finite());
-            if rd.still > 0.8 || rd.t > 8.0 || lost {
+            // knocked off its feet and lying still: up again from where it lies (blown out of the
+            // world, dead)
+            if npc.floored && !npc.is_down() && lost {
+                npc.floored = false;
+                npc.set_mode(Mode::Dead);
+                stats.killed(&npc.pawn, !npc.hostile());
+            } else if npc.floored && !npc.is_down() && (rd.still > 0.6 || rd.t > 6.0) {
+                if let Some(h) = hips {
+                    // on its back or its front: which way its chest faces (its bone's bind-pose
+                    // forward, the model's +X, turned as it lies); its get-up clips start with
+                    // its head behind it, so it faces away from its head
+                    let at = |names: &[&str]| names.iter().find_map(|n| rig.index(n).and_then(|i| world.get(i).copied().flatten().map(|w| (i, w))));
+                    let chest = at(&["spine_3_jnt", "spine_2_jnt", "Torso_jnt", "spine_1_jnt"]);
+                    let top = at(&["head_jnt", "neck_jnt", "spine_3_jnt", "spine_2_jnt"]);
+                    let back = match (chest, anim) {
+                        (Some((i, w)), Some(a)) => (w.rotation * a.bind_model(i).rotation.inverse() * Vec3::X).y > 0.0,
+                        _ => true,
+                    };
+                    let head = top.map(|(_, w)| (w.translation - h).with_y(0.0)).filter(|d| d.length() > 0.05).unwrap_or(t.rotation * Vec3::Z);
+                    npc.yaw = head.x.atan2(head.z);
+                    t.rotation = Quat::from_rotation_y(npc.yaw);
+                    t.translation = Vec3::new(h.x, h.y - 0.15 + crate::npc::NPC_CENTER, h.z);
+                    npc.velocity = Vec3::ZERO;
+                    npc.floored = false;
+                    npc.rise = Some(back);
+                    for &(p, _) in &rd.parts {
+                        commands.entity(p).try_despawn();
+                    }
+                    rd.parts.clear();
+                    commands.entity(e).try_remove::<Ragdoll>();
+                    if log() {
+                        info!("ragdoll: {} gets up from its {} after {:.1}s at {:.2}", npc.name, if back { "back" } else { "front" }, rd.t, t.translation);
+                    }
+                }
+            } else if rd.still > 0.8 || rd.t > 8.0 || lost {
                 // lying still: the bones left where they lay
                 let inv = t.compute_affine().inverse();
                 let rest: Vec<(usize, Transform)> = rd

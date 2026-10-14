@@ -258,7 +258,7 @@ fn special_moves(
     if let Some((_, npc, nt)) = nearest_target(eye, fwd, 1.7, 0.6, npcs.iter()).and_then(|(e, _)| npcs.get(e).ok()) {
         let behind = npc.forward().dot(to_player(nt)) < 0.0;
         let fighting = npc.mode == Mode::Combat && npc.sees_player;
-        sp.choke = !npc.is_down() && npc.kind != crate::npc::Kind::Story && if fighting { npc.stagger > 0.0 } else { behind || npc.alert == Alert::Unaware };
+        sp.choke = !npc.is_down() && !npc.floored && npc.kind != crate::npc::Kind::Story && if fighting { npc.stagger > 0.0 } else { behind || npc.alert == Alert::Unaware };
     }
 }
 
@@ -1091,7 +1091,7 @@ fn chokehold(
     let to_player = (pt.translation - nt.translation).with_y(0.0).normalize_or_zero();
     let behind = npc.forward().dot(to_player) < 0.0;
     let fighting = npc.mode == Mode::Combat && npc.sees_player;
-    if npc.is_down() || npc.kind == crate::npc::Kind::Story || (fighting && npc.stagger <= 0.0) || (!behind && !fighting && npc.alert != crate::npc::Alert::Unaware) {
+    if npc.is_down() || npc.floored || npc.kind == crate::npc::Kind::Story || (fighting && npc.stagger <= 0.0) || (!behind && !fighting && npc.alert != crate::npc::Alert::Unaware) {
         return;
     }
     npc.mode = Mode::Choked;

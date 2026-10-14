@@ -250,7 +250,7 @@ pub fn find_target<'a>(
     let people = npcs.filter_map(|(e, t, npc)| {
         // (the scripts may allow a story character, or forbid anyone)
         let ov = overrides.0.get(&npc.spawner);
-        if npc.is_down() || ov.is_some_and(|o| o.disallow) || (npc.kind == Kind::Story && ov.is_none()) {
+        if npc.is_down() || npc.floored || ov.is_some_and(|o| o.disallow) || (npc.kind == Kind::Story && ov.is_none()) {
             return None;
         }
         let animal = npc.kind == Kind::Creature;

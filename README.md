@@ -1564,6 +1564,12 @@ against the install's own data where it carries them, then implemented independe
   slammed into a wall. Doors take the same factor.
   - It starts at the cast clip's `DisNotify_WindBlast`, 0.27 s in. It gathers its targets once, then
     its front (`m_Speed`, 50 m/s) reaches each in turn.
+  - Pushed at 6 m/s or more (our reading: the pawn's momentum limit is native), a living character
+    is knocked off its feet. It goes limp and flies, out of everyone's way, and can't be choked or
+    possessed while it lies there. Once still, it gets up from where it lies: from its back
+    (`Generic_RagdollToBack`) or its front (`_ToFront`), by which way its chest faces, turned so
+    the clip's lying body lies where its own did, standing for it. Pushed less, it reels back
+    (`Sword_HitWindblast`). Blown out of the world, it dies.
   - Loose props in the cone are blown about too, the heavy ones less.
 - **Possession.** Anyone not choked can be possessed (`Twk_Possessable_BaseNPC.m_AwarenessSettings`),
   combat included. The target is chosen with the angle weighted ten times the distance, plus its

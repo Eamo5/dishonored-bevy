@@ -225,6 +225,12 @@ pub struct Npc {
     pub unpossessed: bool,
     /// casting its Attract spell, Corvo drawn in to it (a whaler's pull, `assassin.rs`)
     pub casting: bool,
+    /// blown off its feet (Wind Blast): the push to go limp with, where its clips can get it up
+    pub knock: Option<Vec3>,
+    /// knocked off its feet, limp till it lies still (`ragdoll`), then getting up
+    pub floored: bool,
+    /// lying still after it, getting up: from its back (or its front)
+    pub rise: Option<bool>,
     /// its bearing about Corvo while it waits outside the ring of those at him (radians)
     pub flank: Option<f32>,
     pub taunt_hold: f32,
@@ -1663,6 +1669,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         body_check: false,
         unpossessed: false,
         casting: false,
+        knock: None,
+        floored: false,
+        rise: None,
         flank: None,
         taunt_hold: 0.0,
         search_run: false,
@@ -2917,7 +2926,7 @@ pub(crate) fn npc_brain(
                 }
             }
         }
-        if npc.is_down() || npc.mode == Mode::Choked {
+        if npc.is_down() || npc.mode == Mode::Choked || npc.floored {
             npc.target = None;
             continue;
         }
@@ -3953,6 +3962,13 @@ fn npc_move(
                 }
             }
         }
+        // knocked off its feet: its bodies carry it (`ragdoll`)
+        if npc.floored {
+            if let Some(mut k) = kcc {
+                k.translation = None;
+            }
+            continue;
+        }
         // Distant, calm NPCs skip the character controller (its shape casts against the
         // level trimeshes dominate the frame) and just follow their route on a ground ray.
         let far = ppos.map(|p| p.distance(t.translation) > FAR_MOVE).unwrap_or(false)
@@ -4329,6 +4345,9 @@ pub struct NpcClips {
     attract: [Option<ClipId>; 4],
     /// an assassin's wrist bow shot
     wrist_shot: Option<ClipId>,
+    /// getting up from where it lay, on its back and on its front (`Generic_RagdollToBack`,
+    /// `_ToFront`)
+    get_up: [Option<ClipId>; 2],
     /// an assassin's slash out of its dodge to the left, right (`Sword_SideStepLeft_DodgeAttack_Small`)
     dodge_attack: [Option<ClipId>; 2],
     /// Corvo gone before its eyes by magic (`Empty_Magic_OutOfSight`, `Sword_Magic_OutOfSight`:
@@ -4492,6 +4511,7 @@ impl NpcClips {
             unpossess: [lib.first(&["Empty_Unpossess_Eject", "Patrol_Unpossess_Eject"]), lib.first(&["Empty_Unpossess_Dizzy", "Patrol_Unpossess_Dizzy"]), lib.first(&["Empty_Unpossess_Puke", "Patrol_Unpossess_Puke"])],
             attract: ["In", "Loop", "Attack", "Cancel"].map(|p| lib.find(&format!("Sword_Power_Attract_{p}"))),
             wrist_shot: lib.find("Sword_RangedAttack"),
+            get_up: [lib.find("Generic_RagdollToBack"), lib.find("Generic_RagdollToFront")],
             dodge_attack: [lib.find("Sword_SideStepLeft_DodgeAttack_Small"), lib.find("Sword_SideStepRight_DodgeAttack_Small")],
             magic: [lib.all(&["Empty_Magic_OutOfSight", "Sword_Magic_OutOfSight"]), lib.all(&["Sword_Magic_OutOfSight", "Empty_Magic_OutOfSight"])],
             swarm: [["Empty_", "Sword_"], ["Sword_", "Empty_"]].map(|sets| ["In", "Loop", "Out"].map(|p| sets.iter().find_map(|s| lib.find(&format!("{s}SwarmAttack_{p}"))))),
@@ -4828,7 +4848,7 @@ fn npc_select_anim(
         anim.time_scale = scale;
         // turning where it stands, it is shown turned as far as its turn has gone (in plain idle
         // only: anything else shows its facing as it is)
-        let plain = !npc.is_down() && !npc.casting && npc.attack_t.is_none() && npc.aim.is_none() && npc.gun_hold <= 0.0 && npc.grab.is_none() && !st.oneshot && npc.anim_speed < 0.3;
+        let plain = !npc.is_down() && !npc.casting && !npc.floored && npc.rise.is_none() && npc.attack_t.is_none() && npc.aim.is_none() && npc.gun_hold <= 0.0 && npc.grab.is_none() && !st.oneshot && npc.anim_speed < 0.3;
         if !plain || !st.shown_yaw.is_finite() {
             st.turn = None;
             st.shown_yaw = npc.yaw;
@@ -4946,6 +4966,41 @@ fn npc_select_anim(
             }
         }
 
+        // blown off its feet (Wind Blast), where its set can get it up again: limp (`ragdoll`),
+        // out of everyone's way till it is
+        if let Some(v) = npc.knock.take() {
+            if clips.get_up.iter().all(Option::is_some) && !npc.is_down() && !limp && !going_limp {
+                commands.entity(e).try_insert((crate::ragdoll::GoLimp::now(v, None), ColliderDisabled));
+                npc.floored = true;
+                npc.attack_t = None;
+                npc.swing = None;
+                npc.aim = None;
+                st.last_mode = npc.mode;
+                st.last_alert = npc.alert;
+                continue;
+            }
+        }
+        if npc.floored && !npc.is_down() {
+            anim.frozen = limp && far;
+            st.last_mode = npc.mode;
+            st.last_alert = npc.alert;
+            continue;
+        }
+        // lying still, up again (`Generic_RagdollToBack` / `_ToFront`: from where its bodies lay,
+        // `ragdoll`), standing for it
+        if let Some(back) = npc.rise.take() {
+            anim.frozen = false;
+            commands.entity(e).try_remove::<ColliderDisabled>();
+            if let Some(c) = clips.get_up[(!back) as usize].filter(|_| !npc.is_down()) {
+                anim.restart(c, false, 1.0, 0.0);
+                npc.stagger = npc.stagger.max(lib.duration(c));
+                st.oneshot = true;
+                st.hit_seen = npc.hit_react;
+                st.last_mode = npc.mode;
+                st.last_alert = npc.alert;
+                continue;
+            }
+        }
         if npc.is_down() {
             // limp (or about to be): its bodies pose its bones, the clip under them the rest
             if limp || going_limp {

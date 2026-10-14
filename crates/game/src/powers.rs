@@ -338,6 +338,9 @@ const GUST_IMPACT_SPACING: f32 = 2.0;
 /// The cast clip's `DisNotify_WindBlast` (s): when the blast starts (roshan's r614/blink
 /// research).
 const WINDBLAST_NOTIFY: f32 = 0.27;
+/// How hard Wind Blast must push a character to knock it off its feet, m/s (our reading: the
+/// original's momentum against the pawn's `m_fMomentumImpulseMax`, 400 uu/s, is native).
+const KNOCKDOWN_SPEED: f32 = 6.0;
 
 impl Default for Powers {
     fn default() -> Self {
@@ -1641,7 +1644,8 @@ fn windblast_gusts(
                 return true;
             }
             let Ok((_, nt, mut npc)) = npcs.get_mut(e) else { return false };
-            if npc.is_down() {
+            // (one already lying there: its bodies are blown on, `ragdoll`)
+            if npc.is_down() || npc.floored {
                 return false;
             }
             let Some((_, k, near)) = factor(nt.translation) else { return false };
@@ -1657,6 +1661,11 @@ fn windblast_gusts(
             }
             npc.velocity += vel;
             stag.write(NpcStagger { npc: e, secs: 2.0, parried: false });
+            // blown hard, off its feet (limp, then up again: `npc.rs`); less, it reels back
+            // (`Sword_HitWindblast`)
+            if vel.length() >= KNOCKDOWN_SPEED {
+                npc.knock = Some(vel);
+            }
             // slammed into a wall within the flight's first moments?
             let wall = ctx.cast_ray(nt.translation, vel.with_y(0.0).normalize_or(flat), (vel.with_y(0.0).length() * 0.3).max(0.5), true, filter).is_some();
             // (the wall's bonus at level 2 only, flung at 500 uu/s or more)
