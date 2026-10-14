@@ -4354,7 +4354,11 @@ fn npc_select_anim(
         // back from an ambient idle)
         let [box_idle, box_in, box_loop, box_out] = st.clips.music_box;
         let musical = box_idle.is_some() && (npc.arms.tunes.is_some() || npc.pawn.contains("MusicOverseer"));
-        if anim.upper_on() && (npc.is_down() || !musical && (npc.alert != Alert::Unaware || npc.hit_react > st.hit_seen + 1e-3 || npc.act.1 != st.act_seen || npc.attack_t.is_some() || npc.caught.is_some())) {
+        // (its ambient idle given up to anything setting it on edge, any upper-body action to a
+        // blow, a gesture, a swing or being caught)
+        let fidget = anim.upper_clip().is_some_and(|c| clips.idle_fidgets.contains(&c));
+        let interrupted = npc.hit_react > st.hit_seen + 1e-3 || npc.act.1 != st.act_seen || npc.attack_t.is_some() || npc.caught.is_some();
+        if anim.upper_on() && (npc.is_down() || !musical && (interrupted || fidget && npc.alert != Alert::Unaware)) {
             anim.stop_upper(0.15);
         }
         // a musical Overseer's arms hold its music box, walking or standing (its pawn's walking
@@ -4800,8 +4804,14 @@ fn npc_select_anim(
         }
         if npc.alert == Alert::Combat && st.last_alert != Alert::Combat {
             if let Some(c) = clips.equip.or(clips.surprised) {
-                anim.restart(c, false, 1.4, 0.15);
-                st.oneshot = true;
+                // (on the move, its sword drawn on its upper body, its legs keeping their stride:
+                // the NPC tree's upper-body slot)
+                if npc.anim_speed >= 0.6 && clips.equip.is_some() && !musical {
+                    anim.restart_upper(c, false, 1.4, 0.15);
+                } else {
+                    anim.restart(c, false, 1.4, 0.15);
+                    st.oneshot = true;
+                }
             }
         } else if npc.mode == Mode::Search && st.last_mode != Mode::Search {
             if let Some(c) = pick(&clips.search) {
@@ -4829,7 +4839,7 @@ fn npc_select_anim(
         if alert {
             // (a change of behaviour starts its ambient idles over)
             st.idle_time = rand::random::<f32>() * AMBIENT_IDLE[1];
-            if anim.upper_on() && !musical {
+            if anim.upper_on() && !musical && fidget {
                 anim.stop_upper(0.2);
             }
         } else if npc.fighter() && !musical {

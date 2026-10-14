@@ -378,7 +378,8 @@ fullscreen display, vertical sync and the crosshair.
   `m_bCheckForMovement` false), its legs keeping their stride (the upper body from
   `spine_0_jnt`, `NPC_Human_at`'s `UpperBodyFilter`); a blow, a fall or anything setting it on
   edge takes the upper body back and starts the wait over. Relaxed characters (civilians idling
-  or wandering) have none. A character that has just noticed Corvo (its attention at
+  or wandering) have none. A guard turning on Corvo on the move draws its sword on the upper body
+  too, its legs keeping their stride, rather than the draw being cut short. A character that has just noticed Corvo (its attention at
   the head-tracking level: the original posts its look-at there and clears it at any other, as
   roshan's research decoded it; turning to face him the whole body turns) or speaks with him
   close by turns its head to him, the neck taking most of the turn and the upper back the rest, within the original's
