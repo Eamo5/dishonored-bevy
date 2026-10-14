@@ -3377,27 +3377,35 @@ impl<'a> Cooker<'a> {
         out
     }
 
+    /// A blade move's kind from its context's class (the tweak's `DisTweaks_<x>`, or the
+    /// context's own `DisItemContext_<x>`).
+    fn melee_kind(class: &str) -> Option<&'static str> {
+        let x = class.strip_prefix("DisTweaks_").or_else(|| class.strip_prefix("DisItemContext_"))?;
+        Some(match x {
+            "NPCAttackShort" => "Short",
+            "NPCAttackStepBack" => "StepBack",
+            "NPCAttackMedium" => "Medium",
+            "NPCAttackLong" => "Long",
+            "NPCBash" => "Bash",
+            "NPCSideStep" => "SideStep",
+            "NPCBackStep" => "BackStep",
+            "NPCAttackLeft90" => "Left90",
+            "NPCAttackRight90" => "Right90",
+            "NPCAttackLeft180" => "Left180",
+            "NPCAttackRight180" => "Right180",
+            "NPCJumpAttack" => "Jump",
+            "NPCRiposte" => "Riposte",
+            "NPCPush" => "Push",
+            "NPCAmbush" => "Ambush",
+            _ => return None,
+        })
+    }
+
     /// A blade's moves (its NPC attack contexts, as enabled).
     fn melee_moves(&mut self, w: &Obj) -> Vec<MeleeMove> {
         let mut out = Vec::new();
         for c in self.npc_contexts(w) {
-            let kind = match c.class().as_str() {
-                "DisTweaks_NPCAttackShort" => "Short",
-                "DisTweaks_NPCAttackMedium" => "Medium",
-                "DisTweaks_NPCAttackLong" => "Long",
-                "DisTweaks_NPCBash" => "Bash",
-                "DisTweaks_NPCSideStep" => "SideStep",
-                "DisTweaks_NPCBackStep" => "BackStep",
-                "DisTweaks_NPCAttackLeft90" => "Left90",
-                "DisTweaks_NPCAttackRight90" => "Right90",
-                "DisTweaks_NPCAttackLeft180" => "Left180",
-                "DisTweaks_NPCAttackRight180" => "Right180",
-                "DisTweaks_NPCJumpAttack" => "Jump",
-                "DisTweaks_NPCRiposte" => "Riposte",
-                "DisTweaks_NPCPush" => "Push",
-                "DisTweaks_NPCAmbush" => "Ambush",
-                _ => continue,
-            };
+            let Some(kind) = Self::melee_kind(&c.class()) else { continue };
             if matches!(self.tweak_prop(&c, "m_bDisabled", 0, 0), Some((_, Value::Bool(true)))) {
                 continue;
             }
@@ -3419,6 +3427,60 @@ impl<'a> Cooker<'a> {
                 big: f(self, "m_fRandomBigHitChance", 0.0),
                 step: f(self, if kind == "SideStep" { "m_fSideStepDistance" } else { "m_fBackStepDistance" }, 0.0) * UNIT,
             });
+        }
+        // (the first that may be used is struck: the short blow before the step back, as
+        // roshan's r614/blink research orders the blows, so it steps back only from someone
+        // nearer than the short blow's least reach, or with that blow cooling down)
+        if let (Some(b), Some(s)) = (out.iter().position(|m| m.kind == "StepBack"), out.iter().position(|m| m.kind == "Short")) {
+            if b < s {
+                let m = out.remove(b);
+                out.insert(s, m);
+            }
+        }
+        out
+    }
+
+    /// The attack patterns a character's combat behaviour draws one of (its brain's
+    /// `m_BehaviorTweak`, at normal difficulty, the combat one's `m_AttackPatterns`): each
+    /// pattern's say over its blade's moves (`m_ItemContextOverrides`).
+    fn attack_patterns(&mut self, pawn: &Obj) -> Vec<Vec<PatternOverride>> {
+        let Some(brain) = self.tweak_obj(pawn, "m_pBrainTweak") else { return Vec::new() };
+        let Some((pkg, Value::Array { count, offset, size })) = self.tweak_prop(&brain, "m_BehaviorTweak", 0, 0) else { return Vec::new() };
+        let behaviours: Vec<Obj> = parse_struct_array(&pkg, offset, size, count)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|b| match b.get_idx("m_Difficulty", 1) {
+                Some(Value::Object(o)) if *o != 0 => self.assets.resolve(&pkg, *o),
+                _ => None,
+            })
+            .filter(|b| b.class().contains("Combat"))
+            .collect();
+        for b in behaviours {
+            let patterns = self.tweak_objs(&b, "m_AttackPatterns");
+            if patterns.is_empty() {
+                continue;
+            }
+            return patterns.iter().map(|p| self.pattern_overrides(p)).collect();
+        }
+        Vec::new()
+    }
+
+    /// What an attack pattern says of the blade's moves (`m_ItemContextOverrides`).
+    fn pattern_overrides(&mut self, p: &Obj) -> Vec<PatternOverride> {
+        let Some((pkg, Value::Array { count, offset, size })) = self.tweak_prop(p, "m_ItemContextOverrides", 0, 0) else { return Vec::new() };
+        let mut out = Vec::new();
+        for o in parse_struct_array(&pkg, offset, size, count).unwrap_or_default() {
+            let Some(ctx) = o.object("m_pContextToOverride").filter(|c| *c != 0) else { continue };
+            let path = pkg.obj_path(ctx);
+            let Some(kind) = Self::melee_kind(path.rsplit('.').next().unwrap_or(&path)) else { continue };
+            let cooldown = match o.get("m_ContextCooldown") {
+                Some(Value::Struct(_, r)) => {
+                    let r = Props(r.clone());
+                    [r.float("m_fMinValue").unwrap_or(0.0), r.float("m_fMaxValue").unwrap_or(0.0)]
+                }
+                _ => [0.0, 0.0],
+            };
+            out.push(PatternOverride { kind: kind.into(), enabled: !matches!(o.get("m_bContextEnabled"), Some(Value::Bool(false))), cooldown });
         }
         out
     }
@@ -3625,6 +3687,7 @@ impl<'a> Cooker<'a> {
             }
             if st.melee.is_empty() && matches!(w.class().as_str(), "DisTweaks_WepSword" | "DisTweaks_WepSwordOfAssassin" | "DisTweaks_Item_WolfhoundBite") {
                 st.melee = self.melee_moves(&w);
+                st.attack_patterns = self.attack_patterns(pawn);
             }
             st.weapons.push(wep);
         }

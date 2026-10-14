@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 147;
+pub const SCENE_VERSION: u32 = 148;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -1087,6 +1087,10 @@ pub struct NpcStats {
     /// its blade's moves
     #[serde(default)]
     pub melee: Vec<MeleeMove>,
+    /// the attack patterns its combat behaviour draws one of (`m_AttackPatterns`, a pattern
+    /// listed again weighing more): what each says of its blade's moves
+    #[serde(default)]
+    pub attack_patterns: Vec<Vec<PatternOverride>>,
     /// a music box's tunes (`DisTweaks_WepMusicBox`'s `DisTweaks_NPCTune_Combat` and
     /// `DisTweaks_NPCTune_Protection`)
     #[serde(default)]
@@ -1145,7 +1149,8 @@ pub struct FireContext {
 /// of a big hit.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct MeleeMove {
-    /// `Short`, `Medium`, `Long`, `Bash`, `Jump` (a charge), the turning blows at someone to
+    /// `Short`, `StepBack` (a blow stepping back from someone too close), `Medium`, `Long`,
+    /// `Bash`, `Jump` (a charge), the turning blows at someone to
     /// its side or behind (`Left90`, `Right90`, `Left180`, `Right180`: `angle` about that
     /// side); or a dodge, `SideStep`, `BackStep`; a counter after its parry, `Riposte`; a shove
     /// at someone in its way, `Push`; lying in wait round a corner, `Ambush`
@@ -1161,6 +1166,16 @@ pub struct MeleeMove {
     /// a dodge's step (m: `m_fSideStepDistance`, `m_fBackStepDistance`)
     #[serde(default)]
     pub step: f32,
+}
+
+/// What an AI attack pattern says of one of its character's blade moves
+/// (`DisTweaks_AIAttackPattern.m_ItemContextOverrides`): the move (as `MeleeMove::kind`), whether
+/// it may be used (`m_bContextEnabled`) and how soon again (s: `m_ContextCooldown`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct PatternOverride {
+    pub kind: String,
+    pub enabled: bool,
+    pub cooldown: [f32; 2],
 }
 
 /// A musical Overseer's tunes.

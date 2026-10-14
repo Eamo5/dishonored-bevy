@@ -471,7 +471,17 @@ fullscreen display, vertical sync and the crosshair.
   loop: an overseer questioning a guard) break off it to fight Corvo. Swordsmen fight with
   their blade's moves (`DisTweaks_NPCAttackShort` within 2.35 m, `..Medium` lunging from
   2.35-3.75 m, `..Long` from 3.75-5.7 m, each within its angle and on its own cooldown, big
-  blows at `m_fRandomBigHitChance`, with the matching `Sword_Attack_*` clips) and answer
+  blows at `m_fRandomBigHitChance`, with the matching `Sword_Attack_*` clips; with Corvo too
+  close, or the short blow cooling down, `..StepBack` within 1.7 m, `Sword_Attack_StepBackA`
+  carrying it back as its clip goes). Which moves and how soon again is their combat
+  behaviour's attack pattern, one drawn from its `m_AttackPatterns` (a city guard's
+  `TwkAttackPattern_SwordBerserker`: the short blow every 1.5-3 s, the step back 1-2 s, the
+  lunge 2-4 s; an officer's `..BerserkerElite`: the long lunge and the charge every 15-20 s),
+  its `m_ItemContextOverrides` turning moves off or setting their cooldowns (a 0-0 one leaving
+  the move's own, our reading); and once one of them uses a move on Corvo no other uses it for
+  a while (`DisGlobalCombatManager.m_fInhibitionTime*`: the short blow 2 s, the step back and
+  the lunge 1 s, the long lunge 0.8 s, the charge 3 s, a step aside 6 s, back 8 s, as roshan's
+  r614/blink research found them used). They answer
   Corvo's block with a kick (`DisTweaks_NPCBash`: it breaks the block and shoves him back);
   a guard who parries plays its parry (`Sword_Ready_ParryWin_*`) and strikes back straight
   after (`DisTweaks_NPCRiposte`), one whose blow Corvo parries reels (`..ParryLost_*`), and

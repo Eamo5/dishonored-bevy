@@ -397,6 +397,8 @@ pub struct Swing {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum MoveKind {
     Short,
+    /// a blow stepping back from someone too close (`Sword_Attack_StepBackA`)
+    StepBack,
     Medium,
     Long,
     Bash,
@@ -414,6 +416,7 @@ pub enum MoveKind {
 impl MoveKind {
     fn of(kind: &str) -> MoveKind {
         match kind {
+            "StepBack" => MoveKind::StepBack,
             "Medium" => MoveKind::Medium,
             "Long" => MoveKind::Long,
             "Bash" => MoveKind::Bash,
@@ -461,7 +464,7 @@ pub fn weapon_kinds(st: &dhcook::format::NpcStats) -> (bool, u8) {
 }
 
 impl Arms {
-    pub fn of(st: &dhcook::format::NpcStats, difficulty: u8) -> Arms {
+    pub fn of(st: &dhcook::format::NpcStats, difficulty: u8, seed: u64) -> Arms {
         let d = difficulty.min(3) as usize;
         let mut a = Arms::default();
         let at = |n: &str| st.attributes.get(n).map(|v| v[d]);
@@ -485,6 +488,17 @@ impl Arms {
         a.dodge = at("DodgeLevel").unwrap_or(0.0);
         a.grenades = st.grenades.clone();
         a.moves = st.melee.clone();
+        // its attack pattern, one of its combat behaviour's: the moves it may use, and how soon
+        // again (a pattern's 0-0 cooldown leaving the move's own, our reading)
+        if !st.attack_patterns.is_empty() {
+            let pattern = &st.attack_patterns[(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as usize % st.attack_patterns.len()];
+            a.moves.retain(|m| pattern.iter().find(|o| o.kind == m.kind).is_none_or(|o| o.enabled));
+            for m in &mut a.moves {
+                if let Some(o) = pattern.iter().find(|o| o.kind == m.kind && o.cooldown[1] > 0.0) {
+                    m.cooldown = o.cooldown;
+                }
+            }
+        }
         a.tunes = st.tunes.clone();
         a.fire = st.fire.clone();
         a.taunt = st.taunt.clone();
@@ -940,6 +954,21 @@ pub const GRAB_PRESSES: u32 = 5;
 /// `DisGlobalCombatManager.m_fInhibitionTimeWeeperArmGrab`, as roshan's r614/blink research
 /// pointed out).
 const GRAB_INHIBIT: f32 = 20.0;
+/// After one strikes Corvo with a move, no other uses the same on him for this long (s:
+/// `DefaultAI.ini`'s `DisGlobalCombatManager.m_fInhibitionTime*Attack`, `..SideStep`,
+/// `..BackStep`, as roshan's r614/blink research found them used).
+fn inhibition(kind: &str) -> f32 {
+    match kind {
+        "Short" => 2.0,
+        "StepBack" => 1.0,
+        "Medium" => 1.0,
+        "Long" => 0.8,
+        "Jump" => 3.0,
+        "SideStep" => 6.0,
+        "BackStep" => 8.0,
+        _ => 0.0,
+    }
+}
 
 /// A wolfhound's leap and pin (`Twk_Inv_WolfhoundBite`: `DisTweaks_WHJumpAttack` from 5.5 to
 /// 8 m, knocking Corvo down for `m_DamageOnKnockDown` 7/10/15/20 by difficulty; then
@@ -1492,7 +1521,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         Some((blade, gun)) => (blade, if enemy { gun } else { 0 }),
         None => (has_sword, ranged),
     };
-    let arms = stats.map(|s| Arms::of(s, difficulty)).unwrap_or_default();
+    let arms = stats.map(|s| Arms::of(s, difficulty, si as u64)).unwrap_or_default();
     let corpse = crate::level::is_corpse_type(&vis.name);
     let mode = if corpse {
         Mode::Dead
@@ -2715,7 +2744,7 @@ pub(crate) fn npc_brain(
     player: Query<(Entity, &Transform, Option<&crate::combat::Sword>), With<Player>>,
     mut npcs: Query<(Entity, &mut Npc, &Transform), (Without<Player>, Without<crate::possession::Possessed>)>,
     (level, mut npc_hits, ai, mut fled): (Option<Res<LevelInfo>>, MessageWriter<NpcHit>, Res<crate::aiworld::AiWorld>, MessageWriter<crate::aiworld::FleePointReached>),
-    (stances, settings, mut grab_inhibit): (Res<crate::script_world::SpawnerOverrides>, Res<crate::settings::Settings>, Local<f32>),
+    (stances, settings, mut grab_inhibit, mut inhibited): (Res<crate::script_world::SpawnerOverrides>, Res<crate::settings::Settings>, Local<f32>, Local<std::collections::HashMap<String, (f32, Entity)>>),
     mut grenades: MessageWriter<crate::gadgets::NpcGrenade>,
     (finishing, mut finishers, mut tallboy_shots): (Query<(), With<FinisherClip>>, MessageWriter<NpcFinisher>, MessageWriter<crate::tallboy::TallboyShot>),
 ) {
@@ -2740,6 +2769,11 @@ pub(crate) fn npc_brain(
     let grab_active = npcs.iter().any(|(_, n, _)| n.grab.is_some());
     // (after any weeper's grab, none for a while: `DisGlobalCombatManager.m_fInhibitionTimeWeeperArmGrab`)
     *grab_inhibit = (*grab_inhibit - dt_world).max(0.0);
+    // (the moves another has just used on Corvo, how long yet, and by whom)
+    inhibited.retain(|_, (left, _)| {
+        *left -= dt_world;
+        *left > 0.0
+    });
     for (e, mut npc, t) in &mut npcs {
         let pos = t.translation;
         // (its time: the world's, stopped, or its own)
@@ -3473,9 +3507,10 @@ pub(crate) fn npc_brain(
                         if npc.melee_cd.len() != moves.len() {
                             npc.melee_cd = vec![0.0; moves.len()];
                         }
-                        let dodge = moves.iter().enumerate().find(|(i, m)| matches!(m.kind.as_str(), "SideStep" | "BackStep") && npc.melee_cd[*i] <= 0.0 && d <= m.range[1]);
+                        let dodge = moves.iter().enumerate().find(|(i, m)| matches!(m.kind.as_str(), "SideStep" | "BackStep") && npc.melee_cd[*i] <= 0.0 && d <= m.range[1] && inhibited.get(&m.kind).is_none_or(|(_, by)| *by == e));
                         if let Some((i, m)) = dodge {
                             if rand::random::<f32>() < npc.arms.dodge * 0.1 {
+                                inhibited.insert(m.kind.clone(), (inhibition(&m.kind), e));
                                 let toward = (ppos - pos).with_y(0.0).normalize_or_zero();
                                 let away = if m.kind == "SideStep" {
                                     let side = Vec3::new(-toward.z, 0.0, toward.x);
@@ -3545,7 +3580,7 @@ pub(crate) fn npc_brain(
                             if off > 180.0 {
                                 off = 360.0 - off;
                             }
-                            npc.melee_cd[i] <= 0.0 && d >= m.range[0] && d <= m.range[1] && off <= m.angle.max(10.0) && (ppos.y - pos.y).abs() <= m.height.max(1.5)
+                            npc.melee_cd[i] <= 0.0 && d >= m.range[0] && d <= m.range[1] && off <= m.angle.max(10.0) && (ppos.y - pos.y).abs() <= m.height.max(1.5) && inhibited.get(&m.kind).is_none_or(|(_, by)| *by == e)
                         };
                         let pick = if moves.is_empty() {
                             (d < 2.0).then_some(None)
@@ -3579,6 +3614,10 @@ pub(crate) fn npc_brain(
                                 None => Swing { kind: MoveKind::Short, big: false, len: 0.95, hit: 0.55, reach: 2.3, lunge: 0.0, no_versus: false, more: Vec::new() },
                             });
                             if let Some(i) = i {
+                                let hold = inhibition(&moves[i].kind);
+                                if hold > 0.0 {
+                                    inhibited.insert(moves[i].kind.clone(), (hold, e));
+                                }
                                 // (the less aggressive, the longer: x1 at full aggression, x2 at none)
                                 let cd = moves[i].cooldown;
                                 npc.melee_cd[i] = (cd[0] + rand::random::<f32>() * (cd[1] - cd[0]).max(0.0)) * ((1.0 - npc.aggression.clamp(0.0, 1.0)) * COOLDOWN_FACTOR + 1.0);
@@ -3726,8 +3765,8 @@ fn npc_move(
             _ => npc.gait[0],
         };
         let mut wish = Vec3::ZERO;
-        // a lunging blow carries it at Corvo until it lands
-        let lunge = npc.swing.as_ref().filter(|s| s.lunge > 0.0 && npc.attack_t.is_some_and(|t| t < s.hit)).map(|s| s.lunge);
+        // a lunging blow carries it at Corvo until it lands (a step back, away)
+        let lunge = npc.swing.as_ref().filter(|s| s.lunge != 0.0 && npc.attack_t.is_some_and(|t| t < s.hit)).map(|s| s.lunge);
         let frozen = npc.stagger > 0.0 || (npc.attack_t.is_some() && lunge.is_none()) || npc.is_down() || npc.mode == Mode::Choked || npc.versus || npc.ambush.is_some();
         if let (Some(v), Some(p), false) = (lunge, ppos, frozen) {
             wish = (p - pos).with_y(0.0).normalize_or_zero() * v;
@@ -4000,6 +4039,7 @@ pub struct NpcClips {
     attack_medium: Vec<ClipId>,
     attack_long: Vec<ClipId>,
     attack_long_big: Vec<ClipId>,
+    attack_step_back: Option<ClipId>,
     kick: Option<ClipId>,
     /// the turning blows (left, right; at 90 and 180 degrees) and the charge
     attack_turn: [Vec<ClipId>; 4],
@@ -4107,6 +4147,7 @@ impl NpcClips {
             attack_medium: lib.all(&["Sword_Attack_MediumSmallA", "Sword_Attack_MediumSmallB", "Sword_Attack_MediumBigA", "Attack_Medium"]),
             attack_long: lib.all(&["Sword_Attack_LongSmallA", "Sword_Attack_LongSmallB"]),
             attack_long_big: lib.all(&["Sword_Attack_LongBigA"]),
+            attack_step_back: lib.first(&["Sword_Attack_StepBackA"]),
             kick: lib.first(&["Sword_Attack_KickMedium"]),
             attack_turn: [
                 lib.all(&["Sword_Attack_Left90BigA", "Sword_Attack_Left90SmallA"]),
@@ -4218,6 +4259,7 @@ impl NpcClips {
                 attack_medium: vec![kick],
                 attack_long: vec![kick],
                 attack_long_big: vec![kick],
+                attack_step_back: Some(kick),
                 kick: Some(kick),
                 ..c
             },
@@ -4730,6 +4772,7 @@ fn npc_select_anim(
                 let own = match kind {
                     MoveKind::Short if big => pick(&clips.attack_short_big).or_else(|| pick(&clips.attack_short)),
                     MoveKind::Short => pick(&clips.attack_short).or_else(|| pick(&clips.attack_short_big)),
+                    MoveKind::StepBack => clips.attack_step_back.or_else(|| pick(&clips.attack_short)),
                     MoveKind::Medium => pick(&clips.attack_medium),
                     MoveKind::Long if big => pick(&clips.attack_long_big).or_else(|| pick(&clips.attack_long)),
                     MoveKind::Long => pick(&clips.attack_long).or_else(|| pick(&clips.attack_long_big)),
@@ -4780,6 +4823,10 @@ fn npc_select_anim(
                                 info!("melee: {who} {:?} by its clip: hit {:.2} -> {hit:.2}, len {:.2} -> {:.2}", s.kind, s.hit, s.len, if intr > hit { intr } else { lib.duration(c) }.max(hit + 0.1));
                             }
                             s.lunge *= s.hit / hit.max(0.05);
+                            // (stepping back: carried back as far as its clip goes by the blow)
+                            if s.kind == MoveKind::StepBack {
+                                s.lunge = -lib.root_speed(c) * lib.duration(c) / hit.max(0.05);
+                            }
                             s.hit = hit;
                             s.len = if intr > hit { intr } else { lib.duration(c) }.max(hit + 0.1);
                             anim.restart(c, false, 1.0, 0.08);
