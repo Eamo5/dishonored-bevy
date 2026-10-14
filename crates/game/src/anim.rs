@@ -430,6 +430,11 @@ impl Animator {
         self.overlay.finished(&self.lib)
     }
 
+    /// How far into its clip the overlay layer is (s).
+    pub fn overlay_time(&self) -> Option<f32> {
+        self.overlay.cur.map(|c| c.t)
+    }
+
     /// Play `clip` on the upper-body layer from its start, fading the layer in.
     pub fn restart_upper(&mut self, clip: ClipId, looping: bool, speed: f32, blend: f32) {
         self.upper.restart(clip, looping, speed, blend);

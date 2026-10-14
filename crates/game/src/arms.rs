@@ -132,6 +132,11 @@ struct ArmClips {
     possess: Option<ClipId>,
     swarm: Option<ClipId>,
     grenade_throw: Option<ClipId>,
+    /// a grenade cooking in the hand (`Gadgets_Grenade_Cooking_In`, `_Idle`), the next one
+    /// taken after a throw (`Gadgets_Grenade_Reload`), or none left (`_OutOfAmmo`)
+    grenade_cook: [Option<ClipId>; 2],
+    grenade_reload: Option<ClipId>,
+    grenade_empty: Option<ClipId>,
     razor_place: Option<ClipId>,
     /// the guns' reload stages (`Pistol_Reload_In`...), by name
     reload: Vec<(&'static str, ClipId)>,
@@ -222,6 +227,9 @@ impl ArmClips {
             possess: lib.find("Powers_Cast_Possession_In"),
             swarm: lib.find("Powers_Cast_Swarm"),
             grenade_throw: lib.find("Gadgets_Grenade_Deploy"),
+            grenade_cook: [lib.find("Gadgets_Grenade_Cooking_In"), lib.find("Gadgets_Grenade_Cooking_Idle")],
+            grenade_reload: lib.find("Gadgets_Grenade_Reload"),
+            grenade_empty: lib.find("Gadgets_Grenade_OutOfAmmo"),
             reload: ["Pistol_Reload_In", "Pistol_Reload_Out", "Pistol_FastReload", "Crossbow_Reload_In", "Crossbow_Reload_Out", "Crossbow_RapidReload"].into_iter().filter_map(|n| lib.find(n).map(|c| (n, c))).collect(),
             razor_place: lib.find("Gadgets_SpringRazor_Deploy"),
         };
@@ -248,6 +256,8 @@ struct ArmsAnim {
     blocking: bool,
     /// aiming Blink (as last seen)
     blink_aiming: bool,
+    /// a grenade cooking (as last seen)
+    cooking: bool,
     choking: bool,
     grabbed: bool,
     oneshot: bool,
@@ -474,6 +484,7 @@ fn spawn_arms(
                 next_attack: 0,
                 blocking: false,
                 blink_aiming: false,
+                cooking: false,
                 choking: false,
                 grabbed: false,
                 oneshot: false,
@@ -853,7 +864,12 @@ fn animate_arms(
     // ---- left arm (overlay): powers and ranged weapons
     for (power, e) in &st.held {
         if let Ok(mut v) = held.get_mut(*e) {
-            let want = if !full_body && *power == powers.selected { Visibility::Inherited } else { Visibility::Hidden };
+            // (a grenade thrown: out of the hand from its release, half way through the throw,
+            // until the next one is taken, or for good with none left)
+            let thrown = matches!(power, Power::Grenade | Power::StickyGrenade | Power::Chokedust)
+                && (anim.overlay_is(st.clips.grenade_empty)
+                    || anim.overlay_is(st.clips.grenade_throw) && anim.overlay_state().0.zip(anim.overlay_time()).is_some_and(|(cl, t)| t > anim.lib.duration(cl) * 0.45));
+            let want = if !full_body && *power == powers.selected && !thrown { Visibility::Inherited } else { Visibility::Hidden };
             if *v != want { *v = want; }
         }
     }
@@ -943,8 +959,32 @@ fn animate_arms(
         }
     }
     st.blink_aiming = aiming;
+    // a grenade cooking: the hand draws it back (`Gadgets_Grenade_Cooking_In`) and holds
+    // (`_Idle`) until it's thrown
+    let [cook_in, cook_loop] = c.grenade_cook;
+    let cooking = powers.cooking.is_some() && cook_loop.is_some();
+    if cooking {
+        if !st.cooking {
+            if let Some(cl) = cook_in.or(cook_loop) {
+                anim.restart_overlay(cl, cook_in.is_none(), 1.0, 0.1);
+            }
+        } else if anim.overlay_finished() || !(anim.overlay_is(cook_in) || anim.overlay_is(cook_loop)) {
+            if let Some(cl) = cook_loop {
+                anim.play_overlay(cl, true, 1.0, 0.1);
+            }
+        }
+    }
+    st.cooking = cooking;
+    // thrown: the next grenade taken from the belt, or the empty hand with none left
+    if anim.overlay_is(c.grenade_throw) && anim.overlay_finished() {
+        let left = powers.selected.ammo(&stats).unwrap_or(0);
+        if let Some(cl) = if left > 0 { c.grenade_reload } else { c.grenade_empty } {
+            anim.restart_overlay(cl, false, 1.0, 0.1);
+        }
+    }
+    let aiming = aiming || cooking;
     let in_reload = c.reload.iter().any(|(_, cl)| anim.overlay_is(Some(*cl)));
-    if !aiming && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision))) {
+    if !aiming && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.grenade_reload) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision))) {
         match idle {
             Some(cl) if !st.choking && !st.blocking => anim.play_overlay(cl, true, 1.0, 0.25),
             _ => anim.stop_overlay(0.2),

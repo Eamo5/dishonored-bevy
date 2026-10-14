@@ -246,7 +246,10 @@ fullscreen display, vertical sync and the crosshair.
   (`Powers_Cast_Blink_In`, the Mark glowing) and holds (`_Loop`) while the marker shows; let go,
   the cast (`_Out`) plays. The left hand's clips (casts, throws, the guns) move the left arm
   alone, as the original's arm tree filters them (`LeftArmFilter`, from `Collarbone_L_Jnt`);
-  the sword arm keeps its own pose.
+  the sword arm keeps its own pose. A grenade cooks with the hand drawn back
+  (`Gadgets_Grenade_Cooking_In`, `_Idle`), is thrown (`Gadgets_Grenade_Deploy`, out of the hand
+  half way through), and the next is taken from the belt (`_Reload`), or with none left the hand
+  comes back empty (`_OutOfAmmo`).
 - **Beheadings and severed limbs** (`gore.rs`): a finisher is a beheading now and then
   (`m_HeadChop`, `m_fBeheadRandomChance` 25%: `Sword_Ready_Fatality_Behead_A/B_Master` with the
   victim's `Generic_Fatality_Behead_*_Slave`); the victim's clip cuts at its

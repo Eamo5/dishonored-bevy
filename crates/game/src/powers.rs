@@ -2029,6 +2029,9 @@ fn cook_grenade(
         powers.cooking = None;
         powers.cooldown = 1.0;
         gadget.write(crate::gadgets::UseGadget { gadget: g, eye, dir, cooked: t.min(crate::gadgets::FUSE) });
+        // (the throw: the left hand's deploy)
+        powers.cast_seq += 1;
+        powers.cast_power = p;
     } else {
         powers.cooking = Some((p, t));
     }
