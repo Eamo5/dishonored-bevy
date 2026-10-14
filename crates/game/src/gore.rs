@@ -24,7 +24,7 @@ impl Plugin for GorePlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<SeverLimb>()
             .add_systems(Update, (sever, log_pieces).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, swap_to_gore.after(sever).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (swap_to_eaten, swap_to_gore).chain().after(sever).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, hide_severed.after(crate::anim::AnimPose).before(TransformSystems::Propagate));
     }
 }
@@ -122,6 +122,69 @@ fn swap_to_gore(
             look.and_then(|l| l.mat(&assets, gp.mats.get(pi))).unwrap_or(mat).apply(&mut ec);
         }
         commands.entity(e).try_insert(GoreSwapped);
+    }
+}
+
+/// A body rats have begun on: it shows as they leave it (`NPC_Body_Eaten.Pwn_eaten`).
+#[derive(Component)]
+pub struct BeingEaten;
+
+/// A body rats have begun on takes the eaten body's meshes (`Skm_Body_Eaten`, `skm_head_eaten`),
+/// bound by bone name to its own posed bones (an eaten bone the body lacks follows its nearest
+/// bound parent); its limbs then go as they're eaten, drawn to nothing (`hide_severed`).
+#[allow(clippy::type_complexity)]
+fn swap_to_eaten(
+    mut commands: Commands,
+    (assets, level): (Option<Res<GameAssets>>, Option<Res<LevelInfo>>),
+    npcs: Query<(Entity, &NpcRig, &Children), Added<BeingEaten>>,
+    children: Query<&Children>,
+    parts: Query<(&NpcPart, &MeshTag)>,
+) {
+    let (Some(assets), Some(level)) = (assets, level) else { return };
+    let Some(tid) = level.scene.eaten_body else { return };
+    let Some(eaten) = assets.npc_types.get(tid as usize).and_then(|v| v.as_ref()) else { return };
+    for (e, rig, kids) in &npcs {
+        let mut found = None;
+        for v in kids.iter() {
+            for p in children.get(v).into_iter().flatten() {
+                if let Ok((_, tag)) = parts.get(*p) {
+                    found = Some((v, tag.0));
+                }
+            }
+        }
+        let Some((visual, slot)) = found else { continue };
+        // the eaten body's bones on the body's own, by name
+        let bones = &eaten.skeleton.bones;
+        let mut joints: Vec<Entity> = Vec::with_capacity(bones.len());
+        for (i, b) in bones.iter().enumerate() {
+            let own = rig.joint(&b.name);
+            let j = own.or_else(|| (b.parent >= 0 && (b.parent as usize) < i).then(|| joints[b.parent as usize])).or_else(|| rig.joint_at(0));
+            let Some(j) = j else { break };
+            joints.push(j);
+        }
+        if joints.len() != bones.len() {
+            continue;
+        }
+        for p in children.get(visual).into_iter().flatten() {
+            if parts.contains(*p) {
+                commands.entity(*p).try_despawn();
+            }
+        }
+        for (pi, (mesh, mat)) in eaten.parts.parts.iter().enumerate() {
+            let mut ec = commands.spawn((
+                Mesh3d(mesh.clone()),
+                MeshTag(slot),
+                SkinnedMesh { inverse_bindposes: eaten.inverse_bindposes.clone(), joints: joints.clone() },
+                DynamicSkinnedMeshBounds,
+                crate::fxlight::LitPart,
+                NpcPart { index: pi as u32, npc_type: tid, lod: crate::npc::GORE_LOD },
+                ChildOf(visual),
+            ));
+            mat.apply(&mut ec);
+        }
+        // (its cuts and the limbs eaten now drawn to nothing on the eaten body)
+        commands.entity(e).try_insert((GoreSwapped, KeepBones));
+        info!("gore: a body swaps to the eaten body");
     }
 }
 

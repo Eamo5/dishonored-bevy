@@ -1217,6 +1217,10 @@ fn swarm_brain(
                     s.eating = Some((be, t));
                     // a limb at a time (its gibs where it was)
                     let (startup, per) = wild_feeding_steps(spawner);
+                    // (begun on: the eaten body)
+                    if t0 < startup && t >= startup {
+                        commands.entity(be).try_insert(crate::gore::BeingEaten);
+                    }
                     for bone in limbs_eaten(&eat_order(&limbs, be), startup, per, t0, t) {
                         severs.write(crate::gore::SeverLimb { npc: be, bone, impulse: 0.0, eaten: true });
                     }
@@ -1319,6 +1323,9 @@ fn swarm_brain(
                     // `m_fEatPerLimbDuration`)
                     let default_duration = if s.level >= 2 { 0.75 } else { 1.5 };
                     let (startup, per) = (summon_setting(&data, s.level, "m_fEatStartupDuration", default_duration), summon_setting(&data, s.level, "m_fEatPerLimbDuration", default_duration));
+                    if t0 < startup && t >= startup {
+                        commands.entity(be).try_insert(crate::gore::BeingEaten);
+                    }
                     for bone in limbs_eaten(&eat_order(&limbs, be), startup, per, t0, t) {
                         severs.write(crate::gore::SeverLimb { npc: be, bone, impulse: 0.0, eaten: true });
                     }

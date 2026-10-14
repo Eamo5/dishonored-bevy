@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 139;
+pub const SCENE_VERSION: u32 = 140;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -85,6 +85,10 @@ pub struct Scene {
     /// hammer, the crossbow's arms, string and bolt).
     #[serde(default)]
     pub prop_rigs: std::collections::BTreeMap<String, u32>,
+    /// A body as rats leave it once they've begun on it (`NPC_Body_Eaten.Pwn_eaten`: its gory
+    /// body and head), the character type it swaps to.
+    #[serde(default)]
+    pub eaten_body: Option<u32>,
     /// Door sounds by door actor name.
     #[serde(default)]
     pub doors: std::collections::HashMap<String, DoorSounds>,

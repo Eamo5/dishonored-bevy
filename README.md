@@ -1932,7 +1932,10 @@ against the install's own data where it carries them, then implemented independe
   `m_fEatPerLimbDuration` from `SLInfo_Default`'s six (from a start of the body's own, round
   the limbs, the chest last), each gone from the body with its rat gibs (`m_bUseWhenEaten`:
   `ps_rat_gibs_leg` and the rest), then one more interval consumes it (a wild swarm's default
-  2 + 7 x 1.85 s; the Devouring Swarm's 12 s at level 1, 6 s at level 2). Fresh corpses now respect `m_fEatStartupDelayAfterKill` (class default
+  2 + 7 x 1.85 s; the Devouring Swarm's 12 s at level 1, 6 s at level 2). Once they're past the
+  start-up the body shows as they leave it (`NPC_Body_Eaten.Pwn_eaten`: `Skm_Body_Eaten` and
+  `skm_head_eaten`, the original's mesh swap), its meshes bound by bone name to the body's own
+  posed bones, its limbs going from it in turn. Fresh corpses now respect `m_fEatStartupDelayAfterKill` (class default
   1s), using wild-spawner and summoned-level settings. A separate world-time death
   clock survives saves, carrying and flight; older saves treat corpses as established.
   Boundary checks cover partial frames, old corpses, overrides and stopped time.

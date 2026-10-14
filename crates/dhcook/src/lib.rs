@@ -6678,6 +6678,10 @@ impl<'a> Cooker<'a> {
                 }
             }
         }
+        // the body rats are eating (`NPC_Body_Eaten.Pwn_eaten`)
+        if let Some(t) = self.assets.find("NPC_Body_Eaten.Pwn_eaten") {
+            self.scene.eaten_body = self.npc_type(&t);
+        }
         // a blade in flesh: its blood (the contact system's sword against a body)
         self.scene.blade_blood = self.blade_blood();
         self.scene.contact_fx = self.contact_fx();
