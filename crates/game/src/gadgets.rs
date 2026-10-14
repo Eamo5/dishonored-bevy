@@ -771,6 +771,9 @@ fn fly_grenades(
                 g.stuck = Some(npcs.get(hit).map(|(_, nt)| (hit, t.translation - nt.translation)).unwrap_or((hit, h.normal * 0.11)));
                 if npcs.get(hit).is_err() {
                     g.vel = Vec3::ZERO;
+                } else {
+                    // (they flail at it, `npc.rs`)
+                    commands.entity(hit).try_insert(crate::npc::StuckGrenade);
                 }
             } else {
                 // the bounce (as roshan's r614/blink research decoded it): v' = (v - (1 + e)(v.n)n) d,

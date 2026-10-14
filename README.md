@@ -456,7 +456,9 @@ fullscreen display, vertical sync and the crosshair.
   deaths', the assassinations', the finishers'), else soon after falling. The sword becomes a
   loose body that lands beside it. A character struck flinches, and falls dead, by the side the
   blow came from: its front, left, right or back clips (`Sword_HitLeft_A`, `Empty_HitBack_A`,
-  `Generic_DeathRightA`...), where it has them; hurt by no blow it knows of, it picks among them. His pistol's bullet (`Twk_Proj_BulletUpgraded`) deals 20, ×1.5
+  `Generic_DeathRightA`...), where it has them; hurt by no blow it knows of, it picks among them.
+  A bullet or bolt to a leg (below the hips) has it clutch that leg (`Sword_HitLeg_Left`,
+  `Empty_HitLeg_Right`). His pistol's bullet (`Twk_Proj_BulletUpgraded`) deals 20, ×1.5
   within 9 m, and kills with a head shot (`m_bKillOnHeadshot`); a crossbow bolt deals the
   crossbow's 20, doubled on someone unaware (`m_fDamageMultiplier_Stealth`). Characters'
   shots hit at their `m_MaxAccuracy` close, falling to `m_MinAccuracy` at the end of their
@@ -1740,6 +1742,7 @@ against the install's own data where it carries them, then implemented independe
   - Grenades bounce the original's way: floors and walls lose different amounts, bodies almost all.
     The fuse runs out whatever they hit, and a sticky grenade does 75 more to whoever it is stuck
     to. A sticky grenade sinks 5 cm into what it sticks to; on a wall it goes off just out of it.
+    Someone it sticks to flails at it (`Generic_StickyWeapon`), standing for it.
   - The Spring Razor kills everyone in a 2.5 m cylinder along its surface's normal and in its
     sight; the Spring Razor upgrade doubles the radius. Corvo caught in it takes 50
     (`m_ImmuneNPCDamage`; the characters' `m_NonNPCDamage` 5 comes with the cut). A blast sets it

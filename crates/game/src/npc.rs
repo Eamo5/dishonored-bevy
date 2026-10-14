@@ -34,6 +34,7 @@ impl Plugin for NpcPlugin {
             .add_message::<NpcShot>()
             .add_systems(OnEnter(GameState::InGame), spawn_npcs.after(LevelSpawnSet))
             .add_systems(First, log_jumps.run_if(in_state(GameState::InGame)))
+            .add_systems(Update, sticky_struck.before(npc_select_anim).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, model_details.run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, log_jumps.after(bevy_rapier3d::plugin::PhysicsSet::Writeback).run_if(in_state(GameState::InGame)))
             .add_systems(
@@ -67,6 +68,23 @@ impl Plugin for NpcPlugin {
                     .chain()
                     .run_if(in_state(GameState::InGame)),
             );
+    }
+}
+
+/// A sticky grenade stuck to someone (`gadgets`): they flail at it till it goes off.
+#[derive(Component)]
+pub struct StuckGrenade;
+
+/// Someone a sticky grenade has stuck to flails at it (`Generic_StickyWeapon`), standing for it.
+fn sticky_struck(mut commands: Commands, mut npcs: Query<(Entity, &mut Npc), With<StuckGrenade>>) {
+    for (e, mut npc) in &mut npcs {
+        commands.entity(e).try_remove::<StuckGrenade>();
+        if !npc.is_down() && !npc.floored {
+            npc.attack_t = None;
+            npc.swing = None;
+            npc.aim = None;
+            npc.gesture(21);
+        }
     }
 }
 
@@ -231,6 +249,8 @@ pub struct Npc {
     pub floored: bool,
     /// lying still after it, getting up: from its back (or its front)
     pub rise: Option<bool>,
+    /// the blow it last took was a shot to a leg: its right (or left)
+    pub leg_hit: Option<bool>,
     /// its bearing about Corvo while it waits outside the ring of those at him (radians)
     pub flank: Option<f32>,
     pub taunt_hold: f32,
@@ -664,6 +684,10 @@ pub struct DropKilled(pub u8);
 /// The shot that just struck was to the head (the challenges' Headshot).
 #[derive(Component, Clone, Copy)]
 pub struct HeadHit;
+
+/// The shot that just struck was to a leg: its right (or left).
+#[derive(Component, Clone, Copy)]
+pub struct LegHit(pub bool);
 
 /// A drop assassination's fall, m (the challenges' fall height scoring).
 #[derive(Component, Clone, Copy)]
@@ -1672,6 +1696,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         knock: None,
         floored: false,
         rise: None,
+        leg_hit: None,
         flank: None,
         taunt_hold: 0.0,
         search_run: false,
@@ -2070,18 +2095,22 @@ fn npc_hits(
     mut fx: MessageWriter<crate::particles::SpawnEffect>,
     mut stances: ResMut<crate::script_world::SpawnerOverrides>,
     (level, mut vm): (Option<Res<LevelInfo>>, Option<ResMut<crate::kismet::Vm>>),
-    (mut takedowns, marks, tc): (MessageWriter<crate::gameplay::PlayerTakedown>, Query<(Option<&HeadHit>, Option<&DropHeight>)>, Res<crate::gameplay::TimeControl>),
+    (mut takedowns, marks, tc): (MessageWriter<crate::gameplay::PlayerTakedown>, Query<(Option<&HeadHit>, Option<&DropHeight>, Option<&LegHit>)>, Res<crate::gameplay::TimeControl>),
     (data, mut knocks, attrs, parts): (Res<crate::gamedata::Data>, MessageWriter<crate::npcparts::KnockOff>, Res<crate::gamedata::Attrs>, Query<&crate::npcparts::NpcAttached>),
 ) {
     // how much sooner a sleep dart takes hold (`SleepDelayReduction`: the Combat Sleep Darts
     // upgrade)
     let sleep_cut: f32 = data.0.upgrades.iter().filter(|u| stats.upgrades.contains(&u.id)).flat_map(|u| &u.attributes).filter(|(n, _)| n == "SleepDelayReduction").map(|(_, v)| *v).sum();
     for h in hits.read() {
-        let (head, drop) = marks.get(h.npc).map(|(h, d)| (h.is_some(), d.map(|d| d.0))).unwrap_or((false, None));
+        let (head, drop, leg) = marks.get(h.npc).map(|(h, d, l)| (h.is_some(), d.map(|d| d.0), l.map(|l| l.0))).unwrap_or((false, None, None));
         if head {
             commands.entity(h.npc).try_remove::<HeadHit>();
         }
+        if leg.is_some() {
+            commands.entity(h.npc).try_remove::<LegHit>();
+        }
         let Ok((e, mut npc, t)) = npcs.get_mut(h.npc) else { continue };
+        npc.leg_hit = leg;
         if npc.is_down() {
             // the knocked out can still be killed where they lie (a blade, a bolt, a shot, a
             // blast, fire, the rats eating them): a kill, no longer a knockout
@@ -4301,6 +4330,9 @@ pub struct NpcClips {
     /// the hit reactions and deaths by the side struck: front, left, right, back
     hit_dir: [Vec<ClipId>; 4],
     hit_dir_empty: [Vec<ClipId>; 4],
+    /// shot in the left, right leg, sword drawn and empty-handed (`Sword_HitLeg_Left`,
+    /// `Empty_HitLeg_Right`)
+    hit_leg: [[Option<ClipId>; 2]; 2],
     death_dir: [Option<ClipId>; 4],
     stun: Option<ClipId>,
     /// the eyelids' `Blink`
@@ -4353,6 +4385,8 @@ pub struct NpcClips {
     /// Corvo gone before its eyes by magic (`Empty_Magic_OutOfSight`, `Sword_Magic_OutOfSight`:
     /// the original's `DisBehaviorMagicResponse`, its Awe slot)
     magic: [Vec<ClipId>; 2],
+    /// a sticky grenade stuck to it, flailing at it (`Generic_StickyWeapon`)
+    sticky: Vec<ClipId>,
     /// fighting off a swarm on it, empty-handed and sword drawn: in, its loop, out
     swarm: [[Option<ClipId>; 3]; 2],
     /// turning where it stands, left then right, by 45, 90, 135 and 180 degrees: relaxed
@@ -4465,6 +4499,7 @@ impl NpcClips {
                 lib.all(&["Empty_HitRight_A"]),
                 lib.all(&["Empty_HitBack_A"]),
             ],
+            hit_leg: [["Sword_", "Empty_"], ["Empty_", "Sword_"]].map(|sets| ["Left", "Right"].map(|s| sets.iter().find_map(|p| lib.find(&format!("{p}HitLeg_{s}"))))),
             death_dir: [
                 lib.first(&["Generic_DeathFrontA", "Generic_DeathFront_A"]),
                 lib.first(&["Generic_DeathLeftA", "Generic_DeathLeft_A"]),
@@ -4514,6 +4549,7 @@ impl NpcClips {
             get_up: [lib.find("Generic_RagdollToBack"), lib.find("Generic_RagdollToFront")],
             dodge_attack: [lib.find("Sword_SideStepLeft_DodgeAttack_Small"), lib.find("Sword_SideStepRight_DodgeAttack_Small")],
             magic: [lib.all(&["Empty_Magic_OutOfSight", "Sword_Magic_OutOfSight"]), lib.all(&["Sword_Magic_OutOfSight", "Empty_Magic_OutOfSight"])],
+            sticky: lib.all(&["Generic_StickyWeapon"]),
             swarm: [["Empty_", "Sword_"], ["Sword_", "Empty_"]].map(|sets| ["In", "Loop", "Out"].map(|p| sets.iter().find_map(|s| lib.find(&format!("{s}SwarmAttack_{p}"))))),
             turn: [["Sword_Patrol_Turn", "Empty_Turn", "Patrol_Turn"], ["Sword_Turn", "Empty_Turn", "Sword_Patrol_Turn"]].map(|sets| {
                 ["Left", "Right"].map(|side| ["45", "90", "135", "180"].map(|a| sets.iter().find_map(|s| lib.find(&format!("{s}{side}{a}")))))
@@ -5549,7 +5585,9 @@ fn npc_select_anim(
                 Some(s) if !dirs[s].is_empty() => &dirs[s],
                 _ => pool,
             };
-            let c = if npc.stagger > 1.0 { clips.stun.or(pick(pool)) } else { pick(pool) };
+            // (shot in a leg: its leg's)
+            let leg = npc.leg_hit.take().and_then(|r| clips.hit_leg[(!std::ptr::eq(dirs, &clips.hit_dir)) as usize][r as usize]);
+            let c = if npc.stagger > 1.0 { clips.stun.or(pick(pool)) } else { leg.or_else(|| pick(pool)) };
             if let Some(c) = c {
                 anim.restart(c, false, 1.3, 0.06);
                 st.oneshot = true;
@@ -5574,12 +5612,13 @@ fn npc_select_anim(
                 18 => &clips.trigger_alarm,
                 19 => &clips.corpse_check,
                 20 => &clips.magic[st.drawn as usize],
+                21 => &clips.sticky,
                 _ => &clips.push,
             };
             if let Some(c) = pick(pool) {
                 // (its pockets checked where it stands; the alarm pulled, a body looked over, Corvo
-                // gone by magic)
-                if matches!(npc.act.0, 14 | 18 | 19 | 20) {
+                // gone by magic, a sticky grenade flailed at)
+                if matches!(npc.act.0, 14 | 18 | 19 | 20 | 21) {
                     npc.stagger = npc.stagger.max(anim.lib.duration(c));
                 }
                 if matches!(npc.act.0, 15 | 16) && clips.dodge_attack[npc.act.0 as usize - 15].is_some() {

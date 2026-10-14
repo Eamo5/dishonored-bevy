@@ -502,6 +502,8 @@ fn ignite(mut commands: Commands, time: Res<Time>, tc: Res<TimeControl>, mut q: 
 
 /// A hit this high above a character's middle is to its head.
 const HEAD: f32 = 0.58;
+/// Below the hips, from a character's middle: its legs (a bolt's limb there).
+const LEGS: f32 = -0.35;
 
 #[derive(Component)]
 pub struct Projectile {
@@ -1456,6 +1458,9 @@ fn use_power(
                     let damage = attrs.bullet.damage(toi, head, n.alert != crate::npc::Alert::Combat);
                     if head {
                         commands.entity(hit).try_insert(crate::npc::HeadHit);
+                    } else if at.y - nt.translation.y < LEGS {
+                        let f = n.forward();
+                        commands.entity(hit).try_insert(crate::npc::LegHit((at - nt.translation).dot(Vec3::new(-f.z, 0.0, f.x)) > 0.0));
                     }
                     hits.write(NpcHit { npc: hit, damage, kind: HitKind::Bullet, from: pt.translation });
                     sfx.write(PostEvent::named("Imp_Bullet_on_Body", Some(at)));
@@ -1868,7 +1873,7 @@ fn update_projectiles(
                     let f = npc.forward();
                     let side = local.with_y(0.0).dot(Vec3::new(-f.z, 0.0, f.x)).abs();
                     let head = local.y > HEAD;
-                    let limb = !head && (local.y < -0.35 || side > 0.22);
+                    let limb = !head && (local.y < LEGS || side > 0.22);
                     // a bolt: more to the head, doubled (`m_fDamageMultiplier_Stealth`) on the head
                     // or torso of one not fighting him, a limb's at most 15; an incendiary one 50,
                     // never killing outright, and the flames 0.5 s on (as roshan's r614/blink
@@ -1879,6 +1884,8 @@ fn update_projectiles(
                     let came = t.translation - step / len * 2.0;
                     if head {
                         commands.entity(hit).try_insert(crate::npc::HeadHit);
+                    } else if local.y < LEGS {
+                        commands.entity(hit).try_insert(crate::npc::LegHit(local.with_y(0.0).dot(Vec3::new(-f.z, 0.0, f.x)) > 0.0));
                     }
                     match pr.kind {
                         HitKind::Bolt => {

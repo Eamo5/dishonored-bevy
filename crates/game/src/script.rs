@@ -1462,14 +1462,15 @@ fn run_script(
             p.pitch = (to.y / to.length().max(1e-3)).asin();
         }
         "face" => {
-            // face [NAME]: aim the view at the nearest standing character (whose name or pawn
-            // holds NAME)
+            // face [NAME [DY]]: aim the view at the nearest standing character (whose name or
+            // pawn holds NAME), DY above its middle (0.6: its head; -0.6 its legs)
             let named = cmd.get(1).cloned().unwrap_or_default();
+            let dy = cmd.get(2).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.6);
             let eye = t.translation + Vec3::Y * 0.6;
             if let Some((_, at)) = npcs
                 .iter()
                 .filter(|(n, _, _)| !n.is_down() && (named.is_empty() || n.name.contains(&named) || n.pawn.contains(&named)))
-                .map(|(_, nt, _)| (nt.translation.distance(t.translation), nt.translation + Vec3::Y * 0.6))
+                .map(|(_, nt, _)| (nt.translation.distance(t.translation), nt.translation + Vec3::Y * dy))
                 .min_by(|a, b| a.0.total_cmp(&b.0))
             {
                 let to = at - eye;
