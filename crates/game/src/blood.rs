@@ -1,7 +1,8 @@
-//! A body's blood on the world: the pool it bleeds lying still (`DisTweaks_NPCPawn_Body
-//! .m_BloodDecal`), spreading under one of its bones, and the splatter it leaves where it's
-//! thrown against something hard enough (the contact system's `Limb` x `Environment`: the
-//! ragdolls' `RGDL_Body` and `RGDL_Limb` are `Limb`). Both are decals (`decals.rs`).
+//! A body on the world: the pool it bleeds lying still (`DisTweaks_NPCPawn_Body
+//! .m_BloodDecal`), spreading under one of its bones, and its contacts as it falls and is thrown
+//! about (`DishonoredNPCPawn.m_CorpseContactPhysicsInfo`: the contact system's `Corpse`): its
+//! thud and the noise the AI hear, and the splatter it leaves where it strikes hard enough. The
+//! pool and the splatter are decals (`decals.rs`).
 
 use crate::decals::SpawnDecal;
 use crate::level::{LevelInfo, GROUP_WORLD};
@@ -16,7 +17,7 @@ pub struct BloodPlugin;
 
 impl Plugin for BloodPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (bleed, splatter).run_if(in_state(GameState::InGame)));
+        app.add_systems(Update, (bleed, contacts).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -29,9 +30,11 @@ const FLOOR_BELOW: f32 = 1.0;
 const FLOOR_DROP: f32 = 0.12;
 /// A body's part has struck something when it loses this share of its speed in a step.
 const STRUCK_LOSS: f32 = 0.5;
-/// A body leaves at most one splatter in this long (s: our reading, so one body flung about
-/// doesn't take all ten decals).
-const SPLATTER_EVERY: f32 = 1.0;
+/// A dead body's contacts: the least speed one is felt at (m/s), and how soon another may be
+/// (s: `DishonoredNPCPawn.m_CorpseContactPhysicsInfo`'s `m_fMinImpactSpeed` 50 uu/s and
+/// `m_fRefireDelay` 0.3).
+const CONTACT_MIN_SPEED: f32 = 0.5;
+const CONTACT_REFIRE: f32 = 0.3;
 /// unreal units to metres
 const UU: f32 = 0.01;
 
@@ -104,19 +107,19 @@ fn floor_reach(ctx: &RapierContext, filter: QueryFilter, at: Vec3, most: f32) ->
     [1.0, 0.8, 0.6, 0.45, 0.3, 0.2, 0.1].into_iter().map(|k| k * most).find(|r| holds(*r)).unwrap_or(0.0)
 }
 
-/// A limp body's part that stops short against the world, having come faster than the
-/// contact's least speed (750 uu/s), leaves its blood splatter there, along the way it came
-/// (none in water; a body one a second).
-#[allow(clippy::too_many_arguments)]
-fn splatter(
+/// A dead body's part that stops short against the world: the contact system's `Corpse` on what
+/// it struck (water's splash in water), at most one a body every `m_fRefireDelay`: its thud, the noise
+/// the AI hear from 200 uu/s, and from 750 uu/s its blood splatter there, along the way it came.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn contacts(
     time: Res<Time>,
     (level, waters): (Option<Res<LevelInfo>>, Option<Res<crate::swim::Waters>>),
     parts: Query<(Entity, &RagdollPart, &Transform, &Velocity)>,
+    owners: Query<&Npc>,
     surfaces: Query<&crate::footsteps::ColliderSurfaces>,
     rapier: ReadRapierContext,
-    mut last: Local<HashMap<Entity, (Vec3, Vec3)>>,
-    mut splattered: Local<HashMap<Entity, f32>>,
-    mut decals: MessageWriter<SpawnDecal>,
+    (mut last, mut struck_at): (Local<HashMap<Entity, (Vec3, Vec3)>>, Local<HashMap<Entity, f32>>),
+    (mut decals, mut sfx, mut noise): (MessageWriter<SpawnDecal>, MessageWriter<crate::audio::PostEvent>, MessageWriter<crate::gameplay::Noise>),
 ) {
     let dt = time.delta_secs();
     let (Some(level), Ok(ctx)) = (level, rapier.single()) else {
@@ -124,13 +127,17 @@ fn splatter(
         return;
     };
     let clock = time.elapsed_secs();
-    splattered.retain(|_, t| clock - *t < SPLATTER_EVERY);
+    struck_at.retain(|_, t| clock - *t < CONTACT_REFIRE);
     let mut now = HashMap::with_capacity(parts.iter().len());
     for (e, part, t, v) in &parts {
         now.insert(e, (t.translation, v.linear));
         let Some(&(from, was)) = last.get(&e) else { continue };
         let speed = was.length();
-        if dt <= 0.0 || speed < 1.0 || v.linear.length() > speed * STRUCK_LOSS || splattered.contains_key(&part.owner) {
+        if dt <= 0.0 || speed < CONTACT_MIN_SPEED || v.linear.length() > speed * STRUCK_LOSS || struck_at.contains_key(&part.owner) {
+            continue;
+        }
+        // (the knocked out are a `SleepingBody`, which the contact system leaves silent)
+        if owners.get(part.owner).is_ok_and(|n| n.mode != Mode::Dead) {
             continue;
         }
         // what it struck, along the way it came
@@ -138,12 +145,21 @@ fn splatter(
         let world = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
         let Some((_, toi, surface, normal)) = crate::footsteps::ray_surface_normal(&ctx, &surfaces, from, dir, speed * dt + 0.4, world) else { continue };
         let at = from + dir * toi;
-        if waters.as_ref().is_some_and(|w| w.at(at).is_some()) {
-            continue;
+        // (in water: its splash, no splatter)
+        let wet = waters.as_ref().is_some_and(|w| w.at(at).is_some());
+        let struck = if wet { "Env_Water" } else { crate::impacts::struck(surface) };
+        struck_at.insert(part.owner, clock);
+        let impacts = &level.scene.corpse_impacts;
+        if let Some(im) = impacts.iter().find(|i| i.against == struck).or_else(|| impacts.iter().find(|i| i.against == "Environment")) {
+            if !im.sound.is_empty() {
+                sfx.write(crate::audio::PostEvent::named(&im.sound, Some(at)));
+            }
+            if im.noise > 0.0 && speed >= im.noise_min_speed {
+                use crate::gameplay::{Noise, NoiseKind};
+                noise.write(Noise { pos: at, radius: im.noise, kind: if im.threatening { NoiseKind::Threatening } else { NoiseKind::Anomaly } });
+            }
         }
-        let struck = crate::impacts::struck(surface);
-        if crate::impacts::mark(&mut decals, &level.scene, "Limb", struck, at, normal, dir, speed / UU) {
-            splattered.insert(part.owner, clock);
+        if !wet && crate::impacts::mark(&mut decals, &level.scene, "Corpse", struck, at, normal, dir, speed / UU) {
             info!("blood: a body strikes {struck} at {:.1} m/s, at {at}", speed);
         }
     }

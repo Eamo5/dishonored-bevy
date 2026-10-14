@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 144;
+pub const SCENE_VERSION: u32 = 145;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -210,6 +210,10 @@ pub struct Scene {
     /// their sounds
     #[serde(default)]
     pub sword_impacts: Vec<Impact>,
+    /// the contact system's intersections of a dead body (`Corpse`) with what it strikes:
+    /// their sounds and noises
+    #[serde(default)]
+    pub corpse_impacts: Vec<Impact>,
     /// the characters' clips that sever a limb (`DishonoredNotify_SeverLimb`: the beheading
     /// finishers)
     #[serde(default)]
@@ -2439,6 +2443,9 @@ pub struct Impact {
     /// how far the AI hear it (m), and whether it alarms them
     pub noise: f32,
     pub threatening: bool,
+    /// the least speed it's heard at (m/s: its noise's `m_VolumeSettings.m_fMinSpeed`)
+    #[serde(default)]
+    pub noise_min_speed: f32,
 }
 
 /// A movable's break (`DisUsableObjectBreakSteps` step).

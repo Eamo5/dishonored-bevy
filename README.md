@@ -267,9 +267,11 @@ fullscreen display, vertical sync and the crosshair.
   the start, have bled already. The contact system's decals mark the world too
   (`DisContactSub_Decal`): a pistol bullet leaves its 8 uu hole (`Bullet` x `Environment`:
   `Bullet_Impact_Metal_01_INST`; wood, metal and glass have their own decals, which never draw),
-  and a limp body that strikes the world faster than 750 uu/s leaves a 150 uu blood splatter
-  there, along the way it came (`Limb` x `Environment`: `blood_splatter_decal_INST`; the
-  ragdolls' physical materials are `Limb`). As roshan's r614/blink research decoded
+  and a dead body that strikes the world faster than 750 uu/s leaves a 150 uu blood splatter
+  there, along the way it came (`Corpse` x `Environment`: `blood_splatter_decal_INST`). A dead
+  body's contacts (`DishonoredNPCPawn.m_CorpseContactPhysicsInfo`: from 50 uu/s, one every
+  0.3 s) also thud (`Snd_Phys_Flesh_Generic`) and, from 200 uu/s, make a whisper the AI hear;
+  the knocked out (`SleepingBody`) fall silent. As roshan's r614/blink research decoded
   `DishonoredDecalComponent` and `DisDecalManager`, only a decal with `m_Materials` draws, at
   most ten are live (a new one takes the place of the first unseen for 0.2 s, else there's
   none), and a grown one goes once unseen for its 10 s lifetime. Ours lie flat on the

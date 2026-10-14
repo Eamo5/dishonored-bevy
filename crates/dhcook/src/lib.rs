@@ -5594,7 +5594,7 @@ impl<'a> Cooker<'a> {
     /// (the ragdolls' `RGDL_Body` and `RGDL_Limb` are `Limb`): each intersection's decal, and
     /// what it draws if it ever does.
     fn contact_decals(&mut self) -> Vec<(String, String, Option<Decal>)> {
-        const STRIKERS: &[&str] = &["Bullet", "Limb"];
+        const STRIKERS: &[&str] = &["Bullet", "Limb", "Corpse"];
         let Some(cs) = self.assets.find("Phy_ContactSystem.ContactSystem.Dis_ContactSystem") else { return Vec::new() };
         let Ok(props) = cs.props() else { return Vec::new() };
         let Some((count, offset, size)) = props.array("m_Intersections") else { return Vec::new() };
@@ -5814,6 +5814,9 @@ impl<'a> Cooker<'a> {
                 let c = self.chain(&n);
                 im.noise = noise_meters(&self.assets.cooked_dir, c.name("m_NoiseLoudness").unwrap_or(""));
                 im.threatening = c.name("m_NoiseContext").is_some_and(|x| x.contains("Threatening"));
+                if let Some(Value::Struct(_, v)) = c.get("m_VolumeSettings") {
+                    im.noise_min_speed = Props(v.clone()).float("m_fMinSpeed").unwrap_or(0.0) * UNIT;
+                }
             }
             if !im.sound.is_empty() || im.particle.is_some() || im.noise > 0.0 {
                 out.push(im);
@@ -6764,6 +6767,7 @@ impl<'a> Cooker<'a> {
         self.scene.contact_fx = self.contact_fx();
         self.scene.contact_decals = self.contact_decals();
         self.scene.sword_impacts = self.impacts("DisContactType_Sword");
+        self.scene.corpse_impacts = self.impacts("DisContactType_Corpse");
         self.scene.severed_limbs = self.severed_limbs();
         // the first-person arms: a skinned rig exposed as the "player_arms" character type
         // (Corvo's; Daud's on The Knife of Dunwall's maps: his pawn's `m_pSkeletalMesh`, his
