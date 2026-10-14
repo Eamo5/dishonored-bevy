@@ -1,9 +1,10 @@
 //! Playback of the original animations (cooked from the game's AnimSets) on character rigs.
 //!
 //! Clips are stored as sparse keyframes per bone; frames between keys interpolate linearly,
-//! exactly as the original Edge runtime does. An [`Animator`] has a base layer and an
-//! overlay layer; each plays one clip at a time and crossfades from the previous one. The
-//! overlay only affects the bones its clips animate (e.g. the left arm casting a power).
+//! exactly as the original Edge runtime does. An [`Animator`] has a base layer, an upper-body
+//! layer and an overlay layer; each plays one clip at a time and crossfades from the previous
+//! one. The upper-body and overlay layers only affect the bones their clips animate, within
+//! their masks if they have one (a character's upper body, the arms' left arm casting a power).
 
 use bevy::prelude::*;
 use dhcook::format::{AnimClip, AnimFile, SkeletonDef};
@@ -306,6 +307,9 @@ pub struct Animator {
     bind_rot: Vec<Quat>,
     bind_t: Vec<Vec3>,
     base: Layer,
+    /// an upper-body layer over the base (masked by `upper_mask`: a character's actions from
+    /// the spine up while its legs keep the base's locomotion)
+    upper: Layer,
     overlay: Layer,
     /// Multiplies the playback rate (Bend Time).
     pub time_scale: f32,
@@ -328,6 +332,8 @@ pub struct Animator {
     /// the joints the overlay layer may move (a branch's filter: the arms' left arm), else
     /// all its clip keys
     pub overlay_mask: Option<Arc<Vec<bool>>>,
+    /// the joints the upper-body layer moves (`spine_0_jnt` and below it)
+    pub upper_mask: Option<Arc<Vec<bool>>>,
     deltas: Vec<(usize, Quat, Vec3)>,
 }
 
@@ -348,6 +354,7 @@ impl Animator {
             bind_rot,
             bind_t,
             base: Layer { weight: 1.0, target: 1.0, ..Default::default() },
+            upper: Layer::default(),
             overlay: Layer::default(),
             time_scale: 1.0,
             frozen: false,
@@ -356,6 +363,7 @@ impl Animator {
             additive: Vec::new(),
             masked: None,
             overlay_mask: None,
+            upper_mask: None,
             deltas: Vec::new(),
         }
     }
@@ -422,6 +430,36 @@ impl Animator {
         self.overlay.finished(&self.lib)
     }
 
+    /// Play `clip` on the upper-body layer from its start, fading the layer in.
+    pub fn restart_upper(&mut self, clip: ClipId, looping: bool, speed: f32, blend: f32) {
+        self.upper.restart(clip, looping, speed, blend);
+        self.upper.target = 1.0;
+        self.upper.weight_rate = 1.0 / blend.max(0.01);
+        if self.upper.weight <= 0.0 {
+            self.upper.prev = None;
+        }
+    }
+
+    /// Fade the upper-body layer out.
+    pub fn stop_upper(&mut self, blend: f32) {
+        self.upper.target = 0.0;
+        self.upper.weight_rate = 1.0 / blend.max(0.01);
+    }
+
+    /// The upper-body layer plays (fading in or held).
+    pub fn upper_on(&self) -> bool {
+        self.upper.target > 0.0 && self.upper.cur.is_some()
+    }
+
+    pub fn upper_finished(&self) -> bool {
+        self.upper.finished(&self.lib)
+    }
+
+    /// What the upper-body layer plays (while it's on).
+    pub fn upper_clip(&self) -> Option<ClipId> {
+        self.upper.cur.filter(|_| self.upper.target > 0.0).map(|c| c.clip)
+    }
+
     pub fn overlay_is(&self, clip: Option<ClipId>) -> bool {
         clip.is_some() && self.overlay.target > 0.0 && self.overlay.cur.map(|c| c.clip) == clip
     }
@@ -485,6 +523,11 @@ impl Animator {
         let mut pending = std::mem::take(&mut self.pending);
         pending.clear();
         self.base.advance(&lib, dt, &mut pending);
+        let mut up = Vec::new();
+        self.upper.advance(&lib, dt, &mut up);
+        if self.upper.weight > 0.5 {
+            pending.extend(up);
+        }
         // the overlay's notifies only while it's audible
         let mut ov = Vec::new();
         self.overlay.advance(&lib, dt, &mut ov);
@@ -497,8 +540,12 @@ impl Animator {
     fn pose(&mut self) {
         self.rot.copy_from_slice(&self.bind_rot);
         self.trans.copy_from_slice(&self.bind_t);
-        for li in 0..2 {
-            let layer = if li == 0 { &self.base } else { &self.overlay };
+        for li in 0..3 {
+            let layer = match li {
+                0 => &self.base,
+                1 => &self.upper,
+                _ => &self.overlay,
+            };
             let Some(cur) = layer.cur else { continue };
             let weight = if li == 0 { 1.0 } else { smooth(layer.weight) };
             if weight <= 0.0 {
@@ -515,8 +562,13 @@ impl Animator {
                 self.lib.sample(p.clip, p.t, &mut self.rot_b, &mut self.trans_b);
                 mix(&mut self.rot_a, &mut self.trans_a, &self.rot_b, &self.trans_b, wprev);
             }
-            // (the overlay's branch filter: the joints outside it keep the base pose)
-            if let (1, Some(mask)) = (li, self.overlay_mask.as_ref()) {
+            // (the layer's branch filter: the joints outside it keep the pose beneath)
+            let mask = match li {
+                1 => self.upper_mask.as_ref(),
+                2 => self.overlay_mask.as_ref(),
+                _ => None,
+            };
+            if let Some(mask) = mask {
                 for (i, on) in mask.iter().enumerate().take(self.rot_a.len()) {
                     if !on {
                         self.rot_a[i] = self.rot[i];

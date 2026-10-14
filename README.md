@@ -369,10 +369,13 @@ fullscreen display, vertical sync and the crosshair.
   Alert characters walk and run the way they go relative to where they face
   (`AnimNodeBlendDirectional`'s four ways: `WalkN/E/S/W`, the sword sets' `_Revert` clips played
   backwards for south and west, by root motion), the quarter held 10 degrees past its edge.
-  Standing about unaware, a character plays an ambient idle of the set it stands in (a guard's
-  `Sword_Patrol_Idle_0x`, empty hands' `Empty_Idle_0x`) as it stops, then every 30-60 s of
-  standing (the patrol and guard behaviours' `DisTweaks_AISubProcess_AmbientAnims`), starting
-  over when anything sets it on edge. A character that has just noticed Corvo (its attention at
+  A patrolling or guarding character plays an ambient idle of the set it stands in (a guard's
+  `Sword_Patrol_Idle_0x`, empty hands' `Empty_Idle_0x`) every 30-60 s on its upper body, walking
+  as well as standing (the patrol and guard behaviours' `DisTweaks_AISubProcess_AmbientAnims`,
+  `m_bCheckForMovement` false), its legs keeping their stride (the upper body from
+  `spine_0_jnt`, `NPC_Human_at`'s `UpperBodyFilter`); a blow, a fall or anything setting it on
+  edge takes the upper body back and starts the wait over. Relaxed characters (civilians idling
+  or wandering) have none. A character that has just noticed Corvo (its attention at
   the head-tracking level: the original posts its look-at there and clears it at any other, as
   roshan's research decoded it; turning to face him the whole body turns) or speaks with him
   close by turns its head to him, the neck taking most of the turn and the upper back the rest, within the original's

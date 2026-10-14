@@ -57,6 +57,7 @@ impl Plugin for NpcPlugin {
                     npc_finishers,
                     weeper_grab,
                     hold_scripted,
+                    scripted_upper,
                     npc_move.run_if(|| !skip("move")),
                     npc_select_anim.run_if(|| !skip("animate")),
                     npc_animate.run_if(|| !skip("animate")),
@@ -1188,6 +1189,16 @@ fn log_jumps(q: Query<(Entity, &Npc, &Transform, Has<ScriptedAnim>)>, mut last: 
     }
 }
 
+/// A scene, a distraction or the scripts playing a character's clips take its upper body
+/// back from an ambient idle.
+fn scripted_upper(mut q: Query<&mut Animator, (With<ScriptedAnim>, With<Npc>)>) {
+    for mut a in &mut q {
+        if a.upper_on() {
+            a.stop_upper(0.2);
+        }
+    }
+}
+
 /// Characters a scene holds don't go on with their last step (the controller keeps its
 /// translation until it is cleared).
 fn hold_scripted(mut q: Query<&mut KinematicCharacterController, With<ScriptedAnim>>) {
@@ -1768,7 +1779,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
             speed(clips.walk_alert.or(clips.walk), 0.8, 2.6, ALERT_WALK),
             speed(clips.run, 2.5, 6.0, RUN),
         ];
-        let animator = Animator::new(lib.clone(), &vis.skeleton, joints.clone());
+        let mut animator = Animator::new(lib.clone(), &vis.skeleton, joints.clone());
+        // (its upper-body actions from `spine_0_jnt` up: `NPC_Human_at`'s `UpperBodyFilter`)
+        animator.upper_mask = upper_body(&vis.skeleton.bones);
         commands.entity(e).insert((
             animator,
             NpcAnim {
@@ -1780,8 +1793,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 attacking: false,
                 oneshot: false,
                 hit_seen: 0.0,
-                // (as it starts out: its first ambient idle comes within a few seconds)
-                idle_time: rand::random::<f32>() * 3.0,
+                // (its behaviour's ambient idles start counting down from a random share of
+                // their longest wait)
+                idle_time: rand::random::<f32>() * AMBIENT_IDLE[1],
                 blink_in: rand::random::<f32>() * BLINK_EVERY[1],
                 settle: None,
                 drawn: true,
@@ -4235,7 +4249,7 @@ fn pick(v: &[ClipId]) -> Option<ClipId> {
 fn log_npc_clips(
     player: Query<&Transform, With<Player>>,
     npcs: Query<(Entity, &Npc, &Animator, &Transform, Has<ScriptedAnim>)>,
-    mut last: Local<std::collections::HashMap<Entity, Option<ClipId>>>,
+    mut last: Local<std::collections::HashMap<Entity, (Option<ClipId>, Option<ClipId>)>>,
 ) {
     let ppos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
     for (e, npc, anim, t, scripted) in &npcs {
@@ -4243,12 +4257,14 @@ fn log_npc_clips(
             continue;
         }
         let cur = anim.current().map(|p| p.clip);
-        if last.get(&e) != Some(&cur) {
-            last.insert(e, cur);
+        let upper = anim.upper_clip();
+        if last.get(&e) != Some(&(cur, upper)) {
+            last.insert(e, (cur, upper));
             info!(
-                "npc clip: {} -> {} (mode {:?} alert {:?} hit {:.2} stagger {:.2} attack {:?} scripted {scripted})",
+                "npc clip: {} -> {} upper {} (mode {:?} alert {:?} hit {:.2} stagger {:.2} attack {:?} scripted {scripted})",
                 npc.name,
                 cur.map(|c| anim.lib.clip(c).name.as_str()).unwrap_or("-"),
+                upper.map(|c| anim.lib.clip(c).name.as_str()).unwrap_or("-"),
                 npc.mode,
                 npc.alert,
                 npc.hit_react,
@@ -4302,6 +4318,12 @@ fn npc_select_anim(
                     anim.restart_overlay(b, false, 1.0 + rand::random::<f32>(), 0.02);
                 }
             }
+        }
+
+        // (a fall, a blow, a gesture, a swing or anything setting it on edge takes the upper body
+        // back from an ambient idle)
+        if anim.upper_on() && (npc.is_down() || npc.alert != Alert::Unaware || npc.hit_react > st.hit_seen + 1e-3 || npc.act.1 != st.act_seen || npc.attack_t.is_some() || npc.caught.is_some()) {
+            anim.stop_upper(0.15);
         }
 
         // sword: drawn when alerted, holstered otherwise
@@ -4739,24 +4761,29 @@ fn npc_select_anim(
 
         // locomotion, played at the rate that matches the ground speed
         let alert = npc.alert != Alert::Unaware || matches!(npc.mode, Mode::Combat | Mode::Search | Mode::Investigate);
+        // a patrolling or guarding character's ambient idles (`DisTweaks_AISubProcess_AmbientAnims`
+        // of the patrol and guard behaviours: every 30-60 s, `m_fMin/MaxAmbientAnimFrequency`, on
+        // the upper body and walking too, `m_bCheckForMovement` false, as roshan's r614/blink
+        // research found); the relaxed (civilians idling, wandering) have none
+        if anim.upper_on() && anim.upper_finished() {
+            anim.stop_upper(0.3);
+        }
         if alert {
             // (a change of behaviour starts its ambient idles over)
-            st.idle_time = 0.0;
-        }
-        if sp < 0.3 {
-            // standing about unaware, an ambient idle at once and then every 30-60 s of standing
-            // (`DisTweaks_AISubProcess_AmbientAnims` of the patrol and guard behaviours,
-            // `m_fMin/MaxAmbientAnimFrequency`, counting while it stands still, as roshan's
-            // r614/blink research found)
+            st.idle_time = rand::random::<f32>() * AMBIENT_IDLE[1];
+            if anim.upper_on() {
+                anim.stop_upper(0.2);
+            }
+        } else if npc.fighter() {
             st.idle_time -= dt;
-            if !alert && st.idle_time <= 0.0 {
+            if st.idle_time <= 0.0 {
                 st.idle_time = AMBIENT_IDLE[0] + rand::random::<f32>() * (AMBIENT_IDLE[1] - AMBIENT_IDLE[0]);
                 if let Some(c) = pick(&clips.idle_fidgets) {
-                    anim.restart(c, false, 1.0, 0.3);
-                    st.oneshot = true;
-                    continue;
+                    anim.restart_upper(c, false, 1.0, 0.3);
                 }
             }
+        }
+        if sp < 0.3 {
             // (run as far as it goes, a civilian cowers there: the panic's stance)
             let c = if npc.mode == Mode::Flee && !npc.fighter() { clips.cower.or(clips.idle_alert).or(clips.idle) } else if alert { clips.idle_alert.or(clips.idle) } else { clips.idle };
             if let Some(c) = c {
@@ -4802,6 +4829,17 @@ fn npc_select_anim(
             }
         }
     }
+}
+
+/// The joints from `spine_0_jnt` down its chain (a character's upper body), parents before
+/// their children.
+fn upper_body(bones: &[dhcook::format::BoneDef]) -> Option<std::sync::Arc<Vec<bool>>> {
+    let root = bones.iter().position(|b| b.name.eq_ignore_ascii_case("spine_0_jnt"))?;
+    let mut on = vec![false; bones.len()];
+    for (i, b) in bones.iter().enumerate() {
+        on[i] = i == root || (b.parent >= 0 && on.get(b.parent as usize).copied().unwrap_or(false));
+    }
+    Some(std::sync::Arc::new(on))
 }
 
 fn ease(x: f32) -> f32 {
