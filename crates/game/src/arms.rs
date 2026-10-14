@@ -136,6 +136,11 @@ struct ArmClips {
     dark_vision: Option<ClipId>,
     wristbow_idle: Option<ClipId>,
     pistol_fire: Option<ClipId>,
+    /// the pistol's shot with its accuracy upgrade (`m_FireAccurateAction`: `Pistol_Fire_Accurate`)
+    pistol_fire_accurate: Option<ClipId>,
+    /// a gun raised to the eye through the mask's optics, pistol and crossbow: in, held, out,
+    /// its shot, its accurate shot (`Pistol_Spyglass_*`, `Crossbow_Spyglass_*`)
+    spyglass: [[Option<ClipId>; 5]; 2],
     possess: Option<ClipId>,
     swarm: Option<ClipId>,
     grenade_throw: Option<ClipId>,
@@ -234,6 +239,8 @@ impl ArmClips {
             dark_vision: lib.find("Powers_Cast_DarkVision_In"),
             wristbow_idle: lib.find("Wristbow_Idle"),
             pistol_fire: lib.find("Pistol_Fire"),
+            pistol_fire_accurate: lib.find("Pistol_Fire_Accurate"),
+            spyglass: ["Pistol", "Crossbow"].map(|g| ["In", "Idle", "Out", "Fire", "FireAccurate"].map(|s| lib.find(&format!("{g}_Spyglass_{s}")))),
             possess: lib.find("Powers_Cast_Possession_In"),
             swarm: lib.find("Powers_Cast_Swarm"),
             grenade_throw: lib.find("Gadgets_Grenade_Deploy"),
@@ -275,6 +282,8 @@ struct ArmsAnim {
     mantling: bool,
     /// sliding (as last seen)
     sliding: bool,
+    /// the gun raised to the eye, zoomed (as last seen: which)
+    raised: Option<usize>,
     /// in the air long enough that touching down is a landing
     airborne: bool,
     parry_flash: f32,
@@ -507,6 +516,7 @@ fn spawn_arms(
                 airborne: false,
                 mantling: false,
                 sliding: false,
+                raised: None,
                 parry_flash: 0.0,
                 damage_flash: 0.0,
                 blow_seen: 0,
@@ -589,7 +599,7 @@ fn animate_arms(
     mut arms: Query<(&mut Animator, &mut ArmsAnim, &mut Visibility), With<ArmsRoot>>,
     mut held: Query<&mut Visibility, Without<ArmsRoot>>,
     (swim, mut carry, peek, cine, scene_arms): (Res<crate::swim::Swim>, ResMut<crate::carry::Carry>, Res<crate::keyhole::Peek>, Res<crate::script_world::Cinematic>, Res<crate::matinee::SceneArms>),
-    (versus, slide, edge): (Res<crate::combat::Versus>, Res<crate::player::Slide>, Res<crate::player::MantleEdge>),
+    (versus, slide, edge, zoom): (Res<crate::combat::Versus>, Res<crate::player::Slide>, Res<crate::player::MantleEdge>, Res<crate::zoom::Zoom>),
 ) {
     let (Ok((p, sword, choking, grabbed)), Ok((mut anim, mut st, mut vis))) = (player.single(), arms.single_mut()) else { return };
     let st = &mut *st;
@@ -968,8 +978,23 @@ fn animate_arms(
             st.started.push(name.to_string());
         }
     }
+    // (a gun raised to the eye through the optics: its own clips, `FirePistolZoom`,
+    // `CrossbowFireZoom`; the pistol's accurate shot with `Twk_Upgrade_Pistol_Accuracy2`)
+    let gun = crate::aim::Weapon::of(powers.selected).map(|w| w as usize);
+    let zoomed = zoom.level > 0 && gun.is_some_and(|g| c.spyglass[g][1].is_some());
+    let accurate = stats.upgrades.iter().any(|u| u == "Twk_Upgrade_Pistol_Accuracy2");
     if powers.cast_seq != st.cast_seq {
         st.cast_seq = powers.cast_seq;
+        let gun_shot = |g: usize| {
+            let sg = c.spyglass[g];
+            if zoomed {
+                if accurate && g == 0 { sg[4].or(sg[3]) } else { sg[3] }
+            } else if accurate && g == 0 {
+                c.pistol_fire_accurate
+            } else {
+                None
+            }
+        };
         let cl = match powers.cast_power {
             Power::Blink => c.blink,
             Power::Windblast => c.windblast,
@@ -979,8 +1004,8 @@ fn animate_arms(
             Power::Empty | Power::Heart => c.switch,
             Power::Possess => c.possess,
             Power::DevouringSwarm => c.swarm,
-            Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt => c.crossbow_fire,
-            Power::Pistol | Power::ExplosiveBullet => c.pistol_fire,
+            Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt => gun_shot(1).or(c.crossbow_fire),
+            Power::Pistol | Power::ExplosiveBullet => gun_shot(0).or(c.pistol_fire),
             Power::Grenade | Power::StickyGrenade | Power::Chokedust => c.grenade_throw,
             Power::SpringRazor | Power::ArcMine | Power::StunMine => c.razor_place,
         };
@@ -1055,9 +1080,31 @@ fn animate_arms(
             anim.restart_overlay(cl, false, 1.0, 0.1);
         }
     }
-    let aiming = aiming || cooking;
+    // zoomed with a gun: it comes up to the eye (`*_Spyglass_In`) and is held there (`_Idle`)
+    // between shots; the optics put away, it comes down (`_Out`)
     let in_reload = c.reload.iter().any(|(_, cl)| anim.overlay_is(Some(*cl)));
-    if !aiming && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.grenade_reload) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision))) {
+    let raised = zoomed && !(reloading && in_reload);
+    if let (true, Some(g)) = (raised, gun) {
+        let [s_in, s_idle, _, s_fire, s_acc] = c.spyglass[g];
+        let shot = (anim.overlay_is(s_fire) || anim.overlay_is(s_acc)) && !anim.overlay_finished();
+        if st.raised != Some(g) {
+            if let Some(cl) = s_in.or(s_idle) {
+                anim.restart_overlay(cl, s_in.is_none(), 1.0, 0.1);
+            }
+        } else if !shot && (anim.overlay_finished() || !(anim.overlay_is(s_in) || anim.overlay_is(s_idle))) {
+            if let Some(cl) = s_idle {
+                anim.play_overlay(cl, true, 1.0, 0.1);
+            }
+        }
+        st.raised = Some(g);
+    } else if let Some(g) = st.raised.take() {
+        if let Some(cl) = c.spyglass[g][2].filter(|_| !in_reload) {
+            anim.restart_overlay(cl, false, 1.0, 0.1);
+        }
+    }
+    let aiming = aiming || cooking || raised;
+    let spyglass_busy = c.spyglass.iter().flatten().any(|cl| anim.overlay_is(*cl)) || anim.overlay_is(c.pistol_fire_accurate);
+    if !aiming && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.grenade_reload) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision) || spyglass_busy)) {
         match idle {
             Some(cl) if !st.choking && !st.blocking => anim.play_overlay(cl, true, 1.0, 0.25),
             _ => anim.stop_overlay(0.2),

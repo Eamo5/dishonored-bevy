@@ -1010,6 +1010,11 @@ fullscreen display, vertical sync and the crosshair.
   (neutral colour balance) comes in with the magnification; the second
   adds a stronger lens ([Use] while zoomed) and a distance read-out (`SpyglassDistance`).
   Aiming slows with the magnification, sprinting puts it away, with the original lens sounds.
+  With the pistol or crossbow in hand, zooming raises it to the eye (`Pistol_Spyglass_In`,
+  `Crossbow_Spyglass_In`), holds it there (`_Idle`), shoots from it (`_Fire`: the item tweaks'
+  `FirePistolZoom`, `CrossbowFireZoom`) and lowers it as the optics go (`_Out`). With the second
+  pistol accuracy upgrade its shots are the steadier ones (`m_FireAccurateAction`:
+  `Pistol_Fire_Accurate`, `Pistol_Spyglass_FireAccurate`).
 - **Shader warm-up**: while the loading screen stays up, the world is drawn whole (no view
   culling) until every material's pipelines are compiled, so nothing appears late in play
   (`DH_NO_WARMUP=1` skips it).
