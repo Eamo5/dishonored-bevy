@@ -1639,7 +1639,9 @@ against the install's own data where it carries them, then implemented independe
   leaving fades back from black over 0.3 s.
 - **The slide.** Crouching while sprinting at 4 m/s or more slides. The speed eases to the
   sneaking speed over 1.1 s along the way it began. It ends early if that way turns more than 25°,
-  or when let go after 0.55 s.
+  or when let go after 0.55 s. The arms play the slide tree's clips (`Ply_Player_Slide_at`): in,
+  held in its loop, then out to a sprint or a sneak (`Sword_SlideIn`, `_SlideLoop`,
+  `_SlideOutSprint`, `_SlideOutSneak`; empty-handed, `Empty_Slide*`).
 
 ## Parity audit status
 

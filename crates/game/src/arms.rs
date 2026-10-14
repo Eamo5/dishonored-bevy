@@ -99,6 +99,9 @@ struct ArmClips {
     /// a mantle (`Ply_Player_Mantle_at`): empty-handed or sword in hand, standing or sneaking,
     /// low, medium or high
     mantle: [[[Option<ClipId>; 3]; 2]; 2],
+    /// a slide (`Ply_Player_Slide_at`), empty-handed or sword in hand: in, its loop, out to a
+    /// sneak or a sprint
+    slide: [[Option<ClipId>; 4]; 2],
     attack_right: Vec<ClipId>,
     attack_left: Vec<ClipId>,
     sneak_attack: Option<ClipId>,
@@ -186,6 +189,7 @@ impl ArmClips {
             land_big: lib.find("Generic_JumpLandBig"),
             mantle: [["Empty_Mantle", "Empty_Sneak_Mantle"], ["Sword_Ready_Mantle", "Sword_Sneak_Mantle"]]
                 .map(|ways| ways.map(|w| ["Low", "Medium", "High"].map(|h| lib.find(&format!("{w}{h}"))))),
+            slide: ["Empty", "Sword"].map(|s| ["SlideIn", "SlideLoop", "SlideOutSneak", "SlideOutSprint"].map(|n| lib.find(&format!("{s}_{n}")))),
             attack_right: lib.all(&["Sword_Ready_AttackRight_A_Big", "Sword_Ready_AttackRight_B_Big"]),
             attack_left: lib.all(&["Sword_Ready_AttackLeft_A_Big", "Sword_Ready_AttackLeft_B_Big"]),
             sneak_attack: lib.find("Sword_Sneak_Attack_Small"),
@@ -269,6 +273,8 @@ struct ArmsAnim {
     oneshot: bool,
     /// mantling (as last seen)
     mantling: bool,
+    /// sliding (as last seen)
+    sliding: bool,
     /// in the air long enough that touching down is a landing
     airborne: bool,
     parry_flash: f32,
@@ -500,6 +506,7 @@ fn spawn_arms(
                 oneshot: false,
                 airborne: false,
                 mantling: false,
+                sliding: false,
                 parry_flash: 0.0,
                 damage_flash: 0.0,
                 blow_seen: 0,
@@ -582,7 +589,7 @@ fn animate_arms(
     mut arms: Query<(&mut Animator, &mut ArmsAnim, &mut Visibility), With<ArmsRoot>>,
     mut held: Query<&mut Visibility, Without<ArmsRoot>>,
     (swim, mut carry, peek, cine, scene_arms): (Res<crate::swim::Swim>, ResMut<crate::carry::Carry>, Res<crate::keyhole::Peek>, Res<crate::script_world::Cinematic>, Res<crate::matinee::SceneArms>),
-    versus: Res<crate::combat::Versus>,
+    (versus, slide): (Res<crate::combat::Versus>, Res<crate::player::Slide>),
 ) {
     let (Ok((p, sword, choking, grabbed)), Ok((mut anim, mut st, mut vis))) = (player.single(), arms.single_mut()) else { return };
     let st = &mut *st;
@@ -689,6 +696,31 @@ fn animate_arms(
             base_busy = true;
         }
         None => st.mantling = false,
+    }
+    // a slide (`Ply_Player_Slide_at`'s in, loop and out): held through it, then out to the
+    // sprint it may go back to or to a sneak (`SlideOutSprint`, `SlideOutSneak`)
+    let [s_in, s_loop, s_sneak, s_sprint] = c.slide[!empty as usize];
+    match slide.0.filter(|_| !base_busy) {
+        Some(_) => {
+            if !st.sliding {
+                if let Some(cl) = s_in.or(s_loop) {
+                    anim.restart(cl, s_in.is_none(), 1.0, 0.08);
+                }
+            } else if let Some(cl) = s_loop.filter(|l| anim.finished() && anim.current().map(|q| q.clip) != Some(*l)) {
+                anim.play(cl, true, 1.0, 0.05);
+            }
+            st.sliding = true;
+            base_busy = true;
+        }
+        None if st.sliding => {
+            st.sliding = false;
+            // (empty hands: their idle takes over)
+            if let Some(cl) = (if p.sprinting { s_sprint } else { s_sneak }).filter(|_| !base_busy && !empty) {
+                anim.restart(cl, false, 1.0, 0.1);
+                st.oneshot = true;
+            }
+        }
+        None => {}
     }
     // the sword drawn again: its equip clip plays through
     if stats.sheathed != st.sheathed {
