@@ -23,13 +23,17 @@ use std::f32::consts::FRAC_PI_2;
 
 pub struct SwarmPlugin;
 
-fn player_bite_distance(data: &Data, crouched: bool) -> f32 {
+/// How near rats come to Corvo before they bite (`Twk_Pawn_Corvo_Release`: standing, sneaking),
+/// divided by the Rat Scent charm's `Attribute_RatsAttackRadiusReduction` (1 worn: one plus it,
+/// our reading of roshan's r614/blink research, which found the attribute dividing the query's
+/// radius), so rats bite only as he walks closer.
+fn player_bite_distance(data: &Data, crouched: bool, scent: f32) -> f32 {
     let (key, fallback) = if crouched {
         ("m_fCrouchedRatSwarmAttackDistance", 60.0)
     } else {
         ("m_fStandUpRatSwarmAttackDistance", 200.0)
     };
-    data.pawn(key, fallback).max(0.0) * 0.01
+    data.pawn(key, fallback).max(0.0) * 0.01 / (1.0 + scent.max(0.0))
 }
 
 fn feeding_required(data: &Data, swarm: &Swarm, spawner: Option<&dhcook::format::RatSpawner>) -> usize {
@@ -739,7 +743,7 @@ mod kill_tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
             .init_resource::<Assets<Mesh>>().init_resource::<Data>().init_resource::<TimeControl>()
-            .init_resource::<PlayerStats>().init_resource::<RatBites>()
+            .init_resource::<PlayerStats>().init_resource::<RatBites>().init_resource::<crate::settings::Settings>()
             .add_message::<NpcHit>().add_message::<NpcStagger>().add_message::<PostEvent>()
             .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
             .add_systems(Last, swarm_brain);
@@ -767,6 +771,17 @@ mod kill_tests {
         app.world_mut().get_mut::<crate::player::Player>(player).unwrap().crouched = false;
         tick(&mut app);
         assert!(app.world().resource::<RatBites>().0 > 0, "standing reach is 2m, beyond the old 1.4m cutoff");
+        // Rat Scent worn: the reach halved, 1.7 m off is out of it
+        app.world_mut().resource_mut::<Data>().0.charms.push(dhcook::format::CharmDef {
+            attribute: "RatsAttackRadiusReduction".into(),
+            levels: vec![("Rat Scent".into(), String::new(), 1.0)],
+        });
+        app.world_mut().resource_mut::<PlayerStats>().charms.push("Rat Scent".into());
+        let before = app.world().resource::<RatBites>().0;
+        tick(&mut app);
+        tick(&mut app);
+        assert_eq!(app.world().resource::<RatBites>().0, before, "Rat Scent halves the reach");
+        app.world_mut().resource_mut::<PlayerStats>().charms.clear();
         app.world_mut().get_mut::<crate::player::Player>(player).unwrap().crouched = true;
         let before = app.world().resource::<RatBites>().0;
         app.world_mut().get_mut::<Transform>(player).unwrap().translation = Vec3::X * 0.5;
@@ -1063,12 +1078,13 @@ fn swarm_brain(
     mut stagger: MessageWriter<NpcStagger>,
     mut sfx: MessageWriter<PostEvent>,
     (player, mut stats, mut bites): (Query<(&Transform, &crate::player::Player), (Without<Swarm>, Without<Npc>)>, ResMut<crate::gameplay::PlayerStats>, ResMut<RatBites>),
-    level: Option<Res<LevelInfo>>,
+    (level, settings): (Option<Res<LevelInfo>>, Res<crate::settings::Settings>),
 ) {
     let dt = time.delta_secs() * tc.world_scale().max(0.0);
     let Ok(ctx) = rapier.single() else { return };
     let ground = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
-    let ppos = player.single().map(|(t, p)| (t.translation, player_bite_distance(&data, p.crouched))).ok();
+    let scent = data.attribute("RatsAttackRadiusReduction", settings.difficulty, &stats.powers, &stats.charms);
+    let ppos = player.single().map(|(t, p)| (t.translation, player_bite_distance(&data, p.crouched, scent))).ok();
     for (se, mut s, mut st) in &mut swarms {
         if s.rats.is_empty() {
             commands.entity(se).despawn();

@@ -46,6 +46,12 @@ pub enum PickupKind {
     Loot(u32),
 }
 
+/// The round the Scavenger charm may add to an ammunition pickup's kind (`n` rounds, its
+/// `chance`, the roll in [0, 1)).
+fn scavenged(n: u32, chance: f32, roll: f32) -> u32 {
+    u32::from(n > 1 && roll < chance)
+}
+
 impl PickupKind {
     fn at_capacity(&self, stats: &PlayerStats, attrs: &crate::gamedata::Attrs) -> bool {
         match self {
@@ -60,6 +66,14 @@ impl PickupKind {
 #[cfg(test)]
 mod capacity_tests {
     use super::*;
+
+    #[test]
+    fn scavenger_adds_a_round_to_kinds_of_more_than_one_on_its_roll() {
+        assert_eq!(scavenged(3, 0.5, 0.2), 1);
+        assert_eq!(scavenged(3, 0.5, 0.7), 0);
+        assert_eq!(scavenged(1, 0.5, 0.0), 0, "a single round is not added to");
+        assert_eq!(scavenged(3, 0.0, 0.0), 0, "not worn");
+    }
 
     #[test]
     fn remaining_ammo_restores_by_instance_including_late_factory_pickups() {
@@ -687,7 +701,12 @@ pub fn use_focus(
             }
             PickupKind::Ammo(list) => {
                 let mut remaining = Vec::new();
-                for &(ty, n) in list {
+                // the Scavenger charm (`Attribute_StatPickupCapacityBonusChance`): each kind of
+                // more than one round may give one more (as roshan's r614/blink research found
+                // the pickup's take rolling it)
+                let more = data.attribute("StatPickupCapacityBonusChance", 1, &stats.powers, &stats.charms);
+                let list: Vec<(u8, u32)> = list.iter().map(|&(ty, n)| (ty, n + scavenged(n, more, rand::random::<f32>()))).collect();
+                for &(ty, n) in &list {
                     let (name, added) = crate::gadgets::give_ammo(&mut stats, &attrs, ty, n);
                     if added > 0 { plog.add(format!("{name} +{added}"), crate::pickuplog::ammo_icon(ty)); }
                     if n > added { remaining.push((ty, n - added)); }

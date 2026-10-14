@@ -357,7 +357,11 @@ fullscreen display, vertical sync and the crosshair.
   extends the cooldown, Vengeance gains adrenaline from health actually lost (even if
   healed that frame), and Carrion Killer gains it for player rat kills. Enemy blasts
   and music boxes do not earn Corvo rat-kill adrenaline. Cooldowns and pending gains
-  survive saves. Script: `equipcharm NAME` equips a specific cooked charm for checks.
+  survive saves. Rat Scent (`Attribute_RatsAttackRadiusReduction`, 1) divides how near rats come
+  before they bite Corvo, by one plus it (2 m standing, 0.6 m sneaking, halved); Scavenger
+  (`Attribute_StatPickupCapacityBonusChance`, 0.5) gives each kind of ammunition of more than one
+  round one more on its chance as he takes it. Both are as roshan's r614/blink research found
+  them (the divisor is our reading of "divides the query's radius"). Script: `equipcharm NAME` equips a specific cooked charm for checks.
   Full elixir inventories disable the shop's purchase action without spending coins.
   Bolt movement, gravity and lifetime now stop during full Bend Time and advance at
   the world's slowed rate during partial Bend Time.
@@ -2079,8 +2083,7 @@ Known outstanding gameplay gaps from source and original-data inspection:
 - Bolt recovery now uses `Twk_Projectiles.Twk_Proj_Arrow`'s recovery flags and break
   chance, with the charm's `ArrowBreakingModifier`. Surface, body and mid-air recovery
   passed rewrite runtime checks; representative comparisons against the original remain.
-- Rat Scent and Scavenger still lack connected gameplay effects.
-  White rats now use the original white material and swarm probability; Albinos adds
+- White rats now use the original white material and swarm probability; Albinos adds
   its chance bonus, and Welcoming Host extends white-rat possession. The runtime log
   confirms a 30-second duration with Welcoming Host. Maps need recooking to include
   the white material (currently recooked: `L_Streets1_P`, `DLC06_DaudBase_P`, `L_Pub_Day_P`); visual and save/load audits
