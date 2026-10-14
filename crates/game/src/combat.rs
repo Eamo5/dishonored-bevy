@@ -12,6 +12,7 @@ use bevy::light::NotShadowCaster;
 use bevy::mesh::MeshTag;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
+use bevy_rapier3d::prelude::{CollisionGroups, Group, QueryFilter, ReadRapierContext};
 use std::f32::consts::FRAC_PI_2;
 
 pub struct CombatPlugin;
@@ -59,6 +60,15 @@ const VERSUS_ZONE: f32 = 0.12;
 /// at 0.346 / 0.343 s), as the original's zone handler opens it (roshan's r614/blink research
 /// decoded it and measured the blow 0.30-0.35 s after the press).
 const PLAYER_HIT: f32 = 0.29;
+/// How far ahead of the eye a wall stops Corvo's blade (m: our reading of his swing's sweep).
+const BLADE_WALL_REACH: f32 = 1.3;
+
+/// The sound of Corvo's sword on what it struck: the contact system's for its surface, else the
+/// plain environment's.
+fn sword_impact_sound<'a>(scene: &'a dhcook::format::Scene, struck: &str) -> Option<&'a str> {
+    let find = |s: &str| scene.sword_impacts.iter().find(|i| i.against == s && !i.sound.is_empty()).map(|i| i.sound.as_str());
+    find(struck).or_else(|| struck.starts_with("Env_").then(|| find("Environment")).flatten())
+}
 
 /// Can these two blows lock? A guard's blade blow (not a kick or a leap) landing within the
 /// zone of Corvo's, each facing the other (Corvo within `m_fVersusAngle` 20 degrees of it, it
@@ -259,6 +269,10 @@ pub struct Sword {
     pub forced_block: f32,
     pub parry_flash: f32,
     pub recoil: f32,
+    /// swings stopped short (the arms play each's bounce), and whether the last met the world
+    /// (`eDisWeaponMeleeState_BigHit`, `HitEnvironment`)
+    pub bounce_seq: u32,
+    pub bounce_wall: bool,
     /// drop assassinations made (the arms play each), and the side the victim was taken from
     /// (0 front, 1 back, 2 left, 3 right)
     pub drop_seq: u32,
@@ -590,7 +604,7 @@ fn sword_input(
         MessageWriter<crate::particles::SpawnEffect>,
         Option<Res<crate::level::LevelInfo>>,
     ),
-    (mut pace, clock): (ResMut<FinisherPace>, Res<crate::gameplay::TimeControl>),
+    (mut pace, clock, rapier, surfaces): (ResMut<FinisherPace>, Res<crate::gameplay::TimeControl>, ReadRapierContext, Query<&crate::footsteps::ColliderSurfaces>),
 ) {
     if paused.0 { return; }
     let Ok((pe, pt, mut p, mut sword)) = player.single_mut() else { return };
@@ -816,6 +830,9 @@ fn sword_input(
                         crate::impacts::spawn(&mut fx, &level.scene, crate::impacts::SWORD, "Sword", pt.translation + Vec3::Y * 1.45 + to * 0.7, -to);
                     }
                     sword.recoil = 0.3;
+                    // (Corvo's swing bounces off its blade: `BigHit`)
+                    sword.bounce_seq += 1;
+                    sword.bounce_wall = false;
                     msgs.push("Blocked");
                 } else {
                     npc.parries = 0;
@@ -854,6 +871,23 @@ fn sword_input(
                 // the world: what the blade meets (a speaker, a crate the scripts listen to)
                 use crate::worlddamage::{Reach, WorldDamage};
                 world_hits.write(WorldDamage::player(Reach::Ray { from: eye, dir: fwd, len: 2.2 }, attrs.sword_damage, "DisDamageType_FastHit_Right"));
+                // a wall in the blade's way: it strikes it and bounces off (`HitEnvironment`), with
+                // the contact system's sparks and sound for the surface
+                let world = QueryFilter::default().exclude_collider(pe).groups(CollisionGroups::new(Group::ALL, crate::level::GROUP_WORLD | crate::level::GROUP_PROP));
+                if let (Ok(ctx), Some(level)) = (rapier.single(), level.as_ref()) {
+                    if let Some((_, toi, surface, normal)) = crate::footsteps::ray_surface_normal(&ctx, &surfaces, eye, fwd, BLADE_WALL_REACH, world) {
+                        let at = eye + fwd * toi;
+                        let what = crate::impacts::struck(surface);
+                        crate::impacts::spawn(&mut fx, &level.scene, crate::impacts::SWORD, what, at, normal);
+                        if let Some(sound) = sword_impact_sound(&level.scene, what) {
+                            sfx.write(crate::audio::PostEvent::named(sound, Some(at)));
+                        }
+                        noise.write(Noise { pos: at, radius: 8.0, kind: NoiseKind::Threatening });
+                        sword.bounce_seq += 1;
+                        sword.bounce_wall = true;
+                        info!("sword: strikes {what} {toi:.2} m ahead");
+                    }
+                }
             }
         }
         if sword.swing > 0.48 {

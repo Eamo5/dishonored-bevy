@@ -1483,6 +1483,13 @@ against the install's own data where it carries them, then implemented independe
 - **Melee timing.** A blow lands where the original's zone handler opens the damage: in the last
   `m_fDamageZoneMaxTime` of its clip's `DishonoredNotify_AttackZone`. That is 0.29 s into Corvo's
   swing (blink measured 0.30–0.35 s).
+- **Swing clips.** Corvo's swings play the `_Small` clips (`Sword_Ready_Attack{Right,Left}_{A,B}_Small`,
+  and the sneak's `Sword_Sneak_Attack_Small`), which blink captured the original playing. A swing
+  that is stopped short bounces back with the clip for that state (blink decoded the melee
+  states `eDisWeaponMeleeState_BigHit` and `HitEnvironment`):
+  - a guard's blade parrying it plays its `_Big` clip (the sneak's is `_BigNpc`);
+  - a wall within 1.3 m of the eye (our reading of the sweep) plays its `_Big` clip (the sneak's
+    is `_BigWall`), with the contact system's sword sparks and sound for the surface (`Sword`).
 - **Walls of light.** One shocks Corvo for its `m_Damage` (100) as he touches it, rather than
   killing him outright, so health upgrades can survive it. While Bend Time stops the world it can be
   walked through. Those it kills burn to ash, and so does a body that touches it (at a kill's

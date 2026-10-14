@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 142;
+pub const SCENE_VERSION: u32 = 143;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -206,6 +206,10 @@ pub struct Scene {
     /// decal, and what it draws if it ever does (it has `m_Materials`)
     #[serde(default)]
     pub contact_decals: Vec<(String, String, Option<Decal>)>,
+    /// the contact system's intersections of Corvo's sword (`Sword`) with what it strikes:
+    /// their sounds
+    #[serde(default)]
+    pub sword_impacts: Vec<Impact>,
     /// the characters' clips that sever a limb (`DishonoredNotify_SeverLimb`: the beheading
     /// finishers)
     #[serde(default)]

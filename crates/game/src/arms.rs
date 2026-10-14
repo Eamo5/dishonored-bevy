@@ -160,6 +160,11 @@ struct ArmClips {
     attack_right: Vec<ClipId>,
     attack_left: Vec<ClipId>,
     sneak_attack: Option<ClipId>,
+    /// the swings stopped short: each ready swing's bounce (`_Big`), the sneak swing's off a
+    /// body and off a wall (`Sword_Sneak_Attack_BigNpc`, `_BigWall`)
+    attack_right_big: Vec<ClipId>,
+    attack_left_big: Vec<ClipId>,
+    sneak_big: [Option<ClipId>; 2],
     parry_in: Option<ClipId>,
     parry_idle: Option<ClipId>,
     parry_out: Option<ClipId>,
@@ -253,9 +258,14 @@ impl ArmClips {
             mantle: [["Empty_Mantle", "Empty_Sneak_Mantle"], ["Sword_Ready_Mantle", "Sword_Sneak_Mantle"]]
                 .map(|ways| ways.map(|w| ["Low", "Medium", "High"].map(|h| lib.find(&format!("{w}{h}"))))),
             slide: ["Empty", "Sword"].map(|s| ["SlideIn", "SlideLoop", "SlideOutSneak", "SlideOutSprint"].map(|n| lib.find(&format!("{s}_{n}")))),
-            attack_right: lib.all(&["Sword_Ready_AttackRight_A_Big", "Sword_Ready_AttackRight_B_Big"]),
-            attack_left: lib.all(&["Sword_Ready_AttackLeft_A_Big", "Sword_Ready_AttackLeft_B_Big"]),
+            // (a swing is the `_Small` clip, as roshan's r614/blink research captured the
+            // original playing; its `_Big` the bounce when it's stopped short)
+            attack_right: lib.all(&["Sword_Ready_AttackRight_A_Small", "Sword_Ready_AttackRight_B_Small"]),
+            attack_left: lib.all(&["Sword_Ready_AttackLeft_A_Small", "Sword_Ready_AttackLeft_B_Small"]),
             sneak_attack: lib.find("Sword_Sneak_Attack_Small"),
+            attack_right_big: lib.all(&["Sword_Ready_AttackRight_A_Big", "Sword_Ready_AttackRight_B_Big"]),
+            attack_left_big: lib.all(&["Sword_Ready_AttackLeft_A_Big", "Sword_Ready_AttackLeft_B_Big"]),
+            sneak_big: [lib.find("Sword_Sneak_Attack_BigNpc"), lib.find("Sword_Sneak_Attack_BigWall")],
             parry_in: lib.find("Sword_Ready_ParryIdle_In"),
             parry_idle: lib.find("Sword_Ready_ParryIdle"),
             parry_out: lib.find("Sword_Ready_ParryIdle_Out"),
@@ -329,6 +339,9 @@ struct ArmsAnim {
     breath_t: f32,
     swinging: bool,
     next_attack: usize,
+    /// the swing playing (0 right, 1 left, 2 sneak; its clip in its list), and the bounces seen
+    swing_clip: (u8, usize),
+    bounce_seen: u32,
     blocking: bool,
     /// aiming Blink (as last seen)
     blink_aiming: bool,
@@ -634,6 +647,8 @@ fn spawn_arms(
                 breath_t: 0.0,
                 swinging: false,
                 next_attack: 0,
+                swing_clip: (0, 0),
+                bounce_seen: 0,
                 blocking: false,
                 blink_aiming: false,
                 cooking: false,
@@ -968,20 +983,41 @@ fn animate_arms(
     if !base_busy {
         if sword.swing > 0.0 && !st.swinging {
             st.swinging = true;
-            let cl = if p.crouched {
-                c.sneak_attack.or(pick(&c.attack_right, st.next_attack))
+            st.bounce_seen = sword.bounce_seq;
+            let (kind, i) = if p.crouched && c.sneak_attack.is_some() {
+                (2, 0)
             } else if sword.swing_dir > 0.0 {
-                pick(&c.attack_right, st.next_attack / 2)
+                (0, st.next_attack / 2)
             } else {
-                pick(&c.attack_left, st.next_attack / 2)
+                (1, st.next_attack / 2)
+            };
+            st.swing_clip = (kind, i);
+            let cl = match kind {
+                2 => c.sneak_attack,
+                0 => pick(&c.attack_right, i),
+                _ => pick(&c.attack_left, i),
             };
             st.next_attack += 1;
             if let Some(cl) = cl {
-                anim.restart(cl, false, 1.35 * attrs.melee_rate, 0.06);
+                anim.restart(cl, false, attrs.melee_rate, 0.06);
                 st.oneshot = true;
             }
         } else if sword.swing == 0.0 {
             st.swinging = false;
+        }
+        // stopped short (on a blade, on a wall): its bounce (the `_Big` clips' rate 1.25)
+        if sword.bounce_seq != st.bounce_seen {
+            st.bounce_seen = sword.bounce_seq;
+            let (kind, i) = st.swing_clip;
+            let cl = match kind {
+                2 => c.sneak_big[sword.bounce_wall as usize].or(c.sneak_big[0]),
+                0 => pick(&c.attack_right_big, i),
+                _ => pick(&c.attack_left_big, i),
+            };
+            if let Some(cl) = cl {
+                anim.restart(cl, false, 1.25 * attrs.melee_rate, 0.05);
+                st.oneshot = true;
+            }
         }
         if sword.parry_flash > st.parry_flash + 1e-3 {
             if let Some(cl) = pick(&c.parry, st.next_attack) {

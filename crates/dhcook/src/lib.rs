@@ -6760,6 +6760,7 @@ impl<'a> Cooker<'a> {
         self.scene.blade_blood = self.blade_blood();
         self.scene.contact_fx = self.contact_fx();
         self.scene.contact_decals = self.contact_decals();
+        self.scene.sword_impacts = self.impacts("DisContactType_Sword");
         self.scene.severed_limbs = self.severed_limbs();
         // the first-person arms: a skinned rig exposed as the "player_arms" character type
         // (Corvo's; Daud's on The Knife of Dunwall's maps: his pawn's `m_pSkeletalMesh`, his
