@@ -1557,7 +1557,9 @@ against the install's own data where it carries them, then implemented independe
   - Loose props in the cone are blown about too, the heavy ones less.
 - **Possession.** Anyone not choked can be possessed (`Twk_Possessable_BaseNPC.m_AwarenessSettings`),
   combat included. The target is chosen with the angle weighted ten times the distance, plus its
-  priority: combatants over civilians over animals.
+  priority: combatants over civilians over animals. Someone he comes out of is thrown off as he
+  does (`Empty_Unpossess_Eject`), then dazed, with its line (`_Dizzy`, 3.5 s), or retching, with
+  its sick (`_Puke`, 6.1 s), one or the other (our reading), standing for it all.
 - **Melee timing.** A blow lands where the original's zone handler opens the damage: in the last
   `m_fDamageZoneMaxTime` of its clip's `DishonoredNotify_AttackZone`. That is 0.29 s into Corvo's
   swing (blink measured 0.30–0.35 s).

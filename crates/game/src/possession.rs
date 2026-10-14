@@ -9,7 +9,7 @@
 
 use crate::audio::PostEvent;
 use crate::gamedata::Data;
-use crate::gameplay::{HudMessages, NpcStagger, PlayerStats};
+use crate::gameplay::{HudMessages, PlayerStats};
 use crate::level::{GROUP_PROP, GROUP_WORLD};
 use crate::npc::{Kind, Mode, Npc, NPC_CENTER};
 use crate::player::{Player, RADIUS, STAND_HALF};
@@ -517,7 +517,7 @@ fn ride(
     mut npcs: Query<(&mut Transform, &mut Npc), Without<Player>>,
     mut hosts: Query<(&Host, &mut Transform), (Without<Player>, Without<Npc>)>,
     mut arms: Query<&mut Visibility, With<crate::arms::ArmsRoot>>,
-    (mut sfx, mut stagger, mut msgs): (MessageWriter<PostEvent>, MessageWriter<NpcStagger>, ResMut<HudMessages>),
+    (mut sfx, mut msgs): (MessageWriter<PostEvent>, ResMut<HudMessages>),
     ai: Res<crate::aiworld::AiWorld>,
 ) {
     let Some(host) = pos.host else { return };
@@ -621,6 +621,8 @@ fn ride(
         npc.anim_speed = 0.0;
         npc.home = ht.translation;
         npc.wait = 3.0;
+        // (reeling: thrown off as he comes out, then dazed or retching, `npc.rs`)
+        npc.unpossessed = true;
     }
     // out of an animal's body: standing room
     if pos.body.is_some() {
@@ -639,7 +641,6 @@ fn ride(
         p.velocity = Vec3::ZERO;
     }
     commands.entity(host).remove::<(Possessed, ColliderDisabled)>();
-    stagger.write(NpcStagger { npc: host, secs: 3.0, parried: false });
     for mut v in &mut arms {
         *v = Visibility::Inherited;
     }

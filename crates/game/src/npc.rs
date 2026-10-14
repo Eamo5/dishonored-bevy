@@ -221,6 +221,8 @@ pub struct Npc {
     pub taunt_cd: f32,
     /// on its way to a body it found, to look it over
     pub body_check: bool,
+    /// Corvo has just come out of it (its possession over): reeling to come
+    pub unpossessed: bool,
     /// its bearing about Corvo while it waits outside the ring of those at him (radians)
     pub flank: Option<f32>,
     pub taunt_hold: f32,
@@ -1634,6 +1636,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         under_cd: [0.0; 2],
         taunt_cd: 5.0 + rand::random::<f32>() * 10.0,
         body_check: false,
+        unpossessed: false,
         flank: None,
         taunt_hold: 0.0,
         search_run: false,
@@ -1968,6 +1971,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 turn: None,
                 swarm_t: f32::INFINITY,
                 swarm_phase: 0,
+                unpossess_next: None,
                 gun_phase: GunPhase::Away,
                 gun_t: 0.0,
                 gun_out: false,
@@ -4267,6 +4271,9 @@ pub struct NpcClips {
     /// a dodge's step (left, right, back: `Sword_SideStep_*`), the alarm's lever pulled
     /// (`Sword_TriggerAlarm`), a body found looked over (`Sword_CorpseCheck`)
     dodge: [Vec<ClipId>; 3],
+    /// Corvo out of it: thrown off as he comes out, then dazed or retching
+    /// (`Empty_Unpossess_Eject`, `_Dizzy` with its line, `_Puke` with its sick)
+    unpossess: [Option<ClipId>; 3],
     /// Corvo gone before its eyes by magic (`Empty_Magic_OutOfSight`, `Sword_Magic_OutOfSight`:
     /// the original's `DisBehaviorMagicResponse`, its Awe slot)
     magic: [Vec<ClipId>; 2],
@@ -4424,6 +4431,7 @@ impl NpcClips {
             gun: [lib.find("Sword_Gun_Draw"), lib.find("Sword_Gun_Idle"), lib.find("Sword_Gun_Fire"), lib.find("Sword_Gun_Undraw")],
             gun_reload: lib.find("Sword_Gun_Reload"),
             dodge: [lib.all(&["Sword_SideStep_Left"]), lib.all(&["Sword_SideStep_Right"]), lib.all(&["Sword_SideStep_Back"])],
+            unpossess: [lib.first(&["Empty_Unpossess_Eject", "Patrol_Unpossess_Eject"]), lib.first(&["Empty_Unpossess_Dizzy", "Patrol_Unpossess_Dizzy"]), lib.first(&["Empty_Unpossess_Puke", "Patrol_Unpossess_Puke"])],
             magic: [lib.all(&["Empty_Magic_OutOfSight", "Sword_Magic_OutOfSight"]), lib.all(&["Sword_Magic_OutOfSight", "Empty_Magic_OutOfSight"])],
             swarm: [["Empty_", "Sword_"], ["Sword_", "Empty_"]].map(|sets| ["In", "Loop", "Out"].map(|p| sets.iter().find_map(|s| lib.find(&format!("{s}SwarmAttack_{p}"))))),
             turn: [["Sword_Patrol_Turn", "Empty_Turn", "Patrol_Turn"], ["Sword_Turn", "Empty_Turn", "Sword_Patrol_Turn"]].map(|sets| {
@@ -4520,6 +4528,8 @@ pub struct NpcAnim {
     /// start, 2 its loop)
     swarm_t: f32,
     swarm_phase: u8,
+    /// its reeling after Corvo came out of it: the clip still to come
+    unpossess_next: Option<ClipId>,
     gun_phase: GunPhase,
     gun_t: f32,
     gun_out: bool,
@@ -5232,6 +5242,29 @@ fn npc_select_anim(
             }
         }
 
+        // Corvo out of it: thrown off as he comes out, then dazed or retching (one or the other,
+        // our reading), standing for it all
+        if std::mem::take(&mut npc.unpossessed) && !npc.is_down() {
+            // (without its clips, it stands reeling a while)
+            npc.stagger = npc.stagger.max(3.0);
+            if let Some(c) = clips.unpossess[0] {
+                let then = if rand::random::<bool>() { clips.unpossess[1] } else { clips.unpossess[2] };
+                anim.restart(c, false, 1.0, 0.1);
+                npc.stagger = npc.stagger.max(lib.duration(c) + then.map_or(0.0, |t| lib.duration(t)));
+                st.unpossess_next = then;
+                st.oneshot = true;
+                st.hit_seen = npc.hit_react;
+                continue;
+            }
+        }
+        if let Some(c) = st.unpossess_next.filter(|_| anim.finished()) {
+            st.unpossess_next = None;
+            if !npc.is_down() {
+                anim.restart(c, false, 1.0, 0.15);
+                st.oneshot = true;
+                continue;
+            }
+        }
         // a swarm on it, eating it alive: it fights it off (`Sword_SwarmAttack_In`, `_Loop` while
         // they stay, `_Out` once they are gone; `Empty_` with its hands empty), above its flinches
         if swarmed.contains(&e) {
