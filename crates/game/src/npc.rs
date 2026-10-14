@@ -1068,9 +1068,11 @@ const LOOK_YAW: f32 = 1.9;
 const LOOK_UP: f32 = 1.05;
 const LOOK_DOWN: f32 = 0.6;
 
-/// Characters look at Corvo once they notice him (from head-tracking on, short of fighting him,
-/// when the whole body turns) and as they speak with him close by: the head takes most of the
-/// turn, the upper back the rest, over the body's animation (`ArkComponentLookatConfig`).
+/// Characters look at Corvo as they first notice him (at the head-tracking level of their
+/// attention alone: the original posts its look-at request there and clears it at any other
+/// level, as roshan's r614/blink research decoded it; from turning to face him on the whole body
+/// turns) and as they speak with him close by: the head takes most of the turn, the upper back
+/// the rest, over the body's animation (`ArkComponentLookatConfig`).
 #[allow(clippy::type_complexity)]
 fn head_track(
     mut commands: Commands,
@@ -1101,7 +1103,7 @@ fn head_track(
             && npc.mode != Mode::Combat
             && flat > 0.3
             && yaw.abs() < LOOK_YAW
-            && ((npc.attn_level >= 1 && (npc.sees_player || npc.last_seen.is_some())) || (speaking && near));
+            && ((npc.attn_level == 1 && (npc.sees_player || npc.last_seen.is_some())) || (speaking && near));
         let rate = 4.0 * dt;
         track.weight = if wants { (track.weight + rate).min(1.0) } else { (track.weight - rate).max(0.0) };
         if wants {
