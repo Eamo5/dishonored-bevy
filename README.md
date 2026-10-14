@@ -461,6 +461,8 @@ fullscreen display, vertical sync and the crosshair.
   settle it: a big win leaves it reeling (`Sword_Versus_BigLose`, the next blow a fatality),
   a win staggers it, a stand-off parts the blades, and fewer throws him back with the guard
   pressing on (how the three thresholds combine is our reading; the data names them only).
+  Piero's Sword Crossing upgrade (`Twk_Upgrade_Sword`: `VersusMiniGameBonus` 3) counts as three
+  presses to the good (our reading of "more effective when locking blades").
   Script `clash` sets one up with the nearest guard. Having lost sight of Corvo within 7 m,
   a swordsman may lie in wait for him where it stands (`DisTweaks_NPCAmbush`; thugs crouch
   in `Sword_Ambush_In`/`_Loop`), springing at him with a lunging blow (`_Out`) as he comes
@@ -1411,7 +1413,7 @@ against the install's own data where it carries them, then implemented independe
   Touching down after a jump or fall plays the arms' landing (`DisTweaks_PlayerPawn_NavigationActions`):
   `Sword_Ready_JumpLandSmall`, crouched `Sword_Sneak_JumpLandSmall`, and past
   `m_fFall_Stun_Vel` (22 m/s) the hard `Generic_JumpLandBig`. None stops him moving (as roshan's
-  r614/blink research found).
+  r614/blink research found). Agility plays them half again as fast (`LandAnimRate` +50%).
 - **Conversations.** Random branches pick by their percentage weights and avoid repeating
   their last pick; in-turn branches stay on their last output unless they loop; a shuffled turn
   ends on "Depleted". A conversation breaks off on its speaker's death or change of behaviour,

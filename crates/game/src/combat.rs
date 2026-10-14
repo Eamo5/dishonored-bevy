@@ -133,7 +133,10 @@ fn versus(
     sword.blocking = false;
     let attr = |k: &str, d: f32| data.0.attributes.get(k).map(|a| a[1]).unwrap_or(d);
     let (big, medium, lose) = (attr("MeleeVersusMiniGame_WinBig", 10.0), attr("MeleeVersusMiniGame_WinMedium", 5.0), attr("MeleeVersusMiniGame_LoseMedium", 2.0));
-    let n = v.presses as f32;
+    // (the Sword Crossing upgrade, `Twk_Upgrade_Sword`'s `VersusMiniGameBonus` 3: so many presses
+    // to the good, as we read "more effective when locking blades")
+    let bonus: f32 = data.0.upgrades.iter().filter(|u| stats.upgrades.contains(&u.id)).flat_map(|u| &u.attributes).filter(|(a, _)| a == "VersusMiniGameBonus").map(|(_, b)| *b).sum();
+    let n = v.presses as f32 + bonus.max(0.0);
     if n < big && v.t < VERSUS_TIME {
         return;
     }

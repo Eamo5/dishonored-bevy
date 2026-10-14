@@ -832,7 +832,8 @@ fn animate_arms(
             if std::env::var("DH_BOB_LOG").is_ok() {
                 info!("arms: landing at {:.1} m/s ({})", p.fall_speed, if p.fall_speed > FALL_STUN { "hard" } else if p.crouched { "sneaking" } else { "soft" });
             }
-            anim.restart(cl, false, 1.0, 0.08);
+            // (Agility's quicker recovery: `LandAnimRate`)
+            anim.restart(cl, false, attrs.land_rate.max(0.1), 0.08);
             st.oneshot = true;
         }
     }
