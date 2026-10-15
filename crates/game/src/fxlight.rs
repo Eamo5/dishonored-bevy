@@ -61,6 +61,17 @@ pub struct RuntimeLights(pub Vec<(u32, Policy, Vec3, f32, [Vec4; 4])>);
 #[derive(Component)]
 pub struct LitPart;
 
+/// A part's dynamic light passes dropped for good (its material changes to one drawn without:
+/// a wall of light's dead).
+pub fn drop_light_passes(commands: &mut Commands, part: Entity, passes: Option<&PartPasses>) {
+    if let Some(p) = passes {
+        for (_, pe) in &p.passes {
+            commands.entity(*pe).try_despawn();
+        }
+    }
+    commands.entity(part).try_remove::<(LitPart, PartPasses)>();
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum LightKey {
     Level(u32),
@@ -69,7 +80,7 @@ enum LightKey {
 
 /// The light passes on a part.
 #[derive(Component, Default)]
-struct PartPasses {
+pub struct PartPasses {
     passes: Vec<(LightKey, Entity)>,
     next: f32,
     /// the part's material the passes were made for (the arms swap skins)

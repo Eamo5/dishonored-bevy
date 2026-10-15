@@ -706,7 +706,7 @@ fn use_devices(
     }
 }
 
-/// Walls of light: crossing one while it runs burns characters to ash, unless its friends (or,
+/// Walls of light: crossing one while it runs electrocutes characters, who vanish, unless its friends (or,
 /// rewired, Corvo); Corvo it shocks for its `m_Damage` (100) as he touches it. While Bend Time
 /// stops the world it can be walked through (as roshan's r614/blink research decoded it).
 #[allow(clippy::too_many_arguments)]
@@ -721,11 +721,11 @@ fn walls(
     mut ambient: Local<Vec<bool>>,
     (time, mut sheets): (Res<Time>, Query<(&WallSheet, &mut Visibility, &MeshMaterial3d<StandardMaterial>)>),
     mut mats: ResMut<Assets<StandardMaterial>>,
-    (tc, mut touching): (Res<crate::gameplay::TimeControl>, Local<Vec<bool>>),
+    (tc, mut touching, mut struck): (Res<crate::gameplay::TimeControl>, Local<Vec<bool>>, Local<std::collections::HashSet<Entity>>),
     (mut commands, carry, ashes, thrown): (
         Commands,
         Res<crate::carry::Carry>,
-        Query<(), With<crate::npc::Ashes>>,
+        Query<(), Or<(With<crate::npc::Ashes>, With<crate::npc::Electrocuted>)>>,
         Query<(Entity, &GlobalTransform), Or<(With<crate::powers::Projectile>, With<crate::gadgets::Grenade>)>>,
     ),
 ) {
@@ -770,6 +770,9 @@ fn walls(
                 sfx.write(PostEvent::named(s, Some(Vec3::from(d.def.position))));
             }
         }
+        if std::env::var("DH_WALL_LOG").is_ok() && (time.elapsed_secs() * 1.0).fract() < time.delta_secs() {
+            info!("wall {} on {on} (off {}, receptacle {:?}, tank {}) rewired {} stopped {stopped}", d.def.actor, d.off, d.receptacle_idx, d.receptacle_idx.is_some_and(|r| devices.list[r].has_tank), devices.rewired(d));
+        }
         if !on || stopped {
             touching[i] = false;
             continue;
@@ -803,28 +806,31 @@ fn walls(
         }
         for (e, n, t) in &npcs {
             if n.is_down() {
-                // a body touching it burns to ash, at a kill's cost; one carried through is spared
-                // (`StateNPCMasterDead_BeingCarried`)
-                if n.mode == crate::npc::Mode::Dead && !ashes.contains(e) && carry.body != Some(e) && inside(w, t.translation) {
-                    commands.entity(e).try_insert(crate::npc::Ashes(-0.2));
+                // a body touching it is electrocuted and vanishes, at a kill's cost; one carried
+                // through is spared (`StateNPCMasterDead_BeingCarried`)
+                // (not those it struck down itself, electrocuted as they stood)
+                if n.mode == crate::npc::Mode::Dead && !ashes.contains(e) && !struck.contains(&e) && carry.body != Some(e) && inside(w, t.translation) {
+                    commands.entity(e).try_insert(crate::npc::Electrocuted::new(false));
                     if let Some(seat) = d.receptacle_idx.and_then(|r| devices.list[r].tank_seat()) {
                         spent.push((seat, 1));
                     }
-                    fx.write(crate::particles::SpawnEffect { follow: Some(e), secs: 1.5, ..crate::particles::SpawnEffect::at("electrified", Vec3::Y * 0.3) });
                 }
                 continue;
             }
             let spared = d.def.friendly.iter().any(|f| *f == n.faction);
             // rewired, it spares Corvo's friends instead
             let dies = if rewired { n.enemy } else { !spared && !n.faction.is_empty() };
+            if std::env::var("DH_WALL_LOG").is_ok() && t.translation.distance(w.0.inverse().transform_point3((w.1 + w.2) * 0.5)) < 4.0 {
+                info!("wall {}: {} at {:.2} inside {} dies {dies} (rewired {rewired}, enemy {}, {})", d.def.actor, n.name, t.translation, inside(w, t.translation), n.enemy, n.faction);
+            }
             if dies && inside(w, t.translation) {
                 hits.write(NpcHit { npc: e, damage: 999.0, kind: HitKind::WallOfLight, from: t.translation });
+                struck.insert(e);
                 killed.push(d.def.actor.clone());
                 // (a kill spends its tank's oil: `m_PawnChargeCost`)
                 if let Some(seat) = d.receptacle_idx.and_then(|r| devices.list[r].tank_seat()) {
                     spent.push((seat, 1));
                 }
-                fx.write(crate::particles::SpawnEffect { follow: Some(e), secs: 1.5, ..crate::particles::SpawnEffect::at("electrified", Vec3::Y * 0.9) });
                 if let Some(s) = d.def.sounds.get("m_pStartKillEffectSound") {
                     sfx.write(PostEvent::named(s, Some(t.translation)));
                 }

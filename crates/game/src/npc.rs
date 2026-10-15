@@ -49,8 +49,7 @@ impl Plugin for NpcPlugin {
                     spawn_requested,
                     npc_hits,
                     age_corpses,
-                    ash_marked,
-                    burn_ashes,
+                    (ash_marked, electrocute, burn_ashes).chain(),
                     npc_shots,
                     npc_hearing,
                     npc_perception.run_if(|| !skip("perception")),
@@ -1085,6 +1084,104 @@ fn ash_marked(
             commands.entity(e).try_insert(Ashes(0.0));
             sfx.write(crate::audio::PostEvent::named("Snd_Power_Shadow_Kill", Some(pos)));
             fx.write(crate::particles::SpawnEffect { secs: 2.0, ..crate::particles::SpawnEffect::at("shadow_kill", pos) });
+        }
+    }
+}
+
+/// A wall of light's dead (`StateNPCMasterDead_Electrocuted`, with `DisTweaks_NPCPawn`'s
+/// settings). Struck standing, it plays its death (`DisNPCAnim_DeathWallOfLight`:
+/// `Generic_Electrified`), lightning on its limbs (`m_ElectrocutedFXs`), drawn at once with
+/// `m_pElectrocutedMaterial` (`Electric_Vanish_inst`: black, its lightning crawling over it); from
+/// `m_fElectrocutedFadeBegin` (0.5 s) its `m_ElectrocutedParameter` (`O_Opacity`) goes from the
+/// material's 1 to `m_fElectrocutedFadeEnd` (0) over `m_fElectrocutedFadeDuration` (1.5 s), the
+/// material's noise eating it away, and nothing is left. A body it burns goes the same way, lying
+/// as it is. (Our reading of the settings: the fade's begin is a time, its end the parameter's
+/// last value; the material's mask leaves nothing below 0.5, so the fade can't start lower.)
+#[derive(Component)]
+pub struct Electrocuted {
+    t: f32,
+    /// struck standing (its death clip plays), else a body
+    pub standing: bool,
+    mat: Option<Handle<crate::ue3mat::Ue3Material>>,
+}
+
+impl Electrocuted {
+    pub fn new(standing: bool) -> Self {
+        Electrocuted { t: 0.0, standing, mat: None }
+    }
+}
+
+/// `m_fElectrocutedFadeBegin`, `m_fElectrocutedFadeEnd`, `m_fElectrocutedFadeDuration`.
+const ELECTROCUTED_FADE: (f32, f32, f32) = (0.5, 0.0, 1.5);
+/// `Twk_Pawn_DefaultNPC.m_ElectrocutedFXs`: the bones the lightning plays on, and which
+/// (`ps_electrified`, the hands' and feet's `_ArmLeft`...).
+const ELECTROCUTED_FXS: [(&str, &str); 12] = [
+    ("spine_1_jnt", "electrified"),
+    ("spine_3_jnt", "electrified"),
+    ("upper_arm_L_jnt", "electrified"),
+    ("lower_arm_L_jnt", "electrified_arm_l"),
+    ("upper_arm_R_jnt", "electrified"),
+    ("lower_arm_R_jnt", "electrified_arm_r"),
+    ("upper_leg_L_jnt", "electrified"),
+    ("lower_leg_L_jnt", "electrified"),
+    ("foot_L_jnt", "electrified_leg_l"),
+    ("upper_leg_R_jnt", "electrified"),
+    ("lower_leg_R_jnt", "electrified"),
+    ("foot_R_jnt", "electrified_leg_r"),
+];
+
+#[allow(clippy::type_complexity)]
+fn electrocute(
+    mut commands: Commands,
+    time: Res<Time>,
+    assets: Option<Res<GameAssets>>,
+    mut materials: ResMut<Assets<crate::ue3mat::Ue3Material>>,
+    mut q: Query<(Entity, &mut Electrocuted, &NpcRig, &Npc)>,
+    children: Query<&Children>,
+    parts: Query<Option<&crate::fxlight::PartPasses>, With<NpcPart>>,
+    mut fx: MessageWriter<crate::particles::SpawnEffect>,
+) {
+    let dt = time.delta_secs();
+    let vanish = assets.as_ref().and_then(|a| a.electrocuted_material.clone());
+    let gone = ELECTROCUTED_FADE.0 + ELECTROCUTED_FADE.2;
+    for (e, mut el, rig, npc) in &mut q {
+        let t0 = el.t;
+        el.t += dt;
+        if t0 == 0.0 {
+            // the lightning on its limbs until it is gone
+            for (bone, name) in ELECTROCUTED_FXS {
+                if let Some(j) = rig.joint(bone).or_else(|| rig.joint("spine_3_jnt")) {
+                    fx.write(crate::particles::SpawnEffect { follow: Some(j), secs: gone, ..crate::particles::SpawnEffect::at(name, Vec3::ZERO) });
+                }
+            }
+            // its parts take the material (each character its own, to fade)
+            if let Some(m) = vanish.as_ref().and_then(|(base, _)| materials.get(base).cloned()) {
+                let h = materials.add(m);
+                for c in children.iter_descendants(e) {
+                    if let Ok(passes) = parts.get(c) {
+                        crate::fxlight::drop_light_passes(&mut commands, c, passes);
+                        commands.entity(c).try_remove::<(MeshMaterial3d<crate::lightmap::WorldMaterial>, MeshMaterial3d<crate::ue3mat::Ue3Material>)>().try_insert(MeshMaterial3d(h.clone()));
+                    }
+                }
+                el.mat = Some(h);
+            }
+            if std::env::var("DH_NPC_CLIP_LOG").is_ok() {
+                info!("npc {} electrocuted ({}{})", npc.name, if el.standing { "standing" } else { "a body" }, if el.mat.is_some() { "" } else { ", no vanishing material" });
+            }
+        }
+        // its parameter from the material's own (1) to the fade's end
+        let k = ((el.t - ELECTROCUTED_FADE.0) / ELECTROCUTED_FADE.2).clamp(0.0, 1.0);
+        if let (Some(mut m), Some((_, slots))) = (el.mat.as_ref().and_then(|h| materials.get_mut(h)), vanish.as_ref()) {
+            let v = 1.0 + (ELECTROCUTED_FADE.1 - 1.0) * k;
+            for &s in slots {
+                if s < m.params.p.len() {
+                    m.params.p[s] = Vec4::splat(v);
+                }
+            }
+        }
+        if el.t >= gone {
+            // nothing left to find
+            commands.entity(e).try_remove::<Electrocuted>().try_insert(Ashes(1.0));
         }
     }
 }
@@ -2400,9 +2497,9 @@ fn npc_hits(
                 npc.health = 0.0;
                 npc.set_mode(Mode::Dead);
                 stats.killed(&npc.pawn, !npc.hostile());
-                // (a wall of light burns its dead to ash, `DisWallOfLight`'s kill)
+                // (a wall of light electrocutes its dead, who vanish: `DisWallOfLight`'s kill)
                 if h.kind == HitKind::WallOfLight {
-                    commands.entity(e).try_insert(Ashes(-0.2));
+                    commands.entity(e).try_insert(Electrocuted::new(true));
                 }
                 if h.kind == HitKind::Assassinate {
                     msgs.push(format!("{} assassinated", npc.name));
@@ -4633,6 +4730,8 @@ pub struct NpcClips {
     blink: Option<ClipId>,
     death: Vec<ClipId>,
     death_fast: Option<ClipId>,
+    /// a wall of light's death (`DisNPCAnim_DeathWallOfLight`)
+    electrified: Option<ClipId>,
     /// lying poses (last frames) to settle into after a reaction that ends mid-fall
     lie_back: Option<ClipId>,
     lie_front: Option<ClipId>,
@@ -4847,6 +4946,7 @@ impl NpcClips {
                 }
             },
             death_fast: lib.find("Generic_DeathFast_Front"),
+            electrified: lib.find("Generic_Electrified"),
             lie_back: lib.first(&["Generic_DeathFrontA", "Corpses_DeathPose_OnBack1", "Generic_DeathFront_A", "Generic_DeathA"]),
             lie_front: lib.first(&["Generic_DeathBackA", "Generic_DeathFrontA", "Generic_DeathBack_A", "Generic_DeathB"]),
             assassinated: lib.all(&["Generic_Assassination_Back_Slave", "Generic_Assassination_FastBack_Slave"]),
@@ -5304,13 +5404,28 @@ fn npc_select_anim(
     tc: Res<TimeControl>,
     mut commands: Commands,
     player: Query<&Transform, With<Player>>,
-    mut npcs: Query<(Entity, &mut Npc, &mut NpcAnim, &mut Animator, &Transform, &Children, Option<&DropKilled>, Option<&AssassinClip>, Option<&mut FinisherClip>, Option<&crate::carry::Falling>, (Has<crate::ragdoll::Ragdoll>, Has<crate::ragdoll::GoLimp>, Has<crate::musicbox::TunePlaying>)), Without<ScriptedAnim>>,
+    mut npcs: Query<
+        (
+            Entity,
+            &mut Npc,
+            &mut NpcAnim,
+            &mut Animator,
+            &Transform,
+            &Children,
+            Option<&DropKilled>,
+            Option<&AssassinClip>,
+            Option<&mut FinisherClip>,
+            Option<&crate::carry::Falling>,
+            (Has<crate::ragdoll::Ragdoll>, Has<crate::ragdoll::GoLimp>, Has<crate::musicbox::TunePlaying>, Option<&Electrocuted>),
+        ),
+        Without<ScriptedAnim>,
+    >,
     mut visuals: Query<&mut Transform, (With<NpcVisual>, Without<Npc>, Without<Player>)>,
     mut swarmed: MessageReader<crate::swarm::SwarmOn>,
 ) {
     let ppos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
     let swarmed: std::collections::HashSet<Entity> = swarmed.read().map(|s| s.0).collect();
-    for (e, mut npc, mut st, mut anim, t, children, dropped, assassin, finisher, falling, (limp, going_limp, tune)) in &mut npcs {
+    for (e, mut npc, mut st, mut anim, t, children, dropped, assassin, finisher, falling, (limp, going_limp, tune, electrocuted)) in &mut npcs {
         let scale = tc.npc_scale(npc.out_of_bend).max(0.0);
         let dt = time.delta_secs() * scale;
         anim.time_scale = scale;
@@ -5336,6 +5451,8 @@ fn npc_select_anim(
         let st = &mut *st;
         let clips = st.clips.clone();
         let lib = anim.lib.clone();
+        // (a wall of light's dead: its death clip, struck standing, and no going limp)
+        let electrified = electrocuted.filter(|el| el.standing).and(clips.electrified);
         // a weak hit's flinch, laid over whatever it does (its clip played through once)
         npc.weak_hits = clips.weak_hit.iter().all(Option::is_some);
         if let Some(side) = npc.weak_hit.take() {
@@ -5588,7 +5705,9 @@ fn npc_select_anim(
             if !st.down {
                 st.down = true;
                 st.oneshot = false;
-                let (clip, settle) = if npc.corpse {
+                let (clip, settle) = if let Some(c) = electrified {
+                    (Some(c), None)
+                } else if npc.corpse {
                     (pick(&clips.corpse).or(clips.lie_back), None)
                 } else if let Some(d) = dropped.filter(|_| npc.mode == Mode::Dead) {
                     (clips.drop_killed[d.0 as usize % 4].or(pick(&clips.assassinated)), clips.lie_front)
@@ -5617,7 +5736,7 @@ fn npc_select_anim(
                 }
             }
             // its clip goes limp where it says (`DishonoredNotify_Ragdoll`), else at its end
-            if st.ragdoll && !far {
+            if st.ragdoll && !far && electrified.is_none() {
                 let due = anim.finished() || anim.current().and_then(|p| st.marks.get(&p.clip).and_then(|m| m.ragdoll).map(|r| p.t >= r)).unwrap_or(true);
                 if due {
                     commands.entity(e).try_insert(crate::ragdoll::GoLimp::soon());

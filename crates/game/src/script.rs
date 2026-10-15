@@ -782,6 +782,18 @@ fn run_script(
                 info!("script: a thrown thing from {from:.2}");
             });
         }
+        "rewire" => {
+            // (tests) rewire: the nearest wall of light (or other device within 30 m) turned on
+            // its owners, as its circuitry panel rewired
+            // (the nearest wall by its face, else any device near)
+            let wall = devices.list.iter().enumerate().filter_map(|(i, dv)| dv.wall_face().map(|w| (i, w.0.distance(t.translation)))).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(i, _)| i);
+            if let Some(i) = wall {
+                devices.list[i].rewired = true;
+            }
+            let ok = wall.is_some() || devices.rewire_near("", t.translation);
+            let which: Vec<String> = devices.list.iter().filter(|d| d.rewired).map(|d| format!("{} ({})", d.def.actor, d.def.kind)).collect();
+            info!("script: rewire {}: {}", if ok { "done" } else { "found nothing" }, which.join(", "));
+        }
         "wallnpc" => {
             // (tests) wallnpc: the nearest character the nearest wall of light would strike, put
             // in it

@@ -477,6 +477,8 @@ pub struct NpcVisual {
 #[derive(Resource, Default)]
 pub struct GameAssets {
     pub white_rat_material: Option<PartMat>,
+    /// a wall of light's dead as they vanish, and its `O_Opacity` slots (each expression's)
+    pub electrocuted_material: Option<(Handle<Ue3Material>, Vec<usize>)>,
     pub npc_types: Vec<Option<NpcVisual>>,
     /// materials the scripts put on characters, by scene material
     pub npc_mat_swaps: HashMap<u32, PartMat>,
@@ -1701,6 +1703,17 @@ fn spawn_level(
         let stalk = part(&k.stalk);
         let pearl = part(&k.pearl);
         game_assets.krust_parts.push((stalk, pearl));
+    }
+    if let Some(id) = scene.electrocuted_material {
+        let slots: Vec<usize> = scene
+            .materials
+            .get(id as usize)
+            .and_then(|m| m.ue3.as_ref())
+            .map(|u| u.param_names.iter().enumerate().filter(|(_, n)| n.eq_ignore_ascii_case("O_Opacity")).map(|(i, _)| i).collect())
+            .unwrap_or_default();
+        if let Some(h) = mb.ue3_material(id, Policy::NoLightMap, &mut image_assets, &mut ue_assets, &mut ue_programs, &mut shader_assets).filter(|_| !slots.is_empty()) {
+            game_assets.electrocuted_material = Some((h, slots));
+        }
     }
     if let Some(id) = scene.white_rat_material {
         game_assets.white_rat_material = match mb.ue3_material(id, Policy::NoLightMap, &mut image_assets, &mut ue_assets, &mut ue_programs, &mut shader_assets) {

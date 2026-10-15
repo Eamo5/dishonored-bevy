@@ -60,6 +60,9 @@ pub struct Scene {
     pub rat_type: Option<u32>,
     #[serde(default)]
     pub white_rat_material: Option<u32>,
+    /// What a wall of light's dead are drawn with as they vanish (`Electric_Vanish_inst`).
+    #[serde(default)]
+    pub electrocuted_material: Option<u32>,
     /// Security systems: walls of light, arc pylons, watchtowers, alarm bells and the whale
     /// oil receptacles and tanks that power them.
     #[serde(default)]

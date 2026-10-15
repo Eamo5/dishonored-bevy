@@ -6673,6 +6673,12 @@ impl<'a> Cooker<'a> {
             ("immolation", "Vfx_GamePlay.SpittingFire.ps_immolation"),
             ("shadow_kill", "Vfx_GamePlay.ShadowKill.ps_SK_Leg_Arms"),
             ("electrified", "Vfx_GamePlay.WallLight.ps_electrified"),
+            // (a wall of light's dead: the lightning on their hands and feet,
+            // `DisTweaks_NPCPawn.m_ElectrocutedFXs`)
+            ("electrified_arm_l", "Vfx_GamePlay.WallLight.ps_electrified_ArmLeft"),
+            ("electrified_arm_r", "Vfx_GamePlay.WallLight.ps_electrified_ArmRight"),
+            ("electrified_leg_l", "Vfx_GamePlay.WallLight.ps_electrified_LegLeft"),
+            ("electrified_leg_r", "Vfx_GamePlay.WallLight.ps_electrified_LegRight"),
             ("rat_gibs", "NPC_Body_Eaten.FX.ps_rat_gibs_body"),
             // (a tallboy's stilt coming down: `Footfall_Tallboy` x `Environment`)
             ("tallboy_step", "Vfx_PhysMat.FootSteps.fsteps_tallboy"),
@@ -7144,6 +7150,10 @@ impl<'a> Cooker<'a> {
         // the rats of swarms (and the Devouring Swarm): the crowd agent's mesh and animations
         if let Some(mat) = self.assets.find("Npc_SmallRat.Materials.SmallRat2_inst") {
             self.scene.white_rat_material = Some(self.material(&mat));
+        }
+        // a wall of light's dead vanish in its lightning (`DisTweaks_NPCPawn.m_pElectrocutedMaterial`)
+        if let Some(mat) = self.assets.find("Shr_Characters.Effect.Electric_Vanish_inst") {
+            self.scene.electrocuted_material = Some(self.material(&mat));
         }
         if let (Some(obj), Some(comp)) = (
             self.assets.find("Npc_SmallRat.Mesh.Npc_SmallRat"),

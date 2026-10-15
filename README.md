@@ -1680,10 +1680,21 @@ against the install's own data where it carries them, then implemented independe
     is `_BigWall`), with the contact system's sword sparks and sound for the surface (`Sword`).
 - **Walls of light.** One shocks Corvo for its `m_Damage` (100) as he touches it, rather than
   killing him outright, so health upgrades can survive it. While Bend Time stops the world it can be
-  walked through. Those it kills burn to ash, and so does a body that touches it (at a kill's
-  cost of its tank), unless Corvo carries it through; a bolt, dart or grenade meeting it is
-  destroyed with a shock, bursting and sticking nowhere (the wall's `TakeDamage` from a causer
+  walked through. Those it kills are electrocuted and vanish, and so is a body that touches it (at
+  a kill's cost of its tank), unless Corvo carries it through; a bolt, dart or grenade meeting it
+  is destroyed with a shock, bursting and sticking nowhere (the wall's `TakeDamage` from a causer
   that isn't a pawn), as roshan's r614/blink research decoded `DisWallOfLight`.
+  - *Electrocuted* (`StateNPCMasterDead_Electrocuted`, with `DisTweaks_NPCPawn`'s settings). One
+    struck standing plays its own death (`DisNPCAnim_DeathWallOfLight`: `Generic_Electrified`),
+    lightning playing on its limbs: `ps_electrified` on the twelve bones of `m_ElectrocutedFXs`, with
+    the hands' and feet's own (`_ArmLeft`, `_LegRight`...). It is drawn at once with
+    `m_pElectrocutedMaterial` (`Electric_Vanish_inst`: black, its lightning crawling over it); from
+    `m_fElectrocutedFadeBegin` (0.5 s) its `O_Opacity` falls from the material's 1 to
+    `m_fElectrocutedFadeEnd` (0) over `m_fElectrocutedFadeDuration` (1.5 s), the material's noise
+    mask eating the body away, and nothing is left. A body goes the same way, lying as it is. That
+    the fade's begin is a time and its end a value is our reading: the mask leaves nothing of the
+    body below 0.5, so the fade cannot start there. `DH_WALL_LOG` logs the walls' state and who
+    they strike; the test script's `rewire` turns the nearest wall on its owners.
 - **Autosaves.**
   - A level script's autosave is denied while Corvo is fighting, unless it is a mission's start or
     `m_bEvenInCombat`.
