@@ -3,16 +3,18 @@
 //! movie's `objectiveMarker_primary` over its target (following a character), as the HUD
 //! tweak's `m_TaskMarkerSettings` place it: 10 units above it, at 90% from 100 m growing to
 //! 150% at 5 m, fading out within 10 m (or as the target's vanish preset has it:
-//! `m_TaskMarkerSpecificSettings`' `VeryClose` within 4 m, `Never` not at all), its description (`_description_mc`: the distance, the
-//! body font at 21 over its brushed backing) shown while it is near the middle of the screen
-//! (`m_fMarkerFocusDistance`); off the screen it is not kept at its edge
-//! (`m_bKeepBBInMarkerArea`).
+//! `m_TaskMarkerSpecificSettings`' `VeryClose` within 4 m, `Never` not at all), its description
+//! (`_description_mc`: the target's name, `DisSeqAct_UpdateTaskTarget`'s `m_TargetName`, as the
+//! marker's maker sets it once; the body font at 21 over its brushed backing) shown while it is
+//! near the middle of the screen (`m_fMarkerFocusDistance`); off the screen it is not kept at
+//! its edge (`m_bKeepBBInMarkerArea`).
 //!
 //! The Heart's marks (`m_bShowHeartTargetMarkers`): while it is held, the level's runes and
 //! bone charms show the movie's `runeMarker` / `boneCharmMarker`, as `m_RuneMarkerSettings` /
 //! `m_BoneCharmMarkerSettings` place them: 3 units above, 30 stage units up the screen, 90% at
-//! 10 m growing to 150% at 5 m, fading out as Corvo nears; these are kept at the screen's edge
-//! when it is off it, the locator turned toward them.
+//! 10 m growing to 150% at 5 m, fading out as Corvo nears, each with its pickup's name (its
+//! interactable's `m_Name`); these are kept at the screen's edge when it is off it, the locator
+//! turned toward them.
 
 use crate::flash::{turn_scale, Clip, FlashClip, MovieTimelines};
 use crate::kismet::{TaskState, Vm};
@@ -76,22 +78,27 @@ struct Marker(usize, bool);
 #[derive(Component)]
 struct MarkerText(usize);
 
-/// Where the visible active tasks of the current objectives point (a character where it
-/// stands now, by its spawner): marker positions, whether optional, the vanish preset.
-pub fn task_points(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: impl Fn(u32) -> Option<Vec3>) -> Vec<(Vec3, bool, u8)> {
-    task_targets(vm, npc_at, pickup_at).into_iter().map(|t| (t.0, t.3, t.4)).collect()
+/// A task marker: where it points (a character where it stands now, a pickup where it is now:
+/// a key on a guard's belt), the actor and pickup it is, whether an optional objective's, its
+/// vanish preset (`Vm::task_vanish`) and its target's name.
+#[derive(Clone, Debug)]
+pub struct TaskMarker {
+    pub at: Vec3,
+    pub pickup: Option<u32>,
+    pub actor: u32,
+    pub optional: bool,
+    pub vanish: u8,
+    pub name: String,
 }
 
-/// The task markers, and the actors and pickups they are (a pickup where it is now: a key on a
-/// guard's belt), whether they are an optional objective's, and their vanish presets
-/// (`Vm::task_vanish`).
-pub fn task_targets(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: impl Fn(u32) -> Option<Vec3>) -> Vec<(Vec3, Option<u32>, u32, bool, u8)> {
-    let mut points: Vec<(Vec3, Option<u32>, u32, bool, u8)> = Vec::new();
+/// The markers of the visible active tasks of the current objectives (and the challenges').
+pub fn task_targets(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: impl Fn(u32) -> Option<Vec3>) -> Vec<TaskMarker> {
+    let mut points: Vec<TaskMarker> = Vec::new();
     // (the challenges' marks: `DisSeqAct_DLC05_MarkerControl`)
     for &a in &vm.dlc_markers {
         let Some(ka) = vm.g.actors.get(a as usize) else { continue };
         let at = ka.spawner.and_then(&npc_at).map(|p| p + Vec3::Y * 1.1).unwrap_or(Vec3::from(ka.position) + Vec3::Y * 0.5);
-        points.push((at, ka.pickup, a, false, 0));
+        points.push(TaskMarker { at, pickup: ka.pickup, actor: a, optional: false, vanish: 0, name: String::new() });
     }
     for path in &vm.objectives {
         let Some(o) = vm.g.objectives.iter().find(|o| o.path == *path) else { continue };
@@ -106,9 +113,9 @@ pub fn task_targets(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: im
                 continue;
             }
             // (its targets: `path`, then `path#1`...)
-            let mut targets: Vec<(&String, u32)> = vm.task_targets.iter().filter(|(k, _)| **k == task.path || k.strip_prefix(task.path.as_str()).is_some_and(|r| r.starts_with('#'))).map(|(k, v)| (k, v.0)).collect();
+            let mut targets: Vec<(&String, u32, &String)> = vm.task_targets.iter().filter(|(k, _)| **k == task.path || k.strip_prefix(task.path.as_str()).is_some_and(|r| r.starts_with('#'))).map(|(k, v)| (k, v.0, &v.1)).collect();
             targets.sort();
-            for (key, a) in targets {
+            for (key, a, name) in targets {
                 let Some(ka) = vm.g.actors.get(a as usize) else { continue };
                 // (a pickup no longer there: taken)
                 let pickup = ka.pickup.map(|p| pickup_at(p));
@@ -121,8 +128,8 @@ pub fn task_targets(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: im
                     .map(|p| p + Vec3::Y * 1.1)
                     .or_else(|| pickup.flatten().map(|p| p + Vec3::Y * 0.3))
                     .unwrap_or(Vec3::from(ka.position) + Vec3::Y * 0.5);
-                if !points.iter().any(|p| p.0.distance(at) < 1.0) {
-                    points.push((at, ka.pickup, a, o.optional, vm.task_vanish.get(key).copied().unwrap_or(0)));
+                if !points.iter().any(|p| p.at.distance(at) < 1.0) {
+                    points.push(TaskMarker { at, pickup: ka.pickup, actor: a, optional: o.optional, vanish: vm.task_vanish.get(key).copied().unwrap_or(0), name: name.clone() });
                 }
             }
         }
@@ -177,7 +184,7 @@ fn update_markers(
         return;
     }
     let mut points = if settings.markers && !paused.0 {
-        task_points(&vm, |s| npcs.iter().find(|(f, _, n)| f.0 == s && !n.is_down()).map(|(_, t, _)| t.translation), |i| pickups.iter().find(|(p, _)| p.index == i).map(|(_, t)| t.translation))
+        task_targets(&vm, |s| npcs.iter().find(|(f, _, n)| f.0 == s && !n.is_down()).map(|(_, t, _)| t.translation), |i| pickups.iter().find(|(p, _)| p.index == i).map(|(_, t)| t.translation))
     } else {
         Vec::new()
     };
@@ -191,7 +198,7 @@ fn update_markers(
     let fwd = cg.forward().as_vec3();
     for (mut m, mut fc, mut node, mut vis) in &mut markers {
         // an optional objective's marker is the other symbol
-        if let Some(&(_, optional, _)) = points.get(m.0) {
+        if let Some(optional) = points.get(m.0).map(|p| p.optional) {
             if optional != m.1 {
                 m.1 = optional;
                 let tl = fc.tl.clone();
@@ -201,7 +208,7 @@ fn update_markers(
             }
         }
         // where it shows: on the screen, ahead (else not at all)
-        let shown = points.get(m.0).map(|p| p.0).and_then(|p| {
+        let shown = points.get(m.0).map(|p| p.at).and_then(|p| {
             let at = p + Vec3::Y * OFFSET_Z;
             ((at - eye).dot(fwd) > 0.1).then(|| camera.world_to_viewport(cg, at).ok()).flatten().filter(|v| v.x >= 0.0 && v.y >= 0.0 && v.x <= w.width() && v.y <= w.height()).map(|v| (v, (at - eye).length()))
         });
@@ -219,7 +226,7 @@ fn update_markers(
         // the tweak's variations by distance
         let k = ((SCALE.0 - d) / (SCALE.0 - SCALE.1)).clamp(0.0, 1.0);
         let scale = SCALE.2 + (SCALE.3 - SCALE.2) * k;
-        let alpha = task_alpha(d, points.get(m.0).map_or(0, |p| p.2));
+        let alpha = task_alpha(d, points.get(m.0).map_or(0, |p| p.vanish));
         let focused = (pos - mid).length() / s < FOCUS;
         node.left = Val::Px(pos.x);
         node.top = Val::Px(pos.y);
@@ -229,8 +236,8 @@ fn update_markers(
         if *vis != Visibility::Inherited {
             *vis = Visibility::Inherited;
         }
-        // the distance, in the description
-        let label = format!("{:.0} m", d);
+        // the target's name, in the description
+        let label = points.get(m.0).map(|p| p.name.clone()).unwrap_or_default();
         for (t, mut text, mut font, mut col, mut tn, mut tv, cn) in &mut texts {
             if t.0 != m.0 {
                 continue;
@@ -291,12 +298,12 @@ fn heart_markers(
     }
     let eye = cg.translation();
     let held = powers.selected == crate::powers::Power::Heart && !paused.0 && !stats.dead && settings.heart_markers;
-    let mut points: Vec<(Vec3, bool)> = if held {
+    let mut points: Vec<(Vec3, bool, &str)> = if held {
         pickups
             .iter()
             .filter_map(|(p, t)| match p.kind {
-                crate::interact::PickupKind::Rune => Some((t.translation, false)),
-                crate::interact::PickupKind::BoneCharm => Some((t.translation, true)),
+                crate::interact::PickupKind::Rune => Some((t.translation, false, p.label.as_str())),
+                crate::interact::PickupKind::BoneCharm => Some((t.translation, true, p.label.as_str())),
                 _ => None,
             })
             .collect()
@@ -311,7 +318,7 @@ fn heart_markers(
     let half = mid - Vec2::splat(AREA_MARGIN * s);
     let to_cam = cg.affine().inverse();
     for (mut m, mut fc, mut node, mut vis) in &mut markers {
-        let Some(&(p, charm)) = points.get(m.0) else {
+        let Some(&(p, charm, name)) = points.get(m.0) else {
             if *vis != Visibility::Hidden {
                 *vis = Visibility::Hidden;
             }
@@ -365,7 +372,8 @@ fn heart_markers(
         if *vis != Visibility::Inherited {
             *vis = Visibility::Inherited;
         }
-        let label = format!("{:.0} m", d);
+        // the rune's or charm's name (its interactable's `m_Name`, as the marker's maker sets it)
+        let label = name.to_string();
         for (t, mut text, mut font, mut col, mut tn, mut tv, cn) in &mut texts {
             if t.0 != m.0 {
                 continue;

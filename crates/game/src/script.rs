@@ -446,8 +446,8 @@ fn run_script(
                     .get_resource::<crate::kismet::Vm>()
                     .map(|vm| crate::markers::task_targets(vm, |s| npcs.iter().find(|(f, _)| *f == s).map(|(_, p)| *p), |i| items.iter().find(|(k, _)| *k == i).map(|(_, p)| *p)))
                     .unwrap_or_default();
-                match pts.get(pick) {
-                    Some(&(p, pickup, actor, _, _)) => {
+                match pts.get(pick).map(|m| (m.at, m.pickup, m.actor)) {
+                    Some((p, pickup, actor)) => {
                         info!("script: goto task marker {pick} at {p:.2}");
                         let mut g = w.resource_mut::<Goto>();
                         g.goal = Some(p - Vec3::Y * 0.5);

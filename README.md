@@ -156,8 +156,9 @@ fullscreen display, vertical sync and the crosshair.
   the person targeted (by story group) or the place (by mission progress). Held, it marks the
   runes and bone charms still to be found with the HUD movie's `runeMarker` /
   `boneCharmMarker` as `m_RuneMarkerSettings` / `m_BoneCharmMarkerSettings` place them (90% at
-  10 m to 150% at 5 m, fading as Corvo nears, the distance shown near the middle, kept at the
-  screen's edge with the locator turned toward them when off it); with one within its reach and
+  10 m to 150% at 5 m, fading as Corvo nears, the pickup's name shown near the middle (its
+  interactable's `m_Name`, as the exe's marker sets it), kept at the screen's edge with the
+  locator turned toward them when off it); with one within its reach and
   the Heart not in hand, the pawn's `m_HeartTargetTutorialMessage` ("Rune or Bone Charm
   nearby. Equip the Heart.") comes up once per approach.
 - **The journal as `UI_Journal` draws it** (`jview.rs`, `journal.rs`), in the original's tab
@@ -1139,8 +1140,9 @@ fullscreen display, vertical sync and the crosshair.
   `objectiveMarker_primary` (a downward chevron) over the target the level scripts give each
   visible active task (`DisSeqAct_UpdateTaskTarget`; a character is followed), as the HUD
   tweak's `m_TaskMarkerSettings` place it — 10 units above, 90% far off growing to 150% near,
-  fading out within 10 m — with its distance on the description's brushed backing while it
-  is near the middle of the screen (`m_fMarkerFocusDistance`); off screen it is not shown
+  fading out within 10 m — with its target's name (`m_TargetName`: "Havelock", "Sewer Hatch",
+  set once as the exe's marker does; it shows no distance) on the description's brushed
+  backing while it is near the middle of the screen (`m_fMarkerFocusDistance`); off screen it is not shown
   (`m_bKeepBBInMarkerArea`). A target's vanish preset (`m_MarkerVanishPreset`, the HUD tweak
   `Twk_InGameUI.Twk_GFxMoviePlayerHUD`'s `m_TaskMarkerSpecificSettings`) fades it otherwise:
   `VeryClose` only within the last 4 m (a whale oil receptacle, Emily), `Never` not at all
