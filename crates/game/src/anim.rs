@@ -430,6 +430,13 @@ impl Animator {
         self.overlay.finished(&self.lib)
     }
 
+    /// Move the overlay layer's clip to `t` (s): kept in step with the body's.
+    pub fn seek_overlay(&mut self, t: f32) {
+        if let Some(c) = &mut self.overlay.cur {
+            c.t = t;
+        }
+    }
+
     /// How far into its clip the overlay layer is (s).
     pub fn overlay_time(&self) -> Option<f32> {
         self.overlay.cur.map(|c| c.t)

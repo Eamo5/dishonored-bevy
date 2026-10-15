@@ -516,6 +516,7 @@ fn player_move(
                 stats.damage_flash = 1.0;
                 if stats.health <= 0.0 {
                     stats.dead = true;
+                    stats.died_falling = true;
                     msgs.push("You fell to your death");
                 }
             }
@@ -889,6 +890,7 @@ fn update_camera_offset(
     mut cam: Query<(&mut Transform, &mut Projection), With<PlayerCamera>>,
     (swim, settings, zoom, possession): (Res<crate::swim::Swim>, Res<crate::settings::Settings>, Res<crate::zoom::Zoom>, Res<crate::possession::Possession>),
     mut world_light: Option<ResMut<crate::world_light::WorldLighting>>,
+    death_fall: Res<crate::arms::DeathFall>,
 ) {
     let Ok((entity, mut p, t)) = q.single_mut() else { return };
     let Ok((mut ct, mut proj)) = cam.single_mut() else { return };
@@ -908,7 +910,10 @@ fn update_camera_offset(
         }
     }
     let dt = time.delta_secs();
-    let target_eye = if stats.dead {
+    // (dead, the view sinks to the floor, unless his death's clip carries it down: `arms`)
+    let target_eye = if stats.dead && death_fall.0 {
+        p.eye_height
+    } else if stats.dead {
         -0.55
     } else if let Some(b) = possession.body {
         b.eye

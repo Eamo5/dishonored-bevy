@@ -1531,7 +1531,10 @@ fn run_script(
             let (fwd, right) = (Vec3::new(-p.yaw.sin(), 0.0, -p.yaw.cos()), Vec3::new(p.yaw.cos(), 0.0, -p.yaw.sin()));
             let damage = f(1).min((stats.health - 1.0).max(0.0));
             stats.take_damage(damage);
-            stats.hit_from = Some(t.translation + (fwd * a.cos() + right * a.sin()) * 2.0);
+            let from = t.translation + (fwd * a.cos() + right * a.sin()) * 2.0;
+            stats.hit_from = Some(from);
+            // (the side it came from, as a real blow's)
+            stats.blow = (stats.blow.0.wrapping_add(1), crate::combat::side_of(from, t.translation, p.yaw));
         }
         "epp" => {
             // epp <Epp_Knocked|Epp_Weepers|...> [0|1]: a scripted screen effect off / on

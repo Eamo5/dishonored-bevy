@@ -336,6 +336,9 @@ pub struct PlayerStats {
     /// 3 right): the arms' reaction
     #[serde(skip)]
     pub blow: (u32, u8),
+    /// he died of a fall (his death's clip)
+    #[serde(skip)]
+    pub died_falling: bool,
     /// the campaign's chaos level (`DisSeqVar_DarknessLevel`): the step of the player tweak's
     /// `m_DarknessLevels` its score reaches (see `campaign::notify_deed`)
     pub chaos_level: i32,
@@ -661,6 +664,7 @@ impl Default for PlayerStats {
             damage_flash: 0.0,
             hit_from: None,
             blow: (0, 0),
+            died_falling: false,
             chaos_level: 0,
             chaos_high: false,
             chaos_score: 0,

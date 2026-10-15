@@ -289,6 +289,8 @@ pub struct Powers {
     pub fov_kick: f32,
     /// Bumped on every use of a power or weapon (`cast_power` is what was used).
     pub cast_seq: u32,
+    /// Bumped on every cast without the mana for it (the left hand's empty gesture: `arms`).
+    pub no_mana_seq: u32,
     pub cast_power: Power,
     /// the left hand's press that ended a possession, held: it does nothing more
     swallow: bool,
@@ -354,6 +356,7 @@ impl Default for Powers {
             cooldown: 0.0,
             fov_kick: 0.0,
             cast_seq: 0,
+            no_mana_seq: 0,
             cast_power: Power::Blink,
             swallow: false,
             cooking: None,
@@ -1688,6 +1691,7 @@ fn out_of_mana(powers: &mut Powers, sfx: &mut MessageWriter<PostEvent>, msgs: &m
     msgs.push("Not enough mana");
     sfx.write(PostEvent::named("Snd_Power_Empty", None));
     powers.cooldown = 0.4;
+    powers.no_mana_seq = powers.no_mana_seq.wrapping_add(1);
 }
 
 /// Daud's Blink (Transversal): aimed while he stands still (no step, no jump), even

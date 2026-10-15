@@ -108,6 +108,8 @@ fullscreen display, vertical sync and the crosshair.
   krust stays rooted and spits where he looks), Devouring Swarm
   (the original rats); enhancements Vitality, Blood Thirst, Shadow Kill, Agility. Runes buy
   them in the journal. Mana regenerates a portion above the last expense, like the original.
+  A power cast without the mana for it gets the left hand's empty gesture (`Powers_OutOfMana`)
+  with "Not enough mana" and its sound (`Snd_Power_Empty`).
   Going into a host plays the original transition (`POSSESSION_IN_INST`, a
   `MaterialInstanceTimeVarying` whose parameter curves are cooked into `scene.post_curves`:
   the eye opening, the retina's veins, the host's view coming in), coming out
@@ -251,7 +253,10 @@ fullscreen display, vertical sync and the crosshair.
   (`Powers_Cast_Blink_In`, the Mark glowing) and holds (`_Loop`) while the marker shows; let go,
   the cast (`_Out`) plays. The left hand's clips (casts, throws, the guns) move the left arm
   alone, as the original's arm tree filters them (`LeftArmFilter`, from `Collarbone_L_Jnt`);
-  the sword arm keeps its own pose. A grenade cooks with the hand drawn back
+  the sword arm keeps its own pose. On the move, the hand with a power or gadget has its own
+  walk, sprint and leap (`Powers_Walk`, `Powers_Jump`, `Gadgets_Walk`, `Gadgets_Sprint`,
+  `Gadgets_Jump`). It keeps to the same part of its cycle as the body's clip, as a UE3 sync
+  group does. Crouched or still, it idles. A grenade cooks with the hand drawn back
   (`Gadgets_Grenade_Cooking_In`, `_Idle`), is thrown (`Gadgets_Grenade_Deploy`, out of the hand
   half way through), and the next is taken from the belt (`_Reload`), or with none left the hand
   comes back empty (`_OutOfAmmo`).
@@ -623,7 +628,13 @@ fullscreen display, vertical sync and the crosshair.
   Corvo's portrait and the description for the one chosen); the pause screen (`p_bkgd` and
   `p_pauseMenu`: Corvo's mask, the brush frame, "PAUSE" up the left, the list masked to its
   slanted panel; its backdrop drifts as `_common.AnimatedBackground` makes it: the grain at
-  15%, the shards and blades flying in and swaying). Dead (once the death has faded,
+  15%, the shards and blades flying in and swaying). Dying, Corvo falls with his death's clip
+  on his own rig, his hands and the view going with his body. The clip is by the side the last
+  blow came from, named for it as the characters' deaths are: from ahead he falls on his back
+  (`Generic_Death_Impact`), from behind on his face (`_Back`), from the left or right
+  (`_Left`, `_Right`). From a fall he gets `Generic_Death_FallImpact_Back`, and drowned
+  `Generic_Death_Water`. The view takes all of his camera bone's turn as he falls (our
+  reading). Dead (once the death has faded,
   `m_fDeathFadeDelay`) or ended by the scripts, the same screen is the game over menu:
   "GAME OVER" up the left, the reason on its brush ("You have met your demise." or the
   scripts'), the mask sliced (`anim_slice`), and `Resume From Last Save`, `Load game`,

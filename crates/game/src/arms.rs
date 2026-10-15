@@ -25,7 +25,8 @@ pub struct ArmsPlugin;
 
 impl Plugin for ArmsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(GameState::InGame), spawn_arms.after(spawn_view_model))
+        app.init_resource::<DeathFall>()
+            .add_systems(OnEnter(GameState::InGame), spawn_arms.after(spawn_view_model))
             .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_effects.after(ArmsAnimSet), (animate_held, animate_sword, show_bolts).after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, (align_arms.in_set(ArmsAlign), arm_pitch).after(AnimPose).before(TransformSystems::Propagate));
     }
@@ -34,6 +35,11 @@ impl Plugin for ArmsPlugin {
 /// The arms' clips are chosen.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ArmsAnimSet;
+
+/// Corvo dead and falling with his death's clip (the view on his camera bone, not sunk to the
+/// floor: `player`).
+#[derive(Resource, Default)]
+pub struct DeathFall(pub bool);
 
 /// The arms' root is placed on the camera.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -151,6 +157,12 @@ struct ArmClips {
     land: Option<ClipId>,
     land_sneak: Option<ClipId>,
     land_big: Option<ClipId>,
+    /// dying, struck from ahead, behind, the left, the right (`Generic_Death_Impact`, `_Back`,
+    /// `_Left`, `_Right`: named, as the characters' deaths are, for the side the blow came from),
+    /// from a fall (`Generic_Death_FallImpact_Back`), drowned (`Generic_Death_Water`)
+    death: [Option<ClipId>; 4],
+    death_fall: Option<ClipId>,
+    death_water: Option<ClipId>,
     /// a mantle (`Ply_Player_Mantle_at`): empty-handed or sword in hand, standing or sneaking,
     /// low, medium or high
     mantle: [[[Option<ClipId>; 3]; 2]; 2],
@@ -180,6 +192,9 @@ struct ArmClips {
     grabbed_out: Option<ClipId>,
     // left arm
     powers_idle: Option<ClipId>,
+    /// the left hand on the move with a power, with a gadget: walking, sprinting, in the air
+    /// (`Powers_Walk`, `Powers_Jump`, `Gadgets_Walk`, `Gadgets_Sprint`, `Gadgets_Jump`)
+    left_loco: [[Option<ClipId>; 3]; 2],
     gadgets_idle: Option<ClipId>,
     /// the Heart's grip: its fingers about it (`Ply_Gadgets_Heart_as`, on the left hand's
     /// fingers over the gadgets' hold)
@@ -187,6 +202,8 @@ struct ArmClips {
     blink: Option<ClipId>,
     /// Blink held: the hand comes up and holds (`Powers_Cast_Blink_In`, `_Loop`)
     blink_aim: [Option<ClipId>; 2],
+    /// a cast without the mana for it: the hand's empty gesture (`Powers_OutOfMana`)
+    out_of_mana: Option<ClipId>,
     windblast: Option<ClipId>,
     bend_time: Option<ClipId>,
     switch: Option<ClipId>,
@@ -255,6 +272,9 @@ impl ArmClips {
             land: lib.find("Sword_Ready_JumpLandSmall"),
             land_sneak: lib.find("Sword_Sneak_JumpLandSmall"),
             land_big: lib.find("Generic_JumpLandBig"),
+            death: [lib.find("Generic_Death_Impact"), lib.find("Generic_Death_Back"), lib.find("Generic_Death_Left"), lib.find("Generic_Death_Right")],
+            death_fall: lib.find("Generic_Death_FallImpact_Back"),
+            death_water: lib.find("Generic_Death_Water"),
             mantle: [["Empty_Mantle", "Empty_Sneak_Mantle"], ["Sword_Ready_Mantle", "Sword_Sneak_Mantle"]]
                 .map(|ways| ways.map(|w| ["Low", "Medium", "High"].map(|h| lib.find(&format!("{w}{h}"))))),
             slide: ["Empty", "Sword"].map(|s| ["SlideIn", "SlideLoop", "SlideOutSneak", "SlideOutSprint"].map(|n| lib.find(&format!("{s}_{n}")))),
@@ -295,10 +315,12 @@ impl ArmClips {
             ],
             swim: [lib.find("Empty_SwimN"), lib.find("Empty_SwimE"), lib.find("Empty_SwimS"), lib.find("Empty_SwimW")],
             powers_idle: lib.find("Powers_Idle"),
+            left_loco: ["Powers", "Gadgets"].map(|s| ["Walk", "Sprint", "Jump"].map(|w| lib.find(&format!("{s}_{w}")))),
             gadgets_idle: lib.find("Gadgets_Idle"),
             heart_fingers: lib.first(&["Gadgets_Heart_Fingers_Idle", "Gadgets_Heart_Fingers_Default"]),
             blink: lib.find("Powers_Cast_Blink_Out"),
             blink_aim: [lib.find("Powers_Cast_Blink_In"), lib.find("Powers_Cast_Blink_Loop")],
+            out_of_mana: lib.find("Powers_OutOfMana"),
             windblast: lib.find("Powers_Cast_Windblast"),
             bend_time: lib.find("Powers_Cast_BendTime"),
             switch: lib.find("Powers_Switch"),
@@ -365,6 +387,8 @@ struct ArmsAnim {
     cast_seq: u32,
     /// the reload clips seen asked for
     reload_seq: u32,
+    /// the casts without mana seen
+    no_mana_seq: u32,
     selected: Power,
     attach_l: Option<(Entity, Transform)>,
     /// ranged weapon meshes held in the left hand: (power, parent entity)
@@ -382,6 +406,8 @@ struct ArmsAnim {
     equipping: bool,
     /// the scene key the arms play (`matinee::SceneArms`)
     scene_key: Option<(u32, usize)>,
+    /// his death's clip started
+    died: bool,
     /// the arms' sockets effects play at (by name), the clips just started whose effects
     /// are due, and those effects: seconds to wait, socket, particle system
     sockets: Vec<(String, Entity)>,
@@ -664,6 +690,7 @@ fn spawn_arms(
                 blow_seen: 0,
                 cast_seq: powers.as_ref().map(|p| p.cast_seq).unwrap_or(0),
                 reload_seq: powers.as_ref().map(|p| p.reload_anim.0).unwrap_or(0),
+                no_mana_seq: powers.as_ref().map(|p| p.no_mana_seq).unwrap_or(0),
                 selected: Power::Pistol,
                 attach_l,
                 held,
@@ -672,6 +699,7 @@ fn spawn_arms(
                 sheathed: false,
                 equipping: false,
                 scene_key: None,
+                died: false,
                 carry_seq: 0,
                 drop_seq: 0,
                 assassin_seq: 0,
@@ -742,10 +770,42 @@ fn animate_arms(
     mut held: Query<&mut Visibility, Without<ArmsRoot>>,
     (swim, mut carry, peek, cine, scene_arms): (Res<crate::swim::Swim>, ResMut<crate::carry::Carry>, Res<crate::keyhole::Peek>, Res<crate::script_world::Cinematic>, Res<crate::matinee::SceneArms>),
     (versus, slide, edge, zoom): (Res<crate::combat::Versus>, Res<crate::player::Slide>, Res<crate::player::MantleEdge>, Res<crate::zoom::Zoom>),
+    mut death_fall: ResMut<DeathFall>,
 ) {
     let (Ok((p, sword, choking, grabbed)), Ok((mut anim, mut st, mut vis))) = (player.single(), arms.single_mut()) else { return };
     let st = &mut *st;
     let c = st.clips.clone();
+    // dead: he falls as the original's death has him, his hands and the view going with his
+    // body (by the side the last blow came from: `Generic_Death_Impact` ahead, `_Back`, `_Left`,
+    // `_Right`; `Generic_Death_FallImpact_Back` from a fall, `Generic_Death_Water` drowned)
+    let dying = stats.dead && c.death[1].is_some() && possession.host.is_none() && !cine.hides_player();
+    if dying {
+        if !st.died {
+            st.died = true;
+            let cl = if swim.swimming() {
+                c.death_water.or(c.death[1])
+            } else if stats.died_falling {
+                c.death_fall.or(c.death[1])
+            } else {
+                c.death[(stats.blow.1 as usize).min(3)].or(c.death[1])
+            };
+            if let Some(cl) = cl {
+                anim.restart(cl, false, 1.0, 0.15);
+                anim.stop_overlay(0.15);
+                anim.stop_upper(0.15);
+                death_fall.0 = true;
+                if std::env::var_os("DH_ARMS_LOG").is_some() {
+                    info!("arms: death {}", anim.lib.clip(cl).name);
+                }
+            }
+        }
+        if *vis != Visibility::Inherited {
+            *vis = Visibility::Inherited;
+        }
+        return;
+    }
+    st.died = false;
+    death_fall.0 = false;
     // inside a possessed host there are no hands of Corvo's to see, nor with his eye to a keyhole
     let hidden = stats.dead || p.noclip || possession.host.is_some() || peek.at.is_some() || cine.hides_player();
     let want = if hidden { Visibility::Hidden } else { Visibility::Inherited };
@@ -1143,6 +1203,13 @@ fn animate_arms(
             st.started.push(name.to_string());
         }
     }
+    // a cast without the mana for it: the hand's empty gesture
+    if powers.no_mana_seq != st.no_mana_seq {
+        st.no_mana_seq = powers.no_mana_seq;
+        if let Some(cl) = c.out_of_mana.filter(|_| !ranged) {
+            anim.restart_overlay(cl, false, 1.0, 0.08);
+        }
+    }
     let fast_bow = stats.upgrades.iter().any(|u| u == "Twk_Upgrade_Crossbow_ReloadSpeed");
     // (a gun raised to the eye through the optics: its own clips, `FirePistolZoom`,
     // `CrossbowFireZoom`; the pistol's accurate shot with `Twk_Upgrade_Pistol_Accuracy2`)
@@ -1208,6 +1275,23 @@ fn animate_arms(
     } else {
         c.powers_idle
     };
+    // on the move with a power or gadget in hand: the left hand's own walk, sprint or leap,
+    // in step with the body's clip (UE3's sync group: the same part of its cycle); crouched,
+    // or with the wrist bow, the idle
+    let speed = Vec2::new(p.velocity.x, p.velocity.z).length();
+    let set = (heart || ranged) as usize;
+    let loco = if idle.is_none() || bow || st.blocking || st.choking || swim.swimming() {
+        None
+    } else if !p.grounded {
+        c.left_loco[set][2]
+    } else if p.crouched || speed < 0.6 {
+        None
+    } else if p.sprinting && speed > 4.5 {
+        c.left_loco[set][1].or(c.left_loco[set][0])
+    } else {
+        c.left_loco[set][0]
+    };
+    let idle = loco.or(idle);
     // aiming Blink: the hand comes up (`Powers_Cast_Blink_In`) and holds (`_Loop`) until it's
     // let go and the cast plays
     let [aim_in, aim_loop] = c.blink_aim;
@@ -1272,9 +1356,19 @@ fn animate_arms(
     }
     let aiming = aiming || cooking || raised;
     let spyglass_busy = c.spyglass.iter().flatten().any(|cl| anim.overlay_is(*cl)) || anim.overlay_is(c.pistol_fire_accurate);
-    if !aiming && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.crossbow_fire_fast) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.grenade_reload) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision) || spyglass_busy)) {
+    if !aiming && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.crossbow_fire_fast) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.grenade_reload) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision) || anim.overlay_is(c.out_of_mana) || spyglass_busy)) {
         match idle {
-            Some(cl) if !st.choking && !st.blocking => anim.play_overlay(cl, true, 1.0, 0.25),
+            Some(cl) if !st.choking && !st.blocking => {
+                let leap = loco.is_some() && loco == c.left_loco[set][2];
+                anim.play_overlay(cl, !leap, 1.0, 0.25);
+                // (walking or sprinting: at the body's place in its cycle)
+                if let (Some(_), false, Some(b)) = (loco, leap, anim.current()) {
+                    if b.looping && anim.overlay_is(Some(cl)) {
+                        let at = (b.t / anim.lib.duration(b.clip)).fract() * anim.lib.duration(cl);
+                        anim.seek_overlay(at);
+                    }
+                }
+            }
             _ => anim.stop_overlay(0.2),
         }
     }
@@ -1433,7 +1527,7 @@ fn align_arms(
     mut cam: Query<&mut Transform, (With<crate::player::PlayerCamera>, Without<ArmsRoot>)>,
     player: Query<&Player>,
     (swim, climb, cine): (Res<crate::swim::Swim>, Res<crate::climb::Climb>, Res<crate::script_world::Cinematic>),
-    (breath, data): (Res<crate::breath::Breath>, Res<crate::gamedata::Data>),
+    (breath, data, death_fall): (Res<crate::breath::Breath>, Res<crate::gamedata::Data>, Res<DeathFall>),
 ) {
     for (mut t, anim, mut st, rig, vis) in &mut arms {
         let a = anim.model(rig.camera);
@@ -1511,7 +1605,9 @@ fn align_arms(
                 let rest = anim.bind_model(rig.camera);
                 let moved = eye * rest.compute_affine().inverse() * a.compute_affine() * eye.inverse();
                 let (_, mrot, mtr) = moved.to_scale_rotation_translation();
-                let mut off = bevy::math::Affine3A::from_rotation_translation(Quat::IDENTITY.slerp(mrot, ROLL_AMOUNT), mtr);
+                // (falling dead, all of it: our reading of the death's view)
+                let roll = if death_fall.0 { 1.0 } else { ROLL_AMOUNT };
+                let mut off = bevy::math::Affine3A::from_rotation_translation(Quat::IDENTITY.slerp(mrot, roll), mtr);
                 if !deltas.is_empty() {
                     // the view's sway: camera_jnt with the bob against without it, in the camera's frame
                     let bobbed = anim.model_with(rig.camera, &deltas);
