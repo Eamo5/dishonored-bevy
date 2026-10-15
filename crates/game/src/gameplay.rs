@@ -338,6 +338,12 @@ pub struct PlayerStats {
     /// 3 right): the arms' reaction
     #[serde(skip)]
     pub blow: (u32, u8),
+    /// knocked down (a wolfhound's jump attack): how many times and from which side (the arms'
+    /// knockdown), and how long yet he is down
+    #[serde(skip)]
+    pub knockdown: (u32, u8),
+    #[serde(skip)]
+    pub knocked: f32,
     /// he died of a fall, or drowned (his death's clip)
     #[serde(skip)]
     pub died_falling: bool,
@@ -668,6 +674,8 @@ impl Default for PlayerStats {
             damage_flash: 0.0,
             hit_from: None,
             blow: (0, 0),
+            knockdown: (0, 0),
+            knocked: 0.0,
             died_falling: false,
             died_drowning: false,
             chaos_level: 0,

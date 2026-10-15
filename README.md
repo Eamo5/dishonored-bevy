@@ -1081,20 +1081,30 @@ fullscreen display, vertical sync and the crosshair.
   Swarm) flails at the rats, `Sword_SwarmAttack_In` then `_Loop` while they stay and `_Out` once
   they are gone (`Empty_SwarmAttack_*` with its hands empty), rather than flinching at each bite.
 - **Rat repulsors** (`DisRatRepulsor`): swarms keep out of their radius, and the Devouring Swarm can't be summoned inside those that forbid it. Swarms shun lit fires too: a toggleable light's `DisRatLightComponent` (`m_pRatLightComponent`, `m_fRadius` 100 uu) keeps them out while the light is on, and lets them by once the scripts put it out.
-- **Wolfhound leaps** (`Twk_Inv_WolfhoundBite`): from 5.5-8 m a wolfhound springs at Corvo
-  (`DisTweaks_WHJumpAttack`), knocking him down for `m_DamageOnKnockDown` (7/10/15/20 by
-  difficulty) and pinning him (`DisTweaks_WHArmAttack`): its teeth take 5 every 0.75 s
-  (`m_LoopSettings`) until he breaks free with 3 presses ("Mash [LMB] !", `DisTweaks_Minigame`).
-  It does so with its arm attack's clips (`DisNPCAnimDefinitions_Wolfhound`'s sync attack): the
-  leap (`Attack_ArmAttack_JumpGlide_Minigame`, landing at his arm as its clip ends), the bite on
-  his arm and its hold (`_GrabArm_`, `_GrabLoop_Minigame`), then thrown off (`_GrabOut_`) or past
-  him (`_GrabMiss_Minigame`), carried as its clips go. His arms play their side of it
-  (`Ply_WolfhoundAttacks_as`, cooked where the level's script package has it:
-  `Sword_ArmAttack_GrabArm_Minigame`, `_GrabLoop_`, `_GrabOut_`). Dead in its teeth, he goes
-  down with `Sword_ArmAttack_TransToDeath_Minigame` and `Sword_WolfhoundDeath_Minigame` as it
-  makes its kill (`Attack_ArmAttack_TransToKill_Minigame`, `Attack_KillPlayer_Minigame`). Up
-  close they bite with their weapon's own moves (`DisTweaks_NPCAttackMedium`, `..Left90`,
-  `..Right90`). Script `spawn NAME` starts a level-script spawner (a kennel's hounds). Seeing
+- **Wolfhound leaps** (`Twk_Inv_WolfhoundBite`'s contexts): a wolfhound has two.
+  - Its arm attack (`DisTweaks_WHArmAttack`): from 2-4.5 m, within 35 degrees and 0.3 m of
+    height, every 8-12 s. It leaps (`Attack_ArmAttack_JumpGlide_Minigame`, landing at his arm as
+    its clip ends) and, with him within `m_ArmGrabRange` 1.5 m, bites his arm and holds on
+    (`_GrabArm_`, `_GrabLoop_Minigame`). Its teeth take 5 every 0.75/0.5/0.25/0.125 s by
+    difficulty until he breaks free with 1/2/3/4 presses ("Mash [LMB] !": its `m_LoopSettings`,
+    `DisTweaks_Minigame`'s 3 presses and 0.5 s where they say none). Then it is thrown off
+    (`_GrabOut_`), or it carries on past him (`_GrabMiss_Minigame`), carried as its clips go.
+    His arms play their side of it (`Ply_WolfhoundAttacks_as`, cooked where the level's script
+    package has it: `Sword_ArmAttack_GrabArm_Minigame`, `_GrabLoop_`, `_GrabOut_`). Dead in its
+    teeth, he goes down with `Sword_ArmAttack_TransToDeath_Minigame` and
+    `Sword_WolfhoundDeath_Minigame` as it makes its kill (`Attack_ArmAttack_TransToKill_Minigame`,
+    `Attack_KillPlayer_Minigame`).
+  - Its jump attack (`DisTweaks_WHJumpAttack`): from 5.5-8 m, within 15 degrees and 1 m, every
+    20-30 s. It springs at him (`Attack_JumpAttack_Jump_Minigame`) and, landing on him, knocks
+    him down for `m_DamageOnKnockDown` (7/10/15/20 by difficulty): his arms thrown by the side it
+    came from (`Sword_KnockdownFront`, `_Back`, `_Left`, `_Right`; `Empty_` empty-handed), down
+    for their 0.7 s. Then it steps back (`_StepBack_Minigame`). Killed by it, he goes down with
+    `Sword_JumpAttack_TransToKill_Minigame` and `Sword_WolfhoundDeath_Minigame` as it makes its
+    kill (`Attack_JumpAttack_TransToKill_Minigame`).
+  Once one has used either on him, no other does for its inhibition (DefaultAI.ini's
+  `m_fInhibitionTimeWHArmAttack` 8 s, `..WHJumpAttack` 30 s). Up close they bite with their weapon's own moves (`DisTweaks_NPCAttackMedium`, `..Left90`,
+  `..Right90`), holding at the bite's ideal reach (2 m) and backing off inside it (their
+  MeleeChase / Engage, as roshan's r614/blink research decoded it). Script `spawn NAME` starts a level-script spawner (a kennel's hounds). Seeing
   Corvo they bark at him (their `DisTweaks_Item_WolfhoundBark`'s `DisTweaks_WHBark`, a taunt of
   theirs: one of `Attack_IdleBark01`-`04`, each with its `Snd_Wolfhound_Bark`), standing for it;
   with him out of their reach, above them or below, they keep where they can bark at him, just

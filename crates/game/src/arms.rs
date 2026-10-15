@@ -168,6 +168,12 @@ struct ArmClips {
     /// killed in a wolfhound's teeth (`Sword_ArmAttack_TransToDeath_Minigame`, then
     /// `Sword_WolfhoundDeath_Minigame`: its arm attack's linked clips)
     death_pinned: [Option<ClipId>; 2],
+    /// killed by a wolfhound's jump attack, knocked down (`Sword_JumpAttack_TransToKill_Minigame`,
+    /// then `Sword_WolfhoundDeath_Minigame`)
+    death_jumped: Option<ClipId>,
+    /// knocked down from ahead, behind, the left, the right (`Sword_KnockdownFront`...; empty
+    /// handed `Empty_Knockdown*`)
+    knockdown: [[Option<ClipId>; 4]; 2],
     /// a mantle (`Ply_Player_Mantle_at`): empty-handed or sword in hand, standing or sneaking,
     /// low, medium or high
     mantle: [[[Option<ClipId>; 3]; 2]; 2],
@@ -288,6 +294,8 @@ impl ArmClips {
             death_water: lib.find("Generic_Death_Water"),
             death_drowned: lib.find("Generic_Death_Water_OutOfBreath"),
             death_pinned: [lib.find("Sword_ArmAttack_TransToDeath_Minigame"), lib.find("Sword_WolfhoundDeath_Minigame")],
+            death_jumped: lib.find("Sword_JumpAttack_TransToKill_Minigame"),
+            knockdown: ["Sword_", "Empty_"].map(|p| ["Front", "Back", "Left", "Right"].map(|s| lib.find(&format!("{p}Knockdown{s}")))),
             mantle: [["Empty_Mantle", "Empty_Sneak_Mantle"], ["Sword_Ready_Mantle", "Sword_Sneak_Mantle"]]
                 .map(|ways| ways.map(|w| ["Low", "Medium", "High"].map(|h| lib.find(&format!("{w}{h}"))))),
             slide: ["Empty", "Sword"].map(|s| ["SlideIn", "SlideLoop", "SlideOutSneak", "SlideOutSprint"].map(|n| lib.find(&format!("{s}_{n}")))),
@@ -403,6 +411,7 @@ struct ArmsAnim {
     damage_flash: f32,
     /// the blows seen (`PlayerStats::blow`)
     blow_seen: u32,
+    knock_seen: u32,
     cast_seq: u32,
     /// the reload clips seen asked for
     reload_seq: u32,
@@ -709,6 +718,7 @@ fn spawn_arms(
                 parry_flash: 0.0,
                 damage_flash: 0.0,
                 blow_seen: 0,
+                knock_seen: 0,
                 cast_seq: powers.as_ref().map(|p| p.cast_seq).unwrap_or(0),
                 reload_seq: powers.as_ref().map(|p| p.reload_anim.0).unwrap_or(0),
                 no_mana_seq: powers.as_ref().map(|p| p.no_mana_seq).unwrap_or(0),
@@ -807,6 +817,9 @@ fn animate_arms(
             let pinned = (std::mem::take(&mut st.grabbed) && st.pinned) || grabbed.is_some_and(|g| g.hound);
             let cl = if pinned && c.death_pinned[0].is_some() {
                 c.death_pinned[0]
+            } else if stats.knocked > 0.0 && c.death_jumped.is_some() {
+                // (killed by a wolfhound's jump attack)
+                c.death_jumped
             } else if stats.died_drowning {
                 c.death_drowned.or(c.death_water).or(c.death[1])
             } else if swim.swimming() {
@@ -825,7 +838,7 @@ fn animate_arms(
                     info!("arms: death {}", anim.lib.clip(cl).name);
                 }
             }
-        } else if let Some(cl) = c.death_pinned[1].filter(|_| anim.finished() && anim.current().map(|p| p.clip) == c.death_pinned[0]) {
+        } else if let Some(cl) = c.death_pinned[1].filter(|_| anim.finished() && anim.current().is_some_and(|p| Some(p.clip) == c.death_pinned[0] || Some(p.clip) == c.death_jumped)) {
             anim.restart(cl, false, 1.0, 0.1);
             if std::env::var_os("DH_ARMS_LOG").is_some() {
                 info!("arms: death {}", anim.lib.clip(cl).name);
@@ -992,7 +1005,7 @@ fn animate_arms(
         base_busy = true;
     }
     // a weeper holds Corvo's arm, or a wolfhound has it in its teeth
-    let [grab_in, grab_loop, grab_out] = match grabbed {
+    let [grab_in, grab_loop, _] = match grabbed {
         Some(g) if g.hound && c.pinned[1].is_some() => c.pinned,
         _ => [c.grabbed_in, c.grabbed_loop, c.grabbed_out],
     };
@@ -1121,6 +1134,20 @@ fn animate_arms(
             if let Some(cl) = pick(&c.parry, st.next_attack) {
                 anim.restart(cl, false, 1.3, 0.05);
                 st.oneshot = true;
+            }
+        }
+        // knocked down (a wolfhound's jump attack): its clip from its side, over the blow's
+        if stats.knockdown.0 != st.knock_seen {
+            st.knock_seen = stats.knockdown.0;
+            let side = (stats.knockdown.1 as usize).min(3);
+            if let Some(cl) = c.knockdown[empty as usize][side].or(c.knockdown[0][side]) {
+                anim.restart(cl, false, 1.0, 0.05);
+                st.oneshot = true;
+                st.blow_seen = stats.blow.0;
+                st.damage_flash = stats.damage_flash;
+                if std::env::var("DH_ARMS_LOG").is_ok() {
+                    info!("arms: knocked down {}", anim.lib.clip(cl).name);
+                }
             }
         }
         // a blow: the arms thrown from its side (a kick too, harmless as it is); other harm, as

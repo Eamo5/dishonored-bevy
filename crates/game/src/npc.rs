@@ -297,6 +297,10 @@ pub struct Npc {
     /// pace), and how fast the clip carries it forward meanwhile (m/s, back below 0)
     pub grab_len: f32,
     pub grab_drift: f32,
+    /// a wolfhound's grab is its jump attack (not its arm attack); the time before each may come
+    /// again (its arm attack's, its jump attack's)
+    pub grab_jump: bool,
+    pub leap_cd: [f32; 2],
     pub trail_idx: usize,
     pub saw_body: bool,
     /// Pre-placed corpse: lies dead from the start and doesn't alarm guards.
@@ -1125,21 +1129,34 @@ fn inhibition(kind: &str) -> f32 {
         "Medium" => 1.0,
         "Long" => 0.8,
         "Jump" => 3.0,
+        // (a wolfhound's: `m_fInhibitionTimeWHArmAttack`, `..WHJumpAttack`)
+        "WHArmAttack" => 8.0,
+        "WHJumpAttack" => 30.0,
         "SideStep" => 6.0,
         "BackStep" => 8.0,
         _ => 0.0,
     }
 }
 
-/// A wolfhound's leap and pin (`Twk_Inv_WolfhoundBite`: `DisTweaks_WHJumpAttack` from 5.5 to
-/// 8 m, knocking Corvo down for `m_DamageOnKnockDown` 7/10/15/20 by difficulty; then
-/// `DisTweaks_WHArmAttack`'s struggle, within 1.5 m: `m_LoopSettings` 5 damage every 0.75 s,
-/// `DisTweaks_Minigame`'s 3 presses to win).
-const HOUND_LEAP: (f32, f32) = (5.5, 8.0);
+/// A wolfhound's two leaps (`Twk_Inv_WolfhoundBite`'s contexts):
+/// - its arm attack (`DisTweaks_WHArmAttack`): from 2-4.5 m (`m_fMin/MaxContextRange`), within
+///   35 degrees (`m_fAllowedAngle`) and 0.3 m of height feet to feet, every 8-12 s
+///   (`m_ContextCooldown`). It has his arm if he is within `m_ArmGrabRange` 1.5 m as it lands,
+///   then the struggle by difficulty (`m_LoopSettings`: presses to win 1/2/3/4, 5 damage every
+///   0.75/0.5/0.25/0.125 s; `DisTweaks_Minigame`'s 3 presses, 0.5 s where it says none);
+/// - its jump attack (`DisTweaks_WHJumpAttack`): from 5.5-8 m, within 15 degrees and 1 m, every
+///   20-30 s, knocking him down for `m_DamageOnKnockDown` 7/10/15/20 by difficulty
+///   (`DisDamageType_WolfhoundJumpAttack`), then stepping back.
+const HOUND_ARM: (f32, f32) = (2.0, 4.5);
+const HOUND_ARM_CD: (f32, f32) = (8.0, 12.0);
 const HOUND_HOLD: f32 = 1.5;
+const HOUND_LOOP: [(u32, f32); 4] = [(1, 0.75), (2, 0.5), (3, 0.25), (4, 0.125)];
+const HOUND_BITE: f32 = 5.0;
+const HOUND_JUMP: (f32, f32) = (5.5, 8.0);
+const HOUND_JUMP_CD: (f32, f32) = (20.0, 30.0);
 const HOUND_KNOCKDOWN: [f32; 4] = [7.0, 10.0, 15.0, 20.0];
-const HOUND_BITE: (f32, f32) = (5.0, 0.75);
-const HOUND_PRESSES: u32 = 3;
+/// Corvo down from a wolfhound's jump attack (s: his knockdown clips', `Sword_KnockdownBack`...)
+const KNOCKED_DOWN: f32 = 0.7;
 
 /// An ambush's longest wait, and the time before another (s).
 const AMBUSH_WAIT: f32 = 8.0;
@@ -1169,12 +1186,19 @@ fn weeper_grab(
             GrabPhase::Try if el >= if npc.grab_len > 0.0 { npc.grab_len } else { 0.6 } => {
                 let d = (pt.translation - t.translation).with_y(0.0).length();
                 let hound = is_hound(&npc);
-                if d < if hound { HOUND_HOLD } else { GRAB_DODGE } && grabbed.is_none() && !npc.is_down() {
-                    // a wolfhound's leap knocks him down
-                    if hound {
+                if npc.grab_jump {
+                    // a wolfhound's jump attack lands: him in its reach, knocked down (its kill if
+                    // that kills him), then it steps back
+                    let hit = d < HOUND_HOLD + 0.5 && grabbed.is_none() && !npc.is_down() && !stats.dead;
+                    if hit {
                         let dmg = HOUND_KNOCKDOWN[(settings.difficulty as usize).min(3)];
                         crate::gameplay::hurt_player(&mut stats, &mut msgs, &mut sfx, dmg);
+                        stats.knockdown = (stats.knockdown.0 + 1, crate::combat::side_of(t.translation, pt.translation, p.yaw));
+                        stats.knocked = KNOCKED_DOWN;
                     }
+                    info!("wolfhound jump attack: {} {} ({d:.2} m)", npc.name, if hit { "knocks Corvo down" } else { "misses" });
+                    npc.grab = Some((if hit && stats.dead { GrabPhase::Kill } else if hit { GrabPhase::Release } else { GrabPhase::Miss }, 0.0));
+                } else if d < if hound { HOUND_HOLD } else { GRAB_DODGE } && grabbed.is_none() && !npc.is_down() {
                     info!("weeper grab: {} holds Corvo", npc.name);
                     npc.grab = Some((GrabPhase::Hold, 0.0));
                     commands.entity(pe).insert(Grabbed { by: e, presses: 0, hound });
@@ -1197,11 +1221,12 @@ fn weeper_grab(
                 }
                 let hound = is_hound(&npc);
                 // the wolfhound's teeth while it pins him
-                if hound && grabbed.is_some_and(|g| g.by == e) && (el / HOUND_BITE.1).floor() > ((el - time.delta_secs()) / HOUND_BITE.1).floor() {
-                    crate::gameplay::hurt_player(&mut stats, &mut msgs, &mut sfx, HOUND_BITE.0);
+                let (presses, tick) = HOUND_LOOP[(settings.difficulty as usize).min(3)];
+                if hound && grabbed.is_some_and(|g| g.by == e) && (el / tick).floor() > ((el - time.delta_secs()) / tick).floor() {
+                    crate::gameplay::hurt_player(&mut stats, &mut msgs, &mut sfx, HOUND_BITE);
                     sfx.write(crate::audio::PostEvent::named("Snd_Wolfhound_Minigame_Bite", Some(t.translation + Vec3::Y * 0.5)));
                 }
-                let need = if hound { HOUND_PRESSES } else { GRAB_PRESSES };
+                let need = if hound { presses } else { GRAB_PRESSES };
                 let broke = grabbed.is_none_or(|g| g.by != e || g.presses >= need) || stats.dead;
                 if broke || npc.is_down() || npc.stagger > 0.5 {
                     // (a wolfhound with Corvo dead in its teeth: its kill)
@@ -1782,6 +1807,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         grab: None,
         grab_len: 0.0,
         grab_drift: 0.0,
+        grab_jump: false,
+        leap_cd: [0.0; 2],
         trail_idx: 0,
         saw_body: false,
         corpse,
@@ -2974,7 +3001,7 @@ pub(crate) fn npc_brain(
     rapier: ReadRapierContext,
     mut hit_writer: MessageWriter<PlayerHit>,
     (mut noise, mut shots): (MessageWriter<Noise>, MessageWriter<NpcShot>),
-    player: Query<(Entity, &Transform, Option<&crate::combat::Sword>), With<Player>>,
+    player: Query<(Entity, &Transform, Option<&crate::combat::Sword>, &Player)>,
     mut npcs: Query<(Entity, &mut Npc, &Transform), (Without<Player>, Without<crate::possession::Possessed>)>,
     (level, mut npc_hits, ai, mut fled): (Option<Res<LevelInfo>>, MessageWriter<NpcHit>, Res<crate::aiworld::AiWorld>, MessageWriter<crate::aiworld::FleePointReached>),
     (stances, settings, mut grab_inhibit, mut inhibited): (Res<crate::script_world::SpawnerOverrides>, Res<crate::settings::Settings>, Local<f32>, Local<std::collections::HashMap<String, (f32, Entity)>>),
@@ -2986,8 +3013,10 @@ pub(crate) fn npc_brain(
     if dt_world <= 0.0 && (dt_own <= 0.0 || !npcs.iter().any(|(_, n, _)| n.out_of_bend)) {
         return;
     }
-    let Ok((pe, pt, psword)) = player.single() else { return };
+    let Ok((pe, pt, psword, pl)) = player.single() else { return };
     let ppos = pt.translation;
+    // (his feet: his capsule's centre above them, standing or crouched)
+    let pfeet = ppos.y - if pl.crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF } - crate::player::RADIUS;
     let blocking = psword.is_some_and(|s| s.blocking);
     let Ok(ctx) = rapier.single() else { return };
     // the others, for feuds between factions
@@ -3039,6 +3068,9 @@ pub(crate) fn npc_brain(
         }
         npc.mode_timer += dt;
         npc.attack_cd = (npc.attack_cd - dt).max(0.0);
+        for c in npc.leap_cd.iter_mut() {
+            *c = (*c - dt).max(0.0);
+        }
         npc.stagger = (npc.stagger - dt).max(0.0);
         npc.hit_react = (npc.hit_react - dt).max(0.0);
         // a sleep dart's drug taking hold
@@ -3771,14 +3803,29 @@ pub(crate) fn npc_brain(
                         continue;
                     }
                 }
-                // a wolfhound leaps at him from its jump's reach (now and then)
-                if is_hound(&npc) && !grab_active && npc.attack_cd <= 0.0 && npc.stagger <= 0.0 && npc.sees_player && d > HOUND_LEAP.0 && d < HOUND_LEAP.1 {
+                // a wolfhound leaps at him: its arm attack from close, its jump attack from further
+                // (as soon as it may: its contexts come first in its slots, paced by their
+                // cooldowns)
+                if is_hound(&npc) && !grab_active && npc.attack_cd <= 0.0 && npc.stagger <= 0.0 && npc.sees_player {
                     let to = (ppos - pos).with_y(0.0);
-                    if to.normalize_or_zero().dot(npc.forward()) > 0.7 && (ppos.y - pos.y).abs() < 1.0 && rand::random::<f32>() < dt * 5.0 {
+                    let off = to.normalize_or_zero().dot(npc.forward()).clamp(-1.0, 1.0).acos().to_degrees();
+                    let rise = (pfeet - (pos.y - NPC_CENTER)).abs();
+                    // (and none other has just used the same on him: its inhibition)
+                    let free = |kind: &str| inhibited.get(kind).is_none_or(|(_, by)| *by == e);
+                    let arm = npc.leap_cd[0] <= 0.0 && free("WHArmAttack") && (HOUND_ARM.0..=HOUND_ARM.1).contains(&d) && off <= 35.0 && rise <= 0.3;
+                    if std::env::var("DH_HOUND_LOG").is_ok() {
+                        info!("hound: {} d {d:.2} off {off:.0} rise {rise:.2} cd {:?} attack_cd {:.2} arm {arm}", npc.name, npc.leap_cd, npc.attack_cd);
+                    }
+                    let jump = !arm && npc.leap_cd[1] <= 0.0 && free("WHJumpAttack") && (HOUND_JUMP.0..=HOUND_JUMP.1).contains(&d) && off <= 15.0 && rise <= 1.0;
+                    if arm || jump {
                         npc.grab = Some((GrabPhase::Try, 0.0));
-                        npc.attack_cd = 6.0;
+                        npc.grab_jump = jump;
+                        let (i, cd, kind) = if jump { (1, HOUND_JUMP_CD, "WHJumpAttack") } else { (0, HOUND_ARM_CD, "WHArmAttack") };
+                        npc.leap_cd[i] = cd.0 + rand::random::<f32>() * (cd.1 - cd.0);
+                        inhibited.insert(kind.to_string(), (inhibition(kind), e));
+                        npc.attack_cd = npc.attack_cd.max(1.0);
                         npc.target = None;
-                        info!("wolfhound leap: {} from {d:.1} m", npc.name);
+                        info!("wolfhound {}: {} from {d:.1} m", if jump { "jump attack" } else { "arm attack" }, npc.name);
                         continue;
                     }
                 }
@@ -4002,8 +4049,12 @@ pub(crate) fn npc_brain(
                             npc.attack_cd = 0.5 + rand::random::<f32>() * 0.6;
                         }
                     }
-                    if d < 1.4 {
-                        npc.target = None; // hold distance
+                    // hold distance (a wolfhound its bite's ideal reach, backing off inside it:
+                    // its MeleeChase / Engage, as roshan's r614/blink research decoded it)
+                    let hound = is_hound(&npc);
+                    let hold = if hound { npc.arms.moves.iter().find(|m| m.kind == "Medium").map_or(1.4, |m| m.range[2].max(1.4)) } else { 1.4 };
+                    if d < hold {
+                        npc.target = (hound && d < hold - 0.4 && npc.attack_t.is_none()).then(|| pos + (pos - ppos).with_y(0.0).normalize_or_zero() * (hold - d + 0.3));
                     }
                 }
                 let _ = pe;
@@ -4192,7 +4243,7 @@ fn npc_move(
         // a weeper's grab: the lunge closes on Corvo, then it stands its ground (a wolfhound's
         // leap lasts its clip and lands at his arm, `Attack_ArmAttack_GrabLoop_Minigame`'s
         // `anchor_jnt` 0.57 m on; its clip carries it as it lets go or misses)
-        let (leap, close) = if npc.grab_len > 0.0 { (npc.grab_len - 0.05, 0.6) } else { (0.55, 0.9) };
+        let (leap, close) = if npc.grab_len > 0.0 { (npc.grab_len - 0.05, if npc.grab_jump { 1.0 } else { 0.6 }) } else { (0.55, 0.9) };
         match (npc.grab, ppos) {
             (Some((GrabPhase::Try, el)), Some(p)) if el < leap && npc.stagger <= 0.0 => {
                 let to = (p - pos).with_y(0.0);
@@ -4521,6 +4572,9 @@ pub struct NpcClips {
     /// a wolfhound's kill, Corvo dead in its teeth (`Attack_ArmAttack_TransToKill_Minigame`, then
     /// `Attack_KillPlayer_Minigame`)
     grab_kill: [Option<ClipId>; 2],
+    /// a wolfhound's jump attack: the leap, its step back after, its kill
+    /// (`Attack_JumpAttack_Jump_Minigame`, `_StepBack_`, `_TransToKill_Minigame`)
+    jump: [Option<ClipId>; 3],
     /// killed from above, by side (front, back, left, right)
     drop_killed: [Option<ClipId>; 4],
     /// the pistol drawn, aimed, fired and put away (`Npc_EliteGuard_Gun_as`: `Sword_Gun_Draw`,
@@ -4722,6 +4776,7 @@ impl NpcClips {
             grab_out: lib.first(&["Empty_ArmGrab_Out", "Attack_ArmAttack_GrabOut_Minigame"]),
             grab_miss: lib.first(&["Empty_ArmGrab_MissDD", "Attack_ArmAttack_GrabMiss_Minigame"]),
             grab_kill: [lib.find("Attack_ArmAttack_TransToKill_Minigame"), lib.find("Attack_KillPlayer_Minigame")],
+            jump: ["Jump", "StepBack", "TransToKill"].map(|s| lib.find(&format!("Attack_JumpAttack_{s}_Minigame"))),
             drop_killed: [
                 lib.find("Generic_Assassination_DropFront_Slave"),
                 lib.find("Generic_Assassination_DropBack_Slave"),
@@ -5430,13 +5485,17 @@ fn npc_select_anim(
         if let Some((phase, _)) = npc.grab {
             if st.grab_seen != Some(phase) {
                 st.grab_seen = Some(phase);
-                let c = match phase {
-                    GrabPhase::Try => clips.grab_try,
-                    GrabPhase::Hold => clips.grab_in.or(clips.grab_loop),
-                    GrabPhase::Release => clips.grab_out,
-                    GrabPhase::Miss => clips.grab_miss.or(clips.grab_out),
-                    GrabPhase::Kill => clips.grab_kill[0].or(clips.grab_out),
+                let c = match (phase, npc.grab_jump) {
+                    (GrabPhase::Try, true) => clips.jump[0].or(clips.grab_try),
+                    (GrabPhase::Release | GrabPhase::Miss, true) => clips.jump[1],
+                    (GrabPhase::Kill, true) => clips.jump[2].or(clips.grab_kill[0]),
+                    (GrabPhase::Try, _) => clips.grab_try,
+                    (GrabPhase::Hold, _) => clips.grab_in.or(clips.grab_loop),
+                    (GrabPhase::Release, _) => clips.grab_out,
+                    (GrabPhase::Miss, _) => clips.grab_miss.or(clips.grab_out),
+                    (GrabPhase::Kill, _) => clips.grab_kill[0].or(clips.grab_out),
                 };
+                let kill_in = c.filter(|&c| Some(c) == clips.grab_kill[0] || Some(c) == clips.jump[2]);
                 if let Some(c) = c {
                     anim.restart(c, false, 1.0, 0.1);
                 }
@@ -5446,14 +5505,14 @@ fn npc_select_anim(
                     None => (0.0, 0.0),
                 };
                 // (its kill through to its end)
-                if let (GrabPhase::Kill, Some(k)) = (phase, clips.grab_kill[1].filter(|_| c == clips.grab_kill[0])) {
+                if let (GrabPhase::Kill, Some(k)) = (phase, clips.grab_kill[1].filter(|_| kill_in.is_some())) {
                     npc.grab_len += lib.duration(k);
                 }
             } else if phase == GrabPhase::Hold && anim.finished() {
                 if let Some(c) = clips.grab_loop {
                     anim.play(c, true, 1.0, 0.1);
                 }
-            } else if phase == GrabPhase::Kill && anim.finished() && anim.current().map(|p| p.clip) == clips.grab_kill[0] {
+            } else if phase == GrabPhase::Kill && anim.finished() && anim.current().is_some_and(|p| Some(p.clip) == clips.grab_kill[0] || Some(p.clip) == clips.jump[2]) {
                 if let Some(c) = clips.grab_kill[1] {
                     anim.restart(c, false, 1.0, 0.1);
                 }

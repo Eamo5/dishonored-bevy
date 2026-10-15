@@ -419,6 +419,13 @@ fn player_move(
         p.velocity = Vec3::ZERO;
         return;
     }
+    // knocked down (a wolfhound's jump attack): down for his knockdown's moment
+    if stats.knocked > 0.0 {
+        stats.knocked = (stats.knocked - dt).max(0.0);
+        p.velocity = Vec3::ZERO;
+        kcc.translation = None;
+        return;
+    }
     if p.locked {
         kcc.translation = None;
         return;
