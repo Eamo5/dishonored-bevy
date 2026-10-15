@@ -1020,6 +1020,30 @@ fn run_script(
                 });
             }
         }
+        "lookhere" => {
+            // (tests) lookhere [NAME]: the nearest standing character (whose name or pawn holds
+            // NAME) watches Corvo, whatever its attention
+            let named = cmd.get(1).cloned().unwrap_or_default();
+            if let Some((e, n, _)) = npc_ents.iter().filter(|(_, n, _)| !n.is_down() && (named.is_empty() || n.name.contains(&named) || n.pawn.contains(&named))).min_by(|a, b| a.2.translation.distance(t.translation).total_cmp(&b.2.translation.distance(t.translation))) {
+                commands.entity(e).try_insert(crate::npc::ForceLook);
+                info!("script: lookhere {}", n.name);
+            }
+        }
+        "lose" => {
+            // (tests) lose [NAME]: the nearest character fighting Corvo (whose name holds NAME)
+            // loses him, searching where it saw him last (as its brain does)
+            let named = cmd.get(1).cloned().unwrap_or_default();
+            let at = t.translation;
+            if let Some((e, _, _)) = npc_ents.iter().filter(|(_, n, _)| !n.is_down() && n.mode == crate::npc::Mode::Combat && (named.is_empty() || n.name.contains(&named))).min_by(|a, b| a.2.translation.distance(t.translation).total_cmp(&b.2.translation.distance(t.translation))) {
+                commands.queue(move |w: &mut World| {
+                    if let Some(mut n) = w.get_mut::<Npc>(e) {
+                        n.set_mode(crate::npc::Mode::Search);
+                        n.last_seen = Some(at);
+                        info!("script: lose {}", n.name);
+                    }
+                });
+            }
+        }
         "flinch" => {
             // (tests) flinch [NAME]: the nearest living character (whose name holds NAME) takes
             // a weak hit from ahead, its additive flinch laid over what it does

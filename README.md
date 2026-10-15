@@ -441,10 +441,18 @@ fullscreen display, vertical sync and the crosshair.
   at its unequip cue, not at once. A character that has just noticed Corvo (its attention at
   the head-tracking level: the original posts its look-at there and clears it at any other, as
   roshan's research decoded it; turning to face him the whole body turns) or speaks with him
-  close by turns its head to him, the neck taking most of the turn and the upper back the rest, within the original's
-  look-at limits (`ArkComponentLookatConfig`'s idle modes: 65 degrees each way for the head
-  with 60 for the torso behind it, 60 up and 35 down), eased in and out over a quarter of a
-  second; a scene's own look-at takes precedence. Characters blink: their sets' `Blink` on the eyelid bones
+  close by turns to him with the original's look-at grids (`DisLookatConfig.DefaultLookatConfig`,
+  an `ArkComponentLookatConfig`, as roshan's r614/blink research read it). Each of its modes, by
+  stance (empty-handed, sword drawn, a search's patrol stance: the stance of the clip it plays) and
+  gait (idle, walk, run), gives the torso's and the head's reach right, left, up and down (an
+  idle empty-handed one: the torso 60 degrees each way, 35 up and 45 down; the head 65, 60 up and
+  35 down) and two 3x3 grids of additive poses (`ADD_Empty_AimTorsoIdle_UpLeft` ...
+  `ADD_Sword_AimHeadRun_DownRight`). The look, 90% of it across and all of it up and down
+  (`m_HeadAndTorso_HorizontalPercentage`, `..Vertical..`), over the torso's and head's reaches
+  together weights each grid's poses, so the torso and head each turn their share, eased in and
+  out over a quarter of a second (that both span the whole look, `Start_Torso` 0 and `End_Head`
+  1, is our reading). A rig without its mode's grids turns its neck and upper back instead. A
+  scene's own look-at takes precedence. Characters blink: their sets' `Blink` on the eyelid bones
   alone, every 0.5-6 s at 1-2 times its pace (`ArkComponentLookatConfig`), over whatever they
   play; a line's own face animation takes the eyelids while it lasts. Their faces play the
   face clip of what their body does, held to its time (the `DisAnimation` steps'
@@ -948,7 +956,13 @@ fullscreen display, vertical sync and the crosshair.
   `ALARM_GO_TO_RING_ALARM`, a grenade by it `ESCAPE_IMPENDING_EXPLOSION`, Corvo's magic before
   its eyes `MAGIC_WITNESSED` (Blink: `MAGIC_DISAPPEARED`; not yet fighting him, it is taken
   aback, standing for its `Sword_Magic_OutOfSight` / `Empty_Magic_OutOfSight`: the original's
-  `DisBehaviorMagicResponse`), finding him again in a search
+  `DisBehaviorMagicResponse`; losing him in a fight, it lowers its sword to its patrol stance,
+  `Sword_SwordToPatrol`, and looks about, `Sword_OutOfSight`, standing for both: the original's
+  `DisNPCAnim_SearchLostTarget`, where something noticed is looked into with `PlayerCheck`,
+  `DisNPCAnim_ReactToNoticing`; searching or looking into something it keeps that patrol stance,
+  its sword in hand, drawn into it with `Sword_Patrol_Equip` (`DisNPCAnim_EquipToSearch`) and
+  raised from it to fight with `Sword_Patrol_PatrolToSword`, drawn straight to fight with
+  `Sword_Equip`, `DisNPCAnim_EquipToCombat`), finding him again in a search
   `SEARCH_FIND_ENEMY`, and going to look again `ATTENTION_INVESTIGATE`. Also `FALLING` as one
   falls (faster than 6 m/s down), `COMBAT_STEALTHKILL_PROJECTILE` for one killed unaware by a
   bolt or bullet, `PATROL_ATTACK_RATSINGLE` stamping on a rat, `COMBAT_RANGED_BEGIN` as a

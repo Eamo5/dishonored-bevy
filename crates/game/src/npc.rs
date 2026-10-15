@@ -1428,11 +1428,47 @@ fn scene_head_look(npcs: Query<(&Transform, &Npc, &NpcRig, &SceneLook)>, mut joi
 
 /// A character's head turned to what holds its attention, eased in and out: its yaw and pitch
 /// from its body, and how far it has turned.
+/// (tests) A character made to watch Corvo whatever its attention (`lookhere`).
+#[derive(Component)]
+pub struct ForceLook;
+
 #[derive(Component, Default)]
 pub struct HeadTrack {
     yaw: f32,
     pitch: f32,
     weight: f32,
+    /// its look is laid by its look-at grids (`look_grids`), not turned here
+    grids: bool,
+}
+
+/// The look-at modes of `DisLookatConfig.DefaultLookatConfig` (`ArkComponentLookatConfig`, as
+/// roshan's r614/blink research read it): by stance (empty-handed, sword drawn, a search's patrol
+/// stance) and gait (idle, walk, run), the torso's and the head's reach right, left, up and down
+/// (degrees). Each has its 3x3 grids of additive poses, `ADD_<stance>_AimTorso<gait>_<dir>` and
+/// `..AimHead..`; a search runs on its walk's.
+const LOOK_MODES: [[([f32; 4], [f32; 4]); 3]; 3] = [
+    // EmptyIdle, EmptyWalk, EmptyRun
+    [([60.0, -60.0, 35.0, -45.0], [65.0, -65.0, 60.0, -35.0]), ([60.0, -60.0, 35.0, -45.0], [65.0, -65.0, 60.0, -35.0]), ([60.0, -60.0, 35.0, -35.0], [65.0, -65.0, 40.0, -40.0])],
+    // SwordIdle, SwordWalk, SwordRun
+    [([70.0, -80.0, 45.0, -35.0], [50.0, -90.0, 45.0, -35.0]), ([70.0, -80.0, 45.0, -35.0], [50.0, -90.0, 45.0, -35.0]), ([65.0, -65.0, 45.0, -35.0], [50.0, -50.0, 45.0, -45.0])],
+    // SearchIdle, SearchWalk (and run)
+    [([60.0, -60.0, 35.0, -35.0], [75.0, -75.0, 50.0, -35.0]), ([60.0, -60.0, 35.0, -35.0], [65.0, -65.0, 45.0, -35.0]), ([60.0, -60.0, 35.0, -35.0], [65.0, -65.0, 45.0, -35.0])],
+];
+/// The share of a look the head and torso take, across and up (`m_HeadAndTorso_HorizontalPercentage`
+/// 90, `..VerticalPercentage` 100).
+const LOOK_SHARE: [f32; 2] = [0.9, 1.0];
+
+/// A look's grid weights: its yaw (radians, left of the facing positive) and pitch over a mode's
+/// reaches, the torso's and head's together (our reading of `Start_Torso` 0, `End_Head` 1: both
+/// across the whole look, so each turns its own share), as 3x3 weights up-left .. down-right.
+fn look_weights(yaw: f32, pitch: f32, torso: [f32; 4], head: [f32; 4]) -> [f32; 9] {
+    let right = -yaw.to_degrees() * LOOK_SHARE[0];
+    let up = pitch.to_degrees() * LOOK_SHARE[1];
+    let x = if right >= 0.0 { right / (torso[0] + head[0]).max(1.0) } else { right / (torso[1] + head[1]).abs().max(1.0) };
+    let y = if up >= 0.0 { up / (torso[2] + head[2]).max(1.0) } else { up / (torso[3] + head[3]).abs().max(1.0) };
+    let split = |v: f32| if v < 0.0 { [-v, 1.0 + v, 0.0] } else { [0.0, 1.0 - v, v] };
+    let (cols, rows) = (split(x.clamp(-1.0, 1.0)), split(-y.clamp(-1.0, 1.0)));
+    std::array::from_fn(|i| rows[i / 3] * cols[i % 3])
 }
 
 /// How far a head turns (radians: `ArkComponentLookatConfig`'s idle look-at modes, the head's
@@ -1452,18 +1488,19 @@ fn head_track(
     mut commands: Commands,
     time: Res<Time>,
     player: Query<&Transform, With<crate::player::Player>>,
-    npcs: Query<(Entity, &Transform, &Npc, &NpcRig, Option<&mut HeadTrack>, Has<crate::audio::Speaking>, Option<&crate::anim::Animator>), (Without<SceneLook>, Without<crate::player::Player>)>,
+    npcs: Query<(Entity, &Transform, &Npc, &NpcRig, Option<&mut HeadTrack>, (Has<crate::audio::Speaking>, Has<ForceLook>), Option<&crate::anim::Animator>), (Without<SceneLook>, Without<crate::player::Player>)>,
     mut joints: Query<&mut Transform, (Without<Npc>, Without<crate::player::Player>)>,
 ) {
     let Ok(pt) = player.single() else { return };
     let dt = time.delta_secs();
     let eye = pt.translation + Vec3::Y * 0.6;
     let mut npcs = npcs;
-    for (e, t, npc, rig, track, speaking, anim) in &mut npcs {
+    for (e, t, npc, rig, track, (speaking, forced), anim) in &mut npcs {
         let Some(mut track) = track else {
             commands.entity(e).try_insert(HeadTrack::default());
             continue;
         };
+        let grids = track.grids;
         // (a rig not posed this frame keeps last frame's pose: nothing laid on it)
         if anim.is_none_or(|a| a.frozen) {
             continue;
@@ -1477,7 +1514,7 @@ fn head_track(
             && npc.mode != Mode::Combat
             && flat > 0.3
             && yaw.abs() < LOOK_YAW
-            && ((npc.attn_level == 1 && (npc.sees_player || npc.last_seen.is_some())) || (speaking && near));
+            && ((npc.attn_level == 1 && (npc.sees_player || npc.last_seen.is_some())) || (speaking && near) || forced);
         let rate = 4.0 * dt;
         track.weight = if wants { (track.weight + rate).min(1.0) } else { (track.weight - rate).max(0.0) };
         if wants {
@@ -1491,6 +1528,10 @@ fn head_track(
         }
         if std::env::var("DH_LOOK_LOG").is_ok() {
             info!("look: {} weight {:.2} yaw {:.0} pitch {:.0} (attention {}, speaking {speaking})", npc.name, track.weight, track.yaw.to_degrees(), track.pitch.to_degrees(), npc.attn_level);
+        }
+        // (laid by its look-at grids, `look_grids`; else turned here)
+        if grids {
+            continue;
         }
         let w = track.weight * track.weight * (3.0 - 2.0 * track.weight);
         for (bone, share) in [(rig.idx.neck, 0.65), (rig.idx.spine[2], 0.35)] {
@@ -2290,7 +2331,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 bow_drawn: false,
                 holster_in: None,
                 limp_in: None,
-                rise_next: None,
+                next_clip: None,
+                lost_pending: false,
                 flinch: None,
                 faces: std::collections::HashMap::new(),
                 walk_phase: f32::NAN,
@@ -4865,11 +4907,22 @@ pub struct NpcClips {
     choke_out: Option<ClipId>,
     corpse: Vec<ClipId>,
     search: Vec<ClipId>,
+    /// Corvo lost in a fight (`DisNPCAnim_SearchLostTarget`): its sword lowered to its patrol
+    /// stance (`Sword_SwordToPatrol`), and its look about, empty-handed and sword drawn
+    /// (`Empty_OutOfSight`, `Sword_OutOfSight`)
+    sword_to_patrol: Option<ClipId>,
+    out_of_sight: [Option<ClipId>; 2],
     surprised: Option<ClipId>,
     /// startled by a live explosive, sword sheathed or drawn (`Empty_Surprised_Front`,
     /// `Sword_Surprised_Front`)
     startled: [Option<ClipId>; 2],
+    /// its sword drawn: into its patrol stance, to search (`DisNPCAnim_EquipToSearch`:
+    /// `Sword_Patrol_Equip`); into its fighting stance (`DisNPCAnim_EquipToCombat`:
+    /// `Sword_Equip`); and, drawn in its patrol stance, raised to fight
+    /// (`Sword_Patrol_PatrolToSword`)
     equip: Option<ClipId>,
+    equip_combat: Option<ClipId>,
+    patrol_to_sword: Option<ClipId>,
     /// its sword put back as it calms down (`Sword_Patrol_UnEquip`, `Sword_UnEquip`)
     unequip: Option<ClipId>,
     /// a weeper's arm grab
@@ -4955,6 +5008,8 @@ pub struct NpcClips {
     check_pockets: Vec<ClipId>,
     /// its aim offsets (`ADD_Sword_Gun_AimIdle_*`): up, centre and down rows, left to right
     gun_aim: [Option<ClipId>; 9],
+    /// its look-at grids (`LOOK_MODES`), by stance and gait: the torso's and the head's
+    look: [[[[Option<ClipId>; 9]; 2]; 3]; 3],
 }
 
 impl NpcClips {
@@ -5083,10 +5138,15 @@ impl NpcClips {
             choke_loop: lib.find("Generic_Choke_Loop_Slave"),
             choke_out: lib.find("Generic_Choke_Win_Slave"),
             corpse: lib.all(&["Corpses_DeathPose_OnBack1", "Corpses_DeathPose_OnBack2", "Corpses_DeathPose_OnBack3"]),
-            search: lib.all(&["Sword_OutOfSight", "Empty_OutOfSight", "Sword_PlayerCheck", "Empty_PlayerCheck", "Patrol_IdleSearch"]),
+            // (what it noticed looked into, `DisNPCAnim_ReactToNoticing`: `PlayerCheck`)
+            search: lib.all(&["Sword_PlayerCheck", "Empty_PlayerCheck", "Patrol_IdleSearch"]),
+            sword_to_patrol: lib.find("Sword_SwordToPatrol"),
+            out_of_sight: [lib.first(&["Empty_OutOfSight", "Sword_OutOfSight"]), lib.first(&["Sword_OutOfSight", "Empty_OutOfSight"])],
             surprised: lib.first(&["Sword_Surprised_Front", "Empty_Surprised_Front", "Attack_IdleBark_Short", "Empty_Taunt"]),
             startled: [lib.find("Empty_Surprised_Front"), lib.find("Sword_Surprised_Front")],
             equip: lib.first(&["Sword_Patrol_Equip", "Sword_Equip"]),
+            equip_combat: lib.first(&["Sword_Equip", "Sword_Patrol_Equip"]),
+            patrol_to_sword: lib.find("Sword_Patrol_PatrolToSword"),
             unequip: lib.first(&["Sword_Patrol_UnEquip", "Sword_UnEquip"]),
             // (a wolfhound's: its arm attack's, `DisNPCAnimDefinitions_Wolfhound`'s sync attack:
             // the leap, the bite on his arm, its hold, thrown off, or past him)
@@ -5134,6 +5194,14 @@ impl NpcClips {
             music_box: [lib.find("Musicbox_Idle"), lib.find("MusicBox_PlayMusic_In"), lib.find("MusicBox_PlayMusic_Loop"), lib.find("MusicBox_PlayMusic_Out")],
             cower: lib.find("Empty_Idle_Panic_Recover"),
             gun_aim: ["UpLeft", "Up", "UpRight", "CenterLeft", "Center", "CenterRight", "DownLeft", "Down", "DownRight"].map(|d| lib.find(&format!("ADD_Sword_Gun_AimIdle_{d}"))),
+            look: ["Empty", "Sword", "Sword_Patrol"].map(|stance| {
+                ["Idle", "Walk", "Run"].map(|gait| {
+                    let gait = if stance == "Sword_Patrol" && gait == "Run" { "Walk" } else { gait };
+                    ["Torso", "Head"].map(|part| {
+                        ["UpLeft", "Up", "UpRight", "CenterLeft", "Center", "CenterRight", "DownLeft", "Down", "DownRight"].map(|d| lib.find(&format!("ADD_{stance}_Aim{part}{gait}_{d}")))
+                    })
+                })
+            }),
             walk_dirs: [None; 3],
             run_dirs: [None; 3],
             walk_start: None,
@@ -5240,8 +5308,11 @@ pub struct NpcAnim {
     holster_in: Option<f32>,
     /// knocked off its feet: how long until it goes limp, and its push
     limp_in: Option<(f32, Vec3)>,
-    /// up again from where it lay: its stun's recovery to come
-    rise_next: Option<ClipId>,
+    /// the clip to follow the one playing: up again from where it lay, its stun's recovery;
+    /// Corvo lost, its look about
+    next_clip: Option<ClipId>,
+    /// Corvo lost in the fight, its lowering and look about yet to play (once it is free to)
+    lost_pending: bool,
     /// a weak hit's flinch under way: its clip and how far through
     flinch: Option<(ClipId, f32)>,
     /// each body clip's face clip, as found
@@ -5472,6 +5543,33 @@ fn log_npc_clips(
     }
 }
 
+/// A character's look at what it watches (`HeadTrack`), as its look-at grids pose it
+/// (`LOOK_MODES`): the mode by the stance of the clip it plays and its gait, the torso's and the
+/// head's additive poses weighted by the look. Without the mode's grids, `head_track` turns it.
+fn look_grids(anim: &mut Animator, clips: &NpcClips, lib: &CharAnims, speed: f32, track: Option<&mut HeadTrack>) {
+    let all: Vec<ClipId> = clips.look.iter().flatten().flatten().flatten().flatten().copied().collect();
+    anim.additive.retain(|(c, _, _)| !all.contains(c));
+    let Some(track) = track else { return };
+    let base = anim.current().map(|p| lib.clip(p.clip).name.as_str()).unwrap_or("");
+    let stance = if base.starts_with("Sword_Patrol") { 2 } else if base.starts_with("Sword_") { 1 } else { 0 };
+    let gait = if speed < 0.3 { 0 } else if speed < 2.6 { 1 } else { 2 };
+    let grid = &clips.look[stance][gait];
+    track.grids = grid.iter().all(|g| g[4].is_some());
+    if !track.grids || track.weight <= 0.0 {
+        return;
+    }
+    let w = track.weight * track.weight * (3.0 - 2.0 * track.weight);
+    let (torso, head) = LOOK_MODES[stance][gait];
+    let ws = look_weights(track.yaw, track.pitch, torso, head);
+    for part in grid {
+        for (i, c) in part.iter().enumerate() {
+            if let Some(c) = c.filter(|_| ws[i] * w > 1e-3) {
+                anim.additive.push((c, 0.0, ws[i] * w));
+            }
+        }
+    }
+}
+
 /// A body clip's face clip (its `DisAnimation` steps' `m_FaceAnimName`, by the names they
 /// follow: the clip's own `_Face`; its variants' (`Sword_Attack_ShortSmallB` ->
 /// `Sword_Attack_ShortSmall_Face`); a big blow's `Sword_Attack_Big_Face`; a hit's small hit's
@@ -5545,7 +5643,7 @@ fn npc_select_anim(
             Option<&AssassinClip>,
             Option<&mut FinisherClip>,
             Option<&crate::carry::Falling>,
-            (Has<crate::ragdoll::Ragdoll>, Has<crate::ragdoll::GoLimp>, Has<crate::musicbox::TunePlaying>, Option<&Electrocuted>, Has<Immolated>),
+            (Has<crate::ragdoll::Ragdoll>, Has<crate::ragdoll::GoLimp>, Has<crate::musicbox::TunePlaying>, Option<&Electrocuted>, Has<Immolated>, Option<&mut HeadTrack>),
         ),
         Without<ScriptedAnim>,
     >,
@@ -5554,7 +5652,7 @@ fn npc_select_anim(
 ) {
     let ppos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
     let swarmed: std::collections::HashSet<Entity> = swarmed.read().map(|s| s.0).collect();
-    for (e, mut npc, mut st, mut anim, t, children, dropped, assassin, finisher, falling, (limp, going_limp, tune, electrocuted, immolated)) in &mut npcs {
+    for (e, mut npc, mut st, mut anim, t, children, dropped, assassin, finisher, falling, (limp, going_limp, tune, electrocuted, immolated, mut track)) in &mut npcs {
         let scale = tc.npc_scale(npc.out_of_bend).max(0.0);
         let dt = time.delta_secs() * scale;
         anim.time_scale = scale;
@@ -5580,6 +5678,16 @@ fn npc_select_anim(
         let st = &mut *st;
         let clips = st.clips.clone();
         let lib = anim.lib.clone();
+        // (Corvo lost in the fight: kept until it is free to show it)
+        if npc.mode != Mode::Search {
+            st.lost_pending = false;
+        } else if st.last_mode == Mode::Combat {
+            st.lost_pending = true;
+        }
+        // its look at what it watches (`head_track`'s), laid by its look-at grids for its stance
+        // and gait: the clip it plays names its stance (a search's patrol stance, sword drawn,
+        // else empty-handed)
+        look_grids(&mut anim, &clips, &lib, npc.anim_speed, track.as_deref_mut());
         // (its own death, and no going limp: a wall of light's dead, struck standing; one burning)
         let own_death = electrocuted.filter(|el| el.standing).and(clips.electrified).or(clips.immolate.filter(|_| immolated));
         // a weak hit's flinch, laid over whatever it does (its clip played through once)
@@ -5665,6 +5773,7 @@ fn npc_select_anim(
         }
 
         // sword: drawn when alerted, holstered otherwise
+        let mut drew = false;
         let drawn = npc.alert != Alert::Unaware
             || matches!(npc.mode, Mode::Combat | Mode::Search | Mode::Investigate)
             || npc.is_down()
@@ -5687,6 +5796,17 @@ fn npc_select_anim(
                 if let Some((j, at)) = if drawn { st.hand } else { st.holster.or(st.hand) } {
                     for &s in &st.sword {
                         commands.entity(s).try_insert((at, ChildOf(j)));
+                    }
+                }
+                // drawn to search (not to fight: that is its fighting stance's draw, below), into
+                // its patrol stance (`DisNPCAnim_EquipToSearch`)
+                if let Some(c) = clips.equip.filter(|_| drawn && npc.alert != Alert::Combat && !npc.is_down() && npc.mode != Mode::Choked && !musical) {
+                    drew = true;
+                    if npc.anim_speed >= 0.6 {
+                        anim.restart_upper(c, false, 1.2, 0.15);
+                    } else {
+                        anim.restart(c, false, 1.2, 0.15);
+                        st.oneshot = true;
                     }
                 }
             }
@@ -5788,9 +5908,9 @@ fn npc_select_anim(
                 // (then the stun's recovery, `Sword_RecoveryA` / `B` or `Empty_`: the original's
                 // stun after a throw, as roshan's r614/blink research read it)
                 let hands = (!st.drawn) as usize;
-                st.rise_next = pick(&clips.recovery[hands]).or_else(|| pick(&clips.recovery[1 - hands]));
+                st.next_clip = pick(&clips.recovery[hands]).or_else(|| pick(&clips.recovery[1 - hands]));
                 anim.restart(c, false, 1.0, 0.0);
-                npc.stagger = npc.stagger.max(lib.duration(c) + st.rise_next.map_or(0.0, |r| lib.duration(r)));
+                npc.stagger = npc.stagger.max(lib.duration(c) + st.next_clip.map_or(0.0, |r| lib.duration(r)));
                 st.oneshot = true;
                 st.hit_seen = npc.hit_react;
                 st.last_mode = npc.mode;
@@ -5798,8 +5918,8 @@ fn npc_select_anim(
                 continue;
             }
         }
-        if let Some(c) = st.rise_next.filter(|_| anim.finished()) {
-            st.rise_next = None;
+        if let Some(c) = st.next_clip.filter(|_| anim.finished()) {
+            st.next_clip = None;
             if !npc.is_down() {
                 anim.restart(c, false, 1.0, 0.15);
                 st.oneshot = true;
@@ -6577,22 +6697,48 @@ fn npc_select_anim(
             continue;
         }
         // (turned on Corvo by the blow it is flinching from: the flinch shows, its sword in hand)
-        if npc.alert == Alert::Combat && st.last_alert != Alert::Combat && !reacted {
-            if let Some(c) = clips.equip.or(clips.surprised) {
+        let searching = |m: Mode| matches!(m, Mode::Search | Mode::Investigate);
+        let to_fight = (npc.alert == Alert::Combat && st.last_alert != Alert::Combat) || (npc.mode == Mode::Combat && searching(st.last_mode));
+        if to_fight && !reacted {
+            st.next_clip = None;
+            // (from its search, its sword already drawn in its patrol stance: raised to fight,
+            // `Sword_Patrol_PatrolToSword`; else drawn to fight, `DisNPCAnim_EquipToCombat`)
+            let raise = clips.patrol_to_sword.filter(|_| searching(st.last_mode));
+            let draw = raise.or(clips.equip_combat);
+            if let Some(c) = draw.or(clips.surprised) {
                 // (on the move, its sword drawn on its upper body, its legs keeping their stride:
                 // the NPC tree's upper-body slot)
-                if npc.anim_speed >= 0.6 && clips.equip.is_some() && !musical {
+                if npc.anim_speed >= 0.6 && draw.is_some() && !musical {
                     anim.restart_upper(c, false, 1.4, 0.15);
                 } else {
                     anim.restart(c, false, 1.4, 0.15);
                     st.oneshot = true;
                 }
             }
-        } else if npc.mode == Mode::Search && st.last_mode != Mode::Search && !reacted {
-            // (searching for what struck it: the flinch shows first)
-            if let Some(c) = pick(&clips.search) {
-                anim.restart(c, false, 1.0, 0.25);
+        } else if npc.mode == Mode::Search && (st.last_mode != Mode::Search || st.lost_pending) && !reacted {
+            // (searching for what struck it: the flinch shows first) Corvo lost in the fight, it
+            // lowers its sword to its patrol stance, then looks about
+            // (`DisNPCAnim_SearchLostTarget`); else it looks into what it noticed
+            let look = clips.out_of_sight[st.drawn as usize];
+            if std::mem::take(&mut st.lost_pending) && look.is_some() {
+                // (standing for it, as for Corvo gone by magic)
+                if let Some(c) = clips.sword_to_patrol.filter(|_| st.drawn) {
+                    anim.restart(c, false, 1.0, 0.2);
+                    st.next_clip = look;
+                    npc.stagger = npc.stagger.max(lib.duration(c) + look.map_or(0.0, |l| lib.duration(l)));
+                } else if let Some(c) = look {
+                    anim.restart(c, false, 1.0, 0.25);
+                    npc.stagger = npc.stagger.max(lib.duration(c));
+                }
                 st.oneshot = true;
+            } else if let Some(c) = pick(&clips.search).or(look) {
+                // (after its draw, if it has just drawn)
+                if drew {
+                    st.next_clip = Some(c);
+                } else {
+                    anim.restart(c, false, 1.0, 0.25);
+                    st.oneshot = true;
+                }
             }
         }
         st.last_mode = npc.mode;
@@ -6605,6 +6751,9 @@ fn npc_select_anim(
 
         // locomotion, played at the rate that matches the ground speed
         let alert = npc.alert != Alert::Unaware || matches!(npc.mode, Mode::Combat | Mode::Search | Mode::Investigate);
+        // (searching or looking into something, it keeps its patrol stance, its sword in hand: the
+        // original's search stance is its patrol's, `DisNPCAnim_EquipToSearch` drawing into it)
+        let search_stance = matches!(npc.mode, Mode::Search | Mode::Investigate) && st.drawn;
         // a patrolling or guarding character's ambient idles (`DisTweaks_AISubProcess_AmbientAnims`
         // of the patrol and guard behaviours: every 30-60 s, `m_fMin/MaxAmbientAnimFrequency`, on
         // the upper body and walking too, `m_bCheckForMovement` false, as roshan's r614/blink
@@ -6759,7 +6908,7 @@ fn npc_select_anim(
         }
         if sp < 0.3 {
             // (run as far as it goes, a civilian cowers there: the panic's stance)
-            let c = if npc.mode == Mode::Flee && !npc.fighter() { clips.cower.or(clips.idle_alert).or(clips.idle) } else if alert { clips.idle_alert.or(clips.idle) } else { clips.idle };
+            let c = if npc.mode == Mode::Flee && !npc.fighter() { clips.cower.or(clips.idle_alert).or(clips.idle) } else if alert && !search_stance { clips.idle_alert.or(clips.idle) } else { clips.idle };
             if let Some(c) = c {
                 anim.play(c, true, 1.0, 0.3);
             }
@@ -6769,7 +6918,7 @@ fn npc_select_anim(
                 clips.flee.or(clips.run)
             } else if running {
                 clips.run.or(clips.walk_alert)
-            } else if alert {
+            } else if alert && !search_stance {
                 clips.walk_alert.or(clips.walk)
             } else {
                 clips.walk
@@ -6777,7 +6926,7 @@ fn npc_select_anim(
             // alert, it goes the way it goes facing where it faces: the walk or run for that way
             // (the quarter its going falls in, held 10 degrees past the edge, not to flicker)
             let (c, sign) = match c {
-                Some(c) if alert && npc.mode != Mode::Flee => {
+                Some(c) if alert && !search_stance && npc.mode != Mode::Flee => {
                     let v = npc.velocity.with_y(0.0);
                     let right = Quat::from_rotation_y(npc.yaw) * Vec3::X;
                     let a = v.dot(right).atan2(v.dot(npc.forward())).to_degrees();
