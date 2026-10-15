@@ -389,12 +389,17 @@ impl Animator {
         self.base.restart(clip, looping, speed, blend);
     }
 
-    /// What the base layer plays.
     /// The overlay layer's clip and its weight (for logs).
     pub fn overlay_state(&self) -> (Option<ClipId>, f32) {
         (self.overlay.cur.map(|c| c.clip), self.overlay.weight)
     }
 
+    /// The overlay layer's clip and how far into it (while it's on).
+    pub fn overlay_playing(&self) -> Option<Playing> {
+        self.overlay.cur.filter(|_| self.overlay.target > 0.0)
+    }
+
+    /// What the base layer plays.
     pub fn current(&self) -> Option<Playing> {
         self.base.cur
     }

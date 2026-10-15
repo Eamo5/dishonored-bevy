@@ -5917,6 +5917,16 @@ impl<'a> Cooker<'a> {
                     // (and a thug's fire breath striking: `DisNotify_WhiskeyFireDamage`)
                     "DishonoredNotify_FireProjectile" | "DisNotify_WhiskeyFireDamage" => m.fires.push(t),
                     "DishonoredNotify_StartPlague" => m.plague.push(t),
+                    "DisNotify_NPCDisableLookAt" => {
+                        let filter = upk::read_object(&seq.pkg, no).ok().and_then(|o| o.props.name("m_LookAtFilter").map(str::to_string)).unwrap_or_default();
+                        let f = match filter.as_str() {
+                            "ELAF_Head" => 1,
+                            "ELAF_Torso" => 2,
+                            _ => 0,
+                        };
+                        // (one without a length: the clip's rest)
+                        m.look_off.push((t, if d > 0.0 { d } else { (len - t).max(0.0) }, f));
+                    }
                     "AnimNotify_PlayParticleEffect" => {
                         let Ok(np) = upk::read_object(&seq.pkg, no).map(|o| o.props) else { continue };
                         let Some(ps) = np.object("PSTemplate").filter(|o| *o != 0).and_then(|o| self.assets.resolve(&seq.pkg, o)) else { continue };
@@ -5955,7 +5965,7 @@ impl<'a> Cooker<'a> {
             m.feet.sort_by(|a, b| a.0.total_cmp(&b.0));
             m.hooks.sort_by(|a, b| a.0.total_cmp(&b.0));
             m.fx.sort_by(|a, b| a.time.total_cmp(&b.time));
-            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() {
+            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() || !m.look_off.is_empty() {
                 self.scene.clip_marks.push(m);
             }
         }

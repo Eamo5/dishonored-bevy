@@ -463,7 +463,12 @@ fullscreen display, vertical sync and the crosshair.
   then right about 90 degrees, 2.5-4 s each. Each sequence is drawn by its `m_fProbability`, its
   rules in turn (their `m_DurationRange`, repeats and corners), the look going to each target at
   its `m_SpeedRange` (our reading: the share of the way a 30th of a second); the sequences' small
-  movements within them (`m_ParentSeqIdx`) are left out. Characters blink: their sets' `Blink` on the eyelid bones
+  movements within them (`m_ParentSeqIdx`) are left out. The clips themselves switch the look off
+  where they move the head their own way (`DisNotify_NPCDisableLookAt`, in whatever layer plays
+  them: the body's, the upper body's or a gesture's): from the eyes or the head (its
+  `m_LookAtFilter`), the whole look, as in an idle fidget, a gesture, a hit, a victim's clip or
+  an attack; from the torso, the torso's share alone, as in a draw, a parry or a taunt (our
+  reading of the filter, by the clips that carry it). Characters blink: their sets' `Blink` on the eyelid bones
   alone, every 0.5-6 s at 1-2 times its pace (`ArkComponentLookatConfig`), over whatever they
   play; a line's own face animation takes the eyelids while it lasts. Their faces play the
   face clip of what their body does, held to its time (the `DisAnimation` steps'

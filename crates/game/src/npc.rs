@@ -1605,14 +1605,14 @@ fn head_track(
     mut commands: Commands,
     time: Res<Time>,
     player: Query<&Transform, With<crate::player::Player>>,
-    npcs: Query<(Entity, &Transform, &Npc, &NpcRig, Option<&mut HeadTrack>, (Has<crate::audio::Speaking>, Has<ForceLook>, Has<ScriptedAnim>), Option<&crate::anim::Animator>), (Without<SceneLook>, Without<crate::player::Player>)>,
+    npcs: Query<(Entity, &Transform, &Npc, &NpcRig, Option<&mut HeadTrack>, (Has<crate::audio::Speaking>, Has<ForceLook>, Has<ScriptedAnim>, Option<&NpcAnim>), Option<&crate::anim::Animator>), (Without<SceneLook>, Without<crate::player::Player>)>,
     mut joints: Query<&mut Transform, (Without<Npc>, Without<crate::player::Player>)>,
 ) {
     let Ok(pt) = player.single() else { return };
     let dt = time.delta_secs();
     let eye = pt.translation + Vec3::Y * 0.6;
     let mut npcs = npcs;
-    for (e, t, npc, rig, track, (speaking, forced, scripted), anim) in &mut npcs {
+    for (e, t, npc, rig, track, (speaking, forced, scripted, st), anim) in &mut npcs {
         let Some(mut track) = track else {
             commands.entity(e).try_insert(HeadTrack::default());
             continue;
@@ -1627,7 +1627,23 @@ fn head_track(
         let flat = to.with_y(0.0).length();
         let yaw = ((-to.x).atan2(-to.z) - npc.yaw + PI).rem_euclid(TAU) - PI;
         let near = flat < 6.0;
+        // a clip it plays (the body's, the upper body's or a gesture's) turning its look off
+        // (`DisNotify_NPCDisableLookAt`, from its
+        // `m_LookAtFilter` down: from the eyes or the head, the whole look; from the torso, the
+        // torso's share; our reading of the filter, by the clips that carry it: a victim's and a
+        // hit's from the eyes, an attack's from the head, a draw's, a parry's or a taunt's from
+        // the torso)
+        let look_off = match (anim, st) {
+            (Some(a), Some(st)) => [a.current(), a.upper_playing(), a.overlay_playing()]
+                .into_iter()
+                .flatten()
+                .filter_map(|p| st.marks.get(&p.clip).map(|m| (p, m)))
+                .flat_map(|(p, m)| m.look_off.iter().filter(move |w| p.t >= w.0 && p.t <= w.0 + w.1).map(|w| w.2))
+                .min(),
+            _ => None,
+        };
         let wants = !npc.is_down()
+            && look_off.is_none_or(|f| f >= 2)
             && npc.mode != Mode::Combat
             && flat > 0.3
             && yaw.abs() < LOOK_YAW
@@ -1636,16 +1652,17 @@ fn head_track(
         // a patrol's, or a search's with its sword drawn or not), near enough to be seen doing it
         let pattern = match npc.mode {
             // (not in a scene the scripts play: its clips have their own looks)
-            _ if wants || !grids || npc.is_down() || flat > 30.0 || speaking || scripted => None,
+            _ if wants || !grids || npc.is_down() || flat > 30.0 || speaking || scripted || look_off.is_some_and(|f| f < 2) => None,
             Mode::Patrol | Mode::Idle | Mode::Return => Some(0),
             Mode::Search | Mode::Investigate => Some(if npc.has_sword { 2 } else { 1 }),
             _ => None,
         };
         let rate = 4.0 * dt;
         track.weight = if wants || pattern.is_some() { (track.weight + rate).min(1.0) } else { (track.weight - rate).max(0.0) };
+        let torso_off = look_off == Some(2);
         if wants {
             track.idle = None;
-            track.torso = (track.torso + rate).min(1.0);
+            track.torso = if torso_off { (track.torso - rate).max(0.0) } else { (track.torso + rate).min(1.0) };
             let pitch = to.y.atan2(flat).clamp(-LOOK_DOWN, LOOK_UP);
             let k = (8.0 * dt).min(1.0);
             track.yaw += (yaw - track.yaw) * k;
@@ -1670,7 +1687,7 @@ fn head_track(
             let k = 1.0 - (1.0 - idle.speed.clamp(0.0, 1.0)).powf(dt * 30.0);
             track.yaw += (idle.target.0 - track.yaw) * k;
             track.pitch += (idle.target.1 - track.pitch) * k;
-            let to_torso = LOOK_PATTERNS[p].torso;
+            let to_torso = if torso_off { 0.0 } else { LOOK_PATTERNS[p].torso };
             track.torso += (to_torso - track.torso).clamp(-rate, rate);
             track.idle = Some(idle);
         } else {
@@ -1680,7 +1697,7 @@ fn head_track(
             continue;
         }
         if std::env::var("DH_LOOK_LOG").is_ok() {
-            info!("look: {} weight {:.2} yaw {:.0} pitch {:.0} (attention {}, speaking {speaking})", npc.name, track.weight, track.yaw.to_degrees(), track.pitch.to_degrees(), npc.attn_level);
+            info!("look: {} weight {:.2} torso {:.2} yaw {:.0} pitch {:.0} (attention {}, speaking {speaking}, off {look_off:?})", npc.name, track.weight, track.torso, track.yaw.to_degrees(), track.pitch.to_degrees(), npc.attn_level);
         }
         // (laid by its look-at grids, `look_grids`; else turned here)
         if grids {

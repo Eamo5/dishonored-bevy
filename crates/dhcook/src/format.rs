@@ -909,6 +909,10 @@ pub struct ClipMarks {
     /// cough, and its retching on Corvo as it holds him)
     #[serde(default)]
     pub plague: Vec<f32>,
+    /// when it turns its character's look off (`DisNotify_NPCDisableLookAt`: start, length, and
+    /// how much, `m_LookAtFilter`: 0 the eyes, 1 the head, 2 the torso)
+    #[serde(default)]
+    pub look_off: Vec<(f32, f32, u8)>,
 }
 
 /// An effect a character's clip starts: seconds in, the particle system, the socket (or bone)
