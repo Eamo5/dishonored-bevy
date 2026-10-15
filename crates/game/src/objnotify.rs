@@ -197,8 +197,8 @@ fn play_popup(
 ) {
     let dt = time.delta_secs();
     let Ok(w) = window.single() else { return };
-    let s = (w.width() / 1280.0).min(w.height() / 720.0).max(0.01);
-    let off = (Vec2::new(w.width(), w.height()) - Vec2::new(1280.0, 720.0) * s) * 0.5;
+    let ms = crate::hud::MovieSpace::of(w);
+    let s = ms.s;
     // the next popup (`PSI_HUD_bShowObjectivePopups` off: none)
     if !settings.objective_popups {
         queue.0.clear();
@@ -260,7 +260,8 @@ fn play_popup(
         return;
     }
     if let Ok((mut node, mut v)) = nodes.get_mut(root) {
-        let p = off + AT * s;
+        // (`objectives_mc` at the safe area's top right: `hud::MovieSpace`)
+        let p = ms.px(AT + ms.objectives_shift());
         node.left = Val::Px(p.x);
         node.top = Val::Px(p.y);
         *v = Visibility::Inherited;

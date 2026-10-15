@@ -172,8 +172,8 @@ fn play_banner(
 ) {
     let Some(root) = banner.root else { return };
     let Ok(w) = window.single() else { return };
-    let s = (w.width() / 1280.0).min(w.height() / 720.0).max(0.01);
-    let off = (Vec2::new(w.width(), w.height()) - Vec2::new(1280.0, 720.0) * s) * 0.5;
+    let ms = crate::hud::MovieSpace::of(w);
+    let s = ms.s;
     // the letters measured (laid out once): their widths in stage units
     if banner.layout.is_none() {
         let mut widths: Vec<(usize, f32)> = parts.iter().map(|(p, c, _, _)| (p.0, c.size().x * c.inverse_scale_factor() / s)).collect();
@@ -217,7 +217,9 @@ fn play_banner(
         return;
     }
     if let Ok((mut n, mut v)) = roots.get_mut(root) {
-        let p = off + AT * s;
+        // (as far down all that is seen as the movie has it down the stage,
+        // `m_fLocationDiscoveryVerticalAlignment`: `hud::MovieSpace`)
+        let p = ms.px(Vec2::new(AT.x, AT.y / 720.0 * (720.0 + 2.0 * ms.empty.y) - ms.empty.y));
         n.left = Val::Px(p.x);
         n.top = Val::Px(p.y);
         // (put away with the HUD: under a menu, while the kill cam rides a bolt)

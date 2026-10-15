@@ -45,8 +45,8 @@ impl UiMaterial for BarFill {
     }
 }
 
-/// `masterHUD_mc` on the 1280x720 stage.
-const MASTER: Vec2 = Vec2::new(95.5, 54.0);
+/// `masterHUD_mc` on the 1280x720 stage, as the movie places it.
+const MASTER: Vec2 = crate::hud::MASTER_AT;
 const FILL_TIME: f32 = 0.45;
 pub(crate) const LOW_HEALTH: f32 = 0.30;
 pub(crate) const LOW_MANA: f32 = 0.19;
@@ -200,9 +200,9 @@ fn update_gauges(
 ) {
     let dt = time.delta_secs();
     let Ok(w) = window.single() else { return };
-    let size = Vec2::new(w.width(), w.height());
-    let s = (size.x / 1280.0).min(size.y / 720.0).max(0.01);
-    let off = (size - Vec2::new(1280.0, 720.0) * s) * 0.5;
+    // (`masterHUD_mc` moved to the safe area's top left: `hud::MovieSpace`)
+    let ms = crate::hud::MovieSpace::of(w);
+    let (s, off) = (ms.s, ms.px(ms.master_shift()));
     // the levels, tweened as the movie does (`_meterFillDuration`)
     let levels = [
         (stats.health / stats.max_health.max(1.0)).clamp(0.0, 1.0),

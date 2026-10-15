@@ -22,8 +22,6 @@ impl Plugin for PlayerStatePlugin {
 
 const MOVIE: &str = "HUD";
 const SYMBOL: &str = "hud_icPlayerStates";
-/// `playerStatesIcon_mc` on the stage
-const AT: Vec2 = Vec2::new(96.05, 663.05);
 const FADE: f32 = 0.35;
 /// the icon's size in the clip
 const ICON_SCALE: f32 = 0.85;
@@ -64,8 +62,8 @@ fn update_state_icon(
     let t = st.t;
     let Ok(w) = window.single() else { return };
     let Some(tl) = timelines.get(MOVIE) else { return };
-    let s = (w.width() / 1280.0).min(w.height() / 720.0).max(0.01);
-    let off = (Vec2::new(w.width(), w.height()) - Vec2::new(1280.0, 720.0) * s) * 0.5;
+    let ms = crate::hud::MovieSpace::of(w);
+    let s = ms.s;
     // `EDisUIPlayerState`: crouched still, crouched moving
     let want: Option<&'static str> = player.single().ok().filter(|p| p.crouched && !p.locked).map(|p| if p.velocity.with_y(0.0).length() > 0.3 { "sneak" } else { "crouch" });
     // the clip (built once, under the HUD)
@@ -120,7 +118,9 @@ fn update_state_icon(
         *vis = Visibility::Hidden;
         return;
     }
-    let p = off + AT * s;
+    // (`playerStatesIcon_mc`, which the movie has at (96.05, 663.05), at the safe area's bottom
+    // left: `hud::MovieSpace`)
+    let p = ms.px(Vec2::new(ms.min.x, ms.max.y));
     node.left = Val::Px(p.x);
     node.top = Val::Px(p.y);
     fc.scale = s;

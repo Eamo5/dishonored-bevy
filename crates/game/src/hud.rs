@@ -24,6 +24,61 @@ impl Plugin for HudPlugin {
 #[derive(Resource, Default)]
 pub struct Paused(pub bool);
 
+/// The HUD's safe area on PC (`DisTweaks_GFxMoviePlayerHUD`'s `m_fSafeAreaRatio_PC`; its movie
+/// is authored on the console's `m_fSafeAreaRatio_Console`, 0.85), and the cinematic stripes'
+/// height (the movie's `_stripeH`) (stage units).
+pub const SAFE_AREA: f32 = 0.9;
+pub const STRIPE_H: f32 = 70.0;
+/// `masterHUD_mc`, `objectives_mc` as the movie places them (stage units).
+pub const MASTER_AT: Vec2 = Vec2::new(95.5, 54.0);
+pub const OBJECTIVES_AT: Vec2 = Vec2::new(1184.0, 54.0);
+
+/// The HUD movie's space on the screen (`DisMovieSpaceInfo`, as roshan's r614/blink research
+/// decoded the HUD's 0x00BA5840 and its layout 0x00B96250): the 1280x720 stage fitted whole and
+/// centred (`s` its scale; `off` where its origin falls, px), the stage units seen beyond it
+/// either side on the narrow axis (`empty`), and the safe area the layout sets the HUD's corner
+/// clips on, `SAFE_AREA` of all that is seen (`min` its top left, `max` its bottom right, stage
+/// units).
+#[derive(Clone, Copy, Debug)]
+pub struct MovieSpace {
+    pub s: f32,
+    pub off: Vec2,
+    pub empty: Vec2,
+    pub min: Vec2,
+    pub max: Vec2,
+}
+
+impl MovieSpace {
+    pub fn of(w: &Window) -> MovieSpace {
+        MovieSpace::of_size(Vec2::new(w.width(), w.height()))
+    }
+
+    pub fn of_size(size: Vec2) -> MovieSpace {
+        let stage = Vec2::new(1280.0, 720.0);
+        let s = (size.x / stage.x).min(size.y / stage.y).max(0.01);
+        let off = (size - stage * s) * 0.5;
+        let empty = off / s;
+        let seen = stage + empty * 2.0;
+        let margin = seen * (1.0 - SAFE_AREA) * 0.5;
+        MovieSpace { s, off, empty, min: margin - empty, max: seen - empty - margin }
+    }
+
+    /// A stage point on the screen (px).
+    pub fn px(&self, p: Vec2) -> Vec2 {
+        self.off + p * self.s
+    }
+
+    /// How far the layout moves what `masterHUD_mc` holds (the gauges, the context line: to the
+    /// safe area's top left), and what `objectives_mc` holds (the objectives, the target card:
+    /// to its top right) (stage units).
+    pub fn master_shift(&self) -> Vec2 {
+        self.min - MASTER_AT
+    }
+    pub fn objectives_shift(&self) -> Vec2 {
+        Vec2::new(self.max.x, self.min.y) - OBJECTIVES_AT
+    }
+}
+
 /// The running tally (coins, runes, elixirs, chaos) isn't part of the original HUD: it shows
 /// for a few seconds when something in it changes, then fades.
 fn fade_inventory(time: Res<Time<Real>>, mut q: Query<(&Text, &mut TextColor), With<InventoryText>>, mut last: Local<(String, f32)>) {
@@ -325,4 +380,24 @@ fn pause_and_restart(
         next.set(GameState::Loading);
     }
     let _ = &mut exit;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_safe_area_spans_what_is_seen() {
+        // 16:9: the stage alone, 5% in from each edge
+        let m = MovieSpace::of_size(Vec2::new(1920.0, 1080.0));
+        assert!((m.min - Vec2::new(64.0, 36.0)).length() < 1e-3 && (m.max - Vec2::new(1216.0, 684.0)).length() < 1e-3);
+        assert!((m.master_shift() - Vec2::new(-31.5, -18.0)).length() < 1e-3);
+        // 21:9: 213.3 stage units seen either side, the corners out over them
+        let m = MovieSpace::of_size(Vec2::new(2560.0, 1080.0));
+        assert!((m.empty.x - 213.333).abs() < 1e-2 && m.empty.y.abs() < 1e-3);
+        assert!((m.min.x - (1706.667 * 0.05 - 213.333)).abs() < 1e-2 && (m.max.x - (1280.0 + 213.333 - 1706.667 * 0.05)).abs() < 1e-2);
+        // 5:4: 152 above and below
+        let m = MovieSpace::of_size(Vec2::new(1280.0, 1024.0));
+        assert!((m.empty.y - 152.0).abs() < 1e-3 && (m.min.y - (1024.0 * 0.05 - 152.0)).abs() < 1e-3);
+    }
 }

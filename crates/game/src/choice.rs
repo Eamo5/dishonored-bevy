@@ -209,16 +209,21 @@ mod ui {
         // stacked up from the bottom; the arc at their middle
         let height = n * BTN_H + (n - 1.0) * GAP;
         let top = -height;
-        let p = off + AT * (s / SCALE);
+        // (`playerChoice_mc` at the stripes' top, 720 - `_stripeH`, as roshan's r614/blink research
+        // decoded the HUD's layout)
+        let p = off + Vec2::new(AT.x, 720.0 - crate::hud::STRIPE_H) * (s / SCALE);
         commands.entity(root).insert(Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), ..default() });
-        // the letterbox across the window, at the stage's 0 and 650 (70 tall)
+        // the letterbox across the window, at the stage's 0 and 650 (70 tall), each out to the
+        // window's edge over what is seen beyond the stage (`BlackStripes.SetStripesPosition`:
+        // 70 + the empty space high)
         if let Some(kids) = ui.stripes.and_then(|e| stripes.get(e).ok()) {
+            let h = crate::hud::STRIPE_H * s / SCALE;
             for (i, k) in kids.iter().enumerate() {
                 if let Ok(mut n) = bars.get_mut(k) {
                     n.left = Val::Px(0.0);
                     n.width = Val::Px(w.width());
-                    n.height = Val::Px(70.0 * s / SCALE);
-                    n.top = Val::Px(off.y + if i == 0 { 0.0 } else { 650.0 * s / SCALE });
+                    n.height = Val::Px(h + off.y);
+                    n.top = Val::Px(if i == 0 { 0.0 } else { w.height() - off.y - h });
                 }
             }
         }

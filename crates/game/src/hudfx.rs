@@ -247,6 +247,7 @@ fn animate_damage(
     let dt = time.delta_secs();
     let Ok(w) = window.single() else { return };
     let (s, off) = stage_fit(w);
+    let empty = crate::hud::MovieSpace::of(w).empty;
     // stage point (from the middle, y up) on the screen
     let screen = |p: Vec2| off + (STAGE * 0.5 + Vec2::new(p.x, -p.y) * STAGE * 0.5) * s;
     // the vignette: held, then `HideVignette` over 3.5 s
@@ -261,11 +262,14 @@ fn animate_damage(
     let va = fx.vignette.value().clamp(0.0, 1.0);
     for (st, mut node, mut im, mut tf) in &mut strips {
         // the strips' rectangles on the stage before turning: middle, size, turn
+        // (out at the edges of all that is seen and along the whole of them: the layout's
+        // vignette sides, as roshan's r614/blink research decoded it)
+        let (across, along) = ((STAGE.x + 2.0 * empty.x).max(1280.0), (STAGE.y + 2.0 * empty.y).max(1280.0));
         let (mid, size, turn) = match st.0 {
-            0 => (Vec2::new(640.0, 81.0), Vec2::new(1280.0, 162.0), 0.0),
-            1 => (Vec2::new(640.0, 639.0), Vec2::new(1280.0, 162.0), 0.0),
-            2 => (Vec2::new(1201.5, 360.0), Vec2::new(1280.0, 162.0), 90.0),
-            _ => (Vec2::new(67.15, 203.2), Vec2::new(1280.0, 134.3), -90.0),
+            0 => (Vec2::new(640.0, 81.0 - empty.y), Vec2::new(across, 162.0), 0.0),
+            1 => (Vec2::new(640.0, 639.0 + empty.y), Vec2::new(across, 162.0), 0.0),
+            2 => (Vec2::new(1201.5 + empty.x, 360.0), Vec2::new(along, 162.0), 90.0),
+            _ => (Vec2::new(67.15 - empty.x, 203.2), Vec2::new(along, 134.3), -90.0),
         };
         let px = off + (mid - size * 0.5) * s;
         node.left = Val::Px(px.x);

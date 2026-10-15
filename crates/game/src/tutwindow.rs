@@ -28,8 +28,6 @@ pub const IMG_CHARM: u8 = 3;
 
 const MOVIE: &str = "HUD";
 const SYMBOL: &str = "hud_tutoWin_";
-/// `tutorialWindow_mc` on the stage
-const AT: Vec2 = Vec2::new(96.0, 664.35);
 /// `m_fTutorialWindowDuration`
 const DURATION: f32 = 10.0;
 /// `_txt_mc.txt`: the body font at 22, `#e3f2d6`, 256 wide (its gutter 2)
@@ -246,10 +244,13 @@ fn update_window(
         }
     }
     let (t, closing) = (st.t, st.closing);
-    let s = (w.width() / 1280.0).min(w.height() / 720.0).max(0.01);
-    let off = (Vec2::new(w.width(), w.height()) - Vec2::new(1280.0, 720.0) * s) * 0.5;
+    let ms = crate::hud::MovieSpace::of(w);
+    let (s, off) = (ms.s, ms.off);
     let Ok((mut fc, mut n, mut v)) = clips.get_mut(root) else { return };
-    let p = off + AT * s;
+    // (`tutorialWindow_mc`, at (96, 664.35) in the movie, 8 in from the safe area's left at its
+    // bottom: `hud::MovieSpace`)
+    let at0 = Vec2::new(ms.min.x + 8.0, ms.max.y);
+    let p = ms.px(at0);
     n.left = Val::Px(p.x);
     n.top = Val::Px(p.y);
     fc.scale = s;
@@ -308,7 +309,7 @@ fn update_window(
         }
         let k = mc_k;
         let mc_pos = mc_at + Vec2::new(mc_off, 0.0);
-        let at = AT + mc_pos + (txt_state.0 + Vec2::splat(2.0)) * k;
+        let at = at0 + mc_pos + (txt_state.0 + Vec2::splat(2.0)) * k;
         let pt = off + at * s;
         tn.left = Val::Px(pt.x);
         tn.top = Val::Px(pt.y);

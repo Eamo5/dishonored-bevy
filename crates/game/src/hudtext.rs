@@ -35,6 +35,10 @@ const SUBTITLES: Field = Field { at: Vec2::new(353.0, 582.4), width: 578.0, size
 const MESSAGES: Field = Field { at: Vec2::new(353.15, 523.85), width: 577.65, size: 24.0, color: Color::srgb(227.0 / 255.0, 242.0 / 255.0, 214.0 / 255.0), shadow: (5.0, 0.0, 1.5) };
 /// `tutorialMsg_mc` (640, 665) + `_txt_mc` (0, -174.65) + `txt` (-378.45, 2)
 const TUTORIAL: Field = Field { at: Vec2::new(263.55, 494.35), width: 752.95, size: 24.0, color: Color::srgb(227.0 / 255.0, 242.0 / 255.0, 214.0 / 255.0), shadow: (5.0, 1.0, 1.2) };
+/// How far the layout moves them: `subtitles_mc`, `gameMsg_mc`, `tutorialMsg_mc` from (640, 665)
+/// to the cinematic stripes' top, 720 - `_stripeH` (as roshan's r614/blink research decoded the
+/// HUD's layout)
+const LAID: Vec2 = Vec2::new(0.0, 720.0 - crate::hud::STRIPE_H - 665.0);
 /// the fields' filter colour
 pub const SHADOW: Color = Color::srgb(23.0 / 255.0, 25.0 / 255.0, 28.0 / 255.0);
 
@@ -51,10 +55,10 @@ fn place_hud_text(
     mut msgs: Query<(Entity, &mut Node, &mut TextFont, &mut TextColor, Option<&SoftShadow>), (With<crate::hud::MessagesText>, Without<crate::kismet::SubtitleText>)>,
 ) {
     let Ok(w) = window.single() else { return };
-    let s = (w.width() / 1280.0).min(w.height() / 720.0).max(0.01);
-    let off = (Vec2::new(w.width(), w.height()) - Vec2::new(1280.0, 720.0) * s) * 0.5;
+    let ms = crate::hud::MovieSpace::of(w);
+    let s = ms.s;
     let mut place = |e: Entity, n: &mut Node, f: &mut TextFont, c: &mut TextColor, shadow: Option<&SoftShadow>, field: &Field| {
-        let p = off + field.at * s;
+        let p = ms.px(field.at + LAID);
         n.left = Val::Px(p.x);
         n.top = Val::Px(p.y);
         n.bottom = Val::Auto;
@@ -112,9 +116,9 @@ fn tutorial_line(
         }
         return;
     };
-    let s = (w.width() / 1280.0).min(w.height() / 720.0).max(0.01);
-    let off = (Vec2::new(w.width(), w.height()) - Vec2::new(1280.0, 720.0) * s) * 0.5;
-    let p = off + TUTORIAL.at * s;
+    let ms = crate::hud::MovieSpace::of(w);
+    let s = ms.s;
+    let p = ms.px(TUTORIAL.at + LAID);
     n.left = Val::Px(p.x);
     n.top = Val::Px(p.y);
     n.width = Val::Px(TUTORIAL.width * s);

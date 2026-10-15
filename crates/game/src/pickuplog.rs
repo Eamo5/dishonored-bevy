@@ -141,9 +141,11 @@ fn show_log(
     }
     log.entries.retain(|e| e.age < FADE_IN + LIFE + FADE_OUT && e.row < 3.0);
     let Ok(w) = window.single() else { return };
-    let size = Vec2::new(w.width(), w.height());
-    let s = (size.x / 1280.0).min(size.y / 720.0).max(0.01);
-    let off = (size - Vec2::new(1280.0, 720.0) * s) * 0.5;
+    let ms = crate::hud::MovieSpace::of(w);
+    let s = ms.s;
+    // (`pickupLog_mc` 54 in from the safe area's right, at its top, and as far below and beside
+    // `objectives_mc` as the movie has it: `m_PickupLogOffset`; `hud::MovieSpace`)
+    let at = AT + ms.objectives_shift() - Vec2::new(54.0, 0.0);
     for (slot, mut node, mut vis, children) in &mut slots {
         let Some(e) = log.entries.get(slot.0) else {
             *vis = Visibility::Hidden;
@@ -164,7 +166,7 @@ fn show_log(
         let row_alpha = ROW_ALPHA[lo] + (ROW_ALPHA[hi] - ROW_ALPHA[lo]) * (r - r.floor());
         let a = life * row_alpha;
         let slide = if e.age < FADE_IN { 30.0 * (1.0 - ease(e.age / FADE_IN)) } else { 0.0 };
-        let p = off + (AT + Vec2::new(slide, -RISE * r - 24.1)) * s;
+        let p = ms.px(at + Vec2::new(slide, -RISE * r - 24.1));
         node.left = Val::Px(p.x);
         node.top = Val::Px(p.y);
         let place = |n: &mut Node, min: Vec2, size: Vec2| {

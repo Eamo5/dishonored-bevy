@@ -155,10 +155,10 @@ fn show_card(
     *vis = Visibility::Inherited;
     let a = if t < FADE { 1.0 - (1.0 - t / FADE).powi(5) } else if t > DURATION + FADE { 1.0 - (t - DURATION - FADE) / FADE } else { 1.0 };
     let Ok(w) = window.single() else { return };
-    let size = Vec2::new(w.width(), w.height());
-    let s = (size.x / 1280.0).min(size.y / 720.0).max(0.01);
-    let off = (size - Vec2::new(1280.0, 720.0) * s) * 0.5;
-    let p = off + AT * s;
+    let ms = crate::hud::MovieSpace::of(w);
+    let s = ms.s;
+    // (`targetNotification_mc` at the safe area's top right: `hud::MovieSpace`)
+    let p = ms.px(AT + ms.objectives_shift());
     node.left = Val::Px(p.x);
     node.top = Val::Px(p.y);
     let has_portrait = card.portrait;

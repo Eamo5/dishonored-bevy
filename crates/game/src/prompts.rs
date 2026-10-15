@@ -245,10 +245,12 @@ fn special_icons(
     }
     let alpha = if want.is_empty() { 1.0 - strong_out(1.0 - st.fade) } else { strong_out(st.fade) };
     let open = st.fade > 0.0 && !st.shown.is_empty();
-    let s = (w.width() / 1280.0).min(w.height() / 720.0).max(0.01);
-    let off = (Vec2::new(w.width(), w.height()) - Vec2::new(1280.0, 720.0) * s) * 0.5;
+    let ms = crate::hud::MovieSpace::of(w);
+    let s = ms.s;
     if let Ok((mut n, mut v)) = roots.get_mut(root) {
-        let p = off + ICONS_AT * s;
+        // (`interactions_ic_mc`, at (1184, 665.5) in the movie, at the safe area's bottom right:
+        // `hud::MovieSpace`)
+        let p = ms.px(ICONS_AT + ms.max - Vec2::new(1184.0, 665.5));
         n.left = Val::Px(p.x);
         n.top = Val::Px(p.y);
         let vis = if open { Visibility::Inherited } else { Visibility::Hidden };
@@ -438,10 +440,11 @@ fn context_line(
         (-20.0 * l, 1.0 - l, -10.0 * r, 1.0 - r)
     };
     let shown = st.line_open || st.line_t > 0.0 || st.rule_t > 0.0;
-    let s = (w.width() / 1280.0).min(w.height() / 720.0).max(0.01);
-    let off = (Vec2::new(w.width(), w.height()) - Vec2::new(1280.0, 720.0) * s) * 0.5;
+    let ms = crate::hud::MovieSpace::of(w);
+    let s = ms.s;
     if let Ok((mut n, mut v)) = roots.get_mut(root) {
-        let p = off + LINE_AT * s;
+        // (with `masterHUD_mc`, `m_ContextInteractionsOffset` below it: `hud::MovieSpace`)
+        let p = ms.px(LINE_AT + ms.master_shift());
         n.left = Val::Px(p.x);
         n.top = Val::Px(p.y);
         let vis = if shown { Visibility::Inherited } else { Visibility::Hidden };

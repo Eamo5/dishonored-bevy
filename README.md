@@ -843,6 +843,19 @@ fullscreen display, vertical sync and the crosshair.
   his `m_BarkCues` give them (`Snd_P_Near_Death_Lvl_1/2`, the stinger, the regeneration as he
   recovers); his eyes coming out of water, `m_pWaterExitEffectTweaks` (`ps_camera_water`) runs
   down the lens. `DH_NO_HUDFX=1` puts back a plain red flash.
+- **The HUD's layout** (`hud.rs`'s `MovieSpace`, as roshan's r614/blink research decoded the
+  HUD's movie space and layout, 0x00BA5840 and 0x00B96250): the movie's 1280x720 stage fitted
+  whole and centred, and its corner clips set on the PC's safe area, `m_fSafeAreaRatio_PC` 0.9
+  of all that is seen (the movie places them on the console's 0.85 of the stage): the gauges
+  and the context line with `masterHUD_mc` at its top left (64, 36 on a 16:9 screen), the
+  objectives and the target card with `objectives_mc` at its top right, the pickup log 54 in
+  from that (`m_PickupLogOffset` below the objectives), the stance icon at its bottom left, the
+  special moves at its bottom right, the tutorial window 8 in from its bottom left; the
+  subtitles, messages, tutorial lines and a conversation's choices at the cinematic stripes'
+  top (720 - `_stripeH` 70); the location banner as far down the screen as the movie has it down
+  the stage. On a screen wider or narrower than 16:9 the corners go out over what is seen
+  beyond the stage, the damage vignette's sides go to its edges and along the whole of them,
+  and a conversation's stripes reach the window's top and bottom.
 - **Health, mana and the left hand** (`gauges.rs`, the HUD movie's `masterHUD_mc` and its
   `PlayerGauges` class): the top left as the original draws it — the health and mana shards
   (tilted 15 and 30 degrees) over their ink splashes, each filling from its base to the
