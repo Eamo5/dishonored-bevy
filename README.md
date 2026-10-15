@@ -450,8 +450,13 @@ fullscreen display, vertical sync and the crosshair.
   Weepers carry the plague (`plague.rs`, their pawns' `m_bHasPlague` tweaks cooked as
   `NpcPlague`). They have no blow: they follow, grab, weep standing (`Empty_Weep_Idle`) and
   cough. After any weeper's grab, none grabs for 20 s (`DisGlobalCombatManager`'s
-  `m_fInhibitionTimeWeeperArmGrab`). The cough comes every `m_fCoughingCooldown` (2-5 s) while Corvo is near enough to
-  catch it, the weeper standing for the clip `Empty_Idle_Cough`. Its notifies spew the vomit
+  `m_fInhibitionTimeWeeperArmGrab`). Their weep behaviour (`TweakBehaviors_Weep_Default`, as
+  roshan's r614/blink research decoded it) has them follow at a walk, only
+  `m_iSimultaneousRunnerAllowed` (3) of them running at once. After its grab, a weeper stands
+  weeping `m_fStandStillWeeping` (2-5 s) and stays until Corvo is 220 uu off. With him beyond
+  `m_fHomeRadius` (15 m) of its home for `m_fLostTimer` (1-3 s), it gives him up and goes home.
+  The cough comes every `m_fCoughingCooldown` (2-5 s) while Corvo is near enough to catch it,
+  the weeper standing for the clip `Empty_Idle_Cough`. Its notifies spew the vomit
   (`weeper_vomit` at the `Puke_Spit` socket) and start the cloud (`DishonoredNotify_StartPlague`;
   the grab's retching loop starts one too). The cloud deals `m_iPlagueDmgPerTick` 4 every 0.5 s
   for 2-3 s to everyone within 3.5 m before the weeper with a clear line, other carriers

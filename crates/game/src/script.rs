@@ -1022,11 +1022,14 @@ fn run_script(
             }
         }
         "rouse" => {
-            // (tests) rouse [NAME]: the nearest living hostile character (whose name holds NAME)
-            // turns on Corvo, knowing where he is
+            // (tests) rouse [NAME [N]]: the nearest living hostile character (whose name holds
+            // NAME; the N nearest) turns on Corvo, knowing where he is
             let named = cmd.get(1).cloned().unwrap_or_default();
+            let count = cmd.get(2).and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
             let at = t.translation;
-            if let Some((e, _, _)) = npc_ents.iter().filter(|(_, n, _)| n.hostile() && !n.is_down() && (named.is_empty() || n.name.contains(&named))).min_by(|a, b| a.2.translation.distance(t.translation).total_cmp(&b.2.translation.distance(t.translation))) {
+            let mut near: Vec<_> = npc_ents.iter().filter(|(_, n, _)| n.hostile() && !n.is_down() && (named.is_empty() || n.name.contains(&named))).collect();
+            near.sort_by(|a, b| a.2.translation.distance(t.translation).total_cmp(&b.2.translation.distance(t.translation)));
+            for (e, _, _) in near.into_iter().take(count) {
                 commands.queue(move |w: &mut World| {
                     if let Some(mut n) = w.get_mut::<Npc>(e) {
                         n.alert = crate::npc::Alert::Combat;

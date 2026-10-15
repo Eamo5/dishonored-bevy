@@ -304,6 +304,11 @@ pub struct Npc {
     /// a wolfhound's grab is its jump attack (not its arm attack); the time before each may come
     /// again (its arm attack's, its jump attack's)
     pub grab_jump: bool,
+    /// a weeper running after Corvo (one of the few its kind allow), standing weeping after its
+    /// grab (s left), and losing him far from its home (s left)
+    pub weep_run: bool,
+    pub weep_stand: f32,
+    pub weep_lost: Option<f32>,
     pub leap_cd: [f32; 2],
     pub trail_idx: usize,
     pub saw_body: bool,
@@ -1162,6 +1167,18 @@ const HOUND_KNOCKDOWN: [f32; 4] = [7.0, 10.0, 15.0, 20.0];
 /// Corvo down from a wolfhound's jump attack (s: his knockdown clips', `Sword_KnockdownBack`...)
 const KNOCKED_DOWN: f32 = 0.7;
 
+/// A weeper's weep behaviour (`TweakBehaviors_Weep_Default` over `DisTweaks_AIBehavior_Weep`'s
+/// defaults, as roshan's r614/blink research decoded the behaviour): following, it walks, running
+/// only while fewer than `m_iSimultaneousRunnerAllowed` (3) of its kind run (after
+/// `m_TimeBeforeRunning`, 0); after its grab it stands weeping `m_fStandStillWeeping_Min`..`Max`
+/// (2-5 s), until he is 220 uu off; with him beyond `m_fHomeRadius` (1500 uu) of its home for
+/// `m_fLostTimer_Min`..`Max` (1-3 s) it gives up and goes home.
+const WEEP_RUNNERS: usize = 3;
+const WEEP_STAND: (f32, f32) = (2.0, 5.0);
+const WEEP_RESUME: f32 = 2.2;
+const WEEP_HOME: f32 = 15.0;
+const WEEP_LOST: (f32, f32) = (1.0, 3.0);
+
 /// An ambush's longest wait, and the time before another (s).
 const AMBUSH_WAIT: f32 = 8.0;
 const AMBUSH_CD: f32 = 12.0;
@@ -1247,6 +1264,11 @@ fn weeper_grab(
             GrabPhase::Release | GrabPhase::Miss | GrabPhase::Kill if el >= if npc.grab_len > 0.0 { npc.grab_len } else { 0.9 } => {
                 npc.grab = None;
                 npc.attack_cd = npc.attack_cd.max(3.0);
+                // (a weeper stands weeping after its grab)
+                if !is_hound(&npc) {
+                    npc.weep_stand = WEEP_STAND.0 + rand::random::<f32>() * (WEEP_STAND.1 - WEEP_STAND.0);
+                    info!("weeper grab: {} stands weeping {:.1} s", npc.name, npc.weep_stand);
+                }
             }
             _ => {}
         }
@@ -1814,6 +1836,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         grab_len: 0.0,
         grab_drift: 0.0,
         grab_jump: false,
+        weep_run: false,
+        weep_stand: 0.0,
+        weep_lost: None,
         leap_cd: [0.0; 2],
         trail_idx: 0,
         saw_body: false,
@@ -3062,6 +3087,8 @@ pub(crate) fn npc_brain(
     };
     // one weeper at a time grabs Corvo
     let grab_active = npcs.iter().any(|(_, n, _)| n.grab.is_some());
+    // (the weepers running after Corvo)
+    let mut weep_runners = npcs.iter().filter(|(_, n, _)| n.weep_run && !n.is_down() && n.mode == Mode::Combat).count();
     // (after any weeper's grab, none for a while: `DisGlobalCombatManager.m_fInhibitionTimeWeeperArmGrab`)
     *grab_inhibit = (*grab_inhibit - dt_world).max(0.0);
     // (the moves another has just used on Corvo, how long yet, and by whom)
@@ -3849,8 +3876,42 @@ pub(crate) fn npc_brain(
                 // has no blow (its weep behaviour only grabs and coughs, as roshan's r614/blink
                 // research found), and keeps the same distance
                 if npc.arms.plague.is_some() {
+                    // its weep behaviour: standing weeping after its grab, until he is off;
+                    // following him, walking but for the few that run
+                    if npc.weep_stand > 0.0 {
+                        npc.weep_stand -= dt;
+                        if npc.weep_stand <= 0.0 && d < WEEP_RESUME {
+                            npc.weep_stand = 1e-3;
+                        }
+                        npc.target = None;
+                        if npc.weep_run {
+                            npc.weep_run = false;
+                            weep_runners = weep_runners.saturating_sub(1);
+                        }
+                    } else if !npc.weep_run && weep_runners < WEEP_RUNNERS {
+                        npc.weep_run = true;
+                        weep_runners += 1;
+                        if std::env::var("DH_NPC_CLIP_LOG").is_ok() {
+                            info!("weeper {} runs after Corvo ({weep_runners} running)", npc.name);
+                        }
+                    }
                     if d < 1.4 {
                         npc.target = None;
+                    }
+                    // (Corvo far from its home a while: it gives up, home again)
+                    if (ppos - npc.home).with_y(0.0).length() > WEEP_HOME {
+                        let left = npc.weep_lost.unwrap_or(WEEP_LOST.0 + rand::random::<f32>() * (WEEP_LOST.1 - WEEP_LOST.0)) - dt;
+                        npc.weep_lost = Some(left);
+                        if left <= 0.0 {
+                            npc.weep_lost = None;
+                            npc.weep_run = false;
+                            npc.alert = Alert::Unaware;
+                            npc.awareness = npc.awareness.min(0.2);
+                            npc.set_mode(Mode::Return);
+                            info!("weeper {} gives Corvo up, home again (he is {:.1} m from it, it {:.1} m)", npc.name, (ppos - npc.home).with_y(0.0).length(), (pos - npc.home).with_y(0.0).length());
+                        }
+                    } else {
+                        npc.weep_lost = None;
                     }
                 } else if npc.has_sword || npc.enemy {
                     for c in npc.melee_cd.iter_mut() {
@@ -4201,6 +4262,8 @@ fn npc_move(
         let pos = t.translation;
         let speed = match npc.mode {
             _ if npc.alarm_run.is_some() || npc.escape.is_some() || npc.plague_escape.is_some() => npc.gait[2],
+            // (a weeper walks after Corvo, but for the few that run)
+            Mode::Combat if npc.arms.plague.is_some() && !npc.weep_run => npc.gait[0],
             Mode::Combat | Mode::Flee => npc.gait[2],
             // searching, its walk or run slowed (`SearchSword` / `SearchEmpty`: x 0.8), as roshan's
             // r614/blink research read the locomotion modifiers
