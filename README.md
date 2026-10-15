@@ -251,7 +251,11 @@ fullscreen display, vertical sync and the crosshair.
   lower looking straight up, nothing within 10 degrees of level; the pistol and crossbow 2 and
   3), as roshan's research decoded them. Holding Blink, the left hand comes up
   (`Powers_Cast_Blink_In`, the Mark glowing) and holds (`_Loop`) while the marker shows; let go,
-  the cast (`_Out`) plays. The left hand's clips (casts, throws, the guns) move the left arm
+  the cast (`_Out`) plays. Changing what it holds: from a power to a power, the Mark's switch
+  (`Powers_Switch`); a gadget taken up or put away (or a power from or to the empty hand), the
+  hand goes down with the old (`Gadgets_Ready_Unequip`, `Powers_Ready_Unequip`) and comes up with
+  the new once it is down (`Gadgets_Ready_Equip`, `Powers_Ready_Equip`), the pistol or crossbow
+  changing hands out of sight. The left hand's clips (casts, throws, the guns) move the left arm
   alone, as the original's arm tree filters them (`LeftArmFilter`, from `Collarbone_L_Jnt`);
   the sword arm keeps its own pose. On the move, the hand with a power or gadget has its own
   walk, sprint and leap (`Powers_Walk`, `Powers_Jump`, `Gadgets_Walk`, `Gadgets_Sprint`,

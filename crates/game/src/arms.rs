@@ -229,6 +229,9 @@ struct ArmClips {
     windblast: Option<ClipId>,
     bend_time: Option<ClipId>,
     switch: Option<ClipId>,
+    /// the left hand taking up and putting away a power or a gadget (`Powers_Ready_Equip`,
+    /// `_Unequip`; `Gadgets_Ready_Equip`, `_Unequip`)
+    left_equip: [[Option<ClipId>; 2]; 2],
     crossbow_fire: Option<ClipId>,
     /// the crossbow's shot reloading as it goes, with its reload upgrade
     /// (`m_FireReloadFastCrossbow`: `Crossbow_Fire_FastReload`, at 1.5)
@@ -361,6 +364,7 @@ impl ArmClips {
             windblast: lib.find("Powers_Cast_Windblast"),
             bend_time: lib.find("Powers_Cast_BendTime"),
             switch: lib.find("Powers_Switch"),
+            left_equip: ["Powers", "Gadgets"].map(|s| ["Equip", "Unequip"].map(|e| lib.find(&format!("{s}_Ready_{e}")))),
             crossbow_fire: lib.find("Crossbow_Fire").or_else(|| lib.find("Wristbow_Fire")),
             crossbow_fire_fast: lib.find("Crossbow_Fire_FastReload"),
             summon: lib.find("Powers_Cast_SummonAssassin_Out"),
@@ -434,6 +438,10 @@ struct ArmsAnim {
     /// the casts without mana seen
     no_mana_seq: u32,
     selected: Power,
+    /// what the left hand shows (behind `selected` while it puts the old away), and what it
+    /// takes up once the old is down
+    shown: Power,
+    swap: Option<Power>,
     attach_l: Option<(Entity, Transform)>,
     /// ranged weapon meshes held in the left hand: (power, parent entity)
     held: Vec<(Power, Entity)>,
@@ -739,7 +747,9 @@ fn spawn_arms(
                 cast_seq: powers.as_ref().map(|p| p.cast_seq).unwrap_or(0),
                 reload_seq: powers.as_ref().map(|p| p.reload_anim.0).unwrap_or(0),
                 no_mana_seq: powers.as_ref().map(|p| p.no_mana_seq).unwrap_or(0),
-                selected: Power::Pistol,
+                selected: powers.as_ref().map(|p| p.selected).unwrap_or(Power::Pistol),
+                shown: powers.as_ref().map(|p| p.selected).unwrap_or(Power::Pistol),
+                swap: None,
                 attach_l,
                 held,
                 sword: sword.single().ok(),
@@ -1297,7 +1307,7 @@ fn animate_arms(
             let thrown = matches!(power, Power::Grenade | Power::StickyGrenade | Power::Chokedust)
                 && (anim.overlay_is(st.clips.grenade_empty)
                     || anim.overlay_is(st.clips.grenade_throw) && anim.overlay_state().0.zip(anim.overlay_time()).is_some_and(|(cl, t)| t > anim.lib.duration(cl) * 0.45));
-            let want = if !full_body && *power == powers.selected && !thrown { Visibility::Inherited } else { Visibility::Hidden };
+            let want = if !full_body && *power == st.shown && !thrown { Visibility::Inherited } else { Visibility::Hidden };
             if *v != want { *v = want; }
         }
     }
@@ -1379,9 +1389,43 @@ fn animate_arms(
             st.started.push(cast_clip(powers.cast_power).to_string());
         }
     } else if powers.selected != st.selected {
-        if let Some(cl) = c.switch.filter(|_| !ranged) {
-            anim.restart_overlay(cl, false, 1.3, 0.1);
-            st.started.push("Powers_Switch".to_string());
+        // from a power to a power, the mark's switch (`Powers_Switch`); a gadget taken up or put
+        // away (or a power from or to the empty hand), the hand goes down with the old
+        // (`*_Ready_Unequip`) and comes up with the new (`*_Ready_Equip`) once it is down
+        let set = |p: Power| if p == Power::Empty { None } else { Some(p.is_gadget() as usize) };
+        let (old, new) = (set(st.shown), set(powers.selected));
+        if old == Some(0) && new == Some(0) && st.swap.is_none() {
+            st.shown = powers.selected;
+            if let Some(cl) = c.switch {
+                anim.restart_overlay(cl, false, 1.3, 0.1);
+                st.started.push("Powers_Switch".to_string());
+            }
+        } else if st.swap.is_some() {
+            // (already going down: it comes up with the newest)
+            st.swap = Some(powers.selected);
+        } else if let Some(cl) = old.and_then(|o| c.left_equip[o][1]) {
+            anim.restart_overlay(cl, false, 1.0, 0.08);
+            st.swap = Some(powers.selected);
+            st.started.push(anim.lib.clip(cl).name.clone());
+        } else {
+            st.shown = powers.selected;
+            if let Some(cl) = new.and_then(|n| c.left_equip[n][0]) {
+                anim.restart_overlay(cl, false, 1.0, 0.08);
+                st.started.push(anim.lib.clip(cl).name.clone());
+            }
+        }
+    }
+    // the old put away: the new taken up
+    if let Some(to) = st.swap {
+        let down = c.left_equip.iter().any(|e| anim.overlay_is(e[1]));
+        if !down || anim.overlay_finished() {
+            st.swap = None;
+            st.shown = to;
+            let set = (to != Power::Empty).then(|| to.is_gadget() as usize);
+            if let Some(cl) = set.and_then(|n| c.left_equip[n][0]) {
+                anim.restart_overlay(cl, false, 1.0, 0.08);
+                st.started.push(anim.lib.clip(cl).name.clone());
+            }
         }
     }
     if powers.selected != st.selected {
@@ -1498,7 +1542,7 @@ fn animate_arms(
     }
     let aiming = aiming || cooking || raised;
     let spyglass_busy = c.spyglass.iter().flatten().any(|cl| anim.overlay_is(*cl)) || anim.overlay_is(c.pistol_fire_accurate);
-    if !aiming && !leaping && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.crossbow_fire_fast) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.grenade_reload) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision) || anim.overlay_is(c.out_of_mana) || c.left_slash.iter().flatten().any(|s| anim.overlay_is(*s)) || spyglass_busy)) {
+    if !aiming && !leaping && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || c.left_equip.iter().flatten().any(|e| anim.overlay_is(*e)) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.crossbow_fire_fast) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.grenade_reload) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision) || anim.overlay_is(c.out_of_mana) || c.left_slash.iter().flatten().any(|s| anim.overlay_is(*s)) || spyglass_busy)) {
         match idle {
             Some(cl) if !st.choking && !st.blocking => {
                 let leap = loco.is_some() && loco == c.left_loco[set][2];
