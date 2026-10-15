@@ -485,8 +485,13 @@ fullscreen display, vertical sync and the crosshair.
   loose body that lands beside it. A character struck flinches, and falls dead, by the side the
   blow came from: its front, left, right or back clips (`Sword_HitLeft_A`, `Empty_HitBack_A`,
   `Generic_DeathRightA`...), where it has them; hurt by no blow it knows of, it picks among them.
-  A bullet or bolt to a leg (below the hips) has it clutch that leg (`Sword_HitLeg_Left`,
-  `Empty_HitLeg_Right`). A thing thrown at it (a bottle, a brick) gets its small hit, by the side
+  Corvo's blade, leaving it standing, gets its weak reaction instead: the additive flinch by the
+  side struck (`HitReactSmall_Additive`: `ADD_Generic_SmallHit_Front`, `_Left`, `_Right`,
+  `_Back`) laid over what it does, its blow or step not stopped and no stagger. The blade's damage
+  type names no reaction and every combat tweak leaves `m_bDisableWeakHitReaction` off, so the
+  original's chooser makes it weak, as roshan's r614/blink research decoded it. Sets without those
+  clips flinch as before. A bullet or bolt to a leg (below the hips) has it clutch that leg
+  (`Sword_HitLeg_Left`, `Empty_HitLeg_Right`). A thing thrown at it (a bottle, a brick) gets its small hit, by the side
   it struck (`Generic_SmallHit_Front`..., with their stone-on-body cue). Shot with a bolt from
   ahead, those whose set has them take it with `Generic_ProjectileHit_Front`, `_FrontLeft` or
   `_FrontRight` (the elite guards). A bullet, or a grenade's blast, that leaves it standing

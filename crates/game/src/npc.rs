@@ -270,6 +270,10 @@ pub struct Npc {
     pub leg_hit: Option<bool>,
     /// the blow it last took was a thing thrown at it (a bottle, a brick: `DisDamageType_Impact`)
     pub small_hit: bool,
+    /// a weak hit taken (Corvo's sword: its flinch laid over what it does, nothing stopped),
+    /// from the side struck (front, left, right, back); its set has the flinch's clips
+    pub weak_hit: Option<usize>,
+    pub weak_hits: bool,
     /// the blow it last took was a bolt (a bullet knocks it down)
     pub shot_hit: bool,
     /// choking in a cloud of chokedust (its stun's length: `stagger`)
@@ -1793,6 +1797,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         rise: None,
         leg_hit: None,
         small_hit: false,
+        weak_hit: None,
+        weak_hits: false,
         shot_hit: false,
         dusted: false,
         flank: None,
@@ -2140,6 +2146,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 holster_in: None,
                 limp_in: None,
                 rise_next: None,
+                flinch: None,
                 walk_phase: f32::NAN,
                 counter: None,
                 gun_phase: GunPhase::Away,
@@ -2390,10 +2397,19 @@ fn npc_hits(
             _ => {
                 npc.health = (npc.health - h.damage).max(npc.min_health);
                 npc.hurt_t = 0.0;
-                npc.hit_react = 0.35;
-                npc.attack_t = None;
-                // (slid into: its strong reaction, stumbling through it)
-                npc.stagger = npc.stagger.max(if h.kind == HitKind::Slide { 0.9 } else { 0.25 });
+                // Corvo's blade, leaving it standing: its weak reaction, the additive flinch over
+                // what it does, nothing stopped (the reaction chooser: no `m_ExpectedHitReaction`
+                // on the blade's damage type and `m_bDisableWeakHitReaction` false in every combat
+                // tweak, as roshan's r614/blink research decoded it), where its set has the clips
+                let weak = h.kind == HitKind::Sword && npc.health > 0.0 && npc.weak_hits;
+                if weak {
+                    npc.weak_hit = side_struck(&npc, pos).or(Some(0));
+                } else {
+                    npc.hit_react = 0.35;
+                    npc.attack_t = None;
+                    // (slid into: its strong reaction, stumbling through it)
+                    npc.stagger = npc.stagger.max(if h.kind == HitKind::Slide { 0.9 } else { 0.25 });
+                }
                 if npc.aggression >= 0.0 && h.damage > 0.0 {
                     npc.aggression = (npc.aggression + AGGRESSION_PER_DAMAGE).clamp(0.0, 1.0);
                 }
@@ -4534,6 +4550,9 @@ pub struct NpcClips {
     /// struck by a thing thrown, by the side it struck: front, left, right, back
     /// (`Generic_SmallHit_Front`..., with their stone-on-body cue)
     small_hit: [Option<ClipId>; 4],
+    /// a weak hit's flinch, laid over the pose (`HitReactSmall_Additive`:
+    /// `ADD_Generic_SmallHit_Front`, `_Left`, `_Right`, `_Back`)
+    weak_hit: [Option<ClipId>; 4],
     /// shot from ahead, ahead left, ahead right (`Generic_ProjectileHit_Front`, `_FrontLeft`,
     /// `_FrontRight`: the elite guards')
     shot_hit: [Option<ClipId>; 3],
@@ -4740,6 +4759,7 @@ impl NpcClips {
                 lib.all(&["Empty_HitBack_A"]),
             ],
             small_hit: ["Front", "Left", "Right", "Back"].map(|s| lib.find(&format!("Generic_SmallHit_{s}"))),
+            weak_hit: ["Front", "Left", "Right", "Back"].map(|s| lib.find(&format!("ADD_Generic_SmallHit_{s}"))),
             shot_hit: ["Front", "FrontLeft", "FrontRight"].map(|s| lib.find(&format!("Generic_ProjectileHit_{s}"))),
             dust: ["In", "Loop", "Out"].map(|p| lib.find(&format!("Generic_SmokeBomb_{p}"))),
             stun_loop: [lib.find("Sword_Stun_Loop"), lib.find("Empty_Stun_Loop")],
@@ -4928,6 +4948,8 @@ pub struct NpcAnim {
     limp_in: Option<(f32, Vec3)>,
     /// up again from where it lay: its stun's recovery to come
     rise_next: Option<ClipId>,
+    /// a weak hit's flinch under way: its clip and how far through
+    flinch: Option<(ClipId, f32)>,
     /// how far through its relaxed walk's loop (0..1; NaN not walking it): its feet landing
     walk_phase: f32,
     /// its bow drawn (a tallboy's)
@@ -5190,6 +5212,23 @@ fn npc_select_anim(
         let st = &mut *st;
         let clips = st.clips.clone();
         let lib = anim.lib.clone();
+        // a weak hit's flinch, laid over whatever it does (its clip played through once)
+        npc.weak_hits = clips.weak_hit.iter().all(Option::is_some);
+        if let Some(side) = npc.weak_hit.take() {
+            st.flinch = clips.weak_hit[side.min(3)].map(|c| (c, 0.0));
+            if let (Some((c, _)), true) = (st.flinch, std::env::var("DH_NPC_CLIP_LOG").is_ok()) {
+                info!("npc flinch: {} {} over {}", npc.name, lib.clip(c).name, anim.current().map(|p| lib.clip(p.clip).name.as_str()).unwrap_or("-"));
+            }
+        }
+        anim.additive.retain(|(c, _, _)| !clips.weak_hit.contains(&Some(*c)));
+        if let Some((c, ft)) = st.flinch {
+            if ft < lib.duration(c) && !npc.is_down() {
+                anim.additive.push((c, ft, 1.0));
+                st.flinch = Some((c, ft + dt));
+            } else {
+                st.flinch = None;
+            }
+        }
 
         // the eyelids: a blink every 0.5-6 s at 1-2 times its pace, on the eyelid bones alone
         // (`ArkComponentLookatConfig`'s `MinDurationBetweenBlink`..`Max`, `MinBlinkSpeed`..`Max`,
@@ -5901,7 +5940,7 @@ fn npc_select_anim(
             }
             // aimed and firing, the arm follows Corvo (the aim offsets blended by where he is
             // off its facing: across 90 degrees each way, up and down)
-            anim.additive.clear();
+            anim.additive.retain(|(c, _, _)| !clips.gun_aim.contains(&Some(*c)));
             if matches!(st.gun_phase, GunPhase::Aiming | GunPhase::Firing) {
                 let to = (ppos + Vec3::Y * 0.6 - (t.translation + Vec3::Y * 0.72)).normalize_or_zero();
                 let fwd = npc.forward();
