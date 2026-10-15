@@ -383,6 +383,9 @@ pub struct PlayerStats {
     /// the journal's key reads it
     #[serde(skip)]
     pub tutorial_prompt: Option<(String, f32)>,
+    /// the tutorial trackers' state (`crate::tutorials`)
+    #[serde(default)]
+    pub trackers: crate::tutorials::Trackers,
     /// the keys on Corvo's ring (`DisKeyRing`: names doors' `m_MatchingKeys` list)
     #[serde(default)]
     pub keys: Vec<String>,
@@ -699,6 +702,7 @@ impl Default for PlayerStats {
             notes: Vec::new(),
             tutorials: Vec::new(),
             tutorial_prompt: None,
+            trackers: Default::default(),
             keys: Vec::new(),
             unarmed: false,
             sheathed: false,
@@ -850,6 +854,14 @@ impl HudMessages {
         match self.tutorial.as_mut() {
             Some(t) if t.0 == s => t.1 = secs,
             _ => self.tutorial = Some((s, secs, 0.0)),
+        }
+    }
+
+    /// A tutorial put away (its condition gone: a blow blocked, the music box's tune out of
+    /// reach), if it is the one up.
+    pub fn drop_tutorial(&mut self, s: &str) {
+        if self.tutorial.as_ref().is_some_and(|t| t.0 == s) {
+            self.tutorial = None;
         }
     }
 

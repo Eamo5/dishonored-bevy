@@ -80,7 +80,7 @@ const POWERS_DLC06: [Power; 7] = [Power::Windblast, Power::DarkVision, Power::De
 
 /// The items the player has and where each sits (`ComputeWeaponAngle` / `ComputePowerAngle`),
 /// and the separators between the groups.
-fn arrange(stats: &PlayerStats, daud: bool) -> (Vec<(Power, f32)>, Vec<f32>) {
+pub(crate) fn arrange(stats: &PlayerStats, daud: bool) -> (Vec<(Power, f32)>, Vec<f32>) {
     let (weapons, powers): (&[Power], &[Power]) = if daud { (&WEAPONS_DLC06, &POWERS_DLC06) } else { (&WEAPONS, &POWERS) };
     let w: Vec<Power> = weapons.iter().copied().filter(|p| p.owned(stats)).collect();
     let p: Vec<Power> = powers.iter().copied().filter(|p| p.owned(stats)).collect();

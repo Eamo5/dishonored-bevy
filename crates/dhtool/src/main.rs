@@ -1,6 +1,8 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
+mod layout;
+
 /// The game's CookedPCConsole (`DISHONORED_DIR`, else the usual Steam folders).
 static COOKED: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
     dhcook::find_cooked_dir().unwrap_or_else(|| PathBuf::from(dhcook::DEFAULT_GAME_DIR).join("DishonoredGame").join("CookedPCConsole"))
@@ -565,6 +567,34 @@ fn main() -> Result<()> {
                 let Ok(d) = pkg.export_data(i) else { continue };
                 let hits: Vec<usize> = d.windows(8).enumerate().filter(|(_, w)| *w == pat.as_slice()).map(|(k, _)| k).collect();
                 if !hits.is_empty() {
+                    println!("{:6} [{}] {} at {:?}", i, pkg.class_name(i), pkg.obj_path(i), hits);
+                }
+            }
+        }
+        Some("layout") => {
+            // dhtool layout <pkg> <class or struct path>: its properties' native offsets
+            init_classes();
+            let mut l = layout::Layouter::new();
+            let pkg = upk::Package::open(&pkg_path(&args[2]))?;
+            let idx = pkg.find_export(&args[3]).expect("no such export");
+            let (fields, size, align) = l.layout(&args[2], idx);
+            for f in &fields {
+                let bit = f.bit.map(|b| format!(" bit {b}")).unwrap_or_default();
+                let dim = if f.dim > 1 { format!("[{}]", f.dim) } else { String::new() };
+                println!("{:#06x} {:<18} {}{dim}{bit}", f.offset, f.kind, f.name);
+            }
+            println!("size {size:#x} align {align}");
+        }
+        Some("findref") => {
+            // dhtool findref <pkg> <export path or index>: exports whose data holds its index (a
+            // script's bytecode naming a property or object), with the offsets
+            let pkg = upk::Package::open(&pkg_path(&args[2]))?;
+            let target: i32 = match args[3].parse() { Ok(i) => i, Err(_) => pkg.find_export(&args[3]).expect("no such export") };
+            let pat = target.to_le_bytes();
+            for i in 1..=pkg.exports.len() as i32 {
+                let Ok(d) = pkg.export_data(i) else { continue };
+                let hits: Vec<usize> = d.windows(4).enumerate().filter(|(_, w)| *w == pat.as_slice()).map(|(k, _)| k).collect();
+                if !hits.is_empty() && i != target {
                     println!("{:6} [{}] {} at {:?}", i, pkg.class_name(i), pkg.obj_path(i), hits);
                 }
             }

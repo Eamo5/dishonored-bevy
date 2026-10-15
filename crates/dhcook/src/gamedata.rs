@@ -1441,6 +1441,18 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
                 d.texts.insert(format!("Pawn.{n}"), object_name(&startup, o));
             }
         }
+        // and its own strings the localisation leaves out (the PC's elixir tutorials,
+        // `m_AcquiredElixirTutorialMessage_PC[i]`...), each element as `Pawn.<property>[i]`
+        for q in &p.0 {
+            if let Value::Str(s) = &q.value {
+                if !s.is_empty() {
+                    d.texts.entry(format!("Pawn.{}[{}]", q.name, q.index)).or_insert_with(|| s.clone());
+                    if q.index == 0 {
+                        d.texts.entry(format!("Pawn.{}", q.name)).or_insert_with(|| s.clone());
+                    }
+                }
+            }
+        }
     }
     // the game parameter his breath sets (`m_BreathlessnessRTPC`, the class's)
     if let Some(Value::Name(n)) = game.find_export("Default__DisTweaks_PlayerPawn").and_then(|i| props(&game, i)).and_then(|p| p.get("m_BreathlessnessRTPC").cloned()) {

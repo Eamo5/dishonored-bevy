@@ -476,8 +476,9 @@ impl Exporter<'_> {
                 continue;
             }
             // enum arrays (stored as names): the brain flags an op sets
-            // (`DisSeqAct_AISetBrainFlags`: `EDisAIBrainFlags_*`)
-            if p.name == "m_FlagsToModify" {
+            // (`DisSeqAct_AISetBrainFlags`: `EDisAIBrainFlags_*`), the tutorial trackers one
+            // switches (`DisSeqAct_ToggleTutorial`: `eTutorialTracker_*`)
+            if p.name == "m_FlagsToModify" || p.name == "m_AffectedTutorials" {
                 if let Value::Array { count, offset, .. } = &p.value {
                     let pkg = self.levels[pi].clone();
                     let mut r = upk::Reader::at(&pkg.data, *offset);

@@ -3,8 +3,8 @@
 //! brushed backing. It pops in from the left at 250% (0.2 s), its picture and strokes settling
 //! a moment later; while up its parts drift to and fro (`Anim` 5 s / `AnimLoop` 4.25 s); after
 //! the HUD tweak's `m_fTutorialWindowDuration` it slides out (0.4 s). The picture is
-//! `_img_mc`'s frame: 0 a gear (a tutorial note), 1 a note (mission clues), 2 a rune, 3 a bone
-//! charm.
+//! `_img_mc`'s frame, the entry's `EDisTutorialType` less one: 0 a gear (a tutorial note), 1 a
+//! note (mission clues), 2 a bone charm, 3 a rune.
 
 use crate::flash::{turn_scale, Clip, Cx, FlashClip, Mat, MovieTimelines};
 use crate::GameState;
@@ -21,10 +21,12 @@ impl Plugin for TutWindowPlugin {
     }
 }
 
-/// The pictures (`_img_mc`'s frames).
+/// The pictures (`_img_mc`'s frames: `DTT_TutorialNote`, `DTT_ChapterNote`, `DTT_BoneCharm`,
+/// `DTT_Rune`).
+pub const IMG_GEAR: u8 = 0;
 pub const IMG_NOTE: u8 = 1;
-pub const IMG_RUNE: u8 = 2;
-pub const IMG_CHARM: u8 = 3;
+pub const IMG_CHARM: u8 = 2;
+pub const IMG_RUNE: u8 = 3;
 
 const MOVIE: &str = "HUD";
 const SYMBOL: &str = "hud_tutoWin_";

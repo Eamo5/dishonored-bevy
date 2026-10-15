@@ -124,6 +124,10 @@ pub struct Switches {
     pub systemic_off: bool,
     /// achievements not judged (`DisSeqAct_ToggleAchievementEval`)
     pub achievements_off: bool,
+    /// the tutorial trackers the scripts switched off (`DisSeqAct_ToggleTutorial`'s
+    /// `m_AffectedTutorials`, by `ETutorialTracker`: `crate::tutorials::TRACKERS`)
+    #[serde(default)]
+    pub trackers_off: u8,
 }
 
 /// A choice put to the player by a conversation (its speaker's actor in the low bits) rather
@@ -870,8 +874,6 @@ pub struct Vm {
     pub possess_overrides: Vec<(Vec<Val>, Option<u32>, Option<Vec3>)>,
     /// the rain box set (`DisSeqAct_SetRainEmitter`): op, emitter, drops, start delay
     pub rain: Option<(u32, Vec<Val>, u32, f32)>,
-    /// tutorial messages held back (`DisSeqAct_ToggleTutorial`)
-    pub tutorials_off: bool,
     /// items put in Corvo's hands (`DisSeqAct_EquipItemType`): targets, item class
     pub equip: Vec<(Vec<Val>, String)>,
     /// camera lens effects (`DisSeqAct_SpawnCameraLensEffect`): op, and to start (particle
@@ -1070,7 +1072,6 @@ impl Vm {
             player_track: None,
             lens: Vec::new(),
             equip: Vec::new(),
-            tutorials_off: false,
             rain: None,
             possess_overrides: Vec::new(),
             set_physics: Vec::new(),
@@ -3294,12 +3295,24 @@ impl Vm {
                 self.rain = Some((op, target, drops, delay));
             }
             "DisSeqAct_ToggleTutorial" => {
+                // the trackers it names (`m_AffectedTutorials`: `eTutorialTracker_Block`...):
                 // enable (0), disable (1), toggle (2)
-                self.tutorials_off = match input {
-                    0 => false,
-                    1 => true,
-                    _ => !self.tutorials_off,
+                let mask = match self.prop(op, "m_AffectedTutorials") {
+                    Some(KVal::List(l)) => l
+                        .iter()
+                        .filter_map(|v| if let KVal::Str(s) = v { crate::tutorials::TRACKERS.iter().position(|t| s.trim_start_matches("eTutorialTracker_") == *t) } else { None })
+                        .fold(0u8, |m, i| m | 1 << i),
+                    _ => 0,
                 };
+                let off = &mut self.switches.trackers_off;
+                *off = match input {
+                    0 => *off & !mask,
+                    1 => *off | mask,
+                    _ => *off ^ mask,
+                };
+                if std::env::var("DH_TUTORIAL_LOG").is_ok() {
+                    info!("tutorial: trackers {mask:#04x} {} (off {:#04x})", ["on", "off", "toggled"][input.min(2) as usize], *off);
+                }
                 self.fire(op, 0);
             }
             "DisSeqAct_ShowTargetNotification" => {
@@ -3316,7 +3329,7 @@ impl Vm {
                 self.fire(op, 0);
             }
             "DisSeqAct_SetTutorialMessage" | "DisSeqAct_ShowHUDMessage" => {
-                if input == 0 && !(self.tutorials_off && class == "DisSeqAct_SetTutorialMessage") {
+                if input == 0 {
                     let text = g.ops[op as usize].props.iter().find_map(|(k, v)| match v {
                         KVal::Str(s) if k.contains("Message") || k.contains("Text") => Some(s.clone()),
                         _ => None,
@@ -4588,7 +4601,7 @@ impl Vm {
             inert: Some(self.inert.clone()),
             task_targets: self.task_targets.clone(),
             task_vanish: self.task_vanish.clone(),
-            switches: Some((self.switches.clone(), self.wheel_off, self.tutorials_off)),
+            switches: Some((self.switches.clone(), self.wheel_off, false)),
             music_box: self.music_box.clone(),
             spawn_props: self.spawn_props.clone(),
             joints_broken: self.joints_broken.iter().cloned().collect(),
@@ -4619,10 +4632,9 @@ impl Vm {
         self.events_of = s.events_of;
         self.touching = s.touching.into_iter().collect();
         self.fired_convs = s.fired_convs.into_iter().collect();
-        if let Some((sw, wheel, tut)) = s.switches {
+        if let Some((sw, wheel, _)) = s.switches {
             self.switches = sw;
             self.wheel_off = wheel;
-            self.tutorials_off = tut;
         }
         self.music_box = s.music_box;
         self.spawn_props = s.spawn_props;

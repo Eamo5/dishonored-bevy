@@ -1302,11 +1302,17 @@ fn receive_hits(
                 sword.parry_flash = 0.25;
                 sword.forced_block = 0.3;
                 msgs.push("Parried!");
+                stats.trackers.hints.push(crate::tutorials::Hint::Blocked(true));
             } else {
                 stagger.write(NpcStagger { npc: h.npc, secs: 0.5, parried: false });
                 sword.recoil = 0.25;
+                stats.trackers.hints.push(crate::tutorials::Hint::Blocked(false));
             }
             continue;
+        }
+        // (a blow he might have blocked: the block tutorial's count)
+        if !h.missile && !h.unblockable {
+            stats.trackers.hints.push(crate::tutorials::Hint::BlockMissed);
         }
         let plague = npcs.get(h.npc).is_ok_and(|(n, _)| n.pawn.to_ascii_lowercase().contains("weeper"));
         let mut damage = if plague { (h.damage - attrs.plague_damage_reduction).max(0.0) } else { h.damage };
