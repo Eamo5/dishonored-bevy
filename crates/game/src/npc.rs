@@ -114,6 +114,12 @@ const INNER_SKIRMISH_CAPS: [usize; 4] = [1, 2, 3, 3];
 const FAR_MOVE: f32 = 25.0;
 /// The most such an NPC steps up (m), as its controller's autostep and ground snap.
 const FAR_STEP: f32 = 0.45;
+/// A relaxed walk's start, stop and turn props (the idle speed modes of the
+/// `ArkComponentLocomotionConfig`s: `m_fStraightDist` 70 uu, the path it needs ahead to start and
+/// the mark it stops short of), and where a walk's goal counts as reached once it has stopped
+/// with its clip (`m_fUnaccuracyRadius`, 120 uu), m.
+const WALK_STRAIGHT: f32 = 1.4;
+const UNACCURACY: f32 = 2.4;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
@@ -249,6 +255,13 @@ pub struct Npc {
     /// thrown, in the air on its push before it goes limp (the original's animated throw, its
     /// `PHYS_Flying` moment)
     pub flying: bool,
+    /// its walk begun or ended with its clip; what it wished to go this frame (its path's way, at
+    /// its pace), and its path: how far to its goal and to the path's next point
+    pub pace: Option<Pace>,
+    pub wish: Vec3,
+    pub path: Option<(f32, f32)>,
+    /// stopped with its stop's clip, short of its goal (reached, within `UNACCURACY`)
+    pub halted: bool,
     /// knocked off its feet, limp till it lies still (`ragdoll`), then getting up
     pub floored: bool,
     /// lying still after it, getting up: from its back (or its front)
@@ -698,6 +711,28 @@ pub struct HeadHit;
 /// The shot that just struck was to a leg: its right (or left).
 #[derive(Component, Clone, Copy)]
 pub struct LegHit(pub bool);
+
+/// A relaxed walk begun or ended with its clip (`npc_select_anim`), which carries it meanwhile
+/// (`npc_move`): its clip, how far through, how long; its pace, linear across `ramp` (s) from
+/// `speed[0]` to `speed[1]` (m/s); shown turning into its walk (from, by: radians); and a stop's
+/// way, kept (a start goes its path's).
+#[derive(Clone, Copy, Debug)]
+pub struct Pace {
+    pub clip: ClipId,
+    pub t: f32,
+    pub len: f32,
+    pub ramp: [f32; 2],
+    pub speed: [f32; 2],
+    pub turn: Option<(f32, f32)>,
+    pub way: Option<Vec3>,
+}
+
+impl Pace {
+    fn now(&self) -> f32 {
+        let k = ((self.t - self.ramp[0]) / (self.ramp[1] - self.ramp[0]).max(0.05)).clamp(0.0, 1.0);
+        self.speed[0] + (self.speed[1] - self.speed[0]) * k
+    }
+}
 
 /// How a character is thrown off its feet (the original's `StateNPCMasterThrown`, as roshan's
 /// r614/blink research decoded it): knocked down by a shot or a blast (`PushToRagdoll` group 0,
@@ -1716,6 +1751,10 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         casting: false,
         knock: None,
         flying: false,
+        pace: None,
+        wish: Vec3::ZERO,
+        path: None,
+        halted: false,
         floored: false,
         rise: None,
         leg_hit: None,
@@ -2063,6 +2102,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 holster_in: None,
                 limp_in: None,
                 rise_next: None,
+                walk_phase: f32::NAN,
                 counter: None,
                 gun_phase: GunPhase::Away,
                 gun_t: 0.0,
@@ -3148,7 +3188,9 @@ pub(crate) fn npc_brain(
         }
         match npc.mode {
             Mode::Idle => {
-                npc.target = if pos.distance(npc.home) > 0.6 { Some(npc.home) } else { None };
+                // (stopped short with its stop's clip, it is there)
+                let away = pos.distance(npc.home);
+                npc.target = if away > 0.6 && !(npc.halted && away < UNACCURACY) { Some(npc.home) } else { None };
                 if npc.target.is_none() {
                     // occasionally glance around
                     npc.look = (npc.mode_timer * 0.4).sin() * 0.6;
@@ -3160,7 +3202,8 @@ pub(crate) fn npc_brain(
                     continue;
                 }
                 let goal = npc.route[npc.route_idx];
-                if Vec2::new(pos.x - goal.x, pos.z - goal.z).length() < 0.6 {
+                let away = Vec2::new(pos.x - goal.x, pos.z - goal.z).length();
+                if away < 0.6 || (npc.halted && away < UNACCURACY) {
                     npc.target = None;
                     npc.wait -= dt;
                     if npc.wait <= 0.0 {
@@ -3176,6 +3219,8 @@ pub(crate) fn npc_brain(
                             }
                         }
                         npc.route_idx = next.clamp(0, n - 1) as usize;
+                        // (on to the next: not there till it gets there)
+                        npc.halted = false;
                     }
                 } else {
                     npc.target = Some(goal);
@@ -4099,6 +4144,7 @@ fn npc_move(
         if let (Some(v), Some(p), false) = (lunge, ppos, frozen) {
             wish = (p - pos).with_y(0.0).normalize_or_zero() * v;
         }
+        npc.path = None;
         if !frozen && lunge.is_none() {
             if let Some(goal) = npc.target {
                 // along its path over the navigation mesh (straight at it off the mesh)
@@ -4108,11 +4154,30 @@ fn npc_move(
                 let left = (goal - pos).with_y(0.0).length();
                 let to = (steer - pos).with_y(0.0);
                 let d = to.length();
+                npc.path = Some((left, d));
                 if left > 0.35 && d > 0.05 {
                     wish = to / d * speed * left.min(1.0).max(0.4);
                 }
             }
         }
+        npc.wish = wish;
+        // its walk begun or ended with its clip (`npc_select_anim`): the clip's pace carries it,
+        // a start its path's way, a stop on its way
+        if frozen {
+            npc.pace = None;
+        }
+        let paced = match npc.pace {
+            Some(p) => {
+                wish = p.way.unwrap_or_else(|| wish.normalize_or(npc.forward())) * p.now();
+                let t = p.t + dt;
+                npc.pace = (t < p.len).then_some(Pace { t, ..p });
+                if t >= p.len && p.way.is_some() {
+                    npc.halted = true;
+                }
+                true
+            }
+            None => false,
+        };
         // a weeper's grab: the lunge closes on Corvo, then it stands its ground
         match (npc.grab, ppos) {
             (Some((GrabPhase::Try, el)), Some(p)) if el < 0.55 && npc.stagger <= 0.0 => {
@@ -4126,7 +4191,7 @@ fn npc_move(
             _ => {}
         }
         // stuck handling: sidestep perpendicular to the desired direction
-        if wish.length_squared() > 0.01 {
+        if wish.length_squared() > 0.01 && !paced {
             npc.stuck += dt;
             if npc.stuck > 0.8 {
                 if pos.distance(npc.progress_pos) < 0.3 {
@@ -4142,7 +4207,10 @@ fn npc_move(
             npc.sidestep = (npc.sidestep.abs() - dt).max(0.0) * npc.sidestep.signum();
         }
         let horiz = Vec3::new(npc.velocity.x, 0.0, npc.velocity.z);
-        let new_h = horiz + (wish - horiz) * (if npc.grab.is_some() { 20.0 } else { 8.0 } * dt).min(1.0);
+        let new_h = if paced { wish } else { horiz + (wish - horiz) * (if npc.grab.is_some() { 20.0 } else { 8.0 } * dt).min(1.0) };
+        if new_h.length() > 0.5 && npc.pace.is_none_or(|p| p.way.is_none()) {
+            npc.halted = false;
+        }
         npc.velocity.x = new_h.x;
         npc.velocity.z = new_h.z;
         if npc.grounded {
@@ -4476,6 +4544,13 @@ pub struct NpcClips {
     /// turning where it stands, left then right, by 45, 90, 135 and 180 degrees: relaxed
     /// (`Sword_Patrol_Turn*`, `Empty_Turn*`) and on edge (`Sword_Turn*`)
     turn: [[[Option<ClipId>; 4]; 2]; 2],
+    /// its relaxed walk begun where it stands (`Sword_Patrol_Walk_Start`, `Empty_Walk_Start`),
+    /// ended as its left or right foot lands (`_Walk_StopLeft`, `_StopRight`), and begun turning
+    /// into it, left then right, by 45, 90, 135 and 180 degrees (`_TurnToWalkLeft45`...): its idle
+    /// speed mode's start, stop and turn props
+    walk_start: Option<ClipId>,
+    walk_stop: [Option<ClipId>; 2],
+    turn_to_walk: [[Option<ClipId>; 4]; 2],
     trigger_alarm: Vec<ClipId>,
     corpse_check: Vec<ClipId>,
     /// striking under a table, with the blade and with the pistol
@@ -4665,13 +4740,23 @@ impl NpcClips {
             gun_aim: ["UpLeft", "Up", "UpRight", "CenterLeft", "Center", "CenterRight", "DownLeft", "Down", "DownRight"].map(|d| lib.find(&format!("ADD_Sword_Gun_AimIdle_{d}"))),
             walk_dirs: [None; 3],
             run_dirs: [None; 3],
+            walk_start: None,
+            walk_stop: [None; 2],
+            turn_to_walk: [[None; 4]; 2],
         };
         let dirs = |n: Option<ClipId>, base: &str| -> [Option<(ClipId, f32)>; 3] {
             let Some(prefix) = n.and_then(|n| lib.clip(n).name.strip_suffix(&format!("{base}N")).map(str::to_string)) else { return [None; 3] };
             let way = |d: &str| lib.find(&format!("{prefix}{base}{d}")).map(|c| (c, 1.0)).or_else(|| lib.find(&format!("{prefix}{base}{d}_Revert")).map(|c| (c, -1.0)));
             [lib.find(&format!("{prefix}{base}E")).map(|c| (c, 1.0)), way("S"), way("W")]
         };
-        let c = NpcClips { walk_dirs: dirs(c.walk_alert, "Walk"), run_dirs: dirs(c.run, "Run"), ..c };
+        // (its relaxed walk's start, stops and turns into it, by its walk's prefix:
+        // `Sword_Patrol_`, `Empty_`)
+        let relaxed = c.walk.and_then(|w| lib.clip(w).name.strip_suffix("WalkN").map(str::to_string));
+        let relaxed = |n: &str| relaxed.as_ref().and_then(|p| lib.find(&format!("{p}{n}")));
+        let walk_start = relaxed("Walk_Start");
+        let walk_stop = ["Left", "Right"].map(|s| relaxed(&format!("Walk_Stop{s}")));
+        let turn_to_walk = ["Left", "Right"].map(|s| ["45", "90", "135", "180"].map(|a| relaxed(&format!("TurnToWalk{s}{a}"))));
+        let c = NpcClips { walk_dirs: dirs(c.walk_alert, "Walk"), run_dirs: dirs(c.run, "Run"), walk_start, walk_stop, turn_to_walk, ..c };
         // (a musical Overseer kicks, its hands on its music box: `MusicBox_Attack_KickMedium`,
         // its music box's set alone has it)
         let c = match lib.first(&["MusicBox_Attack_KickMedium"]) {
@@ -4755,6 +4840,8 @@ pub struct NpcAnim {
     limp_in: Option<(f32, Vec3)>,
     /// up again from where it lay: its stun's recovery to come
     rise_next: Option<ClipId>,
+    /// how far through its relaxed walk's loop (0..1; NaN not walking it): its feet landing
+    walk_phase: f32,
     /// its bow drawn (a tallboy's)
     bow_drawn: bool,
     /// dodging to a side (its clip) with its slash to come
@@ -4995,7 +5082,7 @@ fn npc_select_anim(
         anim.time_scale = scale;
         // turning where it stands, it is shown turned as far as its turn has gone (in plain idle
         // only: anything else shows its facing as it is)
-        let plain = !npc.is_down() && !npc.casting && !npc.floored && npc.rise.is_none() && npc.attack_t.is_none() && npc.aim.is_none() && npc.gun_hold <= 0.0 && npc.grab.is_none() && !st.oneshot && npc.anim_speed < 0.3;
+        let plain = !npc.is_down() && !npc.casting && !npc.floored && npc.rise.is_none() && npc.attack_t.is_none() && npc.aim.is_none() && npc.gun_hold <= 0.0 && npc.grab.is_none() && !st.oneshot && (npc.anim_speed < 0.3 || npc.pace.is_some());
         if !plain || !st.shown_yaw.is_finite() {
             st.turn = None;
             st.shown_yaw = npc.yaw;
@@ -6008,6 +6095,82 @@ fn npc_select_anim(
                     anim.restart_upper(c, false, 1.0, 0.3);
                 }
             }
+        }
+        // a relaxed walk begun and ended with its clips: its idle speed mode's start, stop and turn
+        // props (`m_StartAnimProps`, `m_StopAnimProps`, the `TurnToWalk` turns), by the
+        // locomotion component's rules as roshan's r614/blink research decoded them; its clip
+        // carries it meanwhile (`npc_move`), shown turning across a turn into the walk
+        let relaxed = !alert && matches!(npc.mode, Mode::Idle | Mode::Patrol) && !far && !musical && npc.stagger <= 0.0 && npc.attack_t.is_none() && npc.grounded;
+        if let Some(p) = npc.pace {
+            if relaxed && anim.current().is_some_and(|c| c.clip == p.clip) {
+                match p.turn {
+                    Some((from, by)) => st.shown_yaw = from + by * ease(p.t / p.len),
+                    // (a stop: shown as it was going)
+                    None if p.way.is_some() => {}
+                    None => st.shown_yaw = npc.yaw,
+                }
+                continue;
+            }
+            npc.pace = None;
+        }
+        let loco_log = std::env::var("DH_LOCO_LOG").is_ok();
+        // (from where it stands, the way within 15 degrees of its facing, its path straight ahead
+        // further than the props' straight distance: its start; further round, its turn into the
+        // walk by the nearest 45 degrees, as far round as it is)
+        if relaxed && sp < 0.3 && st.turn.is_none() && npc.wish.length_squared() > 0.01 && npc.path.is_some_and(|(_, next)| next > WALK_STRAIGHT) {
+            let way = (-npc.wish.x).atan2(-npc.wish.z);
+            let off = (way - st.shown_yaw + PI).rem_euclid(TAU) - PI;
+            let pick = if off.abs() <= 15f32.to_radians() {
+                clips.walk_start.map(|c| (c, None))
+            } else {
+                let i = ((off.abs().to_degrees() / 45.0).round() as usize).clamp(1, 4) - 1;
+                clips.turn_to_walk[(off < 0.0) as usize][i].map(|c| (c, Some((st.shown_yaw, off))))
+            };
+            if let Some((c, turn)) = pick {
+                let len = lib.duration(c);
+                let walk = npc.gait[0].max(0.3);
+                // (still, then up to its walk's pace by the clip's end, as far as the clip goes)
+                let hold = (len - 2.0 * lib.root_speed(c) * len / walk).clamp(0.0, len * 0.8);
+                anim.restart(c, false, 1.0, 0.1);
+                npc.pace = Some(Pace { clip: c, t: 0.0, len, ramp: [hold, len], speed: [0.0, walk], turn, way: None });
+                if turn.is_some() {
+                    npc.yaw = way;
+                }
+                st.walk_phase = f32::NAN;
+                if loco_log {
+                    info!("loco: {} starts walking with {} ({:.0} deg round, {hold:.2} s still)", npc.name, lib.clip(c).name, off.to_degrees());
+                }
+                continue;
+            }
+        }
+        // (walking to where it stops, the way within 22.5 degrees of its facing: as a foot lands,
+        // the left half through its walk's loop and the right at its start (the stops'
+        // `m_fMoveAnimIn`), its stop for that foot, unless the next lands nearer the stop's mark,
+        // the props' straight distance short of its goal)
+        let walking = anim.current().filter(|c| relaxed && npc.pace.is_none() && sp > 0.6 && Some(c.clip) == clips.walk);
+        match (walking, npc.path) {
+            (Some(cur), Some((left, _))) => {
+                let ph = (cur.t / lib.duration(cur.clip)).rem_euclid(1.0);
+                let was = std::mem::replace(&mut st.walk_phase, ph);
+                let foot = if was < 0.5 && ph >= 0.5 { Some(0) } else if ph < was { Some(1) } else { None };
+                let way = (-npc.wish.x).atan2(-npc.wish.z);
+                let ahead = npc.wish.length_squared() > 0.01 && ((way - npc.yaw + PI).rem_euclid(TAU) - PI).abs() <= 22.5f32.to_radians();
+                let next = npc.stride * 0.5;
+                if let Some(c) = foot.and_then(|f| clips.walk_stop[f]).filter(|_| ahead && left < UNACCURACY && left - WALK_STRAIGHT < next * 0.5) {
+                    let len = lib.duration(c);
+                    let v0 = npc.velocity.with_y(0.0).length().max(0.3);
+                    // (down from its pace to a stop as far as the clip goes)
+                    let by = (2.0 * lib.root_speed(c) * len / v0).clamp(0.2, len);
+                    anim.restart(c, false, 1.0, 0.1);
+                    npc.pace = Some(Pace { clip: c, t: 0.0, len, ramp: [0.0, by], speed: [v0, 0.0], turn: None, way: Some(npc.forward()) });
+                    st.walk_phase = f32::NAN;
+                    if loco_log {
+                        info!("loco: {} stops with {} {left:.2} m short of its goal (its walk {was:.2} -> {ph:.2}, t {:.2})", npc.name, lib.clip(c).name, cur.t);
+                    }
+                    continue;
+                }
+            }
+            _ => st.walk_phase = f32::NAN,
         }
         // turning where it stands: a turn of more than 40 degrees with its turn's clip for the
         // nearest of 45, 90, 135 or 180 degrees, its body shown turning across it; less, gliding

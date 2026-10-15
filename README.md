@@ -409,6 +409,18 @@ fullscreen display, vertical sync and the crosshair.
   or 180 degrees to its side (`Sword_Patrol_Turn*` / `Empty_Turn*` relaxed, `Sword_Turn*` on
   edge), the body shown turning across the clip (its facing for the game turned at once); less,
   it glides round.
+  A relaxed walker (patrolling, or going back to its post) starts, stops and turns into its walk
+  with its clips (its idle speed mode's start, stop and turn props in the
+  `ArkComponentLocomotionConfig`s, by the locomotion component's rules as roshan's r614/blink
+  research decoded them). From where it stands, with its path straight ahead past the props'
+  straight distance (70 uu), it starts with `Sword_Patrol_Walk_Start` / `Empty_Walk_Start`
+  within 15 degrees of its way, or else turns into the walk by the nearest 45, 90, 135 or 180
+  degrees (`_TurnToWalkLeft90`...). Walking to where it will stand, its way ahead within 22.5
+  degrees, it stops as a foot lands: `_Walk_StopLeft` half through its walk's loop,
+  `_StopRight` at its start (the stops' `m_fMoveAnimIn`). It waits for the foot that brings it
+  nearest the mark the straight distance short of its goal, and once stopped it is there (within
+  `m_fUnaccuracyRadius`, 120 uu). The clip carries it meanwhile: still, then up to its walk's
+  pace, or down from it to a stop, as far as the clip's root goes.
   A patrolling or guarding character plays an ambient idle of the set it stands in, any the set
   has (a guard's `Sword_Patrol_Idle_01` to `_04`, empty hands' `Empty_Idle_01` to `_08`, a tall
   thug's `Empty_Idle02`, `05`, `07`), every 30-60 s on its upper body, walking
