@@ -147,6 +147,16 @@ impl Data {
     pub fn charm(&self, name: &str) -> Option<(&CharmDef, usize)> {
         self.0.charms.iter().find_map(|c| c.levels.iter().position(|l| l.0 == name).map(|i| (c, i)))
     }
+    /// Whether a bone charm worn, and a passive power owned, raise an attribute (the HUD's
+    /// gauges show either: a whale bone charm's `Attribute_HealthMax` modifier, Vitality's).
+    pub fn raised_by(&self, name: &str, powers: &BTreeMap<String, u8>, charms: &[String]) -> (bool, bool) {
+        let charm = charms.iter().any(|c| self.charm(c).is_some_and(|(d, _)| d.attribute == name));
+        let power = self.0.passives.iter().any(|p| {
+            let lvl = powers.get(&p.name).copied().unwrap_or(0) as usize;
+            lvl > 0 && p.levels.get(lvl).is_some_and(|l| l.mods.iter().any(|m| m.attribute == name))
+        });
+        (charm, power)
+    }
     /// A player attribute: the difficulty's base value, modified by the passive powers owned
     /// (each level lists its full set of modifiers) and the bone charms worn.
     pub fn attribute(&self, name: &str, difficulty: u8, powers: &BTreeMap<String, u8>, charms: &[String]) -> f32 {

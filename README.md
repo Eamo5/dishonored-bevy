@@ -866,7 +866,17 @@ fullscreen display, vertical sync and the crosshair.
   amount (tweened 0.45 s) with a pointer at the level and a glow that pulses (15-40% over
   2.25 s, 35-75% over 0.55 s once under the HUD tweak's `m_LowHealthThreshold` 30% /
   `m_LowManaThreshold` 19%), and the left hand's power or weapon (`itemIcons`) beside them
-  with its ammunition (a small UI material stands in for the shards' `mask_mc`).
+  with its ammunition (a small UI material stands in for the shards' `mask_mc`). As roshan's
+  r614/blink research read the movie and its native caller, what will come back by itself
+  shows beyond the amount at half brightness (`maskRegen_mc`: health up to its regeneration's
+  limit, mana up to the cap its last spending left). A shard raised by a whale bone charm
+  (`Attribute_HealthMax`, `Attribute_ManaMax`), by Vitality, or by both grows by its frame
+  (`upgd2`, `upgd4`, `upgd6`): a piece more at its tip, back, fills and outline, and its masks
+  taller (the health's 1.04 to 1.13, 1.14, 1.23 times their 195; the mana's 0.85 to 1). A
+  drink flashes its shard as the shard's `refill_mc` does (its colour transforms at the movie's
+  30 frames a second: the health's white twice, then fading; the mana's blue-white twice), cut
+  to the shard's own outline (the movie's mask is a vector shape; the glints crossing it are
+  left out).
 - **The pickup log** (`pickuplog.rs`, the HUD movie's `PickupLog` class): what Corvo picks
   up comes in at the right of the screen (its name and small item icon, `UI_ItemIcons_Small`,
   over a brush stroke; sliding in over 0.4 s), the older entries rise a slot and dim (60%,
