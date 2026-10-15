@@ -2,7 +2,8 @@
 //! objective whose target the level scripts set (`DisSeqAct_UpdateTaskTarget`) gets the HUD
 //! movie's `objectiveMarker_primary` over its target (following a character), as the HUD
 //! tweak's `m_TaskMarkerSettings` place it: 10 units above it, at 90% from 100 m growing to
-//! 150% at 5 m, fading out within 10 m, its description (`_description_mc`: the distance, the
+//! 150% at 5 m, fading out within 10 m (or as the target's vanish preset has it:
+//! `m_TaskMarkerSpecificSettings`' `VeryClose` within 4 m, `Never` not at all), its description (`_description_mc`: the distance, the
 //! body font at 21 over its brushed backing) shown while it is near the middle of the screen
 //! (`m_fMarkerFocusDistance`); off the screen it is not kept at its edge
 //! (`m_bKeepBBInMarkerArea`).
@@ -39,6 +40,9 @@ const SYMBOL_OPTIONAL: &str = "objectiveMarker_secondary";
 const OFFSET_Z: f32 = 0.1;
 const SCALE: (f32, f32, f32, f32) = (100.0, 5.0, 0.9, 1.5);
 const ALPHA_FROM: f32 = 10.0;
+/// `m_TaskMarkerSpecificSettings`' `m_VanishPreset_VeryClose` (400 units full to 0 at none; its
+/// `m_VanishPreset_Never` is full throughout)
+const ALPHA_FROM_VERY_CLOSE: f32 = 4.0;
 /// `m_fMarkerFocusDistance` (stage units from the middle)
 const FOCUS: f32 = 225.0;
 /// the description's text (`_description_mc.txt`, centred, its top above the marker)
@@ -73,20 +77,21 @@ struct Marker(usize, bool);
 struct MarkerText(usize);
 
 /// Where the visible active tasks of the current objectives point (a character where it
-/// stands now, by its spawner): marker positions.
-pub fn task_points(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: impl Fn(u32) -> Option<Vec3>) -> Vec<(Vec3, bool)> {
-    task_targets(vm, npc_at, pickup_at).into_iter().map(|t| (t.0, t.3)).collect()
+/// stands now, by its spawner): marker positions, whether optional, the vanish preset.
+pub fn task_points(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: impl Fn(u32) -> Option<Vec3>) -> Vec<(Vec3, bool, u8)> {
+    task_targets(vm, npc_at, pickup_at).into_iter().map(|t| (t.0, t.3, t.4)).collect()
 }
 
 /// The task markers, and the actors and pickups they are (a pickup where it is now: a key on a
-/// guard's belt), and whether they are an optional objective's.
-pub fn task_targets(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: impl Fn(u32) -> Option<Vec3>) -> Vec<(Vec3, Option<u32>, u32, bool)> {
-    let mut points: Vec<(Vec3, Option<u32>, u32, bool)> = Vec::new();
+/// guard's belt), whether they are an optional objective's, and their vanish presets
+/// (`Vm::task_vanish`).
+pub fn task_targets(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: impl Fn(u32) -> Option<Vec3>) -> Vec<(Vec3, Option<u32>, u32, bool, u8)> {
+    let mut points: Vec<(Vec3, Option<u32>, u32, bool, u8)> = Vec::new();
     // (the challenges' marks: `DisSeqAct_DLC05_MarkerControl`)
     for &a in &vm.dlc_markers {
         let Some(ka) = vm.g.actors.get(a as usize) else { continue };
         let at = ka.spawner.and_then(&npc_at).map(|p| p + Vec3::Y * 1.1).unwrap_or(Vec3::from(ka.position) + Vec3::Y * 0.5);
-        points.push((at, ka.pickup, a, false));
+        points.push((at, ka.pickup, a, false, 0));
     }
     for path in &vm.objectives {
         let Some(o) = vm.g.objectives.iter().find(|o| o.path == *path) else { continue };
@@ -103,7 +108,7 @@ pub fn task_targets(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: im
             // (its targets: `path`, then `path#1`...)
             let mut targets: Vec<(&String, u32)> = vm.task_targets.iter().filter(|(k, _)| **k == task.path || k.strip_prefix(task.path.as_str()).is_some_and(|r| r.starts_with('#'))).map(|(k, v)| (k, v.0)).collect();
             targets.sort();
-            for (_, a) in targets {
+            for (key, a) in targets {
                 let Some(ka) = vm.g.actors.get(a as usize) else { continue };
                 // (a pickup no longer there: taken)
                 let pickup = ka.pickup.map(|p| pickup_at(p));
@@ -117,12 +122,22 @@ pub fn task_targets(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: im
                     .or_else(|| pickup.flatten().map(|p| p + Vec3::Y * 0.3))
                     .unwrap_or(Vec3::from(ka.position) + Vec3::Y * 0.5);
                 if !points.iter().any(|p| p.0.distance(at) < 1.0) {
-                    points.push((at, ka.pickup, a, o.optional));
+                    points.push((at, ka.pickup, a, o.optional, vm.task_vanish.get(key).copied().unwrap_or(0)));
                 }
             }
         }
     }
     points
+}
+
+/// A task marker's opacity at `d` metres: the target's vanish preset (1 `VeryClose`, 2
+/// `Never`), else the marker's own fade.
+fn task_alpha(d: f32, vanish: u8) -> f32 {
+    match vanish {
+        1 => (d / ALPHA_FROM_VERY_CLOSE).clamp(0.0, 1.0),
+        2 => 1.0,
+        _ => (d / ALPHA_FROM).clamp(0.0, 1.0),
+    }
 }
 
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -176,7 +191,7 @@ fn update_markers(
     let fwd = cg.forward().as_vec3();
     for (mut m, mut fc, mut node, mut vis) in &mut markers {
         // an optional objective's marker is the other symbol
-        if let Some(&(_, optional)) = points.get(m.0) {
+        if let Some(&(_, optional, _)) = points.get(m.0) {
             if optional != m.1 {
                 m.1 = optional;
                 let tl = fc.tl.clone();
@@ -204,7 +219,7 @@ fn update_markers(
         // the tweak's variations by distance
         let k = ((SCALE.0 - d) / (SCALE.0 - SCALE.1)).clamp(0.0, 1.0);
         let scale = SCALE.2 + (SCALE.3 - SCALE.2) * k;
-        let alpha = (d / ALPHA_FROM).clamp(0.0, 1.0);
+        let alpha = task_alpha(d, points.get(m.0).map_or(0, |p| p.2));
         let focused = (pos - mid).length() / s < FOCUS;
         node.left = Val::Px(pos.x);
         node.top = Val::Px(pos.y);
@@ -372,5 +387,22 @@ fn heart_markers(
                 *tv = want;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::task_alpha;
+
+    #[test]
+    fn vanish_presets_fade_as_the_tweak_has_them() {
+        // the marker's own: full from 10 m, none at the target
+        assert_eq!(task_alpha(12.0, 0), 1.0);
+        assert!((task_alpha(5.0, 0) - 0.5).abs() < 1e-6);
+        // `VeryClose`: still full at 5 m, half at 2 m
+        assert_eq!(task_alpha(5.0, 1), 1.0);
+        assert!((task_alpha(2.0, 1) - 0.5).abs() < 1e-6);
+        // `Never`: full at the target
+        assert_eq!(task_alpha(0.0, 2), 1.0);
     }
 }

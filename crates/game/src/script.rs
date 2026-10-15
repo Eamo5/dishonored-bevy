@@ -447,7 +447,7 @@ fn run_script(
                     .map(|vm| crate::markers::task_targets(vm, |s| npcs.iter().find(|(f, _)| *f == s).map(|(_, p)| *p), |i| items.iter().find(|(k, _)| *k == i).map(|(_, p)| *p)))
                     .unwrap_or_default();
                 match pts.get(pick) {
-                    Some(&(p, pickup, actor, _)) => {
+                    Some(&(p, pickup, actor, _, _)) => {
                         info!("script: goto task marker {pick} at {p:.2}");
                         let mut g = w.resource_mut::<Goto>();
                         g.goal = Some(p - Vec3::Y * 0.5);
@@ -1858,7 +1858,7 @@ fn run_script(
                 info!("script: nearest pocket at {:.2} d {:.2} owner {:?}", pt.translation, pt.translation.distance(t.translation), owner);
             }
             if let Some(vm) = vm.as_ref() {
-                info!("script: objectives {:?} targets {:?}", vm.objectives, vm.task_targets.iter().map(|(k, v)| (k.rsplit('.').next().unwrap_or(k).to_string(), v.1.clone(), vm.tasks.get(k).copied())).collect::<Vec<_>>());
+                info!("script: objectives {:?} targets {:?}", vm.objectives, vm.task_targets.iter().map(|(k, v)| (k.rsplit('.').next().unwrap_or(k).to_string(), v.1.clone(), vm.tasks.get(k).copied(), vm.task_vanish.get(k).copied().unwrap_or(0))).collect::<Vec<_>>());
             }
             for (tp, tt) in &traps {
                 if tt.translation.distance(t.translation) < 30.0 {

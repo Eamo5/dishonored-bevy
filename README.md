@@ -1121,7 +1121,11 @@ fullscreen display, vertical sync and the crosshair.
   tweak's `m_TaskMarkerSettings` place it — 10 units above, 90% far off growing to 150% near,
   fading out within 10 m — with its distance on the description's brushed backing while it
   is near the middle of the screen (`m_fMarkerFocusDistance`); off screen it is not shown
-  (`m_bKeepBBInMarkerArea`). `DH_MARKER_LOG=1` logs where they point.
+  (`m_bKeepBBInMarkerArea`). A target's vanish preset (`m_MarkerVanishPreset`, the HUD tweak
+  `Twk_InGameUI.Twk_GFxMoviePlayerHUD`'s `m_TaskMarkerSpecificSettings`) fades it otherwise:
+  `VeryClose` only within the last 4 m (a whale oil receptacle, Emily), `Never` not at all
+  (Granny Rags' furnace, the Boyles). `DH_MARKER_LOG=1` logs where they point and how they
+  fade.
 - **Mission openings**: the level scripts' autosaves (`DisSeqAct_AutoSave`) go through (to
   the Autosave slot), so each mission's opening runs as in the original: Samuel's boat
   carries Corvo in (the player's matinee group rides the boat's bone; he steps off at the

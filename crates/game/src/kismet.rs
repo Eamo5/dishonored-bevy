@@ -558,6 +558,9 @@ pub struct VmSave {
     /// tasks' marker targets
     #[serde(default)]
     task_targets: HashMap<String, (u32, String)>,
+    /// and their vanish presets
+    #[serde(default)]
+    task_vanish: HashMap<String, u8>,
     /// the scripts' switches (and the wheel's and tutorials')
     #[serde(default)]
     switches: Option<(Switches, bool, bool)>,
@@ -667,6 +670,9 @@ pub struct Vm {
     pub tasks: HashMap<String, (TaskState, bool)>,
     /// where each task's marker points (`DisSeqAct_UpdateTaskTarget`): actor, label
     pub task_targets: HashMap<String, (u32, String)>,
+    /// how a target's marker fades as Corvo nears (its `m_MarkerVanishPreset`,
+    /// `EDisTaskMarkerVanishPreset`: 1 `DTTVP_VeryClose`, 2 `DTTVP_Never`; none: the marker's own)
+    pub task_vanish: HashMap<String, u8>,
     pub travel: Option<String>,
     trace: bool,
     /// spawner index -> actor
@@ -982,6 +988,7 @@ impl Vm {
             objectives: Vec::new(),
             tasks: HashMap::new(),
             task_targets: HashMap::new(),
+            task_vanish: HashMap::new(),
             travel: None,
             trace: std::env::var("DH_KISMET_TRACE").is_ok(),
             spawner_actor: HashMap::new(),
@@ -3371,18 +3378,32 @@ impl Vm {
                 let label = self.ps(op, "m_TargetName").unwrap_or_default();
                 // (a task can have several: the three walkway keys; the others are `path#index`)
                 let index = self.pi(op, "m_TargetIndex").unwrap_or(0);
+                let vanish = match self.ps(op, "m_MarkerVanishPreset").as_deref() {
+                    Some("DTTVP_VeryClose") => 1,
+                    Some("DTTVP_Never") => 2,
+                    _ => 0,
+                };
                 for v in self.read(op, "Task") {
                     let Val::Str(path) = v else { continue };
                     let key = if index > 0 { format!("{path}#{index}") } else { path };
-                    match (input, target) {
-                        (0, Some(a)) => {
-                            self.task_targets.insert(key, (a, label.clone()));
+                    let set = match (input, target) {
+                        (0, Some(a)) => Some(a),
+                        (2, Some(a)) if !self.task_targets.contains_key(&key) => Some(a),
+                        (2, Some(_)) => continue,
+                        _ => None,
+                    };
+                    match set {
+                        Some(a) => {
+                            self.task_targets.insert(key.clone(), (a, label.clone()));
+                            if vanish > 0 {
+                                self.task_vanish.insert(key, vanish);
+                            } else {
+                                self.task_vanish.remove(&key);
+                            }
                         }
-                        (2, Some(a)) if !self.task_targets.contains_key(&key) => {
-                            self.task_targets.insert(key, (a, label.clone()));
-                        }
-                        _ => {
+                        None => {
                             self.task_targets.remove(&key);
+                            self.task_vanish.remove(&key);
                         }
                     }
                 }
@@ -4566,6 +4587,7 @@ impl Vm {
             fired_convs: self.fired_convs.iter().cloned().collect(),
             inert: Some(self.inert.clone()),
             task_targets: self.task_targets.clone(),
+            task_vanish: self.task_vanish.clone(),
             switches: Some((self.switches.clone(), self.wheel_off, self.tutorials_off)),
             music_box: self.music_box.clone(),
             spawn_props: self.spawn_props.clone(),
@@ -4589,6 +4611,7 @@ impl Vm {
         self.objectives = s.objectives;
         self.tasks = s.tasks;
         self.task_targets = s.task_targets;
+        self.task_vanish = s.task_vanish;
         self.travel = s.travel;
         self.convs = s.convs;
         self.time = s.time;
@@ -4621,6 +4644,7 @@ impl Vm {
     pub fn restore_level_state(&mut self, s: VmSave) -> bool {
         let (flags, objectives, tasks, task_targets, travel, switches) =
             (self.flags.clone(), self.objectives.clone(), self.tasks.clone(), self.task_targets.clone(), self.travel.clone(), self.switches.clone());
+        let task_vanish = self.task_vanish.clone();
         let campaign = self.campaign_state();
         if !self.restore_state(s) {
             return false;
@@ -4629,6 +4653,7 @@ impl Vm {
         self.objectives = objectives;
         self.tasks = tasks;
         self.task_targets = task_targets;
+        self.task_vanish = task_vanish;
         self.travel = travel;
         self.switches = switches;
         if let Some((vals, st)) = campaign {
