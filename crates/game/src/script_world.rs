@@ -1314,13 +1314,21 @@ fn give_pickup(props: &std::collections::BTreeMap<String, KVal>, data: &crate::g
     let path = s("m_pPickup");
     let name = path.rsplit('.').next().unwrap_or("").to_string();
     let lname = name.to_ascii_lowercase();
-    // a tutorial: its note to the journal (the scripts' own tutorial message points to it)
-    if let Some(topic) = name.strip_suffix("_PickUp").filter(|t| t.ends_with("Tutorial")) {
-        let note = format!("abstract_items.{topic}_Note");
-        if data.0.abstract_items.contains_key(&note) && !stats.notes.contains(&note) {
-            stats.notes.push(note);
-        }
+    // a tutorial (`DisTweaks_AbstractItemPickupNote`'s `m_TutorialNote`): its note kept to read
+    // again from the pause menu's help, and read now with the journal's key while the scripts'
+    // message to (`Press GBA_Journal to view ...`) is up
+    if let Some(KVal::Str(id)) = props.get("pickup_tutorial") {
+        crate::tutorials::received(stats, id);
         return;
+    }
+    if name.ends_with("Tutorial_PickUp") {
+        return;
+    }
+    // (an item bringing its own: the rewire tool's)
+    if let Some(KVal::Str(item)) = props.get("pickup_item") {
+        if let Some(id) = data.0.item_tutorials.get(item.rsplit('.').next().unwrap_or(item)).cloned() {
+            crate::tutorials::received(stats, &id);
+        }
     }
     let mut gave = false;
     if let Some(KVal::Int(health)) = props.get("pickup_food_health") {

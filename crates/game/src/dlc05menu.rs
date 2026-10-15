@@ -499,7 +499,7 @@ fn draw(
                         let zone = fc.size("_viewport_mc._scrollView_mc._zone_mc").unwrap_or(Vec2::new(1090.0, 568.0));
                         let k = (zone.x / natural.x.max(1.0)).min(zone.y / natural.y.max(1.0));
                         let size = natural * k;
-                        fc.images.insert("_viewport_mc._scrollView_mc._imgLoader_mc".into(), LoadedImage { image, size, at: -size * 0.5 });
+                        fc.images.insert("_viewport_mc._scrollView_mc._imgLoader_mc".into(), LoadedImage { image, size, at: -size * 0.5, replace: false });
                     }
                     if was.is_none() {
                         fc.set("_viewport_mc", PropsTo::default().alpha(0.0).scale(1.1));

@@ -3048,6 +3048,16 @@ pub fn sanitize(path: &str) -> String {
         .to_ascii_lowercase()
 }
 
+/// A tutorial note (`DisTutorialNoteContent`): its `EDisTutorialNote` name (`DTN_Stealth`), its
+/// own name (its texts `t_tuto_<name>_title`, `_0`.., its page in the note movie's tutorial
+/// clip) and its pictures' package (`UI_Tuto_Stealth`: `tuto_stealth_0`..).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct TutorialNote {
+    pub id: String,
+    pub name: String,
+    pub image: String,
+}
+
 /// An audiograph (`DisAbstractItemAudioLog`): its card's name and words, and the recording it
 /// plays (its speaker's `Dlg_AudioGraphs` tree: the `DisConv_Hook_PlayAudioLog` link of its
 /// `m_AudioLogName`, its blurbs' Wwise events and words).
@@ -3199,6 +3209,13 @@ pub struct GameData {
     /// (`Localization/INT/*.int`)
     #[serde(default)]
     pub abstract_items: std::collections::BTreeMap<String, (String, String)>,
+    /// The tutorial notes, by `EDisTutorialNote` (`DisGFxMoviePlayerNote`'s `m_TutorialNotes`)
+    #[serde(default)]
+    pub tutorial_notes: Vec<TutorialNote>,
+    /// the abstract items that bring a tutorial note (`DisAbstractItem`'s `m_TutorialNote`: the
+    /// blueprints', the rewire tool's), by their object's name
+    #[serde(default)]
+    pub item_tutorials: std::collections::BTreeMap<String, String>,
     /// where the journal shows each abstract item (`m_JournalDisplaySection`: `DJIS_Mission`,
     /// `DJIS_Note`, `DJIS_None`...) and its picture (`m_JournalIconName`), by the same keys
     #[serde(default)]

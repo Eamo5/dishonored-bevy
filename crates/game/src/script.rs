@@ -868,6 +868,13 @@ fn run_script(
             let (name, n) = crate::gadgets::give_ammo(&mut stats, &attrs, ty, n);
             info!("script: {name} +{n}");
         }
+        "tutnote" => {
+            // (tests) tutnote DTN_NAME: a tutorial note received, as a pickup hands it over
+            if let Some(id) = cmd.get(1) {
+                crate::tutorials::received(&mut stats, id);
+                info!("script: tutnote {id}");
+            }
+        }
         "elixirs" => {
             // Set a test inventory to exercise full and partially full pickups.
             let mana = cmd.get(1).is_some_and(|s| s == "mana");

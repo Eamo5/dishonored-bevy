@@ -361,6 +361,20 @@ fullscreen display, vertical sync and the crosshair.
   once to learn their lines and shown a window of whole lines at a time, tilted as the
   original's (a turned node can't be clipped here: its overflow came out garbled), so the long
   books read to their end.
+- **Tutorial notes and the pause menu's tutorials** (`tutorials.rs`, `helpscreen.rs`): the
+  level scripts hand a tutorial over with a pickup (`DisSeqAct_GivePickup` of a
+  `DisTweaks_AbstractItemPickupNote`: its `m_TutorialNote`, an `EDisTutorialNote`) and put up
+  their message to read it ("Press J to view the Combat Tutorial"); the blueprints and the
+  rewire tool bring their own (`DisAbstractItem`'s `m_TutorialNote`). While the message is up
+  (`m_fTutorialDuration`, 10 s) the journal's key reads it as `UI_Note` shows it, its
+  tutorial page (`n_Tutorial`): the note's content at its label (`DisGFxMoviePlayerNote`'s
+  `m_TutorialNotes`: its name and pictures' package), its pictures from `UI_Tuto_*`
+  (`tuto_<note>_<n>`, the keyboard's where there is one) loaded into its `img<n>` in place of
+  their stand-ins, its words (`t_tuto_<note>_<n>`, the keyboard's own) in its fields with the
+  keys bound, its title (`t_tuto_<note>_title`) on the brush. Each is kept: the pause menu's
+  TUTORIALS (`t_Help`) lists them as `UI_PauseMenu` draws its `p_tuto_screen` over the pause
+  backdrop (a `p_tuto_list_item` each, the chosen one `over`), and choosing one reads it again;
+  Escape goes back to the list. `tutnote DTN_NAME` hands one over in test scripts.
 - **The menus' questions and the saving icon as `UI_Global` draws them** (`msgbox.rs`,
   `globalui.rs`): overwriting a save, loading one, leaving for the main menu or Windows,
   starting a new game over autosaves and restoring a category's settings ask first with the

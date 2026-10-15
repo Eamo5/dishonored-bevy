@@ -375,6 +375,14 @@ pub struct PlayerStats {
     pub counters: std::collections::BTreeMap<String, u32>,
     /// chapter notes and other journal entries (abstract item names)
     pub notes: Vec<String>,
+    /// the tutorial notes received (`EDisTutorialNote` names), to read again from the pause
+    /// menu's help
+    #[serde(default)]
+    pub tutorials: Vec<String>,
+    /// the tutorial just received, while its prompt to read it is up (its name, seconds left):
+    /// the journal's key reads it
+    #[serde(skip)]
+    pub tutorial_prompt: Option<(String, f32)>,
     /// the keys on Corvo's ring (`DisKeyRing`: names doors' `m_MatchingKeys` list)
     #[serde(default)]
     pub keys: Vec<String>,
@@ -689,6 +697,8 @@ impl Default for PlayerStats {
             bodies_found: 0,
             counters: Default::default(),
             notes: Vec::new(),
+            tutorials: Vec::new(),
+            tutorial_prompt: None,
             keys: Vec::new(),
             unarmed: false,
             sheathed: false,

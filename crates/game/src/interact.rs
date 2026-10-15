@@ -754,6 +754,13 @@ pub fn use_focus(
                 }
                 plog.add("Blueprint", Some("BluePrint_Small"));
                 msgs.push("Blueprint found: bring it to Piero");
+                // (the blueprints' tutorial, `m_TutorialNote`, the first time: the journal's
+                // key reads it while its message is up)
+                if let Some(id) = data.0.item_tutorials.get(bp.as_str()).cloned() {
+                    if crate::tutorials::received(&mut stats, &id) {
+                        msgs.push(format!("{} {}", crate::bindings::hint(crate::bindings::Act::Journal), data.text("DisGFxMoviePlayerMenuBase_Texts", "t_ReadTutorial")));
+                    }
+                }
             }
             PickupKind::Weapon(item, ammo) => {
                 // his sword back (the Prison's), or a pistol before the Hound Pits' crossbow

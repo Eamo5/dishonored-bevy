@@ -122,6 +122,8 @@ mod tallboy;
 mod plague;
 mod dock;
 mod elixirs;
+mod tutorials;
+mod helpscreen;
 mod pickuplog;
 mod targetcard;
 mod gauges;
@@ -252,6 +254,8 @@ fn main() -> AppExit {
         .add_plugins((gamedata::GameDataPlugin, journal::JournalPlugin, possession::PossessionPlugin, store::StorePlugin, swarm::SwarmPlugin, gadgets::GadgetsPlugin, whiskey::WhiskeyPlugin, thrown::ThrownPlugin, campaign::CampaignPlugin, heart::HeartPlugin, security::SecurityPlugin, wheel::WheelPlugin))
         .add_plugins(dock::DockPlugin)
         .add_plugins(elixirs::ElixirsPlugin)
+        .add_plugins(tutorials::TutorialsPlugin)
+        .add_plugins(helpscreen::HelpScreenPlugin)
         .add_systems(Startup, powers::configure_xray_gizmos)
         .run()
 }

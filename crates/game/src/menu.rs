@@ -67,6 +67,8 @@ enum Page {
     /// the trials' leaderboards, normal and expert (`Leaderboards_Screen`'s tabs): local
     Leaderboards,
     ExpertLeaderboards,
+    /// the pause menu's help (`t_Help`: the tutorial notes received, `helpscreen`)
+    Help,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -120,6 +122,8 @@ enum Action {
     Difficulty(u8),
     Page(Page),
     Back,
+    /// a tutorial note of the help's (its place in `Menu::tutorials`) read
+    ReadTutorial(usize),
     Adjust(Opt),
     /// bind an action to the next key pressed
     Rebind(crate::bindings::Act),
@@ -181,6 +185,8 @@ pub struct Menu {
     pub board_row: Option<usize>,
     /// a leaderboard opened over a run's results, closed back to them
     board_over_results: bool,
+    /// the tutorial notes the help lists (`EDisTutorialNote` names)
+    tutorials: Vec<String>,
 }
 
 /// How an option row shows its value (`OptionsStepperB_widget`, `OptionsStepper_widget`,
@@ -207,7 +213,7 @@ pub const OPT_CATEGORIES: [(&str, &[&str]); 4] = [
 
 impl Default for Menu {
     fn default() -> Self {
-        Menu { open: None, page: Page::Main, stack: Vec::new(), sel: 0, dirty: true, items: Vec::new(), started: false, capture: None, opt_cat: 0, opt_sub: 0, confirm: None, confirm_click: None, pending_challenge: None, gallery_view: None, board_row: None, board_over_results: false }
+        Menu { open: None, page: Page::Main, stack: Vec::new(), sel: 0, dirty: true, items: Vec::new(), started: false, capture: None, opt_cat: 0, opt_sub: 0, confirm: None, confirm_click: None, pending_challenge: None, gallery_view: None, board_row: None, board_over_results: false, tutorials: Vec::new() }
     }
 }
 
@@ -235,6 +241,8 @@ impl Menu {
             (Some(MenuKind::Main), Page::Welcome) => Some((12, labels())),
             (Some(MenuKind::Main), Page::Leaderboards) => Some((13, labels())),
             (Some(MenuKind::Main), Page::ExpertLeaderboards) => Some((14, labels())),
+            // (the help: `helpscreen`)
+            (Some(_), Page::Help) => Some((crate::helpscreen::CODE, labels())),
             _ => None,
         }
     }
@@ -747,6 +755,15 @@ pub struct TrialRun {
 }
 
 fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::gamedata::Data, profile: &crate::challenge::ChallengeProfile, trial: Option<TrialRun>) -> Vec<(String, Action)> {
+    // (the help: a tutorial note received a row, by its title)
+    if menu.page == Page::Help {
+        return menu
+            .tutorials
+            .iter()
+            .enumerate()
+            .filter_map(|(i, id)| crate::tutorials::note(data, id).map(|n| (crate::tutorials::title(data, &n.name), Action::ReadTutorial(i))))
+            .collect();
+    }
     let has_saves = slots.any();
     match (menu.open, menu.page) {
         (_, Page::Title) => vec![("Press any key".into(), Action::Page(Page::Main))],
@@ -837,6 +854,7 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
             ("Save Game".into(), Action::Page(Page::Save)),
             ("Load Game".into(), Action::Page(Page::Load)),
             ("Options".into(), Action::Page(Page::Options)),
+            (data.text("DisGFxMoviePlayerMenuBase_Texts", "t_Help"), Action::Page(Page::Help)),
             ("Back to Main Menu".into(), Action::QuitToMenu),
             ("Back to Windows".into(), Action::QuitGame),
         ],
@@ -933,6 +951,8 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
             v.extend(slots.list().into_iter().filter(|(i, _)| (1..=8).contains(i)).map(|(i, desc)| (desc, Action::Save(i))));
             v
         }
+        // (the help's rows: above)
+        (_, Page::Help) => Vec::new(),
     }
 }
 
@@ -950,8 +970,13 @@ fn menu_input(
     (vm, mut campaign, scripted, mut intro): (Option<ResMut<Vm>>, ResMut<crate::gameplay::Campaign>, Option<Res<crate::script::Scripted>>, ResMut<crate::movie::IntroPending>),
     (data, mut launch): (Res<crate::gamedata::Data>, ResMut<crate::challenge::ChallengeLaunch>),
     (mut profile, movies, mut play): (ResMut<crate::challenge::ChallengeProfile>, Res<crate::movie::Movies>, MessageWriter<crate::movie::PlayMovie>),
+    (note, mut read): (Res<crate::notescreen::NoteScreen>, MessageWriter<crate::journal::ReadNote>),
 ) {
     let Some(kind) = menu.open else { return };
+    // (a note read over it, or put away this frame: its keys are its own)
+    if note.open.is_some() || note.shut {
+        return;
+    }
     // (a movie over the menu, the trials' credits: its keys are its own)
     if movies.holding() {
         return;
@@ -1237,6 +1262,11 @@ fn menu_input(
     };
     match action {
         Action::Page(p) => menu.go(p),
+        Action::ReadTutorial(i) => {
+            if let Some(id) = menu.tutorials.get(i) {
+                read.write(crate::journal::ReadNote(format!("{}{id}", crate::tutorials::KEY)));
+            }
+        }
         Action::Back => {
             menu.back();
         }
@@ -1364,10 +1394,13 @@ fn menu_build(
     mut ui: ResMut<UiImages>,
     mut images: ResMut<Assets<Image>>,
     roots: Query<Entity, With<MenuRoot>>,
-    (data, profile, challenge): (Res<crate::gamedata::Data>, Res<crate::challenge::ChallengeProfile>, Res<crate::challenge::Challenge>),
+    (data, profile, challenge, stats): (Res<crate::gamedata::Data>, Res<crate::challenge::ChallengeProfile>, Res<crate::challenge::Challenge>, Res<crate::gameplay::PlayerStats>),
 ) {
     if !menu.dirty && !(settings.is_changed() && menu.page == Page::Options) {
         return;
+    }
+    if menu.tutorials != stats.tutorials {
+        menu.tutorials = stats.tutorials.clone();
     }
     menu.dirty = false;
     for e in &roots {

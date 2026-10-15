@@ -390,6 +390,8 @@ pub struct LoadedImage {
     pub image: Handle<Image>,
     pub size: Vec2,
     pub at: Vec2,
+    /// in place of what the clip has (`loadMovie`), not over it
+    pub replace: bool,
 }
 
 impl Clip {
@@ -770,7 +772,9 @@ impl Clip {
                         if p.shadow.is_some() {
                             w.shadow = p.shadow;
                         }
-                        c.masked_leaves(tl, &pm, &pc, mask, out, Some(&mut *w));
+                        if !w.images.get(&w.path).is_some_and(|i| i.replace) {
+                            c.masked_leaves(tl, &pm, &pc, mask, out, Some(&mut *w));
+                        }
                         (w.clip, w.mask, w.shadow) = was;
                         // (a picture loaded into it, over what it has)
                         if let Some(img) = w.images.get(&w.path).filter(|_| c.visible) {
@@ -1122,7 +1126,7 @@ impl FlashClip {
         let max = Vec2::new(max.x / p.xscale.abs().max(1e-6), max.y / p.yscale.abs().max(1e-6));
         let k = if natural.x > max.x || natural.y > max.y { (max.x / natural.x).min(max.y / natural.y) } else { 1.0 };
         let size = natural * k;
-        self.images.insert(path.to_string(), LoadedImage { image, size, at: -size * 0.5 });
+        self.images.insert(path.to_string(), LoadedImage { image, size, at: -size * 0.5, replace: false });
     }
 
     /// `attachMovie` of an exported symbol on a clip within (`""`: the clip itself).

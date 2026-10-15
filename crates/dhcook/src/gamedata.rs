@@ -569,6 +569,33 @@ fn abstract_items(cooked: &Path, d: &mut GameData) {
 }
 
 /// The story's chapters (`Twk_ChapterInfoList`): titles, descriptions and targets.
+/// The tutorial notes (`DisGFxMoviePlayerNote`'s `m_TutorialNotes`, indexed by
+/// `EDisTutorialNote`), and the abstract items that bring one (`m_TutorialNote`: in the
+/// `*Abst*` packages).
+fn tutorial_notes(cooked: &Path, game: &Package, d: &mut GameData) {
+    let ids = enum_names(game, "EDisTutorialNote");
+    if let Some(p) = game.find_export("Default__DisGFxMoviePlayerNote").and_then(|i| props(game, i)) {
+        for (k, id) in ids.iter().enumerate() {
+            let Some(Value::Struct(_, s)) = p.get_idx("m_TutorialNotes", k as i32) else { continue };
+            let s = Props(s.clone());
+            let (Some(name), Some(image)) = (s.name("m_NoteName"), s.name("m_ImagePackageName")) else { continue };
+            d.tutorial_notes.push(crate::format::TutorialNote { id: id.clone(), name: name.to_string(), image: image.to_string() });
+        }
+    }
+    let Ok(rd) = std::fs::read_dir(cooked) else { return };
+    let mut files: Vec<_> = rd.flatten().map(|e| e.path()).filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.contains("Abst") && n.ends_with(".upk"))).collect();
+    files.sort();
+    for f in files {
+        let Ok(pkg) = Package::open(&f) else { continue };
+        for i in pkg.exports_of_class("DisAbstractItem").collect::<Vec<_>>() {
+            if let Some(n) = props(&pkg, i).and_then(|p| p.name("m_TutorialNote").map(str::to_string)) {
+                d.item_tutorials.insert(pkg.obj_name(i).to_string(), n);
+            }
+        }
+    }
+    log::info!("gamedata: {} tutorial notes, {} items bringing one", d.tutorial_notes.len(), d.item_tutorials.len());
+}
+
 fn chapters(pkg: &Package, d: &mut GameData) {
     let Some(list) = pkg.find_export("Twk_ChapterInfoList.Twk_ChapterInfoList").and_then(|i| props(pkg, i)) else { return };
     for e in struct_array(pkg, &list, "m_ChapterList") {
@@ -1465,6 +1492,7 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
     abstract_items(cooked, &mut d);
     journal_items(cooked, &mut d);
     chapters(&game, &mut d);
+    tutorial_notes(cooked, &game, &mut d);
     missions_ini(cooked, &mut d);
     // the campaign: the persistent level's scripts run the flow between missions
     let dir = root.join("game");

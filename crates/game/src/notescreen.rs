@@ -32,6 +32,8 @@ impl Plugin for NoteScreenPlugin {
 #[derive(Resource, Default)]
 pub struct NoteScreen {
     pub open: Option<String>,
+    /// put away this frame (its key is not the menu's under it)
+    pub shut: bool,
     drawn: Option<(String, UVec2)>,
     /// (opened this frame: the key that read it does not close it)
     fresh: bool,
@@ -109,7 +111,12 @@ fn close(
     roots: Query<Entity, With<NoteRoot>>,
     mut sfx: MessageWriter<PostEvent>,
     scripted: Option<Res<crate::script::Scripted>>,
+    menu: Res<crate::menu::Menu>,
 ) {
+    // (only when set: a write marks it changed, which holds the pause menu shut)
+    if note.shut {
+        note.shut = false;
+    }
     if note.open.is_none() {
         return;
     }
@@ -122,14 +129,18 @@ fn close(
         return;
     }
     note.open = None;
+    note.shut = true;
     note.drawn = None;
     note.lines.clear();
     for e in &roots {
         commands.entity(e).despawn();
     }
-    paused.0 = false;
-    cursor.visible = false;
-    cursor.grab_mode = CursorGrabMode::Locked;
+    // (back to the game; or to the menu it was read from)
+    if menu.open.is_none() {
+        paused.0 = false;
+        cursor.visible = false;
+        cursor.grab_mode = CursorGrabMode::Locked;
+    }
     sfx.write(PostEvent::named("Snd_UI_Ingame_Note_Close", None));
 }
 
@@ -159,9 +170,12 @@ fn draw(
     let off = (Vec2::new(w.width(), w.height()) - Vec2::new(1280.0, 720.0) * s) * 0.5;
     let root = commands.spawn((NoteRoot, Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }, GlobalZIndex(85), Pickable::IGNORE, DespawnOnExit(GameState::InGame))).id();
     let map = crate::journal::location_map(&key);
-    let (title, words) = match &map {
-        Some((t, _)) => (t.clone(), String::new()),
-        None => {
+    // (a tutorial note: the movie's tutorial page, `n_Tutorial`)
+    let tuto = key.strip_prefix(crate::tutorials::KEY).and_then(|id| crate::tutorials::note(&data, id)).cloned();
+    let (title, words) = match (&map, &tuto) {
+        (Some((t, _)), _) => (t.clone(), String::new()),
+        (None, Some(n)) => (crate::tutorials::title(&data, &n.name), String::new()),
+        (None, None) => {
             let (n, d) = data.0.abstract_items.get(&key).cloned().unwrap_or_default();
             (if n.is_empty() { key.rsplit('.').next().unwrap_or(&key).replace('_', " ") } else { n }, crate::gamedata::readable(&d))
         }
@@ -170,8 +184,37 @@ fn draw(
     if let Some(c) = Clip::export(&tl, "n_readableNote") {
         let mut fc = FlashClip::new(MOVIE, tl.clone(), c).real();
         fc.scale = s;
-        fc.set_visible("_tutorial_mc", false);
-        fc.set_visible(if map.is_some() { "_note_mc" } else { "_map_mc" }, false);
+        fc.set_visible("_tutorial_mc", tuto.is_some());
+        fc.set_visible("_note_mc", map.is_none() && tuto.is_none());
+        fc.set_visible("_map_mc", map.is_some());
+        // a tutorial's page (`TutorialNote`): its content at the note's label, its pictures
+        // (`UI_Tuto_*`'s `tuto_<note>_<n>`, the keyboard's where it has its own) loaded into
+        // its `img<n>` in place of their stand-ins, its words into its `txt<n>`
+        if let Some(n) = &tuto {
+            const CONTENT: &str = "_tutorial_mc._scrollView_mc.content_mc";
+            fc.goto(CONTENT, &n.name, false);
+            for k in 0..4 {
+                let path = format!("{CONTENT}.img{k}");
+                if fc.size(&path).is_some() {
+                    let stem = format!("tuto_{}_{k}", n.name);
+                    if let Some((image, size)) = ui.file(&mut images, "tutorials", &format!("{stem}_keyboard")).or_else(|| ui.file(&mut images, "tutorials", &stem)) {
+                        fc.images.insert(path, crate::flash::LoadedImage { image, size, at: Vec2::ZERO, replace: true });
+                    }
+                }
+                let words = crate::tutorials::words(&data, &n.name, k);
+                if !words.is_empty() {
+                    fc.set_text(&format!("{CONTENT}.txt{k}"), words);
+                }
+            }
+            // (the journal's: its tabs' names, as the journal shows its first four)
+            if n.name == "journal" {
+                let base = "DisGFxMoviePlayerBase_Texts";
+                for (k, key) in ["t_Objectives", "t_Logs", "t_Powers", "t_BoneCharms"].into_iter().enumerate() {
+                    fc.set_text(&format!("{CONTENT}.txtTab{k}.txt"), data.text(base, key).to_uppercase());
+                }
+            }
+            fc.show_texts = true;
+        }
         // (the map's legend: its places aren't kept)
         fc.set_visible("_map_mc._legend_mc", false);
         let bg = crate::animbg::AnimatedBackground::new(&fc, "_bkgd_mc");
@@ -210,6 +253,8 @@ fn draw(
                 ));
             }
         }
+        // (a tutorial's words are its page's)
+        None if tuto.is_some() => {}
         // the words, in the scrolling field (`_note_mc` at (100,22), its view at (-547.45,-234.5))
         None => {
             let at = Vec2::new(640.0 + 100.0 - 547.45 + 2.0, 360.0 + 22.0 - 234.5 + 2.0);

@@ -4969,6 +4969,14 @@ impl<'a> Cooker<'a> {
             props.insert("pickup_coins".into(), KVal::Bool(coins));
             props.insert("pickup_item".into(), KVal::Str(item));
             props.insert("pickup_label".into(), KVal::Str(label));
+            // (a tutorial's note: `DisTweaks_AbstractItemPickupNote`'s `m_TutorialNote` and the
+            // prompt it puts up, `m_PressKeyToReadMessage`)
+            if let Some(n) = tch.name("m_TutorialNote") {
+                props.insert("pickup_tutorial".into(), KVal::Str(n.to_string()));
+            }
+            if let Some(m) = tch.name("m_PressKeyToReadMessage") {
+                props.insert("pickup_read".into(), KVal::Str(m.to_string()));
+            }
         }
     }
 
@@ -8255,6 +8263,14 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
     for c in ["Arena", "AssassinsTraining", "BendTimeMassacre", "ChainKill", "Countdown", "DropAttack", "MysteryMan", "OilRain", "Race", "Thief"] {
         sources.push((format!("UI_ResBg_{c}_SF"), "dlc05", ""));
         sources.push((format!("UI_Brf_{c}_SF"), "dlc05", ""));
+    }
+    // ... the tutorial notes' pictures (`UI_Tuto_*_SF`: `tuto_<note>_<n>`)
+    if let Ok(rd) = std::fs::read_dir(cooked) {
+        let mut tuto: Vec<String> = rd.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_str().map(str::to_string)).filter(|n| n.starts_with("UI_Tuto_") && n.ends_with("_SF.upk")).map(|n| n.trim_end_matches(".upk").to_string()).collect();
+        tuto.sort();
+        for n in tuto {
+            sources.push((n, "tutorials", ""));
+        }
     }
     // (and the mystery man's possible targets, in its script level: `DLC05_H_MMTarget`)
     sources.push(("L_DLC05_MystMan_Script".into(), "dlc05", "UI_MysteryManTargets_DLC05."));

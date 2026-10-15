@@ -251,10 +251,10 @@ fn toggle(
     mut journal: ResMut<Journal>,
     mut paused: ResMut<Paused>,
     menu: Res<crate::menu::Menu>,
-    (stats, data): (Res<PlayerStats>, Res<Data>),
+    (mut stats, data): (ResMut<PlayerStats>, Res<Data>),
     roots: Query<Entity, With<JournalRoot>>,
     mut cursor: Single<&mut CursorOptions>,
-    mut sfx: MessageWriter<PostEvent>,
+    (mut sfx, mut read): (MessageWriter<PostEvent>, MessageWriter<ReadNote>),
     mission_end: Option<Res<crate::mission::MissionEnd>>,
     note: Res<crate::notescreen::NoteScreen>,
     vm: Option<ResMut<crate::kismet::Vm>>,
@@ -278,6 +278,13 @@ fn toggle(
         return;
     }
     let _ = &data;
+    // (a tutorial just received, its prompt up: the key reads it)
+    if !journal.open && keys.just_pressed(bind.key(crate::bindings::Act::Journal)) && menu.open.is_none() && !stats.dead && mission_end.is_none() {
+        if let Some((id, _)) = stats.tutorial_prompt.take() {
+            read.write(ReadNote(format!("{}{id}", crate::tutorials::KEY)));
+            return;
+        }
+    }
     let want = if journal.open {
         !(keys.just_pressed(bind.key(crate::bindings::Act::Journal)) || keys.just_pressed(KeyCode::Escape))
     } else {
