@@ -1134,7 +1134,7 @@ fn localization(cooked: &Path, d: &mut GameData) {
             if k.trim() == "Hint" {
                 d.hints.entry(set.to_string()).or_default().push(v);
             }
-        } else if section.ends_with("_Texts") || section == "Misc" {
+        } else if section.ends_with("_Texts") || section == "Misc" || section == "DisTweaks_Possessable" {
             d.texts.insert(format!("{section}.{}", k.trim()), v);
         }
     }

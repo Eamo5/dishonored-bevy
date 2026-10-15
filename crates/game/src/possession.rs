@@ -30,7 +30,8 @@ impl Plugin for PossessionPlugin {
                 *o = PossessOverrides::default();
             })
             .add_systems(Update, restore_possession.after(crate::swarm::restore_swarms).after(crate::fish::restore_fish).after(crate::krust::restore_krust_state).after(crate::save::restore_npcs).before(script_overrides).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (script_overrides, start, ride).chain().run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (script_overrides, start, ride).chain().run_if(in_state(GameState::InGame)))
+            .add_systems(Update, refusal.run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -245,12 +246,31 @@ pub fn find_target<'a>(
     hosts: impl Iterator<Item = (Entity, Vec3)>,
     overrides: &PossessOverrides,
 ) -> Option<Entity> {
+    best_host(ctx, player, eye, dir, range, level, npcs, hosts, overrides, false).map(|b| b.0)
+}
+
+/// The host the aim settles on, among those Corvo may take or (`refused_too`) also those he
+/// may not, and whether it is one he may not.
+#[allow(clippy::too_many_arguments)]
+fn best_host<'a>(
+    ctx: &RapierContext,
+    player: Entity,
+    eye: Vec3,
+    dir: Vec3,
+    range: f32,
+    level: u8,
+    npcs: impl Iterator<Item = (Entity, &'a Transform, &'a Npc)>,
+    hosts: impl Iterator<Item = (Entity, Vec3)>,
+    overrides: &PossessOverrides,
+    refused_too: bool,
+) -> Option<(Entity, bool)> {
     let filter = QueryFilter::default().exclude_collider(player).groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
-    let mut best: Option<(f32, Entity)> = None;
+    let mut best: Option<(f32, Entity, bool)> = None;
     let people = npcs.filter_map(|(e, t, npc)| {
         // (the scripts may allow a story character, or forbid anyone)
         let ov = overrides.0.get(&npc.spawner);
-        if npc.is_down() || npc.floored || ov.is_some_and(|o| o.disallow) || (npc.kind == Kind::Story && ov.is_none()) {
+        let refused = ov.is_some_and(|o| o.disallow) || (npc.kind == Kind::Story && ov.is_none());
+        if npc.is_down() || npc.floored || (refused && !refused_too) {
             return None;
         }
         let animal = npc.kind == Kind::Creature;
@@ -261,10 +281,10 @@ pub fn find_target<'a>(
         }
         // (the target's priority: `m_TargetingPriority`, combatants over civilians over animals)
         let weight = if animal { 0.0 } else if npc.fighter() { 2.0 } else { 1.0 };
-        Some((e, t.translation + Vec3::Y * 0.3, weight))
+        Some((e, t.translation + Vec3::Y * 0.3, weight, refused))
     });
     // the other creatures: any level
-    for (e, chest, weight) in people.chain(hosts.map(|(e, c)| (e, c, 0.0))) {
+    for (e, chest, weight, refused) in people.chain(hosts.map(|(e, c)| (e, c, 0.0, false))) {
         let to = chest - eye;
         let d = to.length();
         if d > range || d < 0.5 {
@@ -282,10 +302,43 @@ pub fn find_target<'a>(
         let fov = 0.4 / 0.3;
         let score = 10.0 * (fov - angle) / fov + (range - d) / range + weight;
         if best.is_none_or(|b| score > b.0) {
-            best = Some((score, e));
+            best = Some((score, e, refused));
         }
     }
-    best.map(|b| b.1)
+    best.map(|b| (b.1, b.2))
+}
+
+/// Possession in hand, its aim on someone Corvo may not take (the scripts forbid it, or a story
+/// character they don't allow): the possessable's `m_DisallowPossessionMessage` ("This target
+/// cannot be possessed right now") up while it stays there, as the exe's refusal state 3 holds
+/// its tutorial line (the obstructed and busy states have no words).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn refusal(
+    (powers, stats, possession, overrides, data): (Res<crate::powers::Powers>, Res<PlayerStats>, Res<Possession>, Res<PossessOverrides>, Res<Data>),
+    rapier: ReadRapierContext,
+    player: Query<Entity, With<Player>>,
+    cam: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
+    npcs: Query<(Entity, &Transform, &Npc), Without<Player>>,
+    hosts: Query<(Entity, &GlobalTransform), (With<Host>, Without<Possessed>)>,
+    mut msgs: ResMut<HudMessages>,
+    mut was: Local<bool>,
+) {
+    let power = crate::powers::Power::Possess;
+    let refused = powers.selected == power && possession.host.is_none() && !stats.dead && {
+        let (Ok(ctx), Ok(pe), Ok(cg)) = (rapier.single(), player.single(), cam.single()) else { return };
+        let level = power.level(&stats);
+        let range = data.power_f("Possess", level, "m_fPossessRange", 1000.0) * 0.01;
+        best_host(&ctx, pe, cg.translation(), cg.forward().as_vec3(), range, level, npcs.iter(), hosts.iter().map(|(e, g)| (e, g.translation() + Vec3::Y * 0.1)), &overrides, true).is_some_and(|b| b.1)
+    };
+    if refused != *was {
+        let t = data.text("DisTweaks_Possessable", "m_DisallowPossessionMessage");
+        if refused && !t.is_empty() {
+            msgs.tutorial(t, f32::INFINITY);
+        } else if !refused {
+            msgs.drop_tutorial(&t);
+        }
+        *was = refused;
+    }
 }
 
 fn white_rat_duration(base: f32, white: bool, bonus: f32) -> f32 {
