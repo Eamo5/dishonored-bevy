@@ -152,6 +152,11 @@ struct ArmClips {
     sneak_walk: Option<ClipId>,
     sneak_run: Option<ClipId>,
     jump: Option<ClipId>,
+    /// leaving the ground in a jump (`Sword_Ready_JumpIn`); the left hand's, a power's or a
+    /// gadget's in it, its take-off and its landing (`Powers_JumpIn`, `_JumpLandSmall`,
+    /// `Gadgets_JumpIn`...)
+    jump_in: Option<ClipId>,
+    left_jump: [[Option<ClipId>; 2]; 2],
     /// landing (`DisTweaks_PlayerPawn_NavigationActions`: `m_Action_JumpLandSmall_Ready` /
     /// `_Sneak`, and `m_Action_JumpLandBig` past `m_fFall_Stun_Vel`)
     land: Option<ClipId>,
@@ -286,6 +291,8 @@ impl ArmClips {
             sneak_walk: lib.find("Sword_Sneak_Walk"),
             sneak_run: lib.find("Sword_Sneak_Run"),
             jump: lib.find("Sword_Ready_Jump"),
+            jump_in: lib.find("Sword_Ready_JumpIn"),
+            left_jump: ["Powers", "Gadgets"].map(|s| ["JumpIn", "JumpLandSmall"].map(|w| lib.find(&format!("{s}_{w}")))),
             land: lib.find("Sword_Ready_JumpLandSmall"),
             land_sneak: lib.find("Sword_Sneak_JumpLandSmall"),
             land_big: lib.find("Generic_JumpLandBig"),
@@ -407,6 +414,8 @@ struct ArmsAnim {
     raised: Option<usize>,
     /// in the air long enough that touching down is a landing
     airborne: bool,
+    /// on the ground last frame (a jump's take-off)
+    grounded: bool,
     parry_flash: f32,
     damage_flash: f32,
     /// the blows seen (`PlayerStats::blow`)
@@ -712,6 +721,7 @@ fn spawn_arms(
                 pinned: false,
                 oneshot: false,
                 airborne: false,
+                grounded: true,
                 mantling: false,
                 sliding: false,
                 raised: None,
@@ -1189,6 +1199,14 @@ fn animate_arms(
     // touching down: the landing for how hard and how he stands (a hard one past
     // `StatePlayerMasterFalling.m_fFall_Stun_Vel`, 2200 uu/s), as roshan's r614/blink research
     // decoded the landing's actions
+    // (leaving the ground rising: a jump, not a fall)
+    let took_off = std::mem::replace(&mut st.grounded, p.grounded) && !p.grounded && p.velocity.y > 1.0;
+    if !base_busy && took_off {
+        if let Some(cl) = c.jump_in {
+            anim.restart(cl, false, 1.0, 0.08);
+            st.oneshot = true;
+        }
+    }
     let mut landed = false;
     if !p.grounded && p.air_time > 0.25 {
         st.airborne = true;
@@ -1365,6 +1383,18 @@ fn animate_arms(
         c.left_loco[set][0]
     };
     let idle = loco.or(idle);
+    // (a power or a gadget in hand, the hand leaves the ground with him and lands with him)
+    let left_jump = c.left_jump[set];
+    if loco.is_some() && took_off {
+        if let Some(cl) = left_jump[0] {
+            anim.restart_overlay(cl, false, 1.0, 0.1);
+        }
+    } else if landed && idle.is_some() && !bow && !st.blocking && !st.choking && (anim.overlay_finished() || anim.overlay_is(c.left_loco[set][2]) || anim.overlay_is(idle)) {
+        if let Some(cl) = left_jump[1] {
+            anim.restart_overlay(cl, false, attrs.land_rate.max(0.1), 0.08);
+        }
+    }
+    let leaping = left_jump.iter().flatten().any(|j| anim.overlay_is(Some(*j))) && !anim.overlay_finished();
     // aiming Blink: the hand comes up (`Powers_Cast_Blink_In`) and holds (`_Loop`) until it's
     // let go and the cast plays
     let [aim_in, aim_loop] = c.blink_aim;
@@ -1429,7 +1459,7 @@ fn animate_arms(
     }
     let aiming = aiming || cooking || raised;
     let spyglass_busy = c.spyglass.iter().flatten().any(|cl| anim.overlay_is(*cl)) || anim.overlay_is(c.pistol_fire_accurate);
-    if !aiming && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.crossbow_fire_fast) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.grenade_reload) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision) || anim.overlay_is(c.out_of_mana) || c.left_slash.iter().flatten().any(|s| anim.overlay_is(*s)) || spyglass_busy)) {
+    if !aiming && !leaping && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.crossbow_fire_fast) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.grenade_reload) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision) || anim.overlay_is(c.out_of_mana) || c.left_slash.iter().flatten().any(|s| anim.overlay_is(*s)) || spyglass_busy)) {
         match idle {
             Some(cl) if !st.choking && !st.blocking => {
                 let leap = loco.is_some() && loco == c.left_loco[set][2];

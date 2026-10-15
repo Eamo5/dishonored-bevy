@@ -255,7 +255,8 @@ fullscreen display, vertical sync and the crosshair.
   alone, as the original's arm tree filters them (`LeftArmFilter`, from `Collarbone_L_Jnt`);
   the sword arm keeps its own pose. On the move, the hand with a power or gadget has its own
   walk, sprint and leap (`Powers_Walk`, `Powers_Jump`, `Gadgets_Walk`, `Gadgets_Sprint`,
-  `Gadgets_Jump`). It keeps to the same part of its cycle as the body's clip, as a UE3 sync
+  `Gadgets_Jump`), its take-off and its landing (`Powers_JumpIn`, `_JumpLandSmall`,
+  `Gadgets_JumpIn`, `_JumpLandSmall`). It keeps to the same part of its cycle as the body's clip, as a UE3 sync
   group does. Crouched or still, it idles. As the sword slashes, it goes with the blow
   (`Powers_SwordSlash_Right` / `_Left`, `Gadgets_SwordSlash_*`). A grenade cooks with the hand drawn back
   (`Gadgets_Grenade_Cooking_In`, `_Idle`), is thrown (`Gadgets_Grenade_Deploy`, out of the hand
@@ -1593,6 +1594,7 @@ against the install's own data where it carries them, then implemented independe
   800 uu/s `JumpZ` rises 1.07 m and lands after 0.533 s. A fall hurts from
   `MaxSpeedBeforeFallingDamage` (22.5 m/s) and kills at `MaxSpeedBeforeFallingDeath` (29 m/s), in
   proportion between (Agility raises both). Agility's power jump uses the original numbers unscaled.
+  Leaving the ground in a jump plays the arms' take-off (`Sword_Ready_JumpIn`), then the leap.
   Touching down after a jump or fall plays the arms' landing (`DisTweaks_PlayerPawn_NavigationActions`):
   `Sword_Ready_JumpLandSmall`, crouched `Sword_Sneak_JumpLandSmall`, and past
   `m_fFall_Stun_Vel` (22 m/s) the hard `Generic_JumpLandBig`. None stops him moving (as roshan's
