@@ -121,6 +121,7 @@ mod softshadow;
 mod tallboy;
 mod plague;
 mod dock;
+mod elixirs;
 mod pickuplog;
 mod targetcard;
 mod gauges;
@@ -250,6 +251,7 @@ fn main() -> AppExit {
         .add_plugins((flash::FlashPlugin, awareness::AwarenessPlugin, location::LocationPlugin, crosshair::CrosshairPlugin, intwindow::IntWindowPlugin, hudtext::HudTextPlugin, softshadow::SoftShadowPlugin, tallboy::TallboyPlugin, plague::PlaguePlugin, objnotify::ObjNotifyPlugin, oxygen::OxygenPlugin, playerstate::PlayerStatePlugin, grenadeind::GrenadeIndPlugin, prompts::PromptsPlugin, tutwindow::TutWindowPlugin))
         .add_plugins((gamedata::GameDataPlugin, journal::JournalPlugin, possession::PossessionPlugin, store::StorePlugin, swarm::SwarmPlugin, gadgets::GadgetsPlugin, whiskey::WhiskeyPlugin, thrown::ThrownPlugin, campaign::CampaignPlugin, heart::HeartPlugin, security::SecurityPlugin, wheel::WheelPlugin))
         .add_plugins(dock::DockPlugin)
+        .add_plugins(elixirs::ElixirsPlugin)
         .add_systems(Startup, powers::configure_xray_gizmos)
         .run()
 }

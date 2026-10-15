@@ -751,7 +751,11 @@ fullscreen display, vertical sync and the crosshair.
   the movie): with the wheel it rises 40 under it, alone 10 with the slot shown at 110 %; a
   slot taken, the others fade, it glows and rises 20, and the dock fades and drops. The keys
   and counts are drawn as text (the clip's round key backing is a vector shape). `scroll N`
-  turns the mouse wheel in test scripts.
+  turns the mouse wheel in test scripts. With the wheel come the elixir counters (`elixirs.rs`,
+  the movie's `shPC_potions` and its `PC_PotionsCount`, as roshan's r614/blink research read
+  it): at the bottom right of the HUD's safe area, the health elixirs above the mana ones, each
+  with its count and the key that drinks it, slid in from 150 to the right (0.45 s, 0.55 s); an
+  empty count dims its icon and key, and a drink plays its icon's stroke.
 - **The crosshair** (`crosshair.rs`, the HUD movie's crosshair symbols): the original dot,
   and over something to use the HUD tweak's `m_InteractionCrosshairSettings` symbol by
   `eCrossHairStatus` (a hand to take, a note with an eye to read, a hand to carry, a padlock
