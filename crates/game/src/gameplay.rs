@@ -834,12 +834,39 @@ impl TimeControl {
     }
 }
 
+/// The HUD tweak's `m_fTutorialCycleDelay`: a cycling tutorial at the head of the stack hands
+/// the screen to the next every so often.
+const TUTORIAL_CYCLE: f32 = 5.0;
+/// `m_fTutorialWindowDuration`
+pub const TUTORIAL_WINDOW: f32 = 10.0;
+
+/// An entry of the HUD's tutorial stack (`DisTutorialInfo`): its words, its seconds left while
+/// shown (infinite: until put away), a window's picture (else the line), whether it cycles
+/// (`DTT_TutorialCyclingMessage`), its priority and seconds shown.
+#[derive(Clone, Debug)]
+pub struct TutorialEntry {
+    pub text: String,
+    pub secs: f32,
+    pub window: Option<u8>,
+    cycling: bool,
+    prio: u8,
+    shown: f32,
+}
+
 #[derive(Resource, Default)]
 pub struct HudMessages {
     pub items: Vec<(String, f32)>,
-    /// the tutorial up (the HUD movie's `tutorialMsg_mc`, one at a time): text, seconds left,
-    /// seconds shown
+    /// the tutorial line on screen (the HUD movie's `tutorialMsg_mc`): text, seconds left,
+    /// seconds shown, from the stack
     pub tutorial: Option<(String, f32, f32)>,
+    /// the tutorial stack (`m_TutorialStack`): one entry on screen at a time, the line or the
+    /// window, by priority (the scripts' lines first, then the windows and the game's own),
+    /// only the shown one's time running; a cycling one at the head passes the screen round
+    /// every `m_fTutorialCycleDelay`
+    pub stack: Vec<TutorialEntry>,
+    shown: usize,
+    cycle: f32,
+    logged: usize,
 }
 
 impl HudMessages {
@@ -848,21 +875,103 @@ impl HudMessages {
         self.push_for(s, 5.0);
     }
 
-    /// A tutorial, up for so long (`m_fTutorialDuration`), in place of the one up.
+    /// A tutorial line (the scripts' `DisSeqAct_SetTutorialMessage`, a refusal), up for so
+    /// long while shown (`m_fTutorialDuration`): ahead of the rest.
     pub fn tutorial(&mut self, s: impl Into<String>, secs: f32) {
-        let s = s.into();
-        match self.tutorial.as_mut() {
-            Some(t) if t.0 == s => t.1 = secs,
-            _ => self.tutorial = Some((s, secs, 0.0)),
+        self.add_tutorial(TutorialEntry { text: s.into(), secs, window: None, cycling: false, prio: 3, shown: 0.0 });
+    }
+
+    /// The game's own tutorial line (a tracker's: `DTT_TutorialCyclingMessage`): after those
+    /// up, taking turns with them.
+    pub fn tutorial_cycling(&mut self, s: impl Into<String>, secs: f32) {
+        self.add_tutorial(TutorialEntry { text: s.into(), secs, window: None, cycling: true, prio: 2, shown: 0.0 });
+    }
+
+    /// A tutorial window (`SetTutorialWindow`): its words and picture, up
+    /// `m_fTutorialWindowDuration` while shown.
+    pub fn tutorial_window(&mut self, s: impl Into<String>, img: u8) {
+        self.add_tutorial(TutorialEntry { text: s.into(), secs: TUTORIAL_WINDOW, window: Some(img), cycling: false, prio: 2, shown: 0.0 });
+    }
+
+    /// Into the stack as the HUD's insert does: an entry not cycling goes before the first of
+    /// no higher priority, a cycling one after the last of no lower; one already there is
+    /// renewed.
+    fn add_tutorial(&mut self, e: TutorialEntry) {
+        if e.text.is_empty() {
+            return;
+        }
+        if let Some(t) = self.stack.iter_mut().find(|t| t.text == e.text && t.window == e.window) {
+            t.secs = e.secs;
+            return;
+        }
+        let shown_text = self.stack.get(self.shown).map(|t| t.text.clone());
+        let at = if e.cycling {
+            self.stack.iter().rposition(|t| t.prio >= e.prio).map_or(0, |i| i + 1)
+        } else {
+            self.stack.iter().position(|t| e.prio >= t.prio).unwrap_or(self.stack.len())
+        };
+        self.stack.insert(at, e);
+        // (the one on screen stays on screen until the stack's own turn)
+        if let Some(s) = shown_text {
+            self.shown = self.stack.iter().position(|t| t.text == s).unwrap_or(0);
         }
     }
 
     /// A tutorial put away (its condition gone: a blow blocked, the music box's tune out of
-    /// reach), if it is the one up.
+    /// reach).
     pub fn drop_tutorial(&mut self, s: &str) {
-        if self.tutorial.as_ref().is_some_and(|t| t.0 == s) {
+        self.stack.retain(|t| t.text != s);
+    }
+
+    /// The tutorial window on screen: its words and picture.
+    pub fn tutorial_window_shown(&self) -> Option<(String, u8)> {
+        self.stack.get(self.shown).and_then(|t| t.window.map(|i| (t.text.clone(), i)))
+    }
+
+    /// The stack's time: the entry on screen runs down (gone at its end); a cycling head hands
+    /// the screen on; the line on screen follows.
+    fn tick_tutorials(&mut self, dt: f32) {
+        if self.stack.is_empty() {
+            self.shown = 0;
+            self.cycle = 0.0;
             self.tutorial = None;
+            return;
         }
+        self.shown = self.shown.min(self.stack.len() - 1);
+        let e = &mut self.stack[self.shown];
+        e.secs -= dt;
+        e.shown += dt;
+        if e.secs <= 0.0 {
+            self.stack.remove(self.shown);
+            self.shown = 0;
+            if self.stack.is_empty() {
+                self.tutorial = None;
+                return;
+            }
+        }
+        let was = self.shown;
+        if self.stack[0].cycling && self.stack.len() > 1 {
+            self.cycle += dt;
+            if self.cycle > TUTORIAL_CYCLE {
+                self.cycle -= TUTORIAL_CYCLE;
+                self.shown = (self.shown + 1) % self.stack.len();
+            }
+        } else {
+            self.shown = 0;
+            self.cycle = 0.0;
+        }
+        if self.shown != was {
+            self.stack[self.shown].shown = 0.0;
+        }
+        if std::env::var("DH_TUTORIAL_LOG").is_ok() {
+            let now: Vec<(&str, f32, bool, bool)> = self.stack.iter().map(|t| (t.text.get(..24).unwrap_or(&t.text), t.secs, t.window.is_some(), t.cycling)).collect();
+            if self.shown != was || self.stack.len() != self.logged {
+                info!("tutorial stack: shown {} of {:?}", self.shown, now);
+                self.logged = self.stack.len();
+            }
+        }
+        let e = &self.stack[self.shown];
+        self.tutorial = e.window.is_none().then(|| (e.text.clone(), e.secs, e.shown));
     }
 
     /// A message up for so long.
@@ -997,13 +1106,7 @@ fn tick_messages(time: Res<Time>, mut msgs: ResMut<HudMessages>) {
         m.1 -= dt;
     }
     msgs.items.retain(|m| m.1 > 0.0);
-    if let Some(t) = msgs.tutorial.as_mut() {
-        t.1 -= dt;
-        t.2 += dt;
-        if t.1 <= 0.0 {
-            msgs.tutorial = None;
-        }
-    }
+    msgs.tick_tutorials(dt);
 }
 
 #[cfg(test)]
@@ -1024,5 +1127,48 @@ mod time_tests {
         let tc = TimeControl { bend_remaining: 3.0, world_dilation: 0.2, ..Default::default() };
         assert!((tc.npc_scale(false) - 0.2).abs() < 1e-6);
         assert_eq!(tc.npc_scale(true), 1.0);
+    }
+}
+
+#[cfg(test)]
+mod tutorial_stack_tests {
+    use super::*;
+
+    #[test]
+    fn one_tutorial_on_screen_at_a_time_by_priority() {
+        let mut m = HudMessages::default();
+        // the game's own: a window, then its line, each in its turn
+        m.tutorial_window("window", 0);
+        m.tutorial_cycling("cycling", 10.0);
+        m.tick_tutorials(0.1);
+        assert_eq!(m.tutorial_window_shown().map(|w| w.0), Some("window".to_string()));
+        assert!(m.tutorial.is_none());
+        // a script's line goes ahead of them
+        m.tutorial("script", 10.0);
+        m.tick_tutorials(0.1);
+        assert_eq!(m.tutorial.as_ref().map(|t| t.0.as_str()), Some("script"));
+        assert!(m.tutorial_window_shown().is_none());
+        // its time runs only while it is shown; then the window's turn, untouched
+        m.tick_tutorials(10.0);
+        m.tick_tutorials(0.0);
+        assert_eq!(m.tutorial_window_shown().map(|w| w.0), Some("window".to_string()));
+        assert!(m.stack[0].secs > TUTORIAL_WINDOW - 0.5);
+        // put away, the next
+        m.drop_tutorial("window");
+        m.tick_tutorials(0.0);
+        assert_eq!(m.tutorial.as_ref().map(|t| t.0.as_str()), Some("cycling"));
+    }
+
+    #[test]
+    fn a_cycling_head_takes_turns() {
+        let mut m = HudMessages::default();
+        m.tutorial_cycling("a", f32::INFINITY);
+        m.tutorial_cycling("b", f32::INFINITY);
+        m.tick_tutorials(0.1);
+        assert_eq!(m.tutorial.as_ref().map(|t| t.0.as_str()), Some("a"));
+        m.tick_tutorials(TUTORIAL_CYCLE);
+        assert_eq!(m.tutorial.as_ref().map(|t| t.0.as_str()), Some("b"));
+        m.tick_tutorials(TUTORIAL_CYCLE);
+        assert_eq!(m.tutorial.as_ref().map(|t| t.0.as_str()), Some("a"));
     }
 }

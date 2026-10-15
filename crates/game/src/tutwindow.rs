@@ -17,7 +17,7 @@ impl Plugin for TutWindowPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TutorialWindow>()
             .add_systems(OnEnter(GameState::InGame), |mut w: ResMut<TutorialWindow>| w.reset())
-            .add_systems(Update, update_window.before(crate::flash::PlayClips).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (to_stack, update_window).chain().before(crate::flash::PlayClips).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -30,8 +30,6 @@ pub const IMG_RUNE: u8 = 3;
 
 const MOVIE: &str = "HUD";
 const SYMBOL: &str = "hud_tutoWin_";
-/// `m_fTutorialWindowDuration`
-const DURATION: f32 = 10.0;
 /// `_txt_mc.txt`: the body font at 22, `#e3f2d6`, 256 wide (its gutter 2)
 const TEXT_SIZE: f32 = 22.0;
 const TEXT_W: f32 = 256.0;
@@ -62,6 +60,22 @@ impl TutorialWindow {
             self.queue.push((text.into(), img));
         }
     }
+}
+
+/// The windows asked for go on the HUD's tutorial stack, which says which is on screen.
+fn to_stack(mut st: ResMut<TutorialWindow>, mut msgs: ResMut<crate::gameplay::HudMessages>, settings: Res<crate::settings::Settings>) {
+    if st.queue.is_empty() {
+        return;
+    }
+    for (text, img) in std::mem::take(&mut st.queue) {
+        // (`PSI_HUD_bShowTutorialNotifications` off: none)
+        if settings.tutorials {
+            msgs.tutorial_window(text, img);
+        }
+    }
+}
+
+impl TutorialWindow {
 
     fn reset(&mut self) {
         let root = self.root.take();
@@ -172,7 +186,7 @@ fn update_window(
     mut timelines: ResMut<MovieTimelines>,
     window: Query<&Window, With<PrimaryWindow>>,
     hud: Query<Entity, With<crate::hud::HudRoot>>,
-    (paused, settings): (Res<crate::hud::Paused>, Res<crate::settings::Settings>),
+    (paused, settings, msgs): (Res<crate::hud::Paused>, Res<crate::settings::Settings>, Res<crate::gameplay::HudMessages>),
     mut sfx: MessageWriter<crate::audio::PostEvent>,
     mut clips: Query<(&mut FlashClip, &mut Node, &mut Visibility), (With<WindowClip>, Without<WindowText>)>,
     mut text: Query<(&mut Text, &mut TextFont, &mut TextColor, &mut TextShadow, &mut Node, &mut UiTransform, &mut Visibility), (With<WindowText>, Without<WindowClip>)>,
@@ -208,16 +222,18 @@ fn update_window(
         }
     };
     let dt = if paused.0 { 0.0 } else { time.delta_secs() };
-    // the next hint once the last is gone (`PSI_HUD_bShowTutorialNotifications` off: none)
-    if !settings.tutorials {
-        st.queue.clear();
+    // the window the stack has on screen: another closes the one up first
+    let want = msgs.tutorial_window_shown().filter(|_| settings.tutorials);
+    if st.shown.is_some() && st.shown != want && st.closing.is_none() {
+        st.closing = Some(0.0);
     }
-    if st.shown.is_none() && !st.queue.is_empty() {
-        let next = st.queue.remove(0);
-        st.shown = Some(next);
-        st.t = 0.0;
-        st.closing = None;
-        sfx.write(crate::audio::PostEvent::named("UI_H_windowNotification", None));
+    if st.shown.is_none() {
+        if let Some(next) = want {
+            st.shown = Some(next);
+            st.t = 0.0;
+            st.closing = None;
+            sfx.write(crate::audio::PostEvent::named("UI_H_windowNotification", None));
+        }
     }
     let Some((msg, img)) = st.shown.clone() else {
         if let Ok((_, _, mut v)) = clips.get_mut(root) {
@@ -234,9 +250,6 @@ fn update_window(
         return;
     };
     st.t += dt;
-    if st.closing.is_none() && st.t >= DURATION {
-        st.closing = Some(0.0);
-    }
     if let Some(c) = st.closing.as_mut() {
         *c += dt;
         if *c >= 0.4 {

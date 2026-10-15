@@ -77,7 +77,7 @@ fn beat(
                 heart.near_target = true;
                 if heart.hints_shown < cap && !switches.0.systemic_off && switches.0.trackers_off & 1 << crate::tutorials::TRACK_HEART == 0 {
                     heart.hints_shown += 1;
-                    msgs.tutorial(data.pawn_text("m_HeartTargetTutorialMessage", "Rune or Bone Charm nearby. Equip the Heart."), 10.0);
+                    msgs.tutorial_cycling(data.pawn_text("m_HeartTargetTutorialMessage", "Rune or Bone Charm nearby. Equip the Heart."), 10.0);
                 }
             }
             Some(d) if d < reach + buffer => {}

@@ -820,7 +820,11 @@ fullscreen display, vertical sync and the crosshair.
   picture (`_img_mc`'s frame, the entry's `EDisTutorialType` less one: a gear for a tutorial
   note, a note, a bone charm, a rune), popping in from the left at 250%, its parts
   drifting to and fro while it stays its `m_fTutorialWindowDuration` (10 s), with the
-  window's notification sound.
+  window's notification sound. Windows and tutorial lines share the HUD's tutorial stack
+  (`m_TutorialStack`, as the exe keeps it): one entry is on screen at a time, the line or the
+  window, the scripts' lines ahead of the rest; only the one shown has its time run, so none
+  is lost under another, and a cycling line of the game's own at the head hands the screen
+  round every `m_fTutorialCycleDelay` (5 s).
 - **Grenade throwback**: armed projectiles can be picked up with Use, dropped with Use, or thrown with
   primary attack without resetting their fuse or spending inventory ammunition. Enemy
   grenades use difficulty-scaled damage and Clockwork Malfunction's additional fuse time;

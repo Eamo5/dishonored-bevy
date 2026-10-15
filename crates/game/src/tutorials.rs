@@ -180,7 +180,7 @@ fn trackers(
             info!("tutorial: {key}: {t:?}");
         }
         if !t.is_empty() {
-            msgs.tutorial(t, PROMPT);
+            msgs.tutorial_cycling(t, PROMPT);
         }
     };
     let elixirs = [stats.health_elixirs, stats.mana_elixirs];
