@@ -157,7 +157,7 @@ impl Plugin for SwarmPlugin {
             .add_message::<SwarmOn>()
             .add_systems(OnEnter(GameState::InGame), level_swarms.after(crate::level::LevelSpawnSet))
             .add_systems(Update, restore_swarms.after(crate::save::restore_npcs).before(summon).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (summon, scripted_swarms, color_rats, swarm_brain, move_rats, rat_calls, npc_stomps, kill_rats).chain().after(crate::npc::age_corpses).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (summon, scripted_swarms, color_rats, swarm_brain, move_rats, rat_calls, npc_stomps, kill_rats, dead_rats).chain().after(crate::npc::age_corpses).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -166,6 +166,45 @@ impl Plugin for SwarmPlugin {
 pub struct SummonSwarm {
     pub at: Vec3,
     pub level: u8,
+}
+
+/// A rat killed: down with its death (`Death1`, `Death2`) where it fell, lying there a while,
+/// then gone (s lain).
+#[derive(Component)]
+pub struct DeadRat(f32);
+
+/// How long a dead rat lies before it is gone, s (our reading: the original's is native).
+const DEAD_RAT_LIE: f32 = 20.0;
+
+/// A rat dies (one Corvo is in goes at once, as before).
+fn rat_dies(commands: &mut Commands, r: Entity, possessed: bool) {
+    if possessed {
+        commands.entity(r).try_despawn();
+    } else {
+        commands.entity(r).try_remove::<(Rat, crate::possession::Host)>().try_insert(DeadRat(0.0));
+    }
+}
+
+/// The dead rats: their deaths, then a while lying there.
+fn dead_rats(mut commands: Commands, time: Res<Time>, tc: Res<TimeControl>, mut rats: Query<(Entity, &mut DeadRat, &mut Animator)>) {
+    let dt = time.delta_secs() * tc.world_scale().max(0.0);
+    let mut died = 0;
+    for (e, mut d, mut a) in &mut rats {
+        if d.0 == 0.0 {
+            let deaths: Vec<ClipId> = ["Death1", "Death2"].iter().filter_map(|n| a.lib.find(n)).collect();
+            if let Some(c) = pick(&deaths) {
+                a.restart(c, false, 1.0, 0.08);
+            }
+            died += 1;
+        }
+        d.0 += dt.max(1e-4);
+        if d.0 > DEAD_RAT_LIE {
+            commands.entity(e).try_despawn();
+        }
+    }
+    if died > 0 {
+        info!("rats: {died} die");
+    }
 }
 
 /// Rats within reach die (explosions, the sword's sweep).
@@ -729,7 +768,7 @@ fn npc_stomps(
     mut commands: Commands,
     time: Res<Time>,
     mut npcs: Query<(Entity, &mut Npc, &Transform), (Without<Rat>, Without<crate::possession::Possessed>)>,
-    rats: Query<(Entity, &Transform), With<Rat>>,
+    rats: Query<(Entity, &Transform, Has<crate::possession::Possessed>), With<Rat>>,
     mut swarms: Query<&mut Swarm>,
     (mut cds, mut pending): (Local<std::collections::HashMap<Entity, f32>>, Local<Vec<(Entity, Entity, f32)>>),
 ) {
@@ -745,7 +784,7 @@ fn npc_stomps(
         }
         let near = rats
             .iter()
-            .map(|(r, rt)| (r, rt.translation - t.translation))
+            .map(|(r, rt, _)| (r, rt.translation - t.translation))
             .filter(|(_, d)| d.with_y(0.0).length() < STOMP_REACH && d.y.abs() < 1.2)
             .min_by(|a, b| a.1.length().total_cmp(&b.1.length()));
         let Some((r, d)) = near else { continue };
@@ -765,32 +804,32 @@ fn npc_stomps(
         false
     });
     for (e, r) in landed {
-        let (Ok((_, npc, t)), Ok((_, rt))) = (npcs.get(e), rats.get(r)) else { continue };
+        let (Ok((_, npc, t)), Ok((_, rt, possessed))) = (npcs.get(e), rats.get(r)) else { continue };
         if npc.is_down() || rt.translation.distance(t.translation).max(0.0) > STOMP_HIT {
             continue;
         }
         for mut s in &mut swarms {
             s.rats.retain(|&x| x != r);
         }
-        commands.entity(r).try_despawn();
+        rat_dies(&mut commands, r, possessed);
         info!("{} stamps on a rat", npc.name);
     }
     cds.retain(|e, _| npcs.contains(*e));
 }
 
-fn kill_rats(mut commands: Commands, mut kills: MessageReader<KillRats>, mut swarms: Query<&mut Swarm>, rats: Query<&Transform, With<Rat>>, mut stats: ResMut<PlayerStats>, attrs: Res<crate::gamedata::Attrs>, rapier: ReadRapierContext) {
+fn kill_rats(mut commands: Commands, mut kills: MessageReader<KillRats>, mut swarms: Query<&mut Swarm>, rats: Query<(&Transform, Has<crate::possession::Possessed>), With<Rat>>, mut stats: ResMut<PlayerStats>, attrs: Res<crate::gamedata::Attrs>, rapier: ReadRapierContext) {
     let context = rapier.single().ok();
     for k in kills.read() {
         for mut s in &mut swarms {
             s.rats.retain(|&r| match rats.get(r) {
-                Ok(t) if t.translation.distance(k.at) < k.radius => {
+                Ok((t, possessed)) if t.translation.distance(k.at) < k.radius => {
                     let to = t.translation + Vec3::Y * 0.05 - k.source;
                     let distance = to.length();
                     if distance > 0.05 && context.as_ref().is_some_and(|ctx| ctx.cast_ray(k.source, to / distance, distance - 0.05, true,
                         QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP))).is_some()) {
                         return true;
                     }
-                    commands.entity(r).despawn();
+                    rat_dies(&mut commands, r, possessed);
                     if k.by_player {
                         stats.gain_adrenaline(attrs.adrenaline_rat);
                     }
