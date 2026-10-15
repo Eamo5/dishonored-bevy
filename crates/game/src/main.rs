@@ -124,6 +124,7 @@ mod dock;
 mod elixirs;
 mod tutorials;
 mod helpscreen;
+mod stripes;
 mod pickuplog;
 mod targetcard;
 mod gauges;
@@ -256,6 +257,7 @@ fn main() -> AppExit {
         .add_plugins(elixirs::ElixirsPlugin)
         .add_plugins(tutorials::TutorialsPlugin)
         .add_plugins(helpscreen::HelpScreenPlugin)
+        .add_plugins(stripes::StripesPlugin)
         .add_systems(Startup, powers::configure_xray_gizmos)
         .run()
 }

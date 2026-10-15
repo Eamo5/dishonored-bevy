@@ -873,7 +873,10 @@ fullscreen display, vertical sync and the crosshair.
   top (720 - `_stripeH` 70); the location banner as far down the screen as the movie has it down
   the stage. On a screen wider or narrower than 16:9 the corners go out over what is seen
   beyond the stage, the damage vignette's sides go to its edges and along the whole of them,
-  and a conversation's stripes reach the window's top and bottom.
+  and a conversation's stripes reach the window's top and bottom. While a full-screen menu is
+  up (`m_bDrawBlackStripesWhileActive`: the main and pause menus, the journal, a note, a store,
+  the mission statistics) what is seen beyond the stage is black (the Global movie's
+  `g_BlackStripes`, `stripes.rs`): the menus are pillarboxed, as roshan's research decoded.
 - **Health, mana and the left hand** (`gauges.rs`, the HUD movie's `masterHUD_mc` and its
   `PlayerGauges` class): the top left as the original draws it — the health and mana shards
   (tilted 15 and 30 degrees) over their ink splashes, each filling from its base to the
