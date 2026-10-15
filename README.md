@@ -541,7 +541,8 @@ fullscreen display, vertical sync and the crosshair.
   his blows coming, they may step aside or back out of reach (`DisTweaks_NPCSideStep` 2.5 m,
   `..BackStep` 3 m, every 12-15 s at most; how readily is read from `m_DodgeLevel`, a tenth
   a level), each with its step's clip (`Sword_SideStep_Left`, `_Right`, `_Back`). A blow (a kick too) throws his arms from the side it came (`Sword_BigHit_Front`,
-  `_Back`, `_Left`, `_Right`); other harm, as from ahead. A big blow leaves Corvo reeling for `m_fVulnerableTime_BigHit_Dizzy`; his perfect
+  `_Back`, `_Left`, `_Right`; empty-handed, `Empty_BigHit_*`, and a knockdown's `Empty_Knockdown*`);
+  other harm, as from ahead. A big blow leaves Corvo reeling for `m_fVulnerableTime_BigHit_Dizzy`; his perfect
   parry is a block begun within `m_fTapForPerfectParryWindow` (0.2 s), within his sword's
   `m_fBlockAngle` (50 degrees). When his blow and a guard's land together (their attack
   zones within `m_fVersusZoneMaxTime`, each facing the other) the blades lock
@@ -1599,7 +1600,9 @@ against the install's own data where it carries them, then implemented independe
   800 uu/s `JumpZ` rises 1.07 m and lands after 0.533 s. A fall hurts from
   `MaxSpeedBeforeFallingDamage` (22.5 m/s) and kills at `MaxSpeedBeforeFallingDeath` (29 m/s), in
   proportion between (Agility raises both). Agility's power jump uses the original numbers unscaled.
-  Leaving the ground in a jump plays the arms' take-off (`Sword_Ready_JumpIn`), then the leap.
+  Leaving the ground in a jump plays the arms' take-off (`Sword_Ready_JumpIn`), then the leap;
+  empty-handed, `Empty_Sneak_Jump` and its landing `Empty_Sneak_JumpLandSmall` (the empty set's
+  only jump).
   Touching down after a jump or fall plays the arms' landing (`DisTweaks_PlayerPawn_NavigationActions`):
   `Sword_Ready_JumpLandSmall`, crouched `Sword_Sneak_JumpLandSmall`, and past
   `m_fFall_Stun_Vel` (22 m/s) the hard `Generic_JumpLandBig`. None stops him moving (as roshan's

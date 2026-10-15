@@ -261,6 +261,11 @@ struct ArmClips {
     swim: [Option<ClipId>; 4],
     // empty-handed (no sword): idle, sneaking idle and walk
     empty_idle: Option<ClipId>,
+    /// thrown by a blow empty-handed, by its side (`Empty_BigHit_Front`...)
+    empty_hit: [Option<ClipId>; 4],
+    /// empty-handed in the air and landing (`Empty_Sneak_Jump`, `_JumpLandSmall`: the empty set's
+    /// only jump)
+    empty_jump: [Option<ClipId>; 2],
     empty_sneak: [Option<ClipId>; 2],
     // drawing the sword (standing, sneaking)
     equip: [Option<ClipId>; 2],
@@ -334,6 +339,8 @@ impl ArmClips {
             ],
             swim_idle: lib.find("Empty_SwimIdle"),
             empty_idle: lib.find("Empty_Idle"),
+            empty_hit: ["Front", "Back", "Left", "Right"].map(|s| lib.find(&format!("Empty_BigHit_{s}"))),
+            empty_jump: [lib.find("Empty_Sneak_Jump"), lib.find("Empty_Sneak_JumpLandSmall")],
             empty_sneak: [lib.find("Empty_Sneak_Idle"), lib.find("Empty_Sneak_Walk")],
             equip: [lib.find("Sword_Ready_Equip"), lib.find("Sword_Sneak_Equip")],
             versus: [
@@ -1005,12 +1012,43 @@ fn animate_arms(
             base_busy = true;
         }
     }
-    // no sword: the empty hands, low
+    // no sword: the empty hands, low; struck, thrown from the blow's side or knocked down
+    // (`Empty_BigHit_*`, `Empty_Knockdown*`), as the sword's
     if !base_busy && empty {
-        let moving = Vec2::new(p.velocity.x, p.velocity.z).length() > 0.4;
-        let cl = if p.crouched { if moving { c.empty_sneak[1] } else { c.empty_sneak[0] } } else { c.empty_idle };
-        if let Some(cl) = cl.or(c.empty_idle).or(c.idle) {
-            anim.play(cl, true, 1.0, 0.3);
+        let side = |s: u8| (s as usize).min(3);
+        let struck = if stats.knockdown.0 != st.knock_seen {
+            c.knockdown[1][side(stats.knockdown.1)].map(|cl| (cl, 1.0))
+        } else if stats.blow.0 != st.blow_seen || stats.damage_flash > st.damage_flash + 1e-3 {
+            let s = if stats.blow.0 != st.blow_seen { side(stats.blow.1) } else { 0 };
+            c.empty_hit[s].map(|cl| (cl, 1.4))
+        } else if st.airborne && p.grounded {
+            // (touching down: its landing, at Agility's rate as the sword's)
+            c.empty_jump[1].map(|cl| (cl, attrs.land_rate.max(0.1)))
+        } else {
+            None
+        };
+        if let Some((cl, rate)) = struck {
+            anim.restart(cl, false, rate, 0.05);
+            st.oneshot = true;
+            if std::env::var("DH_ARMS_LOG").is_ok() {
+                info!("arms: struck empty-handed {}", anim.lib.clip(cl).name);
+            }
+        }
+        if st.oneshot && !anim.finished() {
+            // (let it play out)
+        } else {
+            st.oneshot = false;
+            let moving = Vec2::new(p.velocity.x, p.velocity.z).length() > 0.4;
+            let cl = if !p.grounded && p.air_time > 0.25 {
+                c.empty_jump[0]
+            } else if p.crouched {
+                if moving { c.empty_sneak[1] } else { c.empty_sneak[0] }
+            } else {
+                c.empty_idle
+            };
+            if let Some(cl) = cl.or(c.empty_idle).or(c.idle) {
+                anim.play(cl, true, 1.0, 0.3);
+            }
         }
         base_busy = true;
     }
@@ -1196,6 +1234,7 @@ fn animate_arms(
     st.parry_flash = sword.parry_flash;
     st.damage_flash = stats.damage_flash;
     st.blow_seen = stats.blow.0;
+    st.knock_seen = stats.knockdown.0;
     // touching down: the landing for how hard and how he stands (a hard one past
     // `StatePlayerMasterFalling.m_fFall_Stun_Vel`, 2200 uu/s), as roshan's r614/blink research
     // decoded the landing's actions
