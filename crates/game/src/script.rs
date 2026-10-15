@@ -702,6 +702,16 @@ fn run_script(
             explosions.write(crate::gadgets::Explosion { at, radius: 6.0, full: 2.0, damage: 0.0, effect: "grenade", player: None, kind: crate::gameplay::HitKind::Explosion, silent: false });
             info!("script: explode at {at:.1}");
         }
+        "chokedust" => {
+            // (tests) chokedust [distance]: a chokedust cloud in front of the view
+            let d = cmd.get(1).and_then(|v| v.parse::<f32>().ok()).unwrap_or(3.0);
+            let fwd = Quat::from_euler(EulerRot::YXZ, p.yaw, 0.0, 0.0) * Vec3::NEG_Z;
+            let at = t.translation + fwd * d;
+            commands.queue(move |w: &mut World| {
+                w.write_message(crate::gadgets::ChokeDust { at, radius: 3.0, secs: 3.0 });
+            });
+            info!("script: chokedust at {at:.1}");
+        }
         "grenade" => {
             // grenade [fuse] [npc]: an enemy grenade in reach of the view, or at
             // its owner's feet to check non-player kill attribution.

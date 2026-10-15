@@ -403,8 +403,9 @@ fullscreen display, vertical sync and the crosshair.
   or 180 degrees to its side (`Sword_Patrol_Turn*` / `Empty_Turn*` relaxed, `Sword_Turn*` on
   edge), the body shown turning across the clip (its facing for the game turned at once); less,
   it glides round.
-  A patrolling or guarding character plays an ambient idle of the set it stands in (a guard's
-  `Sword_Patrol_Idle_0x`, empty hands' `Empty_Idle_0x`) every 30-60 s on its upper body, walking
+  A patrolling or guarding character plays an ambient idle of the set it stands in, any the set
+  has (a guard's `Sword_Patrol_Idle_01` to `_04`, empty hands' `Empty_Idle_01` to `_08`, a tall
+  thug's `Empty_Idle02`, `05`, `07`), every 30-60 s on its upper body, walking
   as well as standing (the patrol and guard behaviours' `DisTweaks_AISubProcess_AmbientAnims`,
   `m_bCheckForMovement` false), its legs keeping their stride (the upper body from
   `spine_0_jnt`, `NPC_Human_at`'s `UpperBodyFilter`); a blow, a fall or anything setting it on
@@ -458,7 +459,8 @@ fullscreen display, vertical sync and the crosshair.
   blow came from: its front, left, right or back clips (`Sword_HitLeft_A`, `Empty_HitBack_A`,
   `Generic_DeathRightA`...), where it has them; hurt by no blow it knows of, it picks among them.
   A bullet or bolt to a leg (below the hips) has it clutch that leg (`Sword_HitLeg_Left`,
-  `Empty_HitLeg_Right`). His pistol's bullet (`Twk_Proj_BulletUpgraded`) deals 20, ×1.5
+  `Empty_HitLeg_Right`). A thing thrown at it (a bottle, a brick) gets its small hit, by the side
+  it struck (`Generic_SmallHit_Front`..., with their stone-on-body cue). His pistol's bullet (`Twk_Proj_BulletUpgraded`) deals 20, ×1.5
   within 9 m, and kills with a head shot (`m_bKillOnHeadshot`); a crossbow bolt deals the
   crossbow's 20, doubled on someone unaware (`m_fDamageMultiplier_Stealth`). Characters'
   shots hit at their `m_MaxAccuracy` close, falling to `m_MinAccuracy` at the end of their
@@ -1327,7 +1329,11 @@ fullscreen display, vertical sync and the crosshair.
   meant to hit is aimed at the ground under Corvo, leading him, on the arc that brings it down
   there (20 m/s, half gravity), one meant to miss turns aside up to 30 degrees; it bursts where
   it first strikes (`TallboyArrowExplosion_Twk`: 40 within 1 m, nothing at 5 m), and a tallboy
-  holds its arrow while one of its own stands within 7.5 m of Corvo.
+  holds its arrow while one of its own stands within 7.5 m of Corvo. It draws its bow first,
+  standing for it: `Empty_Bow_Charged_In`, with its telegraph cue (`Snd_AI_Tboy_Telegraph`, a
+  warning), held a breath (`_Charged`; 1.5 s in all, our reading). Then it looses
+  (`Empty_Bow_Fire`), or, Corvo lost a moment or the tallboy struck, lets it down
+  (`_Charged_Out`).
 - **Room reverb**: each room's environment (`m_Environment`: `Room_Medium_Wood`,
   `PC_streets_01`, `sewer`...) is the bank's reverb effect of that name (`Init.bnk`'s RoomVerb
   and Matrix Reverb share sets: decay, high damping, tail level), cooked into the audio index;
@@ -1487,6 +1493,9 @@ fullscreen display, vertical sync and the crosshair.
     - Chokedust (`DLC06_Proj_ChokeDust`, from Daud's grenade hand) is thrown and cooked like a
       grenade. It leaves a 3 m cloud for 3 s. Whoever is caught in it chokes for 4 s, unharmed
       (`m_bCannotKillNPC`), then goes looking for whoever threw it. Rats within 2 m die.
+      The choking has its clips (`Generic_SmokeBomb_In`, `_Loop`, `_Out`: the DLC's elite
+      guards'). Others double over (`Sword_Stun_Loop`) and come up again as it ends
+      (`Sword_RecoveryA` / `B`, which start from that pose: our reading of them).
     - Arc mines and stun mines (`DisDLC06Tweaks_ArcMinePlaced`) are placed on any surface and
       arm in 2 s. They strike anyone outside Daud's factions (`m_FriendlyFactions`) who comes
       into their cylinder (5.12 m across, 2.56 m up and down) and in sight: twice, 1 s apart,

@@ -76,13 +76,12 @@ fn loose(
     rapier: ReadRapierContext,
     player: Query<&Player>,
     assets: Option<Res<GameAssets>>,
-    mut sfx: MessageWriter<crate::audio::PostEvent>,
 ) {
     let Ok(ctx) = rapier.single() else { return };
     let ground = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     let lead = player.single().map(|p| p.velocity.with_y(0.0)).unwrap_or(Vec3::ZERO);
     for s in shots.read() {
-        sfx.write(crate::audio::PostEvent::named("Snd_AI_TBoy_Bow_Fire", Some(s.from)));
+        // (its sound is the loosing clip's cue, `Empty_Bow_Fire`: `npc.rs`)
         let dir = if s.hit {
             // the ground under him, where he will be as it comes down
             let floor = ctx.cast_ray(s.at, Vec3::NEG_Y, GROUND, true, ground).map(|(_, t)| s.at - Vec3::Y * t).unwrap_or(s.at - Vec3::Y * 0.9);

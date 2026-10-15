@@ -251,6 +251,10 @@ pub struct Npc {
     pub rise: Option<bool>,
     /// the blow it last took was a shot to a leg: its right (or left)
     pub leg_hit: Option<bool>,
+    /// the blow it last took was a thing thrown at it (a bottle, a brick: `DisDamageType_Impact`)
+    pub small_hit: bool,
+    /// choking in a cloud of chokedust (its stun's length: `stagger`)
+    pub dusted: bool,
     /// its bearing about Corvo while it waits outside the ring of those at him (radians)
     pub flank: Option<f32>,
     pub taunt_hold: f32,
@@ -1697,6 +1701,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         floored: false,
         rise: None,
         leg_hit: None,
+        small_hit: false,
+        dusted: false,
         flank: None,
         taunt_hold: 0.0,
         search_run: false,
@@ -2032,7 +2038,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 swarm_t: f32::INFINITY,
                 swarm_phase: 0,
                 unpossess_next: None,
+                dust_phase: 0,
                 attract_phase: 0,
+                bow_drawn: false,
                 counter: None,
                 gun_phase: GunPhase::Away,
                 gun_t: 0.0,
@@ -2111,6 +2119,7 @@ fn npc_hits(
         }
         let Ok((e, mut npc, t)) = npcs.get_mut(h.npc) else { continue };
         npc.leg_hit = leg;
+        npc.small_hit = h.kind == HitKind::Impact;
         if npc.is_down() {
             // the knocked out can still be killed where they lie (a blade, a bolt, a shot, a
             // blast, fire, the rats eating them): a kill, no longer a knockout
@@ -2233,6 +2242,7 @@ fn npc_hits(
             // chokedust: choking where they stand a while, unharmed; then after whoever threw it
             HitKind::Chokedust => {
                 npc.stagger = npc.stagger.max(crate::gadgets::CHOKEDUST_STUN);
+                npc.dusted = true;
                 npc.attack_t = None;
                 npc.hit_react = 0.35;
                 npc.last_seen = Some(h.from);
@@ -3539,7 +3549,7 @@ pub(crate) fn npc_brain(
                         }
                         npc.gun_hold = 0.0;
                     }
-                    if npc.ranged == 1 {
+                    if matches!(npc.ranged, 1 | 2) {
                         if let Some((left, unseen)) = npc.aim {
                             let unseen = if npc.sees_player { 0.0 } else { unseen + dt };
                             if unseen > 0.65 || d > far || npc.stagger > 0.0 || npc.attack_t.is_some() {
@@ -3571,7 +3581,16 @@ pub(crate) fn npc_brain(
                         npc.target = None;
                         continue;
                     }
-                    if ready && (aimed || (npc.ranged != 1 && facing)) {
+                    // a tallboy draws its bow first (`Empty_Bow_Charged_In`, its telegraph cue
+                    // `Snd_AI_Tboy_Telegraph` a warning), standing for it, and holds it a breath;
+                    // Corvo lost a moment or the tallboy struck, it lets it down
+                    if npc.ranged == 2 && ready && !aimed && facing {
+                        npc.aim = Some((BOW_DRAW, 0.0));
+                        info!("{} draws its bow {d:.1} m away", npc.name);
+                        npc.target = None;
+                        continue;
+                    }
+                    if ready && (aimed || (npc.ranged == 3 && facing)) {
                         let cd = if unreachable { ctx.cooldown_unreachable } else { ctx.cooldown };
                         npc.shoot_cd = cd[0] + rand::random::<f32>() * (cd[1] - cd[0]).max(0.0);
                         // an assassin's wrist bow: a shot of its own (`Sword_RangedAttack`), standing
@@ -4333,6 +4352,15 @@ pub struct NpcClips {
     /// shot in the left, right leg, sword drawn and empty-handed (`Sword_HitLeg_Left`,
     /// `Empty_HitLeg_Right`)
     hit_leg: [[Option<ClipId>; 2]; 2],
+    /// struck by a thing thrown, by the side it struck: front, left, right, back
+    /// (`Generic_SmallHit_Front`..., with their stone-on-body cue)
+    small_hit: [Option<ClipId>; 4],
+    /// choking in chokedust: in, its loop, out (`Generic_SmokeBomb_In`...: Daud's elite guards'
+    /// sets); without them, doubled over and up again, sword drawn and empty-handed
+    /// (`Sword_Stun_Loop`, `Sword_RecoveryA` / `B`)
+    dust: [Option<ClipId>; 3],
+    stun_loop: [Option<ClipId>; 2],
+    recovery: [Vec<ClipId>; 2],
     death_dir: [Option<ClipId>; 4],
     stun: Option<ClipId>,
     /// the eyelids' `Blink`
@@ -4377,6 +4405,9 @@ pub struct NpcClips {
     attract: [Option<ClipId>; 4],
     /// an assassin's wrist bow shot
     wrist_shot: Option<ClipId>,
+    /// a tallboy's bow: drawn, held, loosed, let down (`Empty_Bow_Charged_In`, `_Charged`,
+    /// `Empty_Bow_Fire`, `_Charged_Out`)
+    bow: [Option<ClipId>; 4],
     /// getting up from where it lay, on its back and on its front (`Generic_RagdollToBack`,
     /// `_ToFront`)
     get_up: [Option<ClipId>; 2],
@@ -4419,12 +4450,15 @@ impl NpcClips {
         let c = NpcClips {
             // humans first, then the wolfhound's own sets (Patrol_ / Attack_)
             idle: lib.first(&["Sword_Patrol_Idle", "Empty_Idle", "Sword_Idle", "Patrol_Idle"]),
-            // (the ambient idles of the set it stands in: a guard's patrol stance, empty hands,
-            // a wolfhound's)
+            // (the ambient idles of the set it stands in, all it has: a guard's patrol stance,
+            // empty hands (a tall thug's are named without the underscore), a wolfhound's)
             idle_fidgets: {
                 let sets: [(&str, &[&str]); 3] = [
-                    ("Sword_Patrol_Idle", &["Sword_Patrol_Idle_01", "Sword_Patrol_Idle_03", "Sword_Patrol_Idle_04"]),
-                    ("Empty_Idle", &["Empty_Idle_01", "Empty_Idle_02", "Empty_Idle_03", "Empty_Idle_04"]),
+                    ("Sword_Patrol_Idle", &["Sword_Patrol_Idle_01", "Sword_Patrol_Idle_02", "Sword_Patrol_Idle_03", "Sword_Patrol_Idle_04"]),
+                    (
+                        "Empty_Idle",
+                        &["Empty_Idle_01", "Empty_Idle_02", "Empty_Idle_03", "Empty_Idle_04", "Empty_Idle_05", "Empty_Idle_06", "Empty_Idle_07", "Empty_Idle_08", "Empty_Idle02", "Empty_Idle05", "Empty_Idle07"],
+                    ),
                     ("Patrol_Idle", &["Patrol_Idle_01", "Patrol_Idle_02", "Patrol_Idle_03", "Patrol_Idle_04"]),
                 ];
                 sets.iter().find(|(base, _)| lib.first(&[base]).is_some()).map(|(_, all)| lib.all(all)).unwrap_or_default()
@@ -4499,6 +4533,10 @@ impl NpcClips {
                 lib.all(&["Empty_HitRight_A"]),
                 lib.all(&["Empty_HitBack_A"]),
             ],
+            small_hit: ["Front", "Left", "Right", "Back"].map(|s| lib.find(&format!("Generic_SmallHit_{s}"))),
+            dust: ["In", "Loop", "Out"].map(|p| lib.find(&format!("Generic_SmokeBomb_{p}"))),
+            stun_loop: [lib.find("Sword_Stun_Loop"), lib.find("Empty_Stun_Loop")],
+            recovery: [lib.all(&["Sword_RecoveryA", "Sword_RecoveryB"]), lib.all(&["Empty_RecoveryA", "Empty_RecoveryB"])],
             hit_leg: [["Sword_", "Empty_"], ["Empty_", "Sword_"]].map(|sets| ["Left", "Right"].map(|s| sets.iter().find_map(|p| lib.find(&format!("{p}HitLeg_{s}"))))),
             death_dir: [
                 lib.first(&["Generic_DeathFrontA", "Generic_DeathFront_A"]),
@@ -4546,6 +4584,7 @@ impl NpcClips {
             unpossess: [lib.first(&["Empty_Unpossess_Eject", "Patrol_Unpossess_Eject"]), lib.first(&["Empty_Unpossess_Dizzy", "Patrol_Unpossess_Dizzy"]), lib.first(&["Empty_Unpossess_Puke", "Patrol_Unpossess_Puke"])],
             attract: ["In", "Loop", "Attack", "Cancel"].map(|p| lib.find(&format!("Sword_Power_Attract_{p}"))),
             wrist_shot: lib.find("Sword_RangedAttack"),
+            bow: [lib.find("Empty_Bow_Charged_In"), lib.find("Empty_Bow_Charged"), lib.find("Empty_Bow_Fire"), lib.find("Empty_Bow_Charged_Out")],
             get_up: [lib.find("Generic_RagdollToBack"), lib.find("Generic_RagdollToFront")],
             dodge_attack: [lib.find("Sword_SideStepLeft_DodgeAttack_Small"), lib.find("Sword_SideStepRight_DodgeAttack_Small")],
             magic: [lib.all(&["Empty_Magic_OutOfSight", "Sword_Magic_OutOfSight"]), lib.all(&["Sword_Magic_OutOfSight", "Empty_Magic_OutOfSight"])],
@@ -4647,8 +4686,12 @@ pub struct NpcAnim {
     swarm_phase: u8,
     /// its reeling after Corvo came out of it: the clip still to come
     unpossess_next: Option<ClipId>,
+    /// how far into choking in chokedust (0 not, 1 its start, 2 its loop)
+    dust_phase: u8,
     /// how far into casting its Attract spell (0 not, 1 its hand raised, 2 held)
     attract_phase: u8,
+    /// its bow drawn (a tallboy's)
+    bow_drawn: bool,
     /// dodging to a side (its clip) with its slash to come
     counter: Option<(usize, ClipId)>,
     gun_phase: GunPhase,
@@ -4707,6 +4750,9 @@ const BEG_RISE: f32 = 1.5;
 /// How long a character stands after its pistol shot (`Sword_Gun_Fire` 1 s, then `Sword_Gun_Undraw`
 /// 1 s).
 const GUN_HOLD: f32 = 2.0;
+/// A tallboy's draw before it looses, s: its draw's clip (`Empty_Bow_Charged_In`, 1.27 s) and a
+/// breath held (our reading).
+const BOW_DRAW: f32 = 1.5;
 
 /// Where a character's pistol is: on its hip, coming out, aimed, firing, going back.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -5386,6 +5432,47 @@ fn npc_select_anim(
             hang(&mut commands, &st.bottle, st.bottle_holster.or(st.bottle_hand));
         }
 
+        // a tallboy's bow: drawn as it takes aim (`Empty_Bow_Charged_In`, with its telegraph cue),
+        // held (`_Charged`), loosed (`Empty_Bow_Fire`), or let down as the aim is given up
+        // (`_Charged_Out`)
+        if npc.ranged == 2 && clips.bow[1].is_some() {
+            let [draw, held, loose, down] = clips.bow;
+            let shot = npc.shots != st.shots_seen;
+            st.shots_seen = npc.shots;
+            if shot {
+                st.bow_drawn = false;
+                if let Some(c) = loose {
+                    anim.restart(c, false, 1.0, 0.08);
+                    st.oneshot = true;
+                    st.last_mode = npc.mode;
+                    st.last_alert = npc.alert;
+                    continue;
+                }
+            } else if npc.aim.is_some() && !npc.is_down() {
+                if !st.bow_drawn {
+                    st.bow_drawn = true;
+                    if let Some(c) = draw.or(held) {
+                        anim.restart(c, draw.is_none(), 1.0, 0.15);
+                    }
+                } else if anim.finished() {
+                    if let Some(c) = held {
+                        anim.play(c, true, 1.0, 0.1);
+                    }
+                }
+                st.last_mode = npc.mode;
+                st.last_alert = npc.alert;
+                continue;
+            } else if std::mem::take(&mut st.bow_drawn) && !npc.is_down() {
+                if let Some(c) = down {
+                    anim.restart(c, false, 1.0, 0.1);
+                    st.oneshot = true;
+                    st.last_mode = npc.mode;
+                    st.last_alert = npc.alert;
+                    continue;
+                }
+            }
+        }
+
         // the pistol: drawn into the left hand to aim (`Sword_Gun_Draw`, then `Sword_Gun_Idle`),
         // fired (`Sword_Gun_Fire`), put back on the hip (`Sword_Gun_Undraw`); moving, hurt or
         // down, it goes straight back
@@ -5575,6 +5662,59 @@ fn npc_select_anim(
             }
         }
 
+        // choking in chokedust where it stands: its smoke clips (`Generic_SmokeBomb_In`, `_Loop`,
+        // `_Out`) or, its set without them, doubled over (`Sword_Stun_Loop`) and up again
+        // (`Sword_RecoveryA` / `B`: our reading of them), coming out of it as its stun ends
+        if npc.dusted {
+            let hands = (!st.drawn) as usize;
+            let [d_in, d_loop, d_out] = if clips.dust[1].is_some() {
+                clips.dust
+            } else {
+                [None, clips.stun_loop[hands].or(clips.stun_loop[1 - hands]), pick(&clips.recovery[hands]).or_else(|| pick(&clips.recovery[1 - hands]))]
+            };
+            let out_len = d_out.map_or(0.0, |c| lib.duration(c));
+            match d_loop.filter(|_| !npc.is_down()) {
+                // (without a loop, it reels as struck)
+                None => {
+                    npc.dusted = false;
+                    st.dust_phase = 0;
+                }
+                Some(_) if st.dust_phase > 0 && npc.stagger <= out_len => {
+                    npc.dusted = false;
+                    st.dust_phase = 0;
+                    if let Some(c) = d_out {
+                        anim.restart(c, false, 1.0, 0.2);
+                        st.oneshot = true;
+                        st.hit_seen = npc.hit_react;
+                        st.last_mode = npc.mode;
+                        st.last_alert = npc.alert;
+                        continue;
+                    }
+                }
+                Some(l) => {
+                    match (st.dust_phase, d_in) {
+                        (0, Some(c)) => {
+                            anim.restart(c, false, 1.0, 0.15);
+                            st.dust_phase = 1;
+                        }
+                        (0, None) => {
+                            anim.restart(l, true, 1.0, 0.2);
+                            st.dust_phase = 2;
+                        }
+                        (1, _) if anim.finished() => {
+                            anim.play(l, true, 1.0, 0.1);
+                            st.dust_phase = 2;
+                        }
+                        _ => {}
+                    }
+                    st.hit_seen = npc.hit_react;
+                    st.last_mode = npc.mode;
+                    st.last_alert = npc.alert;
+                    continue;
+                }
+            }
+        }
+
         // reactions
         if npc.hit_react > st.hit_seen + 1e-3 {
             // the reactions of the hands it has: sword drawn, or empty
@@ -5587,7 +5727,9 @@ fn npc_select_anim(
             };
             // (shot in a leg: its leg's)
             let leg = npc.leg_hit.take().and_then(|r| clips.hit_leg[(!std::ptr::eq(dirs, &clips.hit_dir)) as usize][r as usize]);
-            let c = if npc.stagger > 1.0 { clips.stun.or(pick(pool)) } else { leg.or_else(|| pick(pool)) };
+            // (struck by a thing thrown: its small hit, by the side it struck)
+            let small = std::mem::take(&mut npc.small_hit).then(|| side_struck(&npc, t.translation).and_then(|s| clips.small_hit[s])).flatten();
+            let c = if npc.stagger > 1.0 { clips.stun.or(pick(pool)) } else { leg.or(small).or_else(|| pick(pool)) };
             if let Some(c) = c {
                 anim.restart(c, false, 1.3, 0.06);
                 st.oneshot = true;
