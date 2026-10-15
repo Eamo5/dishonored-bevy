@@ -159,10 +159,12 @@ struct ArmClips {
     land_big: Option<ClipId>,
     /// dying, struck from ahead, behind, the left, the right (`Generic_Death_Impact`, `_Back`,
     /// `_Left`, `_Right`: named, as the characters' deaths are, for the side the blow came from),
-    /// from a fall (`Generic_Death_FallImpact_Back`), drowned (`Generic_Death_Water`)
+    /// from a fall (`Generic_Death_FallImpact_Back`), in the water (`Generic_Death_Water`),
+    /// drowned (`Generic_Death_Water_OutOfBreath`)
     death: [Option<ClipId>; 4],
     death_fall: Option<ClipId>,
     death_water: Option<ClipId>,
+    death_drowned: Option<ClipId>,
     /// a mantle (`Ply_Player_Mantle_at`): empty-handed or sword in hand, standing or sneaking,
     /// low, medium or high
     mantle: [[[Option<ClipId>; 3]; 2]; 2],
@@ -195,6 +197,9 @@ struct ArmClips {
     /// the left hand on the move with a power, with a gadget: walking, sprinting, in the air
     /// (`Powers_Walk`, `Powers_Jump`, `Gadgets_Walk`, `Gadgets_Sprint`, `Gadgets_Jump`)
     left_loco: [[Option<ClipId>; 3]; 2],
+    /// the left hand with a power, with a gadget, as the sword slashes from the right, from
+    /// the left (`Powers_SwordSlash_Right`, `Gadgets_SwordSlash_Left`)
+    left_slash: [[Option<ClipId>; 2]; 2],
     gadgets_idle: Option<ClipId>,
     /// the Heart's grip: its fingers about it (`Ply_Gadgets_Heart_as`, on the left hand's
     /// fingers over the gadgets' hold)
@@ -275,6 +280,7 @@ impl ArmClips {
             death: [lib.find("Generic_Death_Impact"), lib.find("Generic_Death_Back"), lib.find("Generic_Death_Left"), lib.find("Generic_Death_Right")],
             death_fall: lib.find("Generic_Death_FallImpact_Back"),
             death_water: lib.find("Generic_Death_Water"),
+            death_drowned: lib.find("Generic_Death_Water_OutOfBreath"),
             mantle: [["Empty_Mantle", "Empty_Sneak_Mantle"], ["Sword_Ready_Mantle", "Sword_Sneak_Mantle"]]
                 .map(|ways| ways.map(|w| ["Low", "Medium", "High"].map(|h| lib.find(&format!("{w}{h}"))))),
             slide: ["Empty", "Sword"].map(|s| ["SlideIn", "SlideLoop", "SlideOutSneak", "SlideOutSprint"].map(|n| lib.find(&format!("{s}_{n}")))),
@@ -316,6 +322,7 @@ impl ArmClips {
             swim: [lib.find("Empty_SwimN"), lib.find("Empty_SwimE"), lib.find("Empty_SwimS"), lib.find("Empty_SwimW")],
             powers_idle: lib.find("Powers_Idle"),
             left_loco: ["Powers", "Gadgets"].map(|s| ["Walk", "Sprint", "Jump"].map(|w| lib.find(&format!("{s}_{w}")))),
+            left_slash: ["Powers", "Gadgets"].map(|s| ["Right", "Left"].map(|w| lib.find(&format!("{s}_SwordSlash_{w}")))),
             gadgets_idle: lib.find("Gadgets_Idle"),
             heart_fingers: lib.first(&["Gadgets_Heart_Fingers_Idle", "Gadgets_Heart_Fingers_Default"]),
             blink: lib.find("Powers_Cast_Blink_Out"),
@@ -363,6 +370,8 @@ struct ArmsAnim {
     next_attack: usize,
     /// the swing playing (0 right, 1 left, 2 sneak; its clip in its list), and the bounces seen
     swing_clip: (u8, usize),
+    /// a slash just begun (its side: 0 from the right, 1 the left) for the left hand to go with
+    slash: Option<u8>,
     bounce_seen: u32,
     blocking: bool,
     /// aiming Blink (as last seen)
@@ -674,6 +683,7 @@ fn spawn_arms(
                 swinging: false,
                 next_attack: 0,
                 swing_clip: (0, 0),
+                slash: None,
                 bounce_seen: 0,
                 blocking: false,
                 blink_aiming: false,
@@ -782,7 +792,9 @@ fn animate_arms(
     if dying {
         if !st.died {
             st.died = true;
-            let cl = if swim.swimming() {
+            let cl = if stats.died_drowning {
+                c.death_drowned.or(c.death_water).or(c.death[1])
+            } else if swim.swimming() {
                 c.death_water.or(c.death[1])
             } else if stats.died_falling {
                 c.death_fall.or(c.death[1])
@@ -1052,6 +1064,7 @@ fn animate_arms(
                 (1, st.next_attack / 2)
             };
             st.swing_clip = (kind, i);
+            st.slash = Some((kind == 1) as u8);
             let cl = match kind {
                 2 => c.sneak_attack,
                 0 => pick(&c.attack_right, i),
@@ -1201,6 +1214,14 @@ fn animate_arms(
         if let Some(&(name, cl)) = c.reload.iter().find(|(n, _)| *n == powers.reload_anim.1).filter(|(n, _)| !(quick && *n == "Crossbow_RapidReload")) {
             anim.restart_overlay(cl, false, 1.0, 0.08);
             st.started.push(name.to_string());
+        }
+    }
+    // the sword slashing: the left hand with a power or gadget goes with it
+    if let Some(side) = st.slash.take() {
+        let set = (powers.selected == Power::Heart || ranged) as usize;
+        let busy = powers.aiming || powers.cooking.is_some() || zoom.level > 0 || !(anim.overlay_finished() || anim.overlay_is(c.powers_idle) || anim.overlay_is(c.gadgets_idle) || c.left_loco.iter().flatten().any(|l| anim.overlay_is(*l)));
+        if let Some(cl) = c.left_slash[set][side as usize].filter(|_| powers.selected != Power::Empty && !busy) {
+            anim.restart_overlay(cl, false, 1.0, 0.08);
         }
     }
     // a cast without the mana for it: the hand's empty gesture
@@ -1356,7 +1377,7 @@ fn animate_arms(
     }
     let aiming = aiming || cooking || raised;
     let spyglass_busy = c.spyglass.iter().flatten().any(|cl| anim.overlay_is(*cl)) || anim.overlay_is(c.pistol_fire_accurate);
-    if !aiming && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.crossbow_fire_fast) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.grenade_reload) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision) || anim.overlay_is(c.out_of_mana) || spyglass_busy)) {
+    if !aiming && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.crossbow_fire_fast) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.grenade_reload) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision) || anim.overlay_is(c.out_of_mana) || c.left_slash.iter().flatten().any(|s| anim.overlay_is(*s)) || spyglass_busy)) {
         match idle {
             Some(cl) if !st.choking && !st.blocking => {
                 let leap = loco.is_some() && loco == c.left_loco[set][2];

@@ -2041,6 +2041,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 dust_phase: 0,
                 attract_phase: 0,
                 bow_drawn: false,
+                holster_in: None,
+                limp_in: None,
                 counter: None,
                 gun_phase: GunPhase::Away,
                 gun_t: 0.0,
@@ -4381,6 +4383,8 @@ pub struct NpcClips {
     /// `Sword_Surprised_Front`)
     startled: [Option<ClipId>; 2],
     equip: Option<ClipId>,
+    /// its sword put back as it calms down (`Sword_Patrol_UnEquip`, `Sword_UnEquip`)
+    unequip: Option<ClipId>,
     /// a weeper's arm grab
     grab_try: Option<ClipId>,
     grab_in: Option<ClipId>,
@@ -4411,6 +4415,9 @@ pub struct NpcClips {
     /// getting up from where it lay, on its back and on its front (`Generic_RagdollToBack`,
     /// `_ToFront`)
     get_up: [Option<ClipId>; 2],
+    /// pushed off its feet, from the front, left, right, back: its moment before it goes limp
+    /// (`Generic_PushToRagdoll_Front`...)
+    push_limp: [Option<ClipId>; 4],
     /// an assassin's slash out of its dodge to the left, right (`Sword_SideStepLeft_DodgeAttack_Small`)
     dodge_attack: [Option<ClipId>; 2],
     /// Corvo gone before its eyes by magic (`Empty_Magic_OutOfSight`, `Sword_Magic_OutOfSight`:
@@ -4566,6 +4573,7 @@ impl NpcClips {
             surprised: lib.first(&["Sword_Surprised_Front", "Empty_Surprised_Front", "Attack_IdleBark_Short", "Empty_Taunt"]),
             startled: [lib.find("Empty_Surprised_Front"), lib.find("Sword_Surprised_Front")],
             equip: lib.first(&["Sword_Patrol_Equip", "Sword_Equip"]),
+            unequip: lib.first(&["Sword_Patrol_UnEquip", "Sword_UnEquip"]),
             grab_try: lib.first(&["Empty_ArmGrab_Try"]),
             grab_in: lib.first(&["Empty_ArmGrab_In"]),
             grab_loop: lib.first(&["Empty_ArmGrab_Loop"]),
@@ -4586,6 +4594,7 @@ impl NpcClips {
             wrist_shot: lib.find("Sword_RangedAttack"),
             bow: [lib.find("Empty_Bow_Charged_In"), lib.find("Empty_Bow_Charged"), lib.find("Empty_Bow_Fire"), lib.find("Empty_Bow_Charged_Out")],
             get_up: [lib.find("Generic_RagdollToBack"), lib.find("Generic_RagdollToFront")],
+            push_limp: ["Front", "Left", "Right", "Back"].map(|s| lib.find(&format!("Generic_PushToRagdoll_{s}"))),
             dodge_attack: [lib.find("Sword_SideStepLeft_DodgeAttack_Small"), lib.find("Sword_SideStepRight_DodgeAttack_Small")],
             magic: [lib.all(&["Empty_Magic_OutOfSight", "Sword_Magic_OutOfSight"]), lib.all(&["Sword_Magic_OutOfSight", "Empty_Magic_OutOfSight"])],
             sticky: lib.all(&["Generic_StickyWeapon"]),
@@ -4690,6 +4699,10 @@ pub struct NpcAnim {
     dust_phase: u8,
     /// how far into casting its Attract spell (0 not, 1 its hand raised, 2 held)
     attract_phase: u8,
+    /// putting its sword away: how long until it is in its holster
+    holster_in: Option<f32>,
+    /// knocked off its feet: how long until it goes limp, and its push
+    limp_in: Option<(f32, Vec3)>,
     /// its bow drawn (a tallboy's)
     bow_drawn: bool,
     /// dodging to a side (its clip) with its slash to come
@@ -5020,12 +5033,38 @@ fn npc_select_anim(
             || npc.is_down()
             || npc.mode == Mode::Choked;
         if drawn != st.drawn && !st.sword.is_empty() {
-            if let Some((j, at)) = if drawn { st.hand } else { st.holster.or(st.hand) } {
-                for &s in &st.sword {
-                    commands.entity(s).try_insert((at, ChildOf(j)));
+            // calming down, it puts the sword away with its clip, into the holster at the clip's
+            // unequip cue (`Snd_Sword_Enm_Unequip_cue_ak`), on its upper body as it walks
+            let away = clips.unequip.filter(|_| !drawn && !npc.is_down() && st.hand.is_some());
+            if let Some(c) = away {
+                let cue = lib.clip(c).sounds.first().map_or(lib.duration(c) * 0.4, |s| s.0);
+                st.holster_in = Some(cue);
+                if npc.anim_speed >= 0.6 {
+                    anim.restart_upper(c, false, 1.0, 0.15);
+                } else {
+                    anim.restart(c, false, 1.0, 0.15);
+                    st.oneshot = true;
+                }
+            } else {
+                st.holster_in = None;
+                if let Some((j, at)) = if drawn { st.hand } else { st.holster.or(st.hand) } {
+                    for &s in &st.sword {
+                        commands.entity(s).try_insert((at, ChildOf(j)));
+                    }
                 }
             }
             st.drawn = drawn;
+        }
+        if let Some(t) = st.holster_in.as_mut() {
+            *t -= dt;
+            if *t <= 0.0 {
+                st.holster_in = None;
+                if let Some((j, at)) = st.holster.or(st.hand) {
+                    for &s in &st.sword {
+                        commands.entity(s).try_insert((at, ChildOf(j)));
+                    }
+                }
+            }
         }
         if let Some(name) = forced_clip() {
             if let Some(c) = lib.find(name) {
@@ -5052,7 +5091,21 @@ fn npc_select_anim(
         // out of everyone's way till it is
         if let Some(v) = npc.knock.take() {
             if clips.get_up.iter().all(Option::is_some) && !npc.is_down() && !limp && !going_limp {
-                commands.entity(e).try_insert((crate::ragdoll::GoLimp::now(v, None), ColliderDisabled));
+                // (its push's moment first, by the side it came from, `Generic_PushToRagdoll_*`;
+                // then limp)
+                let f = npc.forward();
+                let from = -v.with_y(0.0);
+                let (ahead, side) = (from.dot(f), from.dot(Vec3::new(-f.z, 0.0, f.x)));
+                let s = if ahead.abs() >= side.abs() { if ahead >= 0.0 { 0 } else { 3 } } else if side > 0.0 { 2 } else { 1 };
+                match clips.push_limp[s] {
+                    Some(c) => {
+                        anim.restart(c, false, 1.0, 0.05);
+                        st.limp_in = Some((lib.duration(c), v));
+                    }
+                    None => {
+                        commands.entity(e).try_insert((crate::ragdoll::GoLimp::now(v, None), ColliderDisabled));
+                    }
+                }
                 npc.floored = true;
                 npc.attack_t = None;
                 npc.swing = None;
@@ -5063,6 +5116,14 @@ fn npc_select_anim(
             }
         }
         if npc.floored && !npc.is_down() {
+            if let Some((left, v)) = st.limp_in {
+                if left > dt {
+                    st.limp_in = Some((left - dt, v));
+                } else {
+                    st.limp_in = None;
+                    commands.entity(e).try_insert((crate::ragdoll::GoLimp::now(v, None), ColliderDisabled));
+                }
+            }
             anim.frozen = limp && far;
             st.last_mode = npc.mode;
             st.last_alert = npc.alert;

@@ -256,7 +256,8 @@ fullscreen display, vertical sync and the crosshair.
   the sword arm keeps its own pose. On the move, the hand with a power or gadget has its own
   walk, sprint and leap (`Powers_Walk`, `Powers_Jump`, `Gadgets_Walk`, `Gadgets_Sprint`,
   `Gadgets_Jump`). It keeps to the same part of its cycle as the body's clip, as a UE3 sync
-  group does. Crouched or still, it idles. A grenade cooks with the hand drawn back
+  group does. Crouched or still, it idles. As the sword slashes, it goes with the blow
+  (`Powers_SwordSlash_Right` / `_Left`, `Gadgets_SwordSlash_*`). A grenade cooks with the hand drawn back
   (`Gadgets_Grenade_Cooking_In`, `_Idle`), is thrown (`Gadgets_Grenade_Deploy`, out of the hand
   half way through), and the next is taken from the belt (`_Reload`), or with none left the hand
   comes back empty (`_OutOfAmmo`).
@@ -416,7 +417,9 @@ fullscreen display, vertical sync and the crosshair.
   `spine_0_jnt`, `NPC_Human_at`'s `UpperBodyFilter`); a blow, a fall or anything setting it on
   edge takes the upper body back and starts the wait over. Relaxed characters (civilians idling
   or wandering) have none. A guard turning on Corvo on the move draws its sword on the upper body
-  too, its legs keeping their stride, rather than the draw being cut short. A character that has just noticed Corvo (its attention at
+  too, its legs keeping their stride, rather than the draw being cut short. Calming down, it
+  puts the sword away with its clip (`Sword_Patrol_UnEquip`), the blade going into the holster
+  at its unequip cue, not at once. A character that has just noticed Corvo (its attention at
   the head-tracking level: the original posts its look-at there and clears it at any other, as
   roshan's research decoded it; turning to face him the whole body turns) or speaks with him
   close by turns its head to him, the neck taking most of the turn and the upper back the rest, within the original's
@@ -632,8 +635,8 @@ fullscreen display, vertical sync and the crosshair.
   on his own rig, his hands and the view going with his body. The clip is by the side the last
   blow came from, named for it as the characters' deaths are: from ahead he falls on his back
   (`Generic_Death_Impact`), from behind on his face (`_Back`), from the left or right
-  (`_Left`, `_Right`). From a fall he gets `Generic_Death_FallImpact_Back`, and drowned
-  `Generic_Death_Water`. The view takes all of his camera bone's turn as he falls (our
+  (`_Left`, `_Right`). From a fall he gets `Generic_Death_FallImpact_Back`, killed in the water
+  `Generic_Death_Water`, and drowned `Generic_Death_Water_OutOfBreath`. The view takes all of his camera bone's turn as he falls (our
   reading). Dead (once the death has faded,
   `m_fDeathFadeDelay`) or ended by the scripts, the same screen is the game over menu:
   "GAME OVER" up the left, the reason on its brush ("You have met your demise." or the
@@ -1587,7 +1590,8 @@ against the install's own data where it carries them, then implemented independe
   - It starts at the cast clip's `DisNotify_WindBlast`, 0.27 s in. It gathers its targets once, then
     its front (`m_Speed`, 50 m/s) reaches each in turn.
   - Pushed at 6 m/s or more (our reading: the pawn's momentum limit is native), a living character
-    is knocked off its feet. It goes limp and flies, out of everyone's way, and can't be choked or
+    is knocked off its feet. After its push's moment (`Generic_PushToRagdoll_Front`, `_Back`,
+    `_Left`, `_Right` by the side it came from), it goes limp and flies, out of everyone's way, and can't be choked or
     possessed while it lies there. Once still, it gets up from where it lies: from its back
     (`Generic_RagdollToBack`) or its front (`_ToFront`), by which way its chest faces, turned so
     the clip's lying body lies where its own did, standing for it. Pushed less, it reels back

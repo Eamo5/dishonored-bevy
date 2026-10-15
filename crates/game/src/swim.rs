@@ -68,6 +68,23 @@ impl Waters {
         self.0.iter().position(|w| w.contains(p)).map(|i| (i, self.0[i].surface(p)))
     }
 
+    /// (tests) A place in the water nearest `near`, 1.5 m under its surface.
+    pub fn under_near(&self, near: Vec3) -> Option<Vec3> {
+        let mut best: Option<(f32, Vec3)> = None;
+        for w in self.0.iter().filter(|w| !w.out) {
+            for i in 0..64 {
+                let (fx, fz) = ((i % 8) as f32 + 0.5, (i / 8) as f32 + 0.5);
+                let (x, z) = (w.min.x + (w.max.x - w.min.x) * fx / 8.0, w.min.z + (w.max.z - w.min.z) * fz / 8.0);
+                let p = Vec3::new(x, w.surface(Vec3::new(x, w.max.y, z)) - 1.5, z);
+                let d = p.distance(near);
+                if w.contains(p) && best.is_none_or(|b| d < b.0) {
+                    best = Some((d, p));
+                }
+            }
+        }
+        best.map(|b| b.1)
+    }
+
     /// A water's fog layer (seen from under its surface).
     pub fn layer(&self, i: usize) -> Option<&dhcook::format::FogLayer> {
         self.0.get(i).and_then(|w| w.water.fog_layer.as_ref())
@@ -304,6 +321,7 @@ fn breathe(
                 stats.damage_flash = 1.0;
                 if stats.health <= 0.0 {
                     stats.dead = true;
+                    stats.died_drowning = true;
                     msgs.push("You drowned");
                     break;
                 }

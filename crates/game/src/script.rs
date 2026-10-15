@@ -382,6 +382,21 @@ fn run_script(
     let Ok((mut p, mut t)) = player.single_mut() else { return };
     match cmd[0].as_str() {
         "wait" => script.timer = f(1),
+        "dive" => {
+            // (tests) dive: Corvo under the water nearest him, 1.5 m down
+            let at = t.translation;
+            commands.queue(move |w: &mut World| {
+                let Some(to) = w.get_resource::<crate::swim::Waters>().and_then(|ws| ws.under_near(at)) else {
+                    info!("script: dive: no water");
+                    return;
+                };
+                let mut q = w.query_filtered::<&mut Transform, With<crate::player::Player>>();
+                if let Some(mut pt) = q.iter_mut(w).next() {
+                    pt.translation = to;
+                }
+                info!("script: dive to {to:.2}");
+            });
+        }
         "goto" => {
             let goal = Vec3::new(f(1), f(2), f(3));
             let secs = if cmd.len() > 4 { f(4) } else { 60.0 };
@@ -980,6 +995,18 @@ fn run_script(
             // aware 1,2,3,4,0: the awareness markers step through these levels (tests)
             let levels = cmd.get(1).map(|l| l.split(',').filter_map(|x| x.parse().ok()).collect()).unwrap_or_default();
             commands.insert_resource(crate::awareness::ForcedLevels { levels, t0: None });
+        }
+        "calm" => {
+            // (tests) calm: the nearest living hostile character settles down, unaware again
+            if let Some((e, _, _)) = npc_ents.iter().filter(|(_, n, _)| n.hostile() && !n.is_down()).min_by(|a, b| a.2.translation.distance(t.translation).total_cmp(&b.2.translation.distance(t.translation))) {
+                commands.queue(move |w: &mut World| {
+                    if let Some(mut n) = w.get_mut::<Npc>(e) {
+                        n.alert = crate::npc::Alert::Unaware;
+                        n.set_mode(crate::npc::Mode::Return);
+                        info!("script: calm {}", n.name);
+                    }
+                });
+            }
         }
         "npcidle" => {
             // (tests) the nearest living hostile character stops where it is, facing Corvo
