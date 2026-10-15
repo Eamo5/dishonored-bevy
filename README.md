@@ -421,6 +421,12 @@ fullscreen display, vertical sync and the crosshair.
   nearest the mark the straight distance short of its goal, and once stopped it is there (within
   `m_fUnaccuracyRadius`, 120 uu). The clip carries it meanwhile: still, then up to its walk's
   pace, or down from it to a stop, as far as the clip's root goes.
+  On the move and facing its way, a character whose way turns back on itself by 135 degrees or
+  more turns round with its walk's or run's 180 degree turn props by side
+  (`Sword_Patrol_Walk_TurnLeft180`, `Empty_Walk_TurnRight180`, `Sword_Run_TurnLeft180`,
+  `Empty_Run_TurnRight180`: two props spanning 45 degrees each side of 180, as the decoded moving
+  turn has it). It slows to a halt as the turn begins and is shown turning round across it, then
+  sets off the new way.
   A patrolling or guarding character plays an ambient idle of the set it stands in, any the set
   has (a guard's `Sword_Patrol_Idle_01` to `_04`, empty hands' `Empty_Idle_01` to `_08`, a tall
   thug's `Empty_Idle02`, `05`, `07`), every 30-60 s on its upper body, walking

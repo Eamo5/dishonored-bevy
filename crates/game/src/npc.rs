@@ -4233,7 +4233,7 @@ fn npc_move(
                 wish = p.way.unwrap_or_else(|| wish.normalize_or(npc.forward())) * p.now();
                 let t = p.t + dt;
                 npc.pace = (t < p.len).then_some(Pace { t, ..p });
-                if t >= p.len && p.way.is_some() {
+                if t >= p.len && p.way.is_some() && p.turn.is_none() {
                     npc.halted = true;
                 }
                 true
@@ -4326,6 +4326,8 @@ fn npc_move(
             (Mode::Idle, _) if npc.target.is_none() => Some(Quat::from_rotation_y(npc.home_yaw) * Vec3::NEG_Z),
             _ => None,
         };
+        // (turning with its clip: faced the new way already, shown turning: `npc_select_anim`)
+        let face = face.filter(|_| npc.pace.is_none_or(|p| p.turn.is_none()));
         if let Some(f) = face {
             if f.length_squared() > 1e-4 {
                 let target_yaw = (-f.x).atan2(-f.z);
@@ -4623,6 +4625,10 @@ pub struct NpcClips {
     walk_start: Option<ClipId>,
     walk_stop: [Option<ClipId>; 2],
     turn_to_walk: [[Option<ClipId>; 4]; 2],
+    /// turning round on the move, walking (its relaxed walk's) and running, left then right
+    /// (`Sword_Patrol_Walk_TurnLeft180`, `Empty_Run_TurnRight180`...: its walk and run speed
+    /// modes' turn props)
+    move_turn: [[Option<ClipId>; 2]; 2],
     trigger_alarm: Vec<ClipId>,
     corpse_check: Vec<ClipId>,
     /// striking under a table, with the blade and with the pistol
@@ -4819,6 +4825,7 @@ impl NpcClips {
             walk_start: None,
             walk_stop: [None; 2],
             turn_to_walk: [[None; 4]; 2],
+            move_turn: [[None; 2]; 2],
         };
         let dirs = |n: Option<ClipId>, base: &str| -> [Option<(ClipId, f32)>; 3] {
             let Some(prefix) = n.and_then(|n| lib.clip(n).name.strip_suffix(&format!("{base}N")).map(str::to_string)) else { return [None; 3] };
@@ -4832,7 +4839,12 @@ impl NpcClips {
         let walk_start = relaxed("Walk_Start");
         let walk_stop = ["Left", "Right"].map(|s| relaxed(&format!("Walk_Stop{s}")));
         let turn_to_walk = ["Left", "Right"].map(|s| ["45", "90", "135", "180"].map(|a| relaxed(&format!("TurnToWalk{s}{a}"))));
-        let c = NpcClips { walk_dirs: dirs(c.walk_alert, "Walk"), run_dirs: dirs(c.run, "Run"), walk_start, walk_stop, turn_to_walk, ..c };
+        let run_prefix = c.run.and_then(|r| lib.clip(r).name.strip_suffix("RunN").map(str::to_string));
+        let move_turn = [
+            ["Left", "Right"].map(|s| relaxed(&format!("Walk_Turn{s}180"))),
+            ["Left", "Right"].map(|s| run_prefix.as_ref().and_then(|p| lib.find(&format!("{p}Run_Turn{s}180")))),
+        ];
+        let c = NpcClips { walk_dirs: dirs(c.walk_alert, "Walk"), run_dirs: dirs(c.run, "Run"), walk_start, walk_stop, turn_to_walk, move_turn, ..c };
         // (a musical Overseer kicks, its hands on its music box: `MusicBox_Attack_KickMedium`,
         // its music box's set alone has it)
         let c = match lib.first(&["MusicBox_Attack_KickMedium"]) {
@@ -6196,7 +6208,8 @@ fn npc_select_anim(
         // carries it meanwhile (`npc_move`), shown turning across a turn into the walk
         let relaxed = !alert && matches!(npc.mode, Mode::Idle | Mode::Patrol) && !far && !musical && npc.stagger <= 0.0 && npc.attack_t.is_none() && npc.grounded;
         if let Some(p) = npc.pace {
-            if relaxed && anim.current().is_some_and(|c| c.clip == p.clip) {
+            let moving_turn = p.way.is_some() && p.turn.is_some() && !far && npc.stagger <= 0.0 && npc.attack_t.is_none();
+            if (relaxed || moving_turn) && anim.current().is_some_and(|c| c.clip == p.clip) {
                 match p.turn {
                     Some((from, by)) => st.shown_yaw = from + by * ease(p.t / p.len),
                     // (a stop: shown as it was going)
@@ -6265,6 +6278,27 @@ fn npc_select_anim(
                 }
             }
             _ => st.walk_phase = f32::NAN,
+        }
+        // (on the move, facing its way, its way turned back on itself by 135 degrees or more: its
+        // walk's or run's turn round, the speed mode's 180 degree turn props by side (two props
+        // spanning 45 degrees each side of 180, as roshan's r614/blink research decoded the
+        // locomotion component's moving turn). It slows to a stop over the turn's start, shown
+        // turning round across the clip, then goes the new way.)
+        let fore = anim.current().and_then(|c| if Some(c.clip) == clips.walk { Some(0) } else if Some(c.clip) == clips.run { Some(1) } else { None });
+        if let Some(gait) = fore.filter(|_| npc.pace.is_none() && sp >= 0.4 && !far && st.turn.is_none() && npc.stagger <= 0.0 && npc.attack_t.is_none() && st.way == 0 && npc.wish.length_squared() > 0.01) {
+            let way = (-npc.wish.x).atan2(-npc.wish.z);
+            let off = (way - npc.yaw + PI).rem_euclid(TAU) - PI;
+            if let Some(c) = clips.move_turn[gait][(off < 0.0) as usize].filter(|_| off.abs() >= 135f32.to_radians()) {
+                let len = lib.duration(c);
+                let v0 = npc.velocity.with_y(0.0).length();
+                anim.restart(c, false, 1.0, 0.15);
+                npc.pace = Some(Pace { clip: c, t: 0.0, len, ramp: [0.0, len * 0.3], speed: [v0, 0.0], turn: Some((st.shown_yaw, off)), way: Some(npc.forward()) });
+                npc.yaw = way;
+                if loco_log {
+                    info!("loco: {} turns round with {} ({:.0} deg)", npc.name, lib.clip(c).name, off.to_degrees());
+                }
+                continue;
+            }
         }
         // turning where it stands: a turn of more than 40 degrees with its turn's clip for the
         // nearest of 45, 90, 135 or 180 degrees, its body shown turning across it; less, gliding
