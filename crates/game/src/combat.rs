@@ -26,11 +26,37 @@ impl Plugin for CombatPlugin {
             .add_systems(
                 Update,
                 (sword_input, assassinating, chokehold, receive_hits, versus, animate_view_model, special_moves).chain().after(crate::gadgets::grenade_focus).run_if(in_state(GameState::InGame)),
-            );
+            )
+            .add_systems(Update, slide_into.run_if(in_state(GameState::InGame)));
     }
 }
 
 pub const VIEW_LAYER: usize = 1;
+
+/// Corvo sliding into someone (`StatePlayerMasterSlide`'s impact, `m_SlideDamageInfo`: no harm to
+/// characters): it stumbles, its strong reaction (as roshan's r614/blink research read the
+/// slide's hit reaction), once a slide.
+fn slide_into(
+    slide: Res<crate::player::Slide>,
+    player: Query<&Transform, With<Player>>,
+    npcs: Query<(Entity, &crate::npc::Npc, &Transform), Without<Player>>,
+    mut hits: MessageWriter<NpcHit>,
+    mut struck: Local<Vec<Entity>>,
+) {
+    let (Some((_, dir, _)), Ok(pt)) = (slide.0, player.single()) else {
+        struck.clear();
+        return;
+    };
+    for (e, npc, nt) in &npcs {
+        let to = (nt.translation - pt.translation).with_y(0.0);
+        if npc.is_down() || npc.floored || struck.contains(&e) || to.length() > 1.0 || to.dot(dir) <= 0.0 || (nt.translation.y - pt.translation.y).abs() > 1.2 {
+            continue;
+        }
+        struck.push(e);
+        hits.write(NpcHit { npc: e, damage: 0.0, kind: HitKind::Slide, from: pt.translation });
+        info!("slide: into {}", npc.name);
+    }
+}
 
 /// A sword lock (`StatePlayerMasterVersus`): Corvo's blow and a guard's met (their attack
 /// zones within `m_fVersusZoneMaxTime` of each other). Corvo mashes [Primary]

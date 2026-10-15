@@ -157,6 +157,8 @@ pub enum HitKind {
     /// chokedust: stunned a while, unharmed (`DisDLC06DamageType_SmokeGrenade`:
     /// `m_bCannotKillNPC`)
     Chokedust,
+    /// Corvo sliding into someone: unharmed (`m_SlideDamageInfo` 0 to characters), it stumbles
+    Slide,
 }
 
 /// Corvo took someone down (killed, or knocked out): who, how, for the challenges' scoring

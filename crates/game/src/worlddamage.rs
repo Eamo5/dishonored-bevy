@@ -145,7 +145,7 @@ pub fn hit_type(kind: HitKind, dist: f32, attrs: &Attrs) -> &'static str {
         HitKind::Explosion | HitKind::EnemyExplosion | HitKind::GrenadeThrowback => "DisDamageType_Grenade",
         HitKind::StickyGrenade => "DisDamageType_StickyGrenadeExplosion",
         HitKind::ExplosiveBullet => "DisDamageType_ExplosiveBullet",
-        HitKind::Impact => "DisDamageType_Impact",
+        HitKind::Impact | HitKind::Slide => "DisDamageType_Impact",
         HitKind::SpringRazor => "DisDamageType_SpringRazor",
         HitKind::WallOfLight => "DisDamageType_WallOfLight",
         // (The Knife of Dunwall's)

@@ -243,8 +243,12 @@ pub struct Npc {
     pub unpossessed: bool,
     /// casting its Attract spell, Corvo drawn in to it (a whaler's pull, `assassin.rs`)
     pub casting: bool,
-    /// blown off its feet (Wind Blast): the push to go limp with, where its clips can get it up
-    pub knock: Option<Vec3>,
+    /// knocked or blown off its feet: the push to go limp with, where its clips can get it up,
+    /// and its throw
+    pub knock: Option<(Vec3, Throw)>,
+    /// thrown, in the air on its push before it goes limp (the original's animated throw, its
+    /// `PHYS_Flying` moment)
+    pub flying: bool,
     /// knocked off its feet, limp till it lies still (`ragdoll`), then getting up
     pub floored: bool,
     /// lying still after it, getting up: from its back (or its front)
@@ -253,7 +257,7 @@ pub struct Npc {
     pub leg_hit: Option<bool>,
     /// the blow it last took was a thing thrown at it (a bottle, a brick: `DisDamageType_Impact`)
     pub small_hit: bool,
-    /// the blow it last took was a bullet or a bolt
+    /// the blow it last took was a bolt (a bullet knocks it down)
     pub shot_hit: bool,
     /// choking in a cloud of chokedust (its stun's length: `stagger`)
     pub dusted: bool,
@@ -694,6 +698,17 @@ pub struct HeadHit;
 /// The shot that just struck was to a leg: its right (or left).
 #[derive(Component, Clone, Copy)]
 pub struct LegHit(pub bool);
+
+/// How a character is thrown off its feet (the original's `StateNPCMasterThrown`, as roshan's
+/// r614/blink research decoded it): knocked down by a shot or a blast (`PushToRagdoll` group 0,
+/// `Generic_PushToRagdoll_*`), blown away by Wind Blast (group 1, `Generic_WindBlast_*`), or a
+/// push past the full ragdoll's threshold (limp at once).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Throw {
+    Knock,
+    Blast,
+    Limp,
+}
 
 /// A drop assassination's fall, m (the challenges' fall height scoring).
 #[derive(Component, Clone, Copy)]
@@ -1700,6 +1715,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         unpossessed: false,
         casting: false,
         knock: None,
+        flying: false,
         floored: false,
         rise: None,
         leg_hit: None,
@@ -2046,6 +2062,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 bow_drawn: false,
                 holster_in: None,
                 limp_in: None,
+                rise_next: None,
                 counter: None,
                 gun_phase: GunPhase::Away,
                 gun_t: 0.0,
@@ -2125,7 +2142,7 @@ fn npc_hits(
         let Ok((e, mut npc, t)) = npcs.get_mut(h.npc) else { continue };
         npc.leg_hit = leg;
         npc.small_hit = h.kind == HitKind::Impact;
-        npc.shot_hit = matches!(h.kind, HitKind::Bullet | HitKind::Bolt | HitKind::ExplosiveBullet);
+        npc.shot_hit = h.kind == HitKind::Bolt;
         if npc.is_down() {
             // the knocked out can still be killed where they lie (a blade, a bolt, a shot, a
             // blast, fire, the rats eating them): a kill, no longer a knockout
@@ -2297,7 +2314,8 @@ fn npc_hits(
                 npc.hurt_t = 0.0;
                 npc.hit_react = 0.35;
                 npc.attack_t = None;
-                npc.stagger = npc.stagger.max(0.25);
+                // (slid into: its strong reaction, stumbling through it)
+                npc.stagger = npc.stagger.max(if h.kind == HitKind::Slide { 0.9 } else { 0.25 });
                 if npc.aggression >= 0.0 && h.damage > 0.0 {
                     npc.aggression = (npc.aggression + AGGRESSION_PER_DAMAGE).clamp(0.0, 1.0);
                 }
@@ -2337,6 +2355,17 @@ fn npc_hits(
             if vel.length() > 2.0 {
                 commands.entity(e).try_insert(crate::ragdoll::GoLimp::now(vel, None));
             }
+        } else if matches!(h.kind, HitKind::Bullet | HitKind::Explosion | HitKind::EnemyExplosion | HitKind::GrenadeThrowback | HitKind::ExplosiveBullet) && h.damage > 0.0 {
+            // a shot or a grenade's blast that leaves it standing knocks it down (the bullet's
+            // and the grenade's damage types' reaction, Knockdown: roshan's r614/blink research,
+            // seen in the original's `combat/pistol_hit` capture): thrown on the hit's push, at
+            // least the throw's least momentum (800 uu: 4 m/s across, away from the hit)
+            let away = (pos - h.from).with_y(0.0).normalize_or(-npc.forward());
+            let blast = h.kind != HitKind::Bullet;
+            let d = pos.distance(h.from);
+            let push = if blast { (7.0 - d).clamp(4.0, 6.0) } else { 4.0 };
+            let lift = if blast { (4.0 - d * 0.5).clamp(1.0, 3.0) } else { 0.0 };
+            npc.knock = Some((away * push + Vec3::Y * lift, Throw::Knock));
         }
         // (Corvo's own takedowns, for the challenges' scoring)
         // (an arc mine's dead are ash: `m_bAshDeadPawns`)
@@ -4016,10 +4045,18 @@ fn npc_move(
                 }
             }
         }
-        // knocked off its feet: its bodies carry it (`ragdoll`)
+        // knocked off its feet: its bodies carry it (`ragdoll`); thrown, it flies on its push
+        // first, falling, against what is in its way
         if npc.floored {
             if let Some(mut k) = kcc {
-                k.translation = None;
+                if npc.flying && dt > 0.0 {
+                    // (on the ground it slides on, not gathering its fall)
+                    let landed = out.is_some_and(|o| o.grounded) && npc.velocity.y <= 0.0;
+                    npc.velocity.y = if landed { -1.0 } else { (npc.velocity.y - 19.0 * dt).max(-30.0) };
+                    k.translation = Some(npc.velocity * dt);
+                } else {
+                    k.translation = None;
+                }
             }
             continue;
         }
@@ -4422,9 +4459,11 @@ pub struct NpcClips {
     /// getting up from where it lay, on its back and on its front (`Generic_RagdollToBack`,
     /// `_ToFront`)
     get_up: [Option<ClipId>; 2],
-    /// pushed off its feet, from the front, left, right, back: its moment before it goes limp
-    /// (`Generic_PushToRagdoll_Front`...)
-    push_limp: [Option<ClipId>; 4],
+    /// thrown, pushed from the front, left, right, back: its moment before it goes limp, to its
+    /// `DishonoredNotify_Ragdoll` (the original's thrown state, as roshan's r614/blink research
+    /// read it): knocked down (`Generic_PushToRagdoll_Front`...), blown away
+    /// (`Generic_WindBlast_Front`..., else the knock's)
+    push_limp: [[Option<ClipId>; 4]; 2],
     /// an assassin's slash out of its dodge to the left, right (`Sword_SideStepLeft_DodgeAttack_Small`)
     dodge_attack: [Option<ClipId>; 2],
     /// Corvo gone before its eyes by magic (`Empty_Magic_OutOfSight`, `Sword_Magic_OutOfSight`:
@@ -4602,7 +4641,10 @@ impl NpcClips {
             wrist_shot: lib.find("Sword_RangedAttack"),
             bow: [lib.find("Empty_Bow_Charged_In"), lib.find("Empty_Bow_Charged"), lib.find("Empty_Bow_Fire"), lib.find("Empty_Bow_Charged_Out")],
             get_up: [lib.find("Generic_RagdollToBack"), lib.find("Generic_RagdollToFront")],
-            push_limp: ["Front", "Left", "Right", "Back"].map(|s| lib.find(&format!("Generic_PushToRagdoll_{s}"))),
+            push_limp: [
+                ["Front", "Left", "Right", "Back"].map(|s| lib.find(&format!("Generic_PushToRagdoll_{s}"))),
+                ["Front", "Left", "Right", "Back"].map(|s| lib.find(&format!("Generic_WindBlast_{s}")).or_else(|| lib.find(&format!("Generic_PushToRagdoll_{s}")))),
+            ],
             dodge_attack: [lib.find("Sword_SideStepLeft_DodgeAttack_Small"), lib.find("Sword_SideStepRight_DodgeAttack_Small")],
             magic: [lib.all(&["Empty_Magic_OutOfSight", "Sword_Magic_OutOfSight"]), lib.all(&["Sword_Magic_OutOfSight", "Empty_Magic_OutOfSight"])],
             sticky: lib.all(&["Generic_StickyWeapon"]),
@@ -4711,6 +4753,8 @@ pub struct NpcAnim {
     holster_in: Option<f32>,
     /// knocked off its feet: how long until it goes limp, and its push
     limp_in: Option<(f32, Vec3)>,
+    /// up again from where it lay: its stun's recovery to come
+    rise_next: Option<ClipId>,
     /// its bow drawn (a tallboy's)
     bow_drawn: bool,
     /// dodging to a side (its clip) with its slash to come
@@ -5097,7 +5141,7 @@ fn npc_select_anim(
 
         // blown off its feet (Wind Blast), where its set can get it up again: limp (`ragdoll`),
         // out of everyone's way till it is
-        if let Some(v) = npc.knock.take() {
+        if let Some((v, throw)) = npc.knock.take() {
             if clips.get_up.iter().all(Option::is_some) && !npc.is_down() && !limp && !going_limp {
                 // (its push's moment first, by the side it came from, `Generic_PushToRagdoll_*`;
                 // then limp)
@@ -5105,10 +5149,20 @@ fn npc_select_anim(
                 let from = -v.with_y(0.0);
                 let (ahead, side) = (from.dot(f), from.dot(Vec3::new(-f.z, 0.0, f.x)));
                 let s = if ahead.abs() >= side.abs() { if ahead >= 0.0 { 0 } else { 3 } } else if side > 0.0 { 2 } else { 1 };
-                match clips.push_limp[s] {
+                let clip = match throw {
+                    Throw::Knock => clips.push_limp[0][s],
+                    Throw::Blast => clips.push_limp[1][s],
+                    Throw::Limp => None,
+                };
+                match clip {
                     Some(c) => {
+                        // (flying on its push meanwhile: roshan's r614/blink research saw the
+                        // original's throw fly the pawn some 27 ticks before the ragdoll)
                         anim.restart(c, false, 1.0, 0.05);
-                        st.limp_in = Some((lib.duration(c), v));
+                        let at = st.marks.get(&c).and_then(|m| m.ragdoll).unwrap_or(lib.duration(c));
+                        st.limp_in = Some((at, v));
+                        npc.flying = true;
+                        npc.velocity = v;
                     }
                     None => {
                         commands.entity(e).try_insert((crate::ragdoll::GoLimp::now(v, None), ColliderDisabled));
@@ -5129,6 +5183,9 @@ fn npc_select_anim(
                     st.limp_in = Some((left - dt, v));
                 } else {
                     st.limp_in = None;
+                    npc.flying = false;
+                    // (limp, flying on as it was)
+                    let v = if npc.velocity.length() > 0.5 { npc.velocity } else { v };
                     commands.entity(e).try_insert((crate::ragdoll::GoLimp::now(v, None), ColliderDisabled));
                 }
             }
@@ -5143,10 +5200,24 @@ fn npc_select_anim(
             anim.frozen = false;
             commands.entity(e).try_remove::<ColliderDisabled>();
             if let Some(c) = clips.get_up[(!back) as usize].filter(|_| !npc.is_down()) {
+                // (then the stun's recovery, `Sword_RecoveryA` / `B` or `Empty_`: the original's
+                // stun after a throw, as roshan's r614/blink research read it)
+                let hands = (!st.drawn) as usize;
+                st.rise_next = pick(&clips.recovery[hands]).or_else(|| pick(&clips.recovery[1 - hands]));
                 anim.restart(c, false, 1.0, 0.0);
-                npc.stagger = npc.stagger.max(lib.duration(c));
+                npc.stagger = npc.stagger.max(lib.duration(c) + st.rise_next.map_or(0.0, |r| lib.duration(r)));
                 st.oneshot = true;
                 st.hit_seen = npc.hit_react;
+                st.last_mode = npc.mode;
+                st.last_alert = npc.alert;
+                continue;
+            }
+        }
+        if let Some(c) = st.rise_next.filter(|_| anim.finished()) {
+            st.rise_next = None;
+            if !npc.is_down() {
+                anim.restart(c, false, 1.0, 0.15);
+                st.oneshot = true;
                 st.last_mode = npc.mode;
                 st.last_alert = npc.alert;
                 continue;
@@ -5899,7 +5970,8 @@ fn npc_select_anim(
                     st.oneshot = true;
                 }
             }
-        } else if npc.mode == Mode::Search && st.last_mode != Mode::Search {
+        } else if npc.mode == Mode::Search && st.last_mode != Mode::Search && !reacted {
+            // (searching for what struck it: the flinch shows first)
             if let Some(c) = pick(&clips.search) {
                 anim.restart(c, false, 1.0, 0.25);
                 st.oneshot = true;

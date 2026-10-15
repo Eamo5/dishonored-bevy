@@ -468,10 +468,13 @@ fullscreen display, vertical sync and the crosshair.
   `Generic_DeathRightA`...), where it has them; hurt by no blow it knows of, it picks among them.
   A bullet or bolt to a leg (below the hips) has it clutch that leg (`Sword_HitLeg_Left`,
   `Empty_HitLeg_Right`). A thing thrown at it (a bottle, a brick) gets its small hit, by the side
-  it struck (`Generic_SmallHit_Front`..., with their stone-on-body cue). Shot from ahead, those
-  whose set has them take the bullet or bolt with `Generic_ProjectileHit_Front`, `_FrontLeft` or
-  `_FrontRight` (the elite guards). A blow that turns it on Corvo shows its flinch; the sword
-  comes to hand without its draw. His pistol's bullet (`Twk_Proj_BulletUpgraded`) deals 20, ×1.5
+  it struck (`Generic_SmallHit_Front`..., with their stone-on-body cue). Shot with a bolt from
+  ahead, those whose set has them take it with `Generic_ProjectileHit_Front`, `_FrontLeft` or
+  `_FrontRight` (the elite guards). A bullet, or a grenade's blast, that leaves it standing
+  knocks it down (the damage types' Knockdown reaction, as roshan's r614/blink research read it
+  and saw in the original's capture). It flies back at least 4 m/s with `Generic_PushToRagdoll_*`
+  by the side it came from, goes limp at the clip's cue, and gets up as from Wind Blast. A blow
+  that turns it on Corvo shows its flinch; the sword comes to hand without its draw. His pistol's bullet (`Twk_Proj_BulletUpgraded`) deals 20, ×1.5
   within 9 m, and kills with a head shot (`m_bKillOnHeadshot`); a crossbow bolt deals the
   crossbow's 20, doubled on someone unaware (`m_fDamageMultiplier_Stealth`). Characters'
   shots hit at their `m_MaxAccuracy` close, falling to `m_MinAccuracy` at the end of their
@@ -1592,12 +1595,16 @@ against the install's own data where it carries them, then implemented independe
   slammed into a wall. Doors take the same factor.
   - It starts at the cast clip's `DisNotify_WindBlast`, 0.27 s in. It gathers its targets once, then
     its front (`m_Speed`, 50 m/s) reaches each in turn.
-  - Pushed at 6 m/s or more (our reading: the pawn's momentum limit is native), a living character
-    is knocked off its feet. After its push's moment (`Generic_PushToRagdoll_Front`, `_Back`,
-    `_Left`, `_Right` by the side it came from), it goes limp and flies, out of everyone's way, and can't be choked or
-    possessed while it lies there. Once still, it gets up from where it lies: from its back
-    (`Generic_RagdollToBack`) or its front (`_ToFront`), by which way its chest faces, turned so
-    the clip's lying body lies where its own did, standing for it. Pushed less, it reels back
+  - A push whose momentum reaches `m_fAnimRagdollThreshold` (1000) throws a living character
+    (the pawn's reaction tweak, as roshan's r614/blink research read it; a level 1 blast at 2 m
+    gives some 1800). It flies on its push a moment, falling, with its throw's clip by the side
+    the push came from (`Generic_WindBlast_Front`, `_Back`, `_Left`, `_Right`, to its
+    `DishonoredNotify_Ragdoll`), then goes limp. From `m_fFullRagdollThreshold` (3800) it goes
+    limp at once. Thrown, it is out of everyone's way, and can't be choked or possessed while it
+    lies there. Once still, it gets up from where it lies: from its back (`Generic_RagdollToBack`)
+    or its front (`_ToFront`), by which way its chest faces, turned so the clip's lying body lies
+    where its own did. Then it recovers from the stun (`Sword_RecoveryA` / `B`, `Empty_` with its
+    hands empty), standing for it all. Pushed less, it reels back
     (`Sword_HitWindblast`). Blown out of the world, it dies.
   - Loose props in the cone are blown about too, the heavy ones less.
 - **Possession.** Anyone not choked can be possessed (`Twk_Possessable_BaseNPC.m_AwarenessSettings`),
@@ -1823,7 +1830,10 @@ against the install's own data where it carries them, then implemented independe
   sneaking speed over 1.1 s along the way it began. It ends early if that way turns more than 25°,
   or when let go after 0.55 s. The arms play the slide tree's clips (`Ply_Player_Slide_at`): in,
   held in its loop, then out to a sprint or a sneak (`Sword_SlideIn`, `_SlideLoop`,
-  `_SlideOutSprint`, `_SlideOutSneak`; empty-handed, `Empty_Slide*`).
+  `_SlideOutSprint`, `_SlideOutSneak`; empty-handed, `Empty_Slide*`). Sliding into someone does
+  them no harm (`m_SlideDamageInfo`: 0 to characters) but has them stumble, their strong
+  reaction by the side he came from (as roshan's r614/blink research read the slide's), once a
+  slide.
 
 ## Parity audit status
 

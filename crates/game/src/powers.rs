@@ -340,9 +340,12 @@ const GUST_IMPACT_SPACING: f32 = 2.0;
 /// The cast clip's `DisNotify_WindBlast` (s): when the blast starts (roshan's r614/blink
 /// research).
 const WINDBLAST_NOTIFY: f32 = 0.27;
-/// How hard Wind Blast must push a character to knock it off its feet, m/s (our reading: the
-/// original's momentum against the pawn's `m_fMomentumImpulseMax`, 400 uu/s, is native).
-const KNOCKDOWN_SPEED: f32 = 6.0;
+/// How hard a push throws a character (its momentum's magnitude, uu): from
+/// `m_fAnimRagdollThreshold` the animated throw (a moment's flight, then limp), from
+/// `m_fFullRagdollThreshold` limp at once; less, it reels (as roshan's r614/blink research read
+/// the pawn's reaction tweak: a level 1 Wind Blast at 183 uu reaches 1784, a throw).
+const ANIM_RAGDOLL_THRESHOLD: f32 = 1000.0;
+const FULL_RAGDOLL_THRESHOLD: f32 = 3800.0;
 
 impl Default for Powers {
     fn default() -> Self {
@@ -1671,8 +1674,8 @@ fn windblast_gusts(
             stag.write(NpcStagger { npc: e, secs: 2.0, parried: false });
             // blown hard, off its feet (limp, then up again: `npc.rs`); less, it reels back
             // (`Sword_HitWindblast`)
-            if vel.length() >= KNOCKDOWN_SPEED {
-                npc.knock = Some(vel);
+            if momentum.length() >= ANIM_RAGDOLL_THRESHOLD {
+                npc.knock = Some((vel, if momentum.length() >= FULL_RAGDOLL_THRESHOLD { crate::npc::Throw::Limp } else { crate::npc::Throw::Blast }));
             }
             // slammed into a wall within the flight's first moments?
             let wall = ctx.cast_ray(nt.translation, vel.with_y(0.0).normalize_or(flat), (vel.with_y(0.0).length() * 0.3).max(0.5), true, filter).is_some();
