@@ -274,6 +274,14 @@ pub struct Npc {
     /// from the side struck (front, left, right, back); its set has the flinch's clips
     pub weak_hit: Option<usize>,
     pub weak_hits: bool,
+    /// dodging Corvo's blow (s left: his blade passes it by), and its set has the dodge's clips
+    /// (`Sword_DodgeLeftIn` / `Out`)
+    pub dodging: f32,
+    pub dodges: bool,
+    /// Corvo's blows that threatened it lately, and how long since the last; how long his
+    /// firearm or bow has been aimed at it, and how long it bears that before stepping aside
+    pub incoming: (u32, f32),
+    pub ranged_threat: (f32, f32),
     /// the blow it last took was a bolt (a bullet knocks it down)
     pub shot_hit: bool,
     /// choking in a cloud of chokedust (its stun's length: `stagger`)
@@ -445,6 +453,8 @@ pub struct Arms {
     pub plague: Option<dhcook::format::NpcPlague>,
     /// a thug's whiskey bottle (its fire breath, the bottle it throws)
     pub whiskey: Option<dhcook::format::NpcWhiskey>,
+    /// how it paces its fight (its combat behaviour's)
+    pub pacing: Option<dhcook::format::NpcPacing>,
     /// what it throws with its bare hand
     pub throwing: Option<dhcook::format::NpcThrowing>,
     /// the moves it uses only from outside the ring of those at Corvo (or with him out of
@@ -456,7 +466,7 @@ pub struct Arms {
 
 impl Default for Arms {
     fn default() -> Self {
-        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, throwing: None, outer_only: Vec::new(), outer_place: None }
+        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, pacing: None, throwing: None, outer_only: Vec::new(), outer_place: None }
     }
 }
 
@@ -604,6 +614,7 @@ impl Arms {
         a.grenades = st.grenades.clone();
         a.moves = st.melee.clone();
         a.whiskey = st.whiskey.clone();
+        a.pacing = st.pacing.clone();
         // (its outer pattern's place: the ideal reach of the move it names, a projectile's that of
         // its firearm, its bottle or its throw)
         let drawn = (seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as usize;
@@ -1003,9 +1014,10 @@ fn material_swaps(scene: &dhcook::format::Scene, tid: u32, seed: u64) -> Vec<(bo
     out
 }
 
-/// A fight's pacing (the elite guard's `DisAISubProcessManageAttacks`, as roshan's r614/blink
-/// research decoded it): flurries of 2-3 blows (`m_FlurryAttacks`), then 4-5 s to recover
-/// (`m_StaminaRecovery`); aggression rolled in [0, 1) as the fight starts, regained at
+/// A fight's pacing (`DisAISubProcessManageAttacks`, as roshan's r614/blink research decoded
+/// it), each fighter's own (`Arms::pacing`, its combat behaviour's), else the elite guard's:
+/// flurries of 2-3 blows (`m_AttacksPerFlurry`), then 4-5 s to recover
+/// (`m_StaminaRecoveryDuration`); aggression rolled in [0, 1) as the fight starts, regained at
 /// `m_fAggressionRegenRate` 0.1 a second, `m_fAggressionDeltaPerDamage` -0.5 when struck,
 /// stretching its moves' cooldowns by `(1 - aggression) x m_fCooldownFactorAtMinAggression` (1).
 const FLURRY: [i32; 2] = [2, 3];
@@ -1017,16 +1029,17 @@ const COOLDOWN_FACTOR: f32 = 1.0;
 /// A fighter's pacing goes on: its aggression and flurry rolled as the fight starts, its
 /// aggression regained; between flurries, its stamina recovering.
 fn pace_tick(npc: &mut Npc, dt: f32) {
+    let flurry = npc.arms.pacing.as_ref().map_or(FLURRY, |p| [p.flurry[0] as i32, p.flurry[1].max(p.flurry[0]) as i32]);
     if npc.aggression < 0.0 {
         npc.aggression = rand::random::<f32>();
-        npc.flurry = rand::random_range(FLURRY[0]..=FLURRY[1]);
+        npc.flurry = rand::random_range(flurry[0]..=flurry[1]);
         npc.stamina = 0.0;
     }
-    npc.aggression = (npc.aggression + AGGRESSION_REGEN * dt).min(1.0);
+    npc.aggression = (npc.aggression + npc.arms.pacing.as_ref().map_or(AGGRESSION_REGEN, |p| p.aggression[1]) * dt).min(1.0);
     if npc.flurry < 1 {
         npc.stamina -= dt;
         if npc.stamina < 0.0 {
-            npc.flurry = rand::random_range(FLURRY[0]..=FLURRY[1]);
+            npc.flurry = rand::random_range(flurry[0]..=flurry[1]);
         }
     }
 }
@@ -1924,6 +1937,10 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         small_hit: false,
         weak_hit: None,
         weak_hits: false,
+        dodging: 0.0,
+        dodges: false,
+        incoming: (0, 0.0),
+        ranged_threat: (0.0, -1.0),
         shot_hit: false,
         dusted: false,
         flank: None,
@@ -2541,7 +2558,7 @@ fn npc_hits(
                     npc.stagger = npc.stagger.max(if h.kind == HitKind::Slide { 0.9 } else { 0.25 });
                 }
                 if npc.aggression >= 0.0 && h.damage > 0.0 {
-                    npc.aggression = (npc.aggression + AGGRESSION_PER_DAMAGE).clamp(0.0, 1.0);
+                    npc.aggression = (npc.aggression + npc.arms.pacing.as_ref().map_or(AGGRESSION_PER_DAMAGE, |p| p.aggression[0])).clamp(0.0, 1.0);
                 }
                 if npc.mode != Mode::Combat && npc.hostile() {
                     npc.alert = Alert::Combat;
@@ -3150,7 +3167,14 @@ pub(crate) fn npc_brain(
     player: Query<(Entity, &Transform, Option<&crate::combat::Sword>, &Player)>,
     mut npcs: Query<(Entity, &mut Npc, &Transform), (Without<Player>, Without<crate::possession::Possessed>)>,
     (level, mut npc_hits, ai, mut fled): (Option<Res<LevelInfo>>, MessageWriter<NpcHit>, Res<crate::aiworld::AiWorld>, MessageWriter<crate::aiworld::FleePointReached>),
-    (stances, settings, mut grab_inhibit, mut inhibited): (Res<crate::script_world::SpawnerOverrides>, Res<crate::settings::Settings>, Local<f32>, Local<std::collections::HashMap<String, (f32, Entity)>>),
+    (stances, settings, mut grab_inhibit, mut inhibited, powers, mut last_swing): (
+        Res<crate::script_world::SpawnerOverrides>,
+        Res<crate::settings::Settings>,
+        Local<f32>,
+        Local<std::collections::HashMap<String, (f32, Entity)>>,
+        Res<crate::powers::Powers>,
+        Local<f32>,
+    ),
     (mut grenades, mut bottles, mut whiskey_fx, mut throws): (MessageWriter<crate::gadgets::NpcGrenade>, MessageWriter<crate::whiskey::NpcBottle>, MessageWriter<crate::particles::SpawnEffect>, MessageWriter<crate::thrown::NpcThrow>),
     (mut powers_used, finishing, mut finishers, mut tallboy_shots): (MessageReader<crate::powers::PowerUsed>, Query<(), With<FinisherClip>>, MessageWriter<NpcFinisher>, MessageWriter<crate::tallboy::TallboyShot>),
 ) {
@@ -3164,6 +3188,9 @@ pub(crate) fn npc_brain(
     // (his feet: his capsule's centre above them, standing or crouched)
     let pfeet = ppos.y - if pl.crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF } - crate::player::RADIUS;
     let blocking = psword.is_some_and(|s| s.blocking);
+    // (Corvo's swing just begun: once a blow)
+    let swing_began = psword.is_some_and(|s| s.swing > 0.0 && !s.hit_done && (*last_swing <= 0.0 || s.swing < *last_swing));
+    *last_swing = psword.map_or(0.0, |s| s.swing);
     let Ok(ctx) = rapier.single() else { return };
     // the others, for feuds between factions
     let others: Vec<(Entity, Vec3, String, bool, u32, f32)> = npcs.iter().map(|(e, n, t)| (e, t.translation, n.faction.clone(), n.is_down() || n.kind == Kind::Story, n.spawner, n.health)).collect();
@@ -4030,18 +4057,101 @@ pub(crate) fn npc_brain(
                             npc.swing = Some(Swing { kind: MoveKind::Short, big: false, len: 0.85, hit: 0.4, reach: 2.6, lunge: 0.0, no_versus: false, more: Vec::new() });
                         }
                     }
-                    // Corvo's blow coming: a step aside or back out of it (its blade's
-                    // `DisTweaks_NPCSideStep` / `BackStep`, within its reach and on its cooldown;
-                    // how readily, by its `m_DodgeLevel`: a tenth a level)
-                    let swinging = psword.is_some_and(|s| s.swing > 0.0 && s.swing < 0.1 && !s.hit_done);
+                    // Corvo's blows and aim, as its combat behaviour paces them
+                    // (`DisAISubProcessManageAttacks`, as roshan's r614/blink research decoded it):
+                    // a blow of his that threatens it (within `m_fAngleOfPerceivedMeleeThreat` of
+                    // his facing) it dodges, by its `m_DodgeLevel` (a tenth a level), its blade
+                    // passing it by; after `m_IncomingAttacksBeforeBackStep` of them (forgotten
+                    // after `m_fTimeToForgiveIncomingAttacks` s) it steps back out of reach
+                    // (`DisTweaks_NPCBackStep`); his firearm or bow aimed at it (within
+                    // `m_fAngleOfPerceivedRangedThreat`) for `m_TimeForThreatToCauseSideStep` s,
+                    // it steps aside (`DisTweaks_NPCSideStep`); each step within its reach and on
+                    // its cooldown
+                    let pace = npc.arms.pacing.clone().unwrap_or(dhcook::format::NpcPacing {
+                        flurry: [2.0, 3.0],
+                        stamina: [4.0, 5.0],
+                        melee_threat: 30.0,
+                        back_step_after: [1.0, 1.0],
+                        forgive: 5.0,
+                        ranged_threat: 10.0,
+                        side_step_after: [2.0, 3.0],
+                        aggression: [-0.5, 0.1, 1.0],
+                    });
+                    npc.dodging = (npc.dodging - dt).max(0.0);
+                    npc.incoming.1 += dt;
+                    if npc.incoming.1 > pace.forgive {
+                        npc.incoming.0 = 0;
+                    }
+                    let facing = Vec3::new(-pl.yaw.sin(), 0.0, -pl.yaw.cos());
+                    let to_it = (pos - ppos).with_y(0.0).normalize_or_zero();
+                    let swinging = swing_began && d < 3.2 && facing.dot(to_it) >= pace.melee_threat.to_radians().cos();
+                    let aim = Quat::from_euler(EulerRot::YXZ, pl.yaw, pl.pitch, 0.0) * Vec3::NEG_Z;
+                    let to_chest = (pos + Vec3::Y * 0.4 - (ppos + Vec3::Y * 0.6)).normalize_or_zero();
+                    if powers.selected.is_ranged() && npc.sees_player && aim.dot(to_chest) >= pace.ranged_threat.to_radians().cos() {
+                        if npc.ranged_threat.1 < 0.0 {
+                            npc.ranged_threat.1 = pace.side_step_after[0] + rand::random::<f32>() * (pace.side_step_after[1] - pace.side_step_after[0]).max(0.0);
+                        }
+                        let before = npc.ranged_threat.0;
+                        npc.ranged_threat.0 += dt;
+                        if before < npc.ranged_threat.1 && npc.ranged_threat.0 >= npc.ranged_threat.1 && std::env::var("DH_MELEE_LOG").is_ok() {
+                            info!("melee: {} has borne Corvo's aim {:.1} s ({d:.1} m{})", npc.name, npc.ranged_threat.0, if npc.attack_t.is_some() { ", attacking" } else { "" });
+                        }
+                    } else {
+                        npc.ranged_threat = (0.0, -1.0);
+                    }
+                    if swing_began && d < 4.0 && std::env::var("DH_MELEE_LOG").is_ok() {
+                        info!(
+                            "melee: Corvo's blow at {} ({d:.1} m, {:.0} degrees off his facing): {}",
+                            npc.name,
+                            facing.dot(to_it).clamp(-1.0, 1.0).acos().to_degrees(),
+                            if !swinging { "no threat" } else if npc.attack_t.is_some() { "it is attacking" } else if npc.stagger > 0.0 { "it is staggered" } else if npc.retreat.is_some() { "it is stepping" } else if !npc.sees_player { "unseen" } else { "it answers" }
+                        );
+                    }
+                    let mut step = None;
                     if swinging && npc.attack_t.is_none() && npc.stagger <= 0.0 && npc.retreat.is_none() && npc.sees_player {
+                        npc.incoming = (npc.incoming.0 + 1, 0.0);
+                        let after = pace.back_step_after[0] + rand::random::<f32>() * (pace.back_step_after[1] - pace.back_step_after[0]).max(0.0);
+                        // (a back step only when it has one to take: on its cooldown, within its
+                        // reach, not held back; else it dodges as it would)
+                        let back_ok = npc.arms.moves.iter().enumerate().any(|(i, m)| m.kind == "BackStep" && npc.melee_cd.get(i).is_none_or(|c| *c <= 0.0) && d <= m.range[1] && !inhibited.contains_key(&m.kind));
+                        if back_ok && npc.incoming.0 as f32 >= after.round().max(1.0) {
+                            step = Some("BackStep");
+                        } else if npc.dodges && rand::random::<f32>() < npc.arms.dodge * 0.1 {
+                            // (its dodge: aside out of the blade's way, leaning, then back or its
+                            // riposte, `Sword_DodgeLeftIn` and after)
+                            let right = Vec3::new(-npc.forward().z, 0.0, npc.forward().x);
+                            let left_side = rand::random::<bool>();
+                            npc.dodging = 0.6;
+                            npc.retreat = Some((pos + (if left_side { -right } else { right }) * 0.4, 0.4));
+                            npc.gesture(if left_side { 22 } else { 23 });
+                            if std::env::var("DH_MELEE_LOG").is_ok() {
+                                info!("melee: {} dodges Corvo's blow ({}) at {d:.1} m", npc.name, if left_side { "left" } else { "right" });
+                            }
+                            continue;
+                        } else if !npc.dodges {
+                            // (one without the dodge's clips steps aside out of it: an assassin's
+                            // `Sword_SideStepLeft_DodgeIn`)
+                            step = Some("SideStep");
+                        }
+                    } else if npc.ranged_threat.1 >= 0.0 && npc.ranged_threat.0 >= npc.ranged_threat.1 && npc.attack_t.is_none() && npc.stagger <= 0.0 && npc.retreat.is_none() {
+                        npc.ranged_threat = (0.0, -1.0);
+                        step = Some("SideStep");
+                    }
+                    if let Some(kind) = step {
                         let moves = npc.arms.moves.clone();
                         if npc.melee_cd.len() != moves.len() {
                             npc.melee_cd = vec![0.0; moves.len()];
                         }
-                        let dodge = moves.iter().enumerate().find(|(i, m)| matches!(m.kind.as_str(), "SideStep" | "BackStep") && npc.melee_cd[*i] <= 0.0 && d <= m.range[1] && inhibited.get(&m.kind).is_none_or(|(_, by)| *by == e));
+                        // (a step's inhibition holds it back too: an elite guard, stepping back
+                        // after each blow, would else never dodge)
+                        let dodge = moves.iter().enumerate().find(|(i, m)| m.kind == kind && npc.melee_cd[*i] <= 0.0 && d <= m.range[1] && !inhibited.contains_key(&m.kind));
                         if let Some((i, m)) = dodge {
-                            if rand::random::<f32>() < npc.arms.dodge * 0.1 {
+                            // (a blow's step aside, one without the dodge's clips: as readily as it
+                            // dodges)
+                            if !(swinging && kind == "SideStep") || rand::random::<f32>() < npc.arms.dodge * 0.1 {
+                                if kind == "BackStep" {
+                                    npc.incoming.0 = 0;
+                                }
                                 inhibited.insert(m.kind.clone(), (inhibition(&m.kind), e));
                                 let toward = (ppos - pos).with_y(0.0).normalize_or_zero();
                                 let away = if m.kind == "SideStep" {
@@ -4055,7 +4165,7 @@ pub(crate) fn npc_brain(
                                 let right = Vec3::new(-npc.forward().z, 0.0, npc.forward().x);
                                 npc.gesture(if m.kind != "SideStep" { 17 } else if away.dot(right) > 0.0 { 16 } else { 15 });
                                 if std::env::var("DH_MELEE_LOG").is_ok() {
-                                    info!("melee: {} dodges ({}) at {d:.1} m", npc.name, m.kind);
+                                    info!("melee: {} steps ({}) at {d:.1} m", npc.name, m.kind);
                                 }
                                 npc.melee_cd[i] = m.cooldown[0] + rand::random::<f32>() * (m.cooldown[1] - m.cooldown[0]).max(0.0);
                                 continue;
@@ -4218,12 +4328,13 @@ pub(crate) fn npc_brain(
                                     (_, Some(t)) if moves[i].kind == "Throw" && away => t.cooldown_unreachable,
                                     _ => moves[i].cooldown,
                                 };
-                                npc.melee_cd[i] = (cd[0] + rand::random::<f32>() * (cd[1] - cd[0]).max(0.0)) * ((1.0 - npc.aggression.clamp(0.0, 1.0)) * COOLDOWN_FACTOR + 1.0);
+                                npc.melee_cd[i] = (cd[0] + rand::random::<f32>() * (cd[1] - cd[0]).max(0.0)) * ((1.0 - npc.aggression.clamp(0.0, 1.0)) * npc.arms.pacing.as_ref().map_or(COOLDOWN_FACTOR, |p| p.aggression[2]) + 1.0);
                             }
                             // a blow of its flurry; spent, it recovers its stamina
                             npc.flurry -= 1;
                             if npc.flurry < 1 {
-                                npc.stamina = STAMINA_RECOVERY[0] + rand::random::<f32>() * (STAMINA_RECOVERY[1] - STAMINA_RECOVERY[0]);
+                                let rest = npc.arms.pacing.as_ref().map_or(STAMINA_RECOVERY, |p| p.stamina);
+                                npc.stamina = rest[0] + rand::random::<f32>() * (rest[1] - rest[0]);
                             }
                             if std::env::var("DH_MELEE_LOG").is_ok() {
                                 info!("melee: {} {:?} at {d:.1} m (blocking {blocking})", npc.name, npc.swing);
@@ -4736,6 +4847,11 @@ pub struct NpcClips {
     blink: Option<ClipId>,
     death: Vec<ClipId>,
     death_fast: Option<ClipId>,
+    /// its dodge (`DisNPCAnim_Dodge`): in, out, by side (left, right), and its riposte out of
+    /// it (`DisNPCAnim_RiposteLeft`, `_Right`: `Sword_DodgeLeftAttack_Small`, `_Big`)
+    dodge_in: [Vec<ClipId>; 2],
+    dodge_out: [Option<ClipId>; 2],
+    riposte: [Vec<ClipId>; 2],
     /// a wall of light's death (`DisNPCAnim_DeathWallOfLight`), and burning to death
     /// (`DisNPCAnim_Immolate`)
     electrified: Option<ClipId>,
@@ -4956,6 +5072,10 @@ impl NpcClips {
             death_fast: lib.find("Generic_DeathFast_Front"),
             electrified: lib.find("Generic_Electrified"),
             immolate: lib.find("Generic_Immolation"),
+            dodge_in: ["Left", "Right"].map(|s| lib.all(&[&format!("Sword_Dodge{s}In")])),
+            dodge_out: ["Left", "Right"].map(|s| lib.find(&format!("Sword_Dodge{s}Out"))),
+            // (its riposte as its definition chains it: the small one, the big twice)
+            riposte: ["Left", "Right"].map(|s| lib.all(&[&format!("Sword_Dodge{s}Attack_Small"), &format!("Sword_Dodge{s}Attack_Big"), &format!("Sword_Dodge{s}Attack_Big")])),
             lie_back: lib.first(&["Generic_DeathFrontA", "Corpses_DeathPose_OnBack1", "Generic_DeathFront_A", "Generic_DeathA"]),
             lie_front: lib.first(&["Generic_DeathBackA", "Generic_DeathFrontA", "Generic_DeathBack_A", "Generic_DeathB"]),
             assassinated: lib.all(&["Generic_Assassination_Back_Slave", "Generic_Assassination_FastBack_Slave"]),
@@ -5464,6 +5584,7 @@ fn npc_select_anim(
         let own_death = electrocuted.filter(|el| el.standing).and(clips.electrified).or(clips.immolate.filter(|_| immolated));
         // a weak hit's flinch, laid over whatever it does (its clip played through once)
         npc.weak_hits = clips.weak_hit.iter().all(Option::is_some);
+        npc.dodges = clips.dodge_in.iter().all(|v| !v.is_empty());
         if let Some(side) = npc.weak_hit.take() {
             st.flinch = clips.weak_hit[side.min(3)].map(|c| (c, 0.0));
             if let (Some((c, _)), true) = (st.flinch, std::env::var("DH_NPC_CLIP_LOG").is_ok()) {
@@ -5836,7 +5957,8 @@ fn npc_select_anim(
             } else if anim.finished() {
                 st.counter = None;
                 let near = (ppos - t.translation).with_y(0.0).length() < 3.0 && (ppos.y - t.translation.y).abs() < 1.5;
-                if let Some(c) = clips.dodge_attack[side].filter(|_| near && npc.mode == Mode::Combat) {
+                let riposte = clips.dodge_attack[side].or_else(|| pick(&clips.riposte[side]));
+                if let Some(c) = riposte.filter(|_| near && npc.mode == Mode::Combat) {
                     let hit = st.marks.get(&c).and_then(|m| m.zone).map(|(z, d)| (z + d - 0.12).max(z)).unwrap_or(0.3);
                     npc.attack_t = Some(0.0);
                     npc.swing = Some(Swing { kind: MoveKind::Short, big: false, len: lib.duration(c).max(hit + 0.1), hit, reach: 2.6, lunge: 0.0, no_versus: false, more: Vec::new() });
@@ -5849,6 +5971,14 @@ fn npc_select_anim(
                     }
                     st.attacking = true;
                     anim.restart(c, false, 1.0, 0.05);
+                    st.last_mode = npc.mode;
+                    st.last_alert = npc.alert;
+                    continue;
+                }
+                // (else back out of it, `Sword_DodgeLeftOut`)
+                if let Some(c) = clips.dodge_out[side].filter(|_| Some(dodged) == clips.dodge_in[side].first().copied()) {
+                    anim.restart(c, false, 1.0, 0.08);
+                    st.oneshot = true;
                     st.last_mode = npc.mode;
                     st.last_alert = npc.alert;
                     continue;
@@ -6379,6 +6509,7 @@ fn npc_select_anim(
                 13 => &clips.cough,
                 14 => &clips.check_pockets,
                 15..=17 => &clips.dodge[npc.act.0 as usize - 15],
+                22 | 23 => &clips.dodge_in[npc.act.0 as usize - 22],
                 18 => &clips.trigger_alarm,
                 19 => &clips.corpse_check,
                 20 => &clips.magic[st.drawn as usize],
@@ -6393,6 +6524,9 @@ fn npc_select_anim(
                 }
                 if matches!(npc.act.0, 15 | 16) && clips.dodge_attack[npc.act.0 as usize - 15].is_some() {
                     st.counter = Some((npc.act.0 as usize - 15, c));
+                }
+                if matches!(npc.act.0, 22 | 23) {
+                    st.counter = Some((npc.act.0 as usize - 22, c));
                 }
                 // (the lock's struggle holds until it ends)
                 let hold = npc.act.0 == 4;

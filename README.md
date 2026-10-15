@@ -548,9 +548,20 @@ fullscreen display, vertical sync and the crosshair.
   after (`DisTweaks_NPCRiposte`), one whose blow Corvo parries reels (`..ParryLost_*`), and
   one who isn't his enemy shoves him out of its way when he crowds it (`DisTweaks_NPCPush`,
   `Sword_PushBack_*`, with its "personal space" bark);
-  his blows coming, they may step aside or back out of reach (`DisTweaks_NPCSideStep` 2.5 m,
-  `..BackStep` 3 m, every 12-15 s at most; how readily is read from `m_DodgeLevel`, a tenth
-  a level), each with its step's clip (`Sword_SideStep_Left`, `_Right`, `_Back`). A blow (a kick too) throws his arms from the side it came (`Sword_BigHit_Front`,
+  they meet his blows and aim as their combat behaviour's `DisTweaks_AISubProcess_ManageAttacks`
+  paces them (as roshan's r614/blink research decoded `DisAISubProcessManageAttacks`): a blow of
+  his that threatens one (within `m_fAngleOfPerceivedMeleeThreat`, 30 degrees, of his facing) it
+  may dodge, by its `m_DodgeLevel` (a tenth a level), leaning out of the blade's way
+  (`Sword_DodgeLeftIn`, `_RightIn`) as it passes it by (`eDisMeleeResponse_Dodged`), then back
+  (`_Out`) or, with him still in reach, striking out of the dodge (its riposte,
+  `Sword_DodgeLeftAttack_Small`, `_Big`); after `m_IncomingAttacksBeforeBackStep` of his blows
+  (an elite guard's 1, forgotten after `m_fTimeToForgiveIncomingAttacks`, 5 s) it steps back out of
+  reach (`DisTweaks_NPCBackStep`, 3 m, `Sword_SideStep_Back`); his pistol or crossbow held on it
+  (within `m_fAngleOfPerceivedRangedThreat`, 10 degrees) for `m_TimeForThreatToCauseSideStep`
+  (2-3 s), it steps aside (`DisTweaks_NPCSideStep`, 2.5 m, `Sword_SideStep_Left`, `_Right`); each
+  step within its reach and on its cooldown. Its flurries and the rest between them
+  (`m_AttacksPerFlurry`, an elite guard's 2-3; `m_StaminaRecoveryDuration`, 4-5 s) and its
+  aggression are its own behaviour's. A blow (a kick too) throws his arms from the side it came (`Sword_BigHit_Front`,
   `_Back`, `_Left`, `_Right`; empty-handed, `Empty_BigHit_*`, and a knockdown's `Empty_Knockdown*`);
   other harm, as from ahead. A big blow leaves Corvo reeling for `m_fVulnerableTime_BigHit_Dizzy`; his perfect
   parry is a block begun within `m_fTapForPerfectParryWindow` (0.2 s), within his sword's

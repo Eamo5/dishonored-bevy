@@ -1126,6 +1126,30 @@ pub struct NpcStats {
     /// the plague it carries (a weeper's)
     #[serde(default)]
     pub plague: Option<NpcPlague>,
+    /// how it paces its fight (its combat behaviour's `DisTweaks_AISubProcess_ManageAttacks`)
+    #[serde(default)]
+    pub pacing: Option<NpcPacing>,
+}
+
+/// A fighter's pacing (`DisTweaks_AISubProcess_ManageAttacks`, at normal difficulty): blows a
+/// flurry (`m_AttacksPerFlurry`) and the rest after (`m_StaminaRecoveryDuration`, s); Corvo's
+/// blows that threaten it (within `m_fAngleOfPerceivedMeleeThreat` degrees of his facing) and
+/// how many before it steps back (`m_IncomingAttacksBeforeBackStep`), forgotten after
+/// `m_fTimeToForgiveIncomingAttacks` s; his firearm or bow aimed at it (within
+/// `m_fAngleOfPerceivedRangedThreat` degrees) and how long before it steps aside
+/// (`m_TimeForThreatToCauseSideStep`, s); its aggression: lost per damage, regained a second,
+/// and its moves' cooldowns at none (`m_fAggressionDeltaPerDamage`, `m_fAggressionRegenRate`,
+/// `m_fCooldownFactorAtMinAggression`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct NpcPacing {
+    pub flurry: [f32; 2],
+    pub stamina: [f32; 2],
+    pub melee_threat: f32,
+    pub back_step_after: [f32; 2],
+    pub forgive: f32,
+    pub ranged_threat: f32,
+    pub side_step_after: [f32; 2],
+    pub aggression: [f32; 3],
 }
 
 /// A plague carrier's (a weeper's pawn: `m_bHasPlague`). The cloud its cough starts deals

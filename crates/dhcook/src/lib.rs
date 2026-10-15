@@ -3469,6 +3469,48 @@ impl<'a> Cooker<'a> {
         Vec::new()
     }
 
+    /// How a character paces its fight: its combat behaviour's (its brain's `m_BehaviorTweak`,
+    /// at normal difficulty) `DisTweaks_AISubProcess_ManageAttacks` among its
+    /// `m_SubProcessTweaks`.
+    fn pacing(&mut self, pawn: &Obj) -> Option<NpcPacing> {
+        let brain = self.tweak_obj(pawn, "m_pBrainTweak")?;
+        let Some((pkg, Value::Array { count, offset, size })) = self.tweak_prop(&brain, "m_BehaviorTweak", 0, 0) else { return None };
+        let behaviours: Vec<Obj> = parse_struct_array(&pkg, offset, size, count)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|b| match b.get_idx("m_Difficulty", 1) {
+                Some(Value::Object(o)) if *o != 0 => self.assets.resolve(&pkg, *o),
+                _ => None,
+            })
+            .filter(|b| b.class().contains("Combat"))
+            .collect();
+        for b in behaviours {
+            let Some(m) = self.tweak_objs(&b, "m_SubProcessTweaks").into_iter().find(|o| o.class().contains("ManageAttacks")) else { continue };
+            let f = |s: &mut Self, n: &str, d: f32| s.tweak_float(&m, n, 0).unwrap_or(d);
+            let ranged = |s: &mut Self, n: &str, d: [f32; 2]| match s.tweak_prop(&m, n, 0, 0) {
+                Some((_, Value::Struct(_, r))) => {
+                    let p = Props(r);
+                    [
+                        p.float("m_fMinValue").or(p.int("m_MinValue").map(|v| v as f32)).unwrap_or(d[0]),
+                        p.float("m_fMaxValue").or(p.int("m_MaxValue").map(|v| v as f32)).unwrap_or(d[1]),
+                    ]
+                }
+                _ => d,
+            };
+            return Some(NpcPacing {
+                flurry: ranged(self, "m_AttacksPerFlurry", [2.0, 3.0]),
+                stamina: ranged(self, "m_StaminaRecoveryDuration", [4.0, 5.0]),
+                melee_threat: f(self, "m_fAngleOfPerceivedMeleeThreat", 30.0),
+                back_step_after: ranged(self, "m_IncomingAttacksBeforeBackStep", [1.0, 1.0]),
+                forgive: f(self, "m_fTimeToForgiveIncomingAttacks", 5.0),
+                ranged_threat: f(self, "m_fAngleOfPerceivedRangedThreat", 10.0),
+                side_step_after: ranged(self, "m_TimeForThreatToCauseSideStep", [2.0, 3.0]),
+                aggression: [f(self, "m_fAggressionDeltaPerDamage", -0.5), f(self, "m_fAggressionRegenRate", 0.1), f(self, "m_fCooldownFactorAtMinAggression", 1.0)],
+            });
+        }
+        None
+    }
+
     /// Where each of a combat behaviour's attack patterns places its character
     /// (`m_pIdealRangeSource`, `m_fFlankAngleDegrees`), as `attack_patterns` lists them.
     fn pattern_shapes(&mut self, pawn: &Obj, list: &str) -> Vec<PatternShape> {
@@ -3816,6 +3858,7 @@ impl<'a> Cooker<'a> {
             st.rat_dps = self.tweak_float(&c, "m_fRatSwarmDamagePerSecond", 0).unwrap_or(0.0);
         }
         st.plague = self.npc_plague(pawn);
+        st.pacing = self.pacing(pawn);
         log::debug!(
             "npc stats {}: health {:?}, weapons {:?}, ammo {:?}",
             pawn.name(),

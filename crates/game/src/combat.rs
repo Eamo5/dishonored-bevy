@@ -840,6 +840,12 @@ fn sword_input(
                     // its blow is about to land too: the blades lock
                     let at = nt.translation + Vec3::Y;
                     lock_blades(&mut versus, e, &mut npc, at, &mut sfx, &mut noise);
+                } else if npc.dodging > 0.0 {
+                    // it dodged the blow (`eDisMeleeResponse_Dodged`): the blade passes it by
+                    npc.parries = 0;
+                    if std::env::var("DH_MELEE_LOG").is_ok() {
+                        info!("melee: {} dodged Corvo's blow", npc.name);
+                    }
                 } else if npc.mode == Mode::Combat && npc.sees_player && npc.attack_t.is_none() && npc.stagger <= 0.0 && rand::random::<f32>() < npc.parry_chance() {
                     // the guard parries (`m_ParryChanceOfStarting`, then `..OfChaining` up to
                     // `m_ParryChainsAllowed` in a row); a parry may break its guard, leaving it
@@ -874,6 +880,9 @@ fn sword_input(
                 }
                 for &(o, _) in swept.iter().skip(1) {
                     let Ok((_, mut other, ot)) = npcs.get_mut(o) else { continue };
+                    if other.dodging > 0.0 {
+                        continue;
+                    }
                     if other.mode == Mode::Combat && other.sees_player && other.attack_t.is_none() && other.stagger <= 0.0 && rand::random::<f32>() < other.parry_chance() {
                         other.parries += 1;
                         other.gesture(1);
