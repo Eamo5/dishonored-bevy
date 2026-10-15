@@ -585,6 +585,9 @@ pub struct VmSave {
     tower_shots: Vec<(String, Vec3)>,
     #[serde(default)]
     tower_cmds: Vec<(Vec<Val>, u8, Vec<Val>)>,
+    /// the tutorial lines up by op: shown at, gone at (none: until hidden)
+    #[serde(default)]
+    tutorials_up: Vec<(u32, f32, Option<f32>)>,
 }
 
 /// What a conversation's speaker is doing that ends it (`DisConvoEndReasonEnum`: death,
@@ -4629,6 +4632,7 @@ impl Vm {
             joints_broken: self.joints_broken.iter().cloned().collect(),
             tower_shots: self.tower_shots.clone(),
             tower_cmds: self.tower_cmds.clone(),
+            tutorials_up: self.tutorials_up.iter().map(|(op, up)| (*op, up.0, up.1.is_finite().then_some(up.1))).collect(),
         }
     }
 
@@ -4663,6 +4667,7 @@ impl Vm {
         self.joints_broken = s.joints_broken.into_iter().collect();
         self.tower_shots = s.tower_shots;
         self.tower_cmds = s.tower_cmds;
+        self.tutorials_up = s.tutorials_up.into_iter().map(|(op, at, until)| (op, (at, until.unwrap_or(f32::INFINITY)))).collect();
         if let Some(i) = s.inert {
             self.inert = i;
         }

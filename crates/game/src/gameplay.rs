@@ -842,17 +842,34 @@ pub const TUTORIAL_WINDOW: f32 = 10.0;
 
 /// An entry of the HUD's tutorial stack (`DisTutorialInfo`): its words, its seconds left while
 /// shown (infinite: until put away), a window's picture (else the line), whether it cycles
-/// (`DTT_TutorialCyclingMessage`), its priority and seconds shown.
-#[derive(Clone, Debug)]
+/// (`DTT_TutorialCyclingMessage`), its priority and seconds shown. Saved with the game, as the
+/// HUD's save data keeps them.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TutorialEntry {
     pub text: String,
+    #[serde(with = "forever")]
     pub secs: f32,
     pub window: Option<u8>,
     cycling: bool,
     prio: u8,
+    /// (not saved: a loaded line comes up afresh)
+    #[serde(skip)]
     shown: f32,
     /// shown even while the HUD is hidden (`m_bForceDisplay`: a cinematic's)
     forced: bool,
+}
+
+/// Seconds that may be infinite (until put away), saved as none: JSON has no infinity.
+pub(crate) mod forever {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &f32, s: S) -> Result<S::Ok, S::Error> {
+        v.is_finite().then_some(*v).serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+        Ok(Option::<f32>::deserialize(d)?.unwrap_or(f32::INFINITY))
+    }
 }
 
 #[derive(Resource, Default)]
@@ -925,6 +942,17 @@ impl HudMessages {
         if let Some(s) = shown_text {
             self.shown = self.stack.iter().position(|t| t.text == s).unwrap_or(0);
         }
+    }
+
+    /// The stack as a save left it (the HUD's save data writes `m_TutorialStack`, each entry
+    /// with its time left, and its load clears the stack before reading it back): the screen
+    /// goes to its head.
+    pub fn restore_tutorials(&mut self, stack: Vec<TutorialEntry>) {
+        self.stack = stack;
+        self.shown = 0;
+        self.cycle = 0.0;
+        self.tutorial = None;
+        self.tutorial_forced = false;
     }
 
     /// A tutorial put away (its condition gone: a blow blocked, the music box's tune out of
@@ -1185,5 +1213,23 @@ mod tutorial_stack_tests {
         assert_eq!(m.tutorial.as_ref().map(|t| t.0.as_str()), Some("b"));
         m.tick_tutorials(TUTORIAL_CYCLE);
         assert_eq!(m.tutorial.as_ref().map(|t| t.0.as_str()), Some("a"));
+    }
+
+    #[test]
+    fn the_stack_comes_back_from_a_save() {
+        let mut m = HudMessages::default();
+        m.tutorial_forced("until hidden", f32::INFINITY);
+        m.tutorial_window("a window", 1);
+        m.tick_tutorials(2.0);
+        let json = serde_json::to_string(&m.stack).unwrap();
+        let mut n = HudMessages::default();
+        n.tutorial("another game's", f32::INFINITY);
+        n.restore_tutorials(serde_json::from_str(&json).unwrap());
+        n.tick_tutorials(0.1);
+        assert_eq!(n.stack.len(), 2);
+        assert!(n.stack[0].secs.is_infinite() && n.stack[0].forced);
+        assert_eq!(n.stack[1].window, Some(1));
+        assert_eq!(n.tutorial.as_ref().map(|t| t.0.as_str()), Some("until hidden"));
+        assert!(n.tutorial_forced);
     }
 }

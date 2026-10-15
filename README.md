@@ -936,6 +936,11 @@ fullscreen display, vertical sync and the crosshair.
   ("Use your mouse to look around" over the Tower's boat ride, the challenges' briefings), and
   a camera fade darkens the view under the HUD, as Scaleform draws after UE3's canvas: the
   subtitles and such lines show over black. The game's own stay `m_fTutorialDuration` (10 s).
+  The tutorial stack goes into saves as the HUD's save data writes it (each entry with its
+  time left; its load clears the stack before reading it back), and the scripts' ops keep
+  which of their lines are up: a loaded game shows the line it was saved with for the time it
+  had left, a line until hidden still goes when its script hides it, and the start-up's or an
+  earlier game's tutorials don't carry over.
 - **Target cards** (`targetcard.rs`, the HUD movie's `TargetNotification`): when the scripts
   report a target's fate (`DisSeqAct_ShowTargetNotification`: assassinated, neutralized,
   rescued, spared), the card comes up at the top right with the target's portrait

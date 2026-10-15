@@ -248,6 +248,9 @@ pub struct SaveGame {
     /// the maps' states kept for a return to them (`Campaign::level_states`)
     #[serde(default)]
     level_states: Vec<(String, Vec<String>, String)>,
+    /// the HUD's tutorial stack (`m_TutorialStack`), as its save data keeps it
+    #[serde(default)]
+    tutorials: Vec<crate::gameplay::TutorialEntry>,
 }
 
 /// What each slot holds (map, time), for the menus.
@@ -521,6 +524,7 @@ fn save_game(
         cinematic: cine.on.then_some((cine.hide_hud, cine.hold, cine.hide_player)),
         hud_hidden: script_ui.map(|u| u.hud_hidden.iter().cloned().collect()),
         hub_taken: campaign.hub_taken.iter().cloned().collect(),
+        tutorials: msgs.stack.clone(),
         broken_doors: Vec::new(),
         level_states: Vec::new(),
         usables: usables.entered.iter().map(|(k, (s, d))| (*k, *s, *d)).collect(),
@@ -734,7 +738,7 @@ fn apply_pending(
     mut lights: Query<(&LevelLight, &mut Visibility), (Without<LevelInstance>, Without<Player>)>,
     (mut krusts, mut prop_restore, mut traps, mut usables, mut carry_restore, mut krust_spit, mut krust_state, mut trap_state, mut tower_arrows, mut tower_state): (ResMut<crate::krust::KrustLog>, ResMut<crate::props::PropRestore>, ResMut<crate::traps::TrapLog>, ResMut<crate::usables::UsableLog>, ResMut<crate::carry::CarryRestore>, ResMut<crate::krust::SpitRestore>, ResMut<crate::krust::KrustRestore>, ResMut<crate::traps::TrapRestore>, ResMut<crate::watchtower::ArrowRestore>, ResMut<crate::watchtower::TowerRestore>),
     (mut overrides, mut devices, props, mut gadgets, mut projectiles, mut swarms, mut possession, mut fish): (ResMut<crate::script_world::SpawnerOverrides>, ResMut<crate::security::Devices>, Query<(Entity, &crate::props::Prop)>, ResMut<crate::gadgets::GadgetRestore>, ResMut<crate::powers::ProjectileRestore>, ResMut<crate::swarm::SwarmRestore>, ResMut<crate::possession::PossessionRestore>, ResMut<crate::fish::FishRestore>),
-    (mut cine, mut matinee, mut collider_tfs, script_ui, mut campaign, settings, mut cinematic_fade, mut powers, mut tc): (
+    (mut cine, mut matinee, mut collider_tfs, script_ui, mut campaign, settings, mut cinematic_fade, mut powers, mut tc, mut msgs): (
         ResMut<crate::script_world::Cinematic>,
         ResMut<crate::matinee::MatineeState>,
         Query<&mut Transform, (With<bevy_rapier3d::prelude::Collider>, Without<LevelInstance>, Without<Player>, Without<Npc>)>,
@@ -744,6 +748,7 @@ fn apply_pending(
         ResMut<crate::matinee::CinematicFade>,
         ResMut<crate::powers::Powers>,
         ResMut<crate::gameplay::TimeControl>,
+        ResMut<HudMessages>,
     ),
 ) {
     let Some(mut p) = pending else { return };
@@ -810,6 +815,8 @@ fn apply_pending(
         // that override together with ScriptUi, otherwise it reinstates black
         // until the eight-second fallback fade despite the saved scene being live.
         cinematic_fade.0 = None;
+        // (the save's tutorials, not the start-up's or another game's)
+        msgs.restore_tutorials(std::mem::take(&mut s.tutorials));
     }
     // (before the characters come back: they take it as they spawn)
     overrides.load(std::mem::take(&mut s.overrides));
