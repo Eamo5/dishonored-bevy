@@ -7013,6 +7013,10 @@ impl<'a> Cooker<'a> {
                             None => log::warn!("player anim set {path} not found"),
                         }
                     }
+                    // (and his side of the wolfhound's arm attack, `DisNPCAnimDefinitions_Wolfhound`'s
+                    // linked player clips: only where hounds are, in their levels' script packages)
+                    const LEVEL_SETS: &[&str] = &["Ply_WolfhoundAttacks_as.Ply_WolfhoundAttacks_as"];
+                    sets.extend(LEVEL_SETS.iter().filter_map(|path| self.assets.find(path)));
                     let anim_sets = Vec::new();
                     // the clips' effects at the hands (`AnimNotify_PlayParticleEffect`: the
                     // Mark glowing as he casts)

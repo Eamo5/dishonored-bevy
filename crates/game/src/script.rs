@@ -1008,6 +1008,23 @@ fn run_script(
                 });
             }
         }
+        "rouse" => {
+            // (tests) rouse [NAME]: the nearest living hostile character (whose name holds NAME)
+            // turns on Corvo, knowing where he is
+            let named = cmd.get(1).cloned().unwrap_or_default();
+            let at = t.translation;
+            if let Some((e, _, _)) = npc_ents.iter().filter(|(_, n, _)| n.hostile() && !n.is_down() && (named.is_empty() || n.name.contains(&named))).min_by(|a, b| a.2.translation.distance(t.translation).total_cmp(&b.2.translation.distance(t.translation))) {
+                commands.queue(move |w: &mut World| {
+                    if let Some(mut n) = w.get_mut::<Npc>(e) {
+                        n.alert = crate::npc::Alert::Combat;
+                        n.awareness = 1.0;
+                        n.last_seen = Some(at);
+                        n.set_mode(crate::npc::Mode::Combat);
+                        info!("script: rouse {}", n.name);
+                    }
+                });
+            }
+        }
         "npcidle" => {
             // (tests) npcidle [NAME]: the nearest living hostile character (whose name holds NAME)
             // stops where it is, facing Corvo
@@ -1537,7 +1554,8 @@ fn run_script(
                 script.held.push((Input::Key(k), secs));
             }
         }
-        "god" => script.god = true,
+        // (god 0: mortal again)
+        "god" => script.god = cmd.get(1).is_none_or(|s| s != "0"),
         "sheathe" => {
             // (tests) sheathe [0]: the hands emptied as the scripts empty them
             // (`DisSeqAct_EquipItemType`), or the sword drawn again

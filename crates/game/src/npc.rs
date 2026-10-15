@@ -293,6 +293,10 @@ pub struct Npc {
     pub feud_scan: f32,
     /// a weeper's arm grab (`DisTweaks_WeeperGrab`): phase and time in it
     pub grab: Option<(GrabPhase, f32)>,
+    /// a wolfhound's leap, or its letting go: how long its clip lasts (s; 0 a weeper's own
+    /// pace), and how fast the clip carries it forward meanwhile (m/s, back below 0)
+    pub grab_len: f32,
+    pub grab_drift: f32,
     pub trail_idx: usize,
     pub saw_body: bool,
     /// Pre-placed corpse: lies dead from the start and doesn't alarm guards.
@@ -1084,20 +1088,23 @@ fn burn_ashes(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &mu
 }
 
 /// A weeper's arm grab: the lunge, the hold (Corvo struggles free with
-/// `m_NumAttackButtonPressToWin` attacks), the release, or a miss.
+/// `m_NumAttackButtonPressToWin` attacks), the release, or a miss; a wolfhound's, Corvo dead in
+/// its teeth.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GrabPhase {
     Try,
     Hold,
     Release,
     Miss,
+    Kill,
 }
 
-/// Corvo held by a weeper.
+/// Corvo held by a weeper (or pinned by a wolfhound).
 #[derive(Component)]
 pub struct Grabbed {
     pub by: Entity,
     pub presses: u32,
+    pub hound: bool,
 }
 
 /// `DisTweaks_WeeperGrab`: reach, dodge radius (UE units / 100), presses to break free.
@@ -1159,7 +1166,7 @@ fn weeper_grab(
         let el = el + time.delta_secs();
         npc.grab = Some((phase, el));
         match phase {
-            GrabPhase::Try if el >= 0.6 => {
+            GrabPhase::Try if el >= if npc.grab_len > 0.0 { npc.grab_len } else { 0.6 } => {
                 let d = (pt.translation - t.translation).with_y(0.0).length();
                 let hound = is_hound(&npc);
                 if d < if hound { HOUND_HOLD } else { GRAB_DODGE } && grabbed.is_none() && !npc.is_down() {
@@ -1170,7 +1177,7 @@ fn weeper_grab(
                     }
                     info!("weeper grab: {} holds Corvo", npc.name);
                     npc.grab = Some((GrabPhase::Hold, 0.0));
-                    commands.entity(pe).insert(Grabbed { by: e, presses: 0 });
+                    commands.entity(pe).insert(Grabbed { by: e, presses: 0, hound });
                     p.locked = true;
                     p.velocity = Vec3::ZERO;
                     sfx.write(crate::audio::PostEvent::named("Snd_P_Clothes_Grab_01_Cue_ak", Some(pt.translation)));
@@ -1197,8 +1204,10 @@ fn weeper_grab(
                 let need = if hound { HOUND_PRESSES } else { GRAB_PRESSES };
                 let broke = grabbed.is_none_or(|g| g.by != e || g.presses >= need) || stats.dead;
                 if broke || npc.is_down() || npc.stagger > 0.5 {
-                    info!("weeper grab: {} lets go", npc.name);
-                    npc.grab = Some((GrabPhase::Release, 0.0));
+                    // (a wolfhound with Corvo dead in its teeth: its kill)
+                    let kill = hound && stats.dead && !npc.is_down();
+                    info!("weeper grab: {} {}", npc.name, if kill { "kills Corvo" } else { "lets go" });
+                    npc.grab = Some((if kill { GrabPhase::Kill } else { GrabPhase::Release }, 0.0));
                     npc.stagger = npc.stagger.max(1.2);
                     if grabbed.is_some_and(|g| g.by == e) {
                         commands.entity(pe).remove::<Grabbed>();
@@ -1206,7 +1215,7 @@ fn weeper_grab(
                     }
                 }
             }
-            GrabPhase::Release | GrabPhase::Miss if el >= 0.9 => {
+            GrabPhase::Release | GrabPhase::Miss | GrabPhase::Kill if el >= if npc.grab_len > 0.0 { npc.grab_len } else { 0.9 } => {
                 npc.grab = None;
                 npc.attack_cd = npc.attack_cd.max(3.0);
             }
@@ -1771,6 +1780,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         foe: None,
         feud_scan: rand::random::<f32>(),
         grab: None,
+        grab_len: 0.0,
+        grab_drift: 0.0,
         trail_idx: 0,
         saw_body: false,
         corpse,
@@ -4178,15 +4189,19 @@ fn npc_move(
             }
             None => false,
         };
-        // a weeper's grab: the lunge closes on Corvo, then it stands its ground
+        // a weeper's grab: the lunge closes on Corvo, then it stands its ground (a wolfhound's
+        // leap lasts its clip and lands at his arm, `Attack_ArmAttack_GrabLoop_Minigame`'s
+        // `anchor_jnt` 0.57 m on; its clip carries it as it lets go or misses)
+        let (leap, close) = if npc.grab_len > 0.0 { (npc.grab_len - 0.05, 0.6) } else { (0.55, 0.9) };
         match (npc.grab, ppos) {
-            (Some((GrabPhase::Try, el)), Some(p)) if el < 0.55 && npc.stagger <= 0.0 => {
+            (Some((GrabPhase::Try, el)), Some(p)) if el < leap && npc.stagger <= 0.0 => {
                 let to = (p - pos).with_y(0.0);
                 let d = to.length();
                 // (a wolfhound's leap covers its 8 m)
                 let cap = if is_hound(&npc) { 16.0 } else { 8.0 };
-                wish = if d > 0.9 { to / d * ((d - 0.9) / (0.55 - el).max(0.15)).min(cap) } else { Vec3::ZERO };
+                wish = if d > close { to / d * ((d - close) / (leap - el).max(0.15)).min(cap) } else { Vec3::ZERO };
             }
+            (Some((GrabPhase::Release | GrabPhase::Miss | GrabPhase::Kill, el)), _) if npc.grab_len > 0.0 && el < npc.grab_len => wish = npc.forward() * npc.grab_drift,
             (Some(_), _) => wish = Vec3::ZERO,
             _ => {}
         }
@@ -4503,6 +4518,9 @@ pub struct NpcClips {
     grab_loop: Option<ClipId>,
     grab_out: Option<ClipId>,
     grab_miss: Option<ClipId>,
+    /// a wolfhound's kill, Corvo dead in its teeth (`Attack_ArmAttack_TransToKill_Minigame`, then
+    /// `Attack_KillPlayer_Minigame`)
+    grab_kill: [Option<ClipId>; 2],
     /// killed from above, by side (front, back, left, right)
     drop_killed: [Option<ClipId>; 4],
     /// the pistol drawn, aimed, fired and put away (`Npc_EliteGuard_Gun_as`: `Sword_Gun_Draw`,
@@ -4696,11 +4714,14 @@ impl NpcClips {
             startled: [lib.find("Empty_Surprised_Front"), lib.find("Sword_Surprised_Front")],
             equip: lib.first(&["Sword_Patrol_Equip", "Sword_Equip"]),
             unequip: lib.first(&["Sword_Patrol_UnEquip", "Sword_UnEquip"]),
-            grab_try: lib.first(&["Empty_ArmGrab_Try"]),
-            grab_in: lib.first(&["Empty_ArmGrab_In"]),
-            grab_loop: lib.first(&["Empty_ArmGrab_Loop"]),
-            grab_out: lib.first(&["Empty_ArmGrab_Out"]),
-            grab_miss: lib.first(&["Empty_ArmGrab_MissDD"]),
+            // (a wolfhound's: its arm attack's, `DisNPCAnimDefinitions_Wolfhound`'s sync attack:
+            // the leap, the bite on his arm, its hold, thrown off, or past him)
+            grab_try: lib.first(&["Empty_ArmGrab_Try", "Attack_ArmAttack_JumpGlide_Minigame"]),
+            grab_in: lib.first(&["Empty_ArmGrab_In", "Attack_ArmAttack_GrabArm_Minigame"]),
+            grab_loop: lib.first(&["Empty_ArmGrab_Loop", "Attack_ArmAttack_GrabLoop_Minigame"]),
+            grab_out: lib.first(&["Empty_ArmGrab_Out", "Attack_ArmAttack_GrabOut_Minigame"]),
+            grab_miss: lib.first(&["Empty_ArmGrab_MissDD", "Attack_ArmAttack_GrabMiss_Minigame"]),
+            grab_kill: [lib.find("Attack_ArmAttack_TransToKill_Minigame"), lib.find("Attack_KillPlayer_Minigame")],
             drop_killed: [
                 lib.find("Generic_Assassination_DropFront_Slave"),
                 lib.find("Generic_Assassination_DropBack_Slave"),
@@ -5414,13 +5435,27 @@ fn npc_select_anim(
                     GrabPhase::Hold => clips.grab_in.or(clips.grab_loop),
                     GrabPhase::Release => clips.grab_out,
                     GrabPhase::Miss => clips.grab_miss.or(clips.grab_out),
+                    GrabPhase::Kill => clips.grab_kill[0].or(clips.grab_out),
                 };
                 if let Some(c) = c {
                     anim.restart(c, false, 1.0, 0.1);
                 }
+                // (a wolfhound's leap and letting go last their clips, carried by them)
+                (npc.grab_len, npc.grab_drift) = match c.filter(|_| is_hound(&npc) && phase != GrabPhase::Hold) {
+                    Some(c) => (lib.duration(c), lib.clip(c).root_motion[0] / lib.duration(c)),
+                    None => (0.0, 0.0),
+                };
+                // (its kill through to its end)
+                if let (GrabPhase::Kill, Some(k)) = (phase, clips.grab_kill[1].filter(|_| c == clips.grab_kill[0])) {
+                    npc.grab_len += lib.duration(k);
+                }
             } else if phase == GrabPhase::Hold && anim.finished() {
                 if let Some(c) = clips.grab_loop {
                     anim.play(c, true, 1.0, 0.1);
+                }
+            } else if phase == GrabPhase::Kill && anim.finished() && anim.current().map(|p| p.clip) == clips.grab_kill[0] {
+                if let Some(c) = clips.grab_kill[1] {
+                    anim.restart(c, false, 1.0, 0.1);
                 }
             }
             st.last_mode = npc.mode;

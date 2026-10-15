@@ -165,6 +165,9 @@ struct ArmClips {
     death_fall: Option<ClipId>,
     death_water: Option<ClipId>,
     death_drowned: Option<ClipId>,
+    /// killed in a wolfhound's teeth (`Sword_ArmAttack_TransToDeath_Minigame`, then
+    /// `Sword_WolfhoundDeath_Minigame`: its arm attack's linked clips)
+    death_pinned: [Option<ClipId>; 2],
     /// a mantle (`Ply_Player_Mantle_at`): empty-handed or sword in hand, standing or sneaking,
     /// low, medium or high
     mantle: [[[Option<ClipId>; 3]; 2]; 2],
@@ -188,10 +191,13 @@ struct ArmClips {
     choke_in: Option<ClipId>,
     choke_loop: Option<ClipId>,
     choke_win: Option<ClipId>,
-    // held by a weeper
+    // held by a weeper; pinned by a wolfhound, its teeth in his arm (`Ply_WolfhoundAttacks_as`:
+    // `Sword_ArmAttack_GrabArm_Minigame`, `_GrabLoop_`, `_GrabOut_`, its arm attack's linked
+    // clips), where the level has them
     grabbed_in: Option<ClipId>,
     grabbed_loop: Option<ClipId>,
     grabbed_out: Option<ClipId>,
+    pinned: [Option<ClipId>; 3],
     // left arm
     powers_idle: Option<ClipId>,
     /// the left hand on the move with a power, with a gadget: walking, sprinting, in the air
@@ -281,6 +287,7 @@ impl ArmClips {
             death_fall: lib.find("Generic_Death_FallImpact_Back"),
             death_water: lib.find("Generic_Death_Water"),
             death_drowned: lib.find("Generic_Death_Water_OutOfBreath"),
+            death_pinned: [lib.find("Sword_ArmAttack_TransToDeath_Minigame"), lib.find("Sword_WolfhoundDeath_Minigame")],
             mantle: [["Empty_Mantle", "Empty_Sneak_Mantle"], ["Sword_Ready_Mantle", "Sword_Sneak_Mantle"]]
                 .map(|ways| ways.map(|w| ["Low", "Medium", "High"].map(|h| lib.find(&format!("{w}{h}"))))),
             slide: ["Empty", "Sword"].map(|s| ["SlideIn", "SlideLoop", "SlideOutSneak", "SlideOutSprint"].map(|n| lib.find(&format!("{s}_{n}")))),
@@ -303,6 +310,7 @@ impl ArmClips {
             grabbed_in: lib.find("Sword_Weeper_ArmGrab_In"),
             grabbed_loop: lib.find("Sword_Weeper_ArmGrab_Loop"),
             grabbed_out: lib.find("Sword_Weeper_ArmGrab_Out"),
+            pinned: ["GrabArm", "GrabLoop", "GrabOut"].map(|s| lib.find(&format!("Sword_ArmAttack_{s}_Minigame"))),
             drop_kill: [
                 lib.find("Sword_Ready_Assassination_DropFront_Master"),
                 lib.find("Sword_Ready_Assassination_DropBack_Master"),
@@ -380,6 +388,8 @@ struct ArmsAnim {
     cooking: bool,
     choking: bool,
     grabbed: bool,
+    /// (by a wolfhound)
+    pinned: bool,
     oneshot: bool,
     /// mantling (as last seen)
     mantling: bool,
@@ -690,6 +700,7 @@ fn spawn_arms(
                 cooking: false,
                 choking: false,
                 grabbed: false,
+                pinned: false,
                 oneshot: false,
                 airborne: false,
                 mantling: false,
@@ -792,7 +803,11 @@ fn animate_arms(
     if dying {
         if !st.died {
             st.died = true;
-            let cl = if stats.died_drowning {
+            // (pinned by a wolfhound as he died)
+            let pinned = (std::mem::take(&mut st.grabbed) && st.pinned) || grabbed.is_some_and(|g| g.hound);
+            let cl = if pinned && c.death_pinned[0].is_some() {
+                c.death_pinned[0]
+            } else if stats.died_drowning {
                 c.death_drowned.or(c.death_water).or(c.death[1])
             } else if swim.swimming() {
                 c.death_water.or(c.death[1])
@@ -809,6 +824,11 @@ fn animate_arms(
                 if std::env::var_os("DH_ARMS_LOG").is_some() {
                     info!("arms: death {}", anim.lib.clip(cl).name);
                 }
+            }
+        } else if let Some(cl) = c.death_pinned[1].filter(|_| anim.finished() && anim.current().map(|p| p.clip) == c.death_pinned[0]) {
+            anim.restart(cl, false, 1.0, 0.1);
+            if std::env::var_os("DH_ARMS_LOG").is_some() {
+                info!("arms: death {}", anim.lib.clip(cl).name);
             }
         }
         if *vis != Visibility::Inherited {
@@ -971,22 +991,27 @@ fn animate_arms(
         }
         base_busy = true;
     }
-    // a weeper holds Corvo's arm
+    // a weeper holds Corvo's arm, or a wolfhound has it in its teeth
+    let [grab_in, grab_loop, grab_out] = match grabbed {
+        Some(g) if g.hound && c.pinned[1].is_some() => c.pinned,
+        _ => [c.grabbed_in, c.grabbed_loop, c.grabbed_out],
+    };
     if grabbed.is_some() {
         if !st.grabbed {
             st.grabbed = true;
-            if let Some(cl) = c.grabbed_in.or(c.grabbed_loop) {
+            st.pinned = grabbed.is_some_and(|g| g.hound) && c.pinned[1].is_some();
+            if let Some(cl) = grab_in.or(grab_loop) {
                 anim.restart(cl, false, 1.0, 0.1);
             }
         } else if anim.finished() {
-            if let Some(cl) = c.grabbed_loop {
+            if let Some(cl) = grab_loop {
                 anim.play(cl, true, 1.0, 0.1);
             }
         }
         base_busy = true;
     } else if st.grabbed {
         st.grabbed = false;
-        if let Some(cl) = c.grabbed_out {
+        if let Some(cl) = if st.pinned { c.pinned[2] } else { c.grabbed_out } {
             anim.restart(cl, false, 1.0, 0.1);
             st.oneshot = true;
         }
