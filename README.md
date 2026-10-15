@@ -452,7 +452,14 @@ fullscreen display, vertical sync and the crosshair.
   together weights each grid's poses, so the torso and head each turn their share, eased in and
   out over a quarter of a second (that both span the whole look, `Start_Torso` 0 and `End_Head`
   1, is our reading). A rig without its mode's grids turns its neck and upper back instead. A
-  scene's own look-at takes precedence. Characters blink: their sets' `Blink` on the eyelid bones
+  scene's own look-at takes precedence. Nothing holding its eye, a character within 30 m looks
+  about by the config's patterns (`m_ProcPatterns`): patrolling, its head alone
+  (`m_fMaxTorsoInfluence` 0) looking ahead 10 s, glancing within 32 degrees either way, 20 down
+  and 5 up, for 5-6 s, or making small movements of 8; searching, head and torso look left and
+  then right about 90 degrees, 2.5-4 s each. Each sequence is drawn by its `m_fProbability`, its
+  rules in turn (their `m_DurationRange`, repeats and corners), the look going to each target at
+  its `m_SpeedRange` (our reading: the share of the way a 30th of a second); the sequences' small
+  movements within them (`m_ParentSeqIdx`) are left out. Characters blink: their sets' `Blink` on the eyelid bones
   alone, every 0.5-6 s at 1-2 times its pace (`ArkComponentLookatConfig`), over whatever they
   play; a line's own face animation takes the eyelids while it lasts. Their faces play the
   face clip of what their body does, held to its time (the `DisAnimation` steps'

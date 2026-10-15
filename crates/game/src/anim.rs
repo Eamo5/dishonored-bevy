@@ -153,6 +153,10 @@ impl CharAnims {
             } else {
                 q0.normalize()
             };
+            // (a bone the clip leaves as it is changes nothing: most of an additive clip's tracks)
+            if q.w.abs() > 0.999_999 {
+                continue;
+            }
             let i = slot(*j as usize, out);
             out[i].1 = Quat::IDENTITY.slerp(q, w) * out[i].1;
         }
@@ -161,6 +165,9 @@ impl CharAnims {
             let (k, a) = key_at(&tr.frames, f);
             let v0 = Vec3::from(tr.values[k]);
             let v = if a > 0.0 { v0.lerp(Vec3::from(tr.values[k + 1]), a) } else { v0 };
+            if v.length_squared() < 1e-12 {
+                continue;
+            }
             let i = slot(*j as usize, out);
             out[i].2 += v * w;
         }

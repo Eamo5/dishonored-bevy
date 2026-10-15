@@ -1439,6 +1439,118 @@ pub struct HeadTrack {
     weight: f32,
     /// its look is laid by its look-at grids (`look_grids`), not turned here
     grids: bool,
+    /// its torso's share of the look (its pattern's `m_fMaxTorsoInfluence`; all of it watching
+    /// Corvo)
+    torso: f32,
+    /// its look about while nothing holds its eye (`LOOK_PATTERNS`)
+    idle: Option<IdleLook>,
+}
+
+/// A look-about under way: its pattern, sequence and rule, the rule's time and repeats left,
+/// where it goes (yaw left, pitch up, radians) and how fast.
+#[derive(Clone, Copy, Debug)]
+struct IdleLook {
+    pattern: usize,
+    seq: usize,
+    rule: usize,
+    left: f32,
+    repeats: u32,
+    target: (f32, f32),
+    speed: f32,
+}
+
+/// One step of a look-about (`ArkComponentLookatConfig`'s `m_ProcPatterns` rule): a target
+/// about its centre within its corners (degrees across, right positive, and up; absolute, from
+/// the facing, or from where the look is), held `dur` s, `repeat` more times, gone to at `speed`
+/// (our reading: the share of the way a 30th of a second).
+struct LookRule {
+    absolute: bool,
+    center: (f32, f32),
+    corners: [(f32, f32); 2],
+    repeat: (u32, u32),
+    dur: (f32, f32),
+    speed: (f32, f32),
+}
+
+/// A look-about's sequence: its rules in turn, drawn by its weight (`m_fProbability`).
+struct LookSeq {
+    weight: f32,
+    rules: &'static [LookRule],
+}
+
+/// The look-about patterns of `DisLookatConfig.DefaultLookatConfig` (as roshan's r614/blink
+/// research read the config): a patrol's (the head alone glancing about), a search's empty-handed
+/// and sword drawn (head and torso, left and right in turn). The sequences' small movements
+/// within them (`m_ParentSeqIdx`) are left out.
+struct LookPattern {
+    torso: f32,
+    seqs: &'static [LookSeq],
+}
+
+const LOOK_FORWARD: LookRule = LookRule { absolute: true, center: (0.0, 0.0), corners: [(0.0, 0.0), (0.0, 0.0)], repeat: (0, 0), dur: (10.0, 10.0), speed: (0.2, 0.25) };
+
+const LOOK_PATTERNS: [LookPattern; 3] = [
+    // Patrol
+    LookPattern {
+        torso: 0.0,
+        seqs: &[
+            LookSeq { weight: 1.0, rules: &[LOOK_FORWARD] },
+            LookSeq { weight: 0.9, rules: &[LookRule { absolute: true, center: (0.0, 0.0), corners: [(-32.0, -20.0), (32.0, 5.0)], repeat: (0, 1), dur: (5.0, 6.0), speed: (0.03, 0.1) }] },
+            LookSeq { weight: 0.4, rules: &[LookRule { absolute: false, center: (0.0, 0.0), corners: [(-8.0, -5.0), (8.0, 5.0)], repeat: (0, 0), dur: (1.0, 2.0), speed: (0.1, 0.15) }] },
+        ],
+    },
+    // SearchEmpty
+    LookPattern {
+        torso: 1.0,
+        seqs: &[
+            LookSeq { weight: 1.0, rules: &[LOOK_FORWARD] },
+            LookSeq {
+                weight: 1.0,
+                rules: &[
+                    LookRule { absolute: true, center: (-90.0, 0.0), corners: [(-30.0, -40.0), (30.0, 25.0)], repeat: (0, 0), dur: (2.5, 4.0), speed: (0.05, 0.1) },
+                    LookRule { absolute: true, center: (90.0, 0.0), corners: [(-30.0, -40.0), (30.0, 25.0)], repeat: (0, 0), dur: (2.5, 4.0), speed: (0.05, 0.1) },
+                ],
+            },
+        ],
+    },
+    // SearchSword
+    LookPattern {
+        torso: 1.0,
+        seqs: &[
+            LookSeq { weight: 1.0, rules: &[LOOK_FORWARD] },
+            LookSeq {
+                weight: 1.0,
+                rules: &[
+                    LookRule { absolute: true, center: (-90.0, 0.0), corners: [(-35.0, -40.0), (35.0, 35.0)], repeat: (0, 0), dur: (3.0, 4.0), speed: (0.05, 0.12) },
+                    LookRule { absolute: true, center: (90.0, 0.0), corners: [(-35.0, -40.0), (35.0, 35.0)], repeat: (0, 0), dur: (3.0, 4.0), speed: (0.05, 0.12) },
+                ],
+            },
+        ],
+    },
+];
+
+/// A look-about's next rule (`rule` of `seq`, or the sequence's first when a new one is drawn),
+/// from where the look is.
+fn idle_rule(pattern: usize, seq: usize, rule: usize, from: (f32, f32)) -> IdleLook {
+    let roll = |r: (f32, f32)| r.0 + rand::random::<f32>() * (r.1 - r.0).max(0.0);
+    let p = &LOOK_PATTERNS[pattern];
+    let r = &p.seqs[seq].rules[rule];
+    let (h, v) = (roll((r.corners[0].0, r.corners[1].0)) + r.center.0, roll((r.corners[0].1, r.corners[1].1)) + r.center.1);
+    // (right positive across, as the config has it: the look's yaw is left positive)
+    let target = if r.absolute { (-h.to_radians(), v.to_radians()) } else { (from.0 - h.to_radians(), from.1 + v.to_radians()) };
+    IdleLook { pattern, seq, rule, left: roll(r.dur), repeats: rand::random_range(r.repeat.0..=r.repeat.1), target, speed: roll(r.speed) }
+}
+
+/// A look-about's next sequence, drawn by weight.
+fn idle_seq(pattern: usize, from: (f32, f32)) -> IdleLook {
+    let seqs = LOOK_PATTERNS[pattern].seqs;
+    let total: f32 = seqs.iter().map(|s| s.weight).sum();
+    let mut x = rand::random::<f32>() * total;
+    let seq = seqs.iter().position(|s| {
+        x -= s.weight;
+        x < 0.0
+    });
+    idle_rule(pattern, seq.unwrap_or(0), 0, from)
 }
 
 /// The look-at modes of `DisLookatConfig.DefaultLookatConfig` (`ArkComponentLookatConfig`, as
@@ -1458,17 +1570,22 @@ const LOOK_MODES: [[([f32; 4], [f32; 4]); 3]; 3] = [
 /// 90, `..VerticalPercentage` 100).
 const LOOK_SHARE: [f32; 2] = [0.9, 1.0];
 
-/// A look's grid weights: its yaw (radians, left of the facing positive) and pitch over a mode's
-/// reaches, the torso's and head's together (our reading of `Start_Torso` 0, `End_Head` 1: both
-/// across the whole look, so each turns its own share), as 3x3 weights up-left .. down-right.
-fn look_weights(yaw: f32, pitch: f32, torso: [f32; 4], head: [f32; 4]) -> [f32; 9] {
+/// A look's grid weights, the torso's and the head's: its yaw (radians, left of the facing
+/// positive) and pitch over a mode's reaches, the torso's share of its reach (`share`) and the
+/// head's together (our reading of `Start_Torso` 0, `End_Head` 1: both across the whole look, so
+/// each turns its own share; a look of the head alone, the head the whole of it), as 3x3 weights
+/// up-left .. down-right.
+fn look_weights(yaw: f32, pitch: f32, torso: [f32; 4], head: [f32; 4], share: f32) -> [[f32; 9]; 2] {
     let right = -yaw.to_degrees() * LOOK_SHARE[0];
     let up = pitch.to_degrees() * LOOK_SHARE[1];
-    let x = if right >= 0.0 { right / (torso[0] + head[0]).max(1.0) } else { right / (torso[1] + head[1]).abs().max(1.0) };
-    let y = if up >= 0.0 { up / (torso[2] + head[2]).max(1.0) } else { up / (torso[3] + head[3]).abs().max(1.0) };
+    let x = if right >= 0.0 { right / (torso[0] * share + head[0]).max(1.0) } else { right / (torso[1] * share + head[1]).abs().max(1.0) };
+    let y = if up >= 0.0 { up / (torso[2] * share + head[2]).max(1.0) } else { up / (torso[3] * share + head[3]).abs().max(1.0) };
     let split = |v: f32| if v < 0.0 { [-v, 1.0 + v, 0.0] } else { [0.0, 1.0 - v, v] };
-    let (cols, rows) = (split(x.clamp(-1.0, 1.0)), split(-y.clamp(-1.0, 1.0)));
-    std::array::from_fn(|i| rows[i / 3] * cols[i % 3])
+    let grid = |x: f32, y: f32| -> [f32; 9] {
+        let (cols, rows) = (split(x.clamp(-1.0, 1.0)), split(-y.clamp(-1.0, 1.0)));
+        std::array::from_fn(|i| rows[i / 3] * cols[i % 3])
+    };
+    [grid(x * share, y * share), grid(x, y)]
 }
 
 /// How far a head turns (radians: `ArkComponentLookatConfig`'s idle look-at modes, the head's
@@ -1488,14 +1605,14 @@ fn head_track(
     mut commands: Commands,
     time: Res<Time>,
     player: Query<&Transform, With<crate::player::Player>>,
-    npcs: Query<(Entity, &Transform, &Npc, &NpcRig, Option<&mut HeadTrack>, (Has<crate::audio::Speaking>, Has<ForceLook>), Option<&crate::anim::Animator>), (Without<SceneLook>, Without<crate::player::Player>)>,
+    npcs: Query<(Entity, &Transform, &Npc, &NpcRig, Option<&mut HeadTrack>, (Has<crate::audio::Speaking>, Has<ForceLook>, Has<ScriptedAnim>), Option<&crate::anim::Animator>), (Without<SceneLook>, Without<crate::player::Player>)>,
     mut joints: Query<&mut Transform, (Without<Npc>, Without<crate::player::Player>)>,
 ) {
     let Ok(pt) = player.single() else { return };
     let dt = time.delta_secs();
     let eye = pt.translation + Vec3::Y * 0.6;
     let mut npcs = npcs;
-    for (e, t, npc, rig, track, (speaking, forced), anim) in &mut npcs {
+    for (e, t, npc, rig, track, (speaking, forced, scripted), anim) in &mut npcs {
         let Some(mut track) = track else {
             commands.entity(e).try_insert(HeadTrack::default());
             continue;
@@ -1515,13 +1632,49 @@ fn head_track(
             && flat > 0.3
             && yaw.abs() < LOOK_YAW
             && ((npc.attn_level == 1 && (npc.sees_player || npc.last_seen.is_some())) || (speaking && near) || forced);
+        // nothing holding its eye, a patrolling or searching character looks about (its pattern:
+        // a patrol's, or a search's with its sword drawn or not), near enough to be seen doing it
+        let pattern = match npc.mode {
+            // (not in a scene the scripts play: its clips have their own looks)
+            _ if wants || !grids || npc.is_down() || flat > 30.0 || speaking || scripted => None,
+            Mode::Patrol | Mode::Idle | Mode::Return => Some(0),
+            Mode::Search | Mode::Investigate => Some(if npc.has_sword { 2 } else { 1 }),
+            _ => None,
+        };
         let rate = 4.0 * dt;
-        track.weight = if wants { (track.weight + rate).min(1.0) } else { (track.weight - rate).max(0.0) };
+        track.weight = if wants || pattern.is_some() { (track.weight + rate).min(1.0) } else { (track.weight - rate).max(0.0) };
         if wants {
+            track.idle = None;
+            track.torso = (track.torso + rate).min(1.0);
             let pitch = to.y.atan2(flat).clamp(-LOOK_DOWN, LOOK_UP);
             let k = (8.0 * dt).min(1.0);
             track.yaw += (yaw - track.yaw) * k;
             track.pitch += (pitch - track.pitch) * k;
+        } else if let Some(p) = pattern {
+            let from = (track.yaw, track.pitch);
+            let mut idle = match track.idle {
+                Some(i) if i.pattern == p => i,
+                _ => idle_seq(p, from),
+            };
+            idle.left -= dt;
+            if idle.left <= 0.0 {
+                let rules = LOOK_PATTERNS[p].seqs[idle.seq].rules.len();
+                idle = if idle.repeats > 0 {
+                    IdleLook { repeats: idle.repeats - 1, ..idle_rule(p, idle.seq, idle.rule, from) }
+                } else if idle.rule + 1 < rules {
+                    idle_rule(p, idle.seq, idle.rule + 1, from)
+                } else {
+                    idle_seq(p, from)
+                };
+            }
+            let k = 1.0 - (1.0 - idle.speed.clamp(0.0, 1.0)).powf(dt * 30.0);
+            track.yaw += (idle.target.0 - track.yaw) * k;
+            track.pitch += (idle.target.1 - track.pitch) * k;
+            let to_torso = LOOK_PATTERNS[p].torso;
+            track.torso += (to_torso - track.torso).clamp(-rate, rate);
+            track.idle = Some(idle);
+        } else {
+            track.idle = None;
         }
         if track.weight <= 0.0 {
             continue;
@@ -5560,8 +5713,8 @@ fn look_grids(anim: &mut Animator, clips: &NpcClips, lib: &CharAnims, speed: f32
     }
     let w = track.weight * track.weight * (3.0 - 2.0 * track.weight);
     let (torso, head) = LOOK_MODES[stance][gait];
-    let ws = look_weights(track.yaw, track.pitch, torso, head);
-    for part in grid {
+    let ws = look_weights(track.yaw, track.pitch, torso, head, track.torso);
+    for (part, ws) in grid.iter().zip(ws) {
         for (i, c) in part.iter().enumerate() {
             if let Some(c) = c.filter(|_| ws[i] * w > 1e-3) {
                 anim.additive.push((c, 0.0, ws[i] * w));
