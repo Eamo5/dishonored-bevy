@@ -468,7 +468,10 @@ fullscreen display, vertical sync and the crosshair.
   `Generic_DeathRightA`...), where it has them; hurt by no blow it knows of, it picks among them.
   A bullet or bolt to a leg (below the hips) has it clutch that leg (`Sword_HitLeg_Left`,
   `Empty_HitLeg_Right`). A thing thrown at it (a bottle, a brick) gets its small hit, by the side
-  it struck (`Generic_SmallHit_Front`..., with their stone-on-body cue). His pistol's bullet (`Twk_Proj_BulletUpgraded`) deals 20, ×1.5
+  it struck (`Generic_SmallHit_Front`..., with their stone-on-body cue). Shot from ahead, those
+  whose set has them take the bullet or bolt with `Generic_ProjectileHit_Front`, `_FrontLeft` or
+  `_FrontRight` (the elite guards). A blow that turns it on Corvo shows its flinch; the sword
+  comes to hand without its draw. His pistol's bullet (`Twk_Proj_BulletUpgraded`) deals 20, ×1.5
   within 9 m, and kills with a head shot (`m_bKillOnHeadshot`); a crossbow bolt deals the
   crossbow's 20, doubled on someone unaware (`m_fDamageMultiplier_Stealth`). Characters'
   shots hit at their `m_MaxAccuracy` close, falling to `m_MinAccuracy` at the end of their

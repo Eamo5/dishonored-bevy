@@ -253,6 +253,8 @@ pub struct Npc {
     pub leg_hit: Option<bool>,
     /// the blow it last took was a thing thrown at it (a bottle, a brick: `DisDamageType_Impact`)
     pub small_hit: bool,
+    /// the blow it last took was a bullet or a bolt
+    pub shot_hit: bool,
     /// choking in a cloud of chokedust (its stun's length: `stagger`)
     pub dusted: bool,
     /// its bearing about Corvo while it waits outside the ring of those at him (radians)
@@ -1702,6 +1704,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         rise: None,
         leg_hit: None,
         small_hit: false,
+        shot_hit: false,
         dusted: false,
         flank: None,
         taunt_hold: 0.0,
@@ -2122,6 +2125,7 @@ fn npc_hits(
         let Ok((e, mut npc, t)) = npcs.get_mut(h.npc) else { continue };
         npc.leg_hit = leg;
         npc.small_hit = h.kind == HitKind::Impact;
+        npc.shot_hit = matches!(h.kind, HitKind::Bullet | HitKind::Bolt | HitKind::ExplosiveBullet);
         if npc.is_down() {
             // the knocked out can still be killed where they lie (a blade, a bolt, a shot, a
             // blast, fire, the rats eating them): a kill, no longer a knockout
@@ -4357,6 +4361,9 @@ pub struct NpcClips {
     /// struck by a thing thrown, by the side it struck: front, left, right, back
     /// (`Generic_SmallHit_Front`..., with their stone-on-body cue)
     small_hit: [Option<ClipId>; 4],
+    /// shot from ahead, ahead left, ahead right (`Generic_ProjectileHit_Front`, `_FrontLeft`,
+    /// `_FrontRight`: the elite guards')
+    shot_hit: [Option<ClipId>; 3],
     /// choking in chokedust: in, its loop, out (`Generic_SmokeBomb_In`...: Daud's elite guards'
     /// sets); without them, doubled over and up again, sword drawn and empty-handed
     /// (`Sword_Stun_Loop`, `Sword_RecoveryA` / `B`)
@@ -4541,6 +4548,7 @@ impl NpcClips {
                 lib.all(&["Empty_HitBack_A"]),
             ],
             small_hit: ["Front", "Left", "Right", "Back"].map(|s| lib.find(&format!("Generic_SmallHit_{s}"))),
+            shot_hit: ["Front", "FrontLeft", "FrontRight"].map(|s| lib.find(&format!("Generic_ProjectileHit_{s}"))),
             dust: ["In", "Loop", "Out"].map(|p| lib.find(&format!("Generic_SmokeBomb_{p}"))),
             stun_loop: [lib.find("Sword_Stun_Loop"), lib.find("Empty_Stun_Loop")],
             recovery: [lib.all(&["Sword_RecoveryA", "Sword_RecoveryB"]), lib.all(&["Empty_RecoveryA", "Empty_RecoveryB"])],
@@ -5777,6 +5785,7 @@ fn npc_select_anim(
         }
 
         // reactions
+        let mut reacted = false;
         if npc.hit_react > st.hit_seen + 1e-3 {
             // the reactions of the hands it has: sword drawn, or empty
             let pool = if (st.drawn && !st.sword.is_empty() || clips.hit_empty.is_empty()) && !clips.hit.is_empty() { &clips.hit } else if clips.hit_empty.is_empty() { &clips.hit } else { &clips.hit_empty };
@@ -5790,10 +5799,13 @@ fn npc_select_anim(
             let leg = npc.leg_hit.take().and_then(|r| clips.hit_leg[(!std::ptr::eq(dirs, &clips.hit_dir)) as usize][r as usize]);
             // (struck by a thing thrown: its small hit, by the side it struck)
             let small = std::mem::take(&mut npc.small_hit).then(|| side_struck(&npc, t.translation).and_then(|s| clips.small_hit[s])).flatten();
-            let c = if npc.stagger > 1.0 { clips.stun.or(pick(pool)) } else { leg.or(small).or_else(|| pick(pool)) };
+            // (shot from ahead: its projectile hit, where its set has one)
+            let shot = std::mem::take(&mut npc.shot_hit).then(|| side_struck(&npc, t.translation).and_then(|s| clips.shot_hit.get(s).copied().flatten())).flatten();
+            let c = if npc.stagger > 1.0 { clips.stun.or(pick(pool)) } else { leg.or(small).or(shot).or_else(|| pick(pool)) };
             if let Some(c) = c {
                 anim.restart(c, false, 1.3, 0.06);
                 st.oneshot = true;
+                reacted = true;
             }
         }
         st.hit_seen = npc.hit_react;
@@ -5875,7 +5887,8 @@ fn npc_select_anim(
             }
             continue;
         }
-        if npc.alert == Alert::Combat && st.last_alert != Alert::Combat {
+        // (turned on Corvo by the blow it is flinching from: the flinch shows, its sword in hand)
+        if npc.alert == Alert::Combat && st.last_alert != Alert::Combat && !reacted {
             if let Some(c) = clips.equip.or(clips.surprised) {
                 // (on the move, its sword drawn on its upper body, its legs keeping their stride:
                 // the NPC tree's upper-body slot)

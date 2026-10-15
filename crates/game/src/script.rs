@@ -1009,8 +1009,10 @@ fn run_script(
             }
         }
         "npcidle" => {
-            // (tests) the nearest living hostile character stops where it is, facing Corvo
-            if let Some((e, _, nt)) = npc_ents.iter().filter(|(_, n, _)| n.hostile() && !n.is_down()).min_by(|a, b| a.2.translation.distance(t.translation).total_cmp(&b.2.translation.distance(t.translation))) {
+            // (tests) npcidle [NAME]: the nearest living hostile character (whose name holds NAME)
+            // stops where it is, facing Corvo
+            let named = cmd.get(1).cloned().unwrap_or_default();
+            if let Some((e, _, nt)) = npc_ents.iter().filter(|(_, n, _)| n.hostile() && !n.is_down() && (named.is_empty() || n.name.contains(&named))).min_by(|a, b| a.2.translation.distance(t.translation).total_cmp(&b.2.translation.distance(t.translation))) {
                 let to = t.translation - nt.translation;
                 let yaw = (-to.x).atan2(-to.z);
                 let home = nt.translation;
