@@ -717,26 +717,24 @@ pub fn use_focus(
                 stats.runes += 1;
                 stats.runes_found += 1;
                 plog.add("Rune", Some("Rune_Small"));
-                // the HUD tweak's `m_RuneFoundMessage` ("`c/`t Runes found"), and the first time
-                // `m_PressKeyToBuyPowers` in the tutorial window, with the rune
+                // the HUD tweak's `m_RuneFoundMessage` ("`c/`t Runes found"), and
+                // `m_PressKeyToBuyPowers` in the tutorial window, with the rune, while his runes
+                // would buy a power or an enhancement (the HUD's pickup asks the count of them)
                 let total = level.as_ref().map(|l| count_kind(l, |k| matches!(k, PickupKind::Rune))).unwrap_or(0).max(stats.runes_found);
                 msgs.push(format!("{}/{} Runes found", stats.runes_found, total));
-                if !stats.hints.iter().any(|h| h == "rune") {
-                    stats.hints.push("rune".into());
+                if crate::journal::affordable(&data, &stats) > 0 {
                     tw.push(data.hud_text("m_PressKeyToBuyPowers", "New Rune added<br />Press `GBA_Journal` to acquire Powers"), crate::tutwindow::IMG_RUNE);
                 }
             }
             PickupKind::BoneCharm => {
                 stats.bone_charms += 1;
                 stats.charms_found += 1;
-                // `m_BoneCharmFoundMessage`, and the first time `m_PressKeyToEquipBoneCharms` (in
-                // the tutorial window, with the charm)
+                // `m_BoneCharmFoundMessage`, and `m_PressKeyToEquipBoneCharms` (in the tutorial
+                // window, with the charm) for each; it is new until the journal shows the charms
                 let total = level.as_ref().map(|l| count_kind(l, |k| matches!(k, PickupKind::BoneCharm))).unwrap_or(0).max(stats.charms_found);
                 msgs.push(format!("{}/{} Bone Charms found", stats.charms_found, total));
-                if !stats.hints.iter().any(|h| h == "charm") {
-                    stats.hints.push("charm".into());
-                    tw.push(data.hud_text("m_PressKeyToEquipBoneCharms", "New Bone Charm added<br />Press `GBA_Journal` to equip"), crate::tutwindow::IMG_CHARM);
-                }
+                stats.new_charm = true;
+                tw.push(data.hud_text("m_PressKeyToEquipBoneCharms", "New Bone Charm added<br />Press `GBA_Journal` to equip"), crate::tutwindow::IMG_CHARM);
                 // which charm: one not found yet, at random (as the original deals them)
                 let owned = stats.charms_owned.clone();
                 let left: Vec<&str> = data.0.charms.iter().filter_map(|c| c.levels.first()).map(|l| l.0.as_str()).filter(|n| !owned.iter().any(|o| o == n)).collect();

@@ -187,6 +187,18 @@ fullscreen display, vertical sync and the crosshair.
   the movie does: the page fades up as the journal opens (0.3 s), slides 250 in from the side
   it was moved towards when its page or sub tab changes (`SetContent`: 0.25 s, Strong.easeOut,
   the sub tabs staying put), and fades as it grows to 105% when put away (`CloseJournal`).
+  It has the tabs the exe makes available: the Powers once he has runes, a power or an
+  enhancement (`PowersTabAvailable`), the Bone Charms once he owns a charm, so the Prison and
+  the Tower's opening show only the Objectives, Logs and Inventory. Its key opens it on the
+  Objectives, as the exe asks the movie's `StartTabIndex`. With a
+  tutorial window on screen, the key opens the window's own tab instead (its `m_JournalTab`:
+  the rune's Powers, the bone charm's Bone Charms, the mission clues' Objectives on their sub
+  tab) and puts the window away. Tabs flash as `Req_FlashingTabsBitfield` gives them: the
+  Powers while the runes would buy a power or enhancement, the Bone Charms after a charm is
+  picked up until the page is seen (the HUD's `m_bHasNewBoneCharm`, kept in saves). Each shows
+  its update badge looping (`icUpdate_mc`) until it is left. The rune's window ("New Rune
+  added") comes up with each rune while the runes would buy something, and the charm's with
+  each charm, as the HUD's pickup raises them.
 - **The save and load screens as `UI_LoadGame` draws them** (`savescreen.rs`): the list turned
   -2.5 degrees, each save on its brushed card with its mission's strip (`UI_Mission_Small`),
   its date in the original's `m_DateFormat` (local time) over its chapter (`AUTOSAVE - ` /
@@ -2578,7 +2590,7 @@ furthest spot with a floor and a clear line to it), `ledge [LOW] [HIGH] [crouch]
 high; `crouch`, only one he'd arrive crouched on; `DH_MANTLE_LOG` logs what blocks a mantle's
 top), `pos` (his position, velocity, footing), `pistol [NAME]` (the nearest hostile character
 carries a pistol and turns on him; `bow [NAME]`, a tallboy's bow: `DH_GUN_LOG` logs why it holds), `npchere [D] [NAME]` (the nearest hostile character, or
-the nearest whose name holds NAME, moved D m before him), `stream NAME [out]` (a streamed sublevel loads, or goes), `rise D` (Corvo lifted D m and held there), `notarget [0]` (the characters stop seeing Corvo, as `DH_NOTARGET`; `0` they see him again), `hideout` (Corvo crouched in the nearest hideout volume), `keyhole [D]` (before the nearest keyhole, looking at it), `spotlit [D]` (a character stood under the nearest dominant spot light, Corvo looking on), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `runes N`,
+the nearest whose name holds NAME, moved D m before him), `stream NAME [out]` (a streamed sublevel loads, or goes), `rise D` (Corvo lifted D m and held there), `notarget [0]` (the characters stop seeing Corvo, as `DH_NOTARGET`; `0` they see him again), `hideout` (Corvo crouched in the nearest hideout volume), `keyhole [D]` (before the nearest keyhole, looking at it), `spotlit [D]` (a character stood under the nearest dominant spot light, Corvo looking on), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup [health|mana|ammo|rune|charm|N]`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `runes N`,
 `charms N`, `mana`, `ammo TYPE N` (0 bullets .. 6 grenades, 7 sticky), `fx EFFECT [DIST]`,
 `remote EVENT` (a level-script remote event, e.g. `ChangeLvl_fromStreets1_toHub`), `chaos N`,
 `ko [NAME]` (a sleep dart into the nearest, or the nearest whose name or pawn holds NAME),

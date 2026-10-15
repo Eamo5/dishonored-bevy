@@ -284,9 +284,14 @@ pub struct PlayerStats {
     /// carried through the campaign
     pub runes: u32,
     pub bone_charms: u32,
-    /// the one-time hints given (the HUD tweak's "New Rune added..." messages)
+    /// the one-time hints given (older saves': the rune's and charm's windows now come up with
+    /// each, as the HUD raises them)
     #[serde(default)]
     pub hints: Vec<String>,
+    /// a bone charm picked up and not yet seen in the journal (the HUD's `m_bHasNewBoneCharm`,
+    /// in its save data): the journal's Bone Charms tab flashes
+    #[serde(default)]
+    pub new_charm: bool,
     /// lethal / non-lethal totals of the missions before this one (chaos)
     pub past_kills: u32,
     pub past_knockouts: u32,
@@ -662,6 +667,7 @@ impl Default for PlayerStats {
             runes: 0,
             bone_charms: 0,
             hints: Vec::new(),
+            new_charm: false,
             past_kills: 0,
             past_knockouts: 0,
             past_detected: 0,

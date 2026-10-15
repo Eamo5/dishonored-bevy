@@ -1790,6 +1790,8 @@ fn run_script(
                     Some("health") => matches!(pickup.kind, crate::interact::PickupKind::HealthElixir),
                     Some("mana") => matches!(pickup.kind, crate::interact::PickupKind::ManaElixir),
                     Some("ammo") => matches!(pickup.kind, crate::interact::PickupKind::Ammo(_)),
+                    Some("rune") => matches!(pickup.kind, crate::interact::PickupKind::Rune),
+                    Some("charm") => matches!(pickup.kind, crate::interact::PickupKind::BoneCharm),
                     Some(index) if index.parse::<u32>().is_ok() => pickup.index == index.parse::<u32>().unwrap(),
                     _ => true,
                 }).map(|(pt, _)| pt.translation).min_by(|a, b| a.distance(t.translation).total_cmp(&b.distance(t.translation)))

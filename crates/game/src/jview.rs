@@ -180,6 +180,8 @@ pub struct JState<'a> {
     pub charm_sel: usize,
     pub inv_tab: u8,
     pub inv_sel: usize,
+    /// the tabs flashing, by their places
+    pub flashing: u8,
     pub playing: Option<&'a str>,
 }
 
@@ -408,16 +410,17 @@ pub fn build(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats, vm: Op
         _ => inventory(cx, js, data, stats),
     }
     cx.root = root;
-    main_tabs(cx, js.page, data);
+    main_tabs(cx, js.page, js.flashing, data, stats);
     // the vignette over all (`vignette_mc`)
     cx.sym(root, Vec2::ZERO, false, "m_Vignette", Vec2::new(640.0, 360.0), |_| {});
 }
 
 /// The main tabs (`TabsHandler`: `lib_mTabs_tab_s` 256 wide, 60 overlapping, centred on the
-/// stage at y 100; the chosen one `selected`, lifted 20 and drawn 1.25 times nearer).
-fn main_tabs(cx: &mut Ctx, page: u8, data: &Data) {
+/// stage at y 100; the chosen one `selected`, lifted 20 and drawn 1.25 times nearer; one
+/// flashing, its update badge `icUpdate_mc` looping; only the tabs he has).
+fn main_tabs(cx: &mut Ctx, page: u8, flashing: u8, data: &Data, stats: &PlayerStats) {
     let root = cx.root;
-    let pages = crate::journal::PAGES;
+    let pages = crate::journal::pages(stats);
     let n = pages.len();
     let total = 196.0 * (n as f32 - 1.0) + 256.0;
     for (i, p) in pages.iter().enumerate() {
@@ -433,8 +436,12 @@ fn main_tabs(cx: &mut Ctx, page: u8, data: &Data) {
         .to_uppercase();
         cx.sym(root, Vec2::ZERO, true, "lib_mTabs_tab_s", Vec2::new(x, 100.0), |fc| {
             let tl = fc.tl.clone();
-            // (the update badge: no tab is flagged)
-            fc.set_visible("tab_mc.icUpdate_mc", false);
+            // the update badge (`bFlashingTab`)
+            let flash = flashing & 1 << i != 0;
+            fc.set_visible("tab_mc.icUpdate_mc", flash);
+            if flash {
+                fc.goto("tab_mc.icUpdate_mc", "loop", true);
+            }
             if on {
                 fc.goto("tab_mc", "selected", true);
                 fc.goto("tab_mc.glow_mc", "loop", true);

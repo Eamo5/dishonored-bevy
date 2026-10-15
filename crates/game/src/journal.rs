@@ -63,12 +63,74 @@ pub struct Journal {
     /// the Inventory page's sub-tab and the item shown
     inv_tab: u8,
     inv_sel: usize,
+    /// the tabs flashing (`bFlashingTab`, by the tabs' order): set as it opens, each put out as
+    /// it is left
+    flashing: u8,
     dirty: bool,
 }
 
 impl Default for Journal {
     fn default() -> Self {
-        Journal { open: false, viewed: 0, page: PAGE_MISSION, obj_tab: 0, obj_sel: 0, log_tab: 0, note: 0, selected: 1, charm_sel: 0, inv_tab: 0, inv_sel: 0, dirty: false }
+        Journal { open: false, viewed: 0, page: PAGE_MISSION, obj_tab: 0, obj_sel: 0, log_tab: 0, note: 0, selected: 1, charm_sel: 0, inv_tab: 0, inv_sel: 0, flashing: 0, dirty: false }
+    }
+}
+
+/// A page's `EDisJournalTab` (the bit the exe flags it by).
+fn tab_index(page: u8) -> usize {
+    PAGES.iter().position(|p| *p == page).unwrap_or(0)
+}
+
+/// The tabs the journal has (`PowersTabAvailable`: runes, or a power or enhancement owned;
+/// `BoneCharmsTabAvailable`: a charm owned): before the Mark, the Objectives, Logs and
+/// Inventory only.
+pub(crate) fn pages(stats: &PlayerStats) -> Vec<u8> {
+    let powers = stats.runes > 0 || stats.powers.values().any(|l| *l > 0);
+    let charms = !stats.charms_owned.is_empty();
+    PAGES
+        .iter()
+        .copied()
+        .filter(|p| match *p {
+            PAGE_POWERS => powers,
+            PAGE_CHARMS => charms,
+            _ => true,
+        })
+        .collect()
+}
+
+/// A page's place among the tabs it has (the movie reads the flags by place).
+fn place(stats: &PlayerStats, page: u8) -> usize {
+    pages(stats).iter().position(|p| *p == page).unwrap_or(0)
+}
+
+/// How many power levels his runes would buy now (the exe's count over his powers and
+/// enhancements, the next level of each not maxed out).
+pub(crate) fn affordable(data: &Data, stats: &PlayerStats) -> usize {
+    crate::jview::POWER_SLOTS.iter().filter(|(name, _)| next_cost(data, name, stats.power(name)).is_some_and(|c| stats.runes >= c)).count()
+}
+
+/// The tabs that flash as the journal opens (`Req_FlashingTabsBitfield`, by `EDisJournalTab`;
+/// the movie reads each tab's bit by its place): the Powers while his runes would buy
+/// something, the Bone Charms while a charm picked up is new.
+fn flashing_tabs(data: &Data, stats: &PlayerStats) -> u8 {
+    let mut bits = 0;
+    if affordable(data, stats) > 0 {
+        bits |= 1 << tab_index(PAGE_POWERS);
+    }
+    if stats.new_charm {
+        bits |= 1 << tab_index(PAGE_CHARMS);
+    }
+    bits
+}
+
+/// The page a tutorial window's key opens (its `m_JournalTab`, by its picture): the rune's the
+/// Powers, the bone charm's the Bone Charms, the clues' the Objectives on their sub tab
+/// (`DJT_Sub_ChapterNotes`); a note's reads the note.
+fn window_page(img: u8) -> Option<(u8, u8)> {
+    match img {
+        crate::tutwindow::IMG_RUNE => Some((PAGE_POWERS, 0)),
+        crate::tutwindow::IMG_CHARM => Some((PAGE_CHARMS, 0)),
+        crate::tutwindow::IMG_NOTE => Some((PAGE_MISSION, 1)),
+        _ => None,
     }
 }
 
@@ -251,7 +313,7 @@ fn toggle(
     mut journal: ResMut<Journal>,
     mut paused: ResMut<Paused>,
     menu: Res<crate::menu::Menu>,
-    (mut stats, data): (ResMut<PlayerStats>, Res<Data>),
+    (mut stats, data, mut msgs): (ResMut<PlayerStats>, Res<Data>, ResMut<crate::gameplay::HudMessages>),
     roots: Query<Entity, With<JournalRoot>>,
     mut cursor: Single<&mut CursorOptions>,
     (mut sfx, mut read): (MessageWriter<PostEvent>, MessageWriter<ReadNote>),
@@ -264,12 +326,15 @@ fn toggle(
     let shut = vm.as_ref().is_some_and(|v| v.switches.journal_off);
     // the scripts open it on a tab (`DisSeqAct_OpenJournal`: the dream's powers page)
     if let Some(tab) = vm.and_then(|mut v| v.open_journal.take()) {
-        journal.page = match tab.as_str() {
+        let page = match tab.as_str() {
             "DJT_Powers" => PAGE_POWERS,
             "DJT_BoneCharms" | "DJT_Charms" => PAGE_CHARMS,
             "DJT_Notes" | "DJT_Journal" => PAGE_NOTES,
             _ => PAGE_MISSION,
         };
+        // (a tab it hasn't: the Objectives)
+        journal.page = if pages(&stats).contains(&page) { page } else { PAGE_MISSION };
+        journal.flashing = flashing_tabs(&data, &stats);
         open_journal(&mut journal, &mut paused, &mut cursor, &mut sfx);
         return;
     }
@@ -294,6 +359,23 @@ fn toggle(
         return;
     }
     if want {
+        // the page it opens on (`_root.StartTabIndex`, as the journal's key asks it): a tutorial
+        // window's on screen (the window put away), else the Objectives
+        let window = msgs.tutorial_window_shown().and_then(|(text, img)| window_page(img).map(|p| (text, p)));
+        let (page, sub) = match window {
+            Some((text, p)) => {
+                msgs.drop_tutorial(&text);
+                p
+            }
+            None => (PAGE_MISSION, 0),
+        };
+        let (page, sub) = if pages(&stats).contains(&page) { (page, sub) } else { (PAGE_MISSION, 0) };
+        journal.page = page;
+        if page == PAGE_MISSION && journal.obj_tab != sub {
+            journal.obj_tab = sub;
+            journal.obj_sel = 0;
+        }
+        journal.flashing = flashing_tabs(&data, &stats);
         open_journal(&mut journal, &mut paused, &mut cursor, &mut sfx);
         // (`PSI_Gameplay_bAutoSaveInMenu`: saved as it opens, but not in a fight:
         // `m_bDisableAutosaveInCombat`)
@@ -344,6 +426,10 @@ fn interact(
     if !journal.open {
         return;
     }
+    // (the Bone Charms shown: the charm is new no more, as the tab's content clears the HUD's)
+    if journal.page == PAGE_CHARMS && stats.new_charm {
+        stats.new_charm = false;
+    }
     // (a scripted run ignores the real pointer)
     let pointer = scripted.is_none();
     // the pages: their tabs, or Tab / Shift+Tab (`LB`/`RB`)
@@ -354,11 +440,14 @@ fn interact(
         }
     }
     if keys.just_pressed(KeyCode::Tab) {
-        let k = PAGES.iter().position(|p| *p == journal.page).unwrap_or(0);
+        let tabs = pages(&stats);
+        let k = tabs.iter().position(|p| *p == journal.page).unwrap_or(0);
         let back = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-        page = Some(PAGES[if back { (k + PAGES.len() - 1) % PAGES.len() } else { (k + 1) % PAGES.len() }]);
+        page = Some(tabs[if back { (k + tabs.len() - 1) % tabs.len() } else { (k + 1) % tabs.len() }]);
     }
     if let Some(p) = page {
+        // (the tab left flashes no more: `TabsHandler`)
+        journal.flashing &= !(1 << place(&stats, journal.page));
         journal.page = p;
         journal.dirty = true;
         sfx.write(PostEvent::named("UI_ChangeMainTab", None));
@@ -591,6 +680,7 @@ fn refresh(
         charm_sel: journal.charm_sel,
         inv_tab: journal.inv_tab,
         inv_sel: journal.inv_sel,
+        flashing: journal.flashing,
         playing: playing.as_deref(),
     };
     let mut cx = crate::jview::Ctx { c: &mut commands, root, frame: root, st: crate::jview::Stage::of(w), tl, lib, title: fonts.title.clone().into(), ui: &mut ui, images: &mut images };
