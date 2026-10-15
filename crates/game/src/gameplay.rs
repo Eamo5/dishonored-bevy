@@ -851,6 +851,8 @@ pub struct TutorialEntry {
     cycling: bool,
     prio: u8,
     shown: f32,
+    /// shown even while the HUD is hidden (`m_bForceDisplay`: a cinematic's)
+    forced: bool,
 }
 
 #[derive(Resource, Default)]
@@ -859,6 +861,8 @@ pub struct HudMessages {
     /// the tutorial line on screen (the HUD movie's `tutorialMsg_mc`): text, seconds left,
     /// seconds shown, from the stack
     pub tutorial: Option<(String, f32, f32)>,
+    /// and whether it shows while the HUD is hidden
+    pub tutorial_forced: bool,
     /// the tutorial stack (`m_TutorialStack`): one entry on screen at a time, the line or the
     /// window, by priority (the scripts' lines first, then the windows and the game's own),
     /// only the shown one's time running; a cycling one at the head passes the screen round
@@ -878,19 +882,25 @@ impl HudMessages {
     /// A tutorial line (the scripts' `DisSeqAct_SetTutorialMessage`, a refusal), up for so
     /// long while shown (`m_fTutorialDuration`): ahead of the rest.
     pub fn tutorial(&mut self, s: impl Into<String>, secs: f32) {
-        self.add_tutorial(TutorialEntry { text: s.into(), secs, window: None, cycling: false, prio: 3, shown: 0.0 });
+        self.add_tutorial(TutorialEntry { text: s.into(), secs, window: None, cycling: false, prio: 3, shown: 0.0, forced: false });
+    }
+
+    /// A scripts' tutorial line shown even while the HUD is hidden (`m_bForceDisplay`: "Use
+    /// your mouse to look around" over the Tower's boat ride, the challenges' briefings).
+    pub fn tutorial_forced(&mut self, s: impl Into<String>, secs: f32) {
+        self.add_tutorial(TutorialEntry { text: s.into(), secs, window: None, cycling: false, prio: 3, shown: 0.0, forced: true });
     }
 
     /// The game's own tutorial line (a tracker's: `DTT_TutorialCyclingMessage`): after those
     /// up, taking turns with them.
     pub fn tutorial_cycling(&mut self, s: impl Into<String>, secs: f32) {
-        self.add_tutorial(TutorialEntry { text: s.into(), secs, window: None, cycling: true, prio: 2, shown: 0.0 });
+        self.add_tutorial(TutorialEntry { text: s.into(), secs, window: None, cycling: true, prio: 2, shown: 0.0, forced: false });
     }
 
     /// A tutorial window (`SetTutorialWindow`): its words and picture, up
     /// `m_fTutorialWindowDuration` while shown.
     pub fn tutorial_window(&mut self, s: impl Into<String>, img: u8) {
-        self.add_tutorial(TutorialEntry { text: s.into(), secs: TUTORIAL_WINDOW, window: Some(img), cycling: false, prio: 2, shown: 0.0 });
+        self.add_tutorial(TutorialEntry { text: s.into(), secs: TUTORIAL_WINDOW, window: Some(img), cycling: false, prio: 2, shown: 0.0, forced: false });
     }
 
     /// Into the stack as the HUD's insert does: an entry not cycling goes before the first of
@@ -935,6 +945,10 @@ impl HudMessages {
             self.shown = 0;
             self.cycle = 0.0;
             self.tutorial = None;
+            if self.logged != 0 && std::env::var("DH_TUTORIAL_LOG").is_ok() {
+                info!("tutorial stack: empty");
+            }
+            self.logged = 0;
             return;
         }
         self.shown = self.shown.min(self.stack.len() - 1);
@@ -972,6 +986,7 @@ impl HudMessages {
         }
         let e = &self.stack[self.shown];
         self.tutorial = e.window.is_none().then(|| (e.text.clone(), e.secs, e.shown));
+        self.tutorial_forced = e.forced;
     }
 
     /// A message up for so long.

@@ -95,12 +95,14 @@ fn tutorial_line(
     mut commands: Commands,
     window: Query<&Window, With<PrimaryWindow>>,
     hud: Query<Entity, With<crate::hud::HudRoot>>,
-    (msgs, settings): (Res<crate::gameplay::HudMessages>, Res<crate::settings::Settings>),
-    mut line: Query<(&mut Text, &mut Node, &mut TextFont, &mut TextColor, &mut UiTransform, &mut SoftShadow), With<TutorialText>>,
+    (msgs, settings, time, hidden): (Res<crate::gameplay::HudMessages>, Res<crate::settings::Settings>, Res<Time>, Res<crate::menu::HudHidden>),
+    mut line: Query<(&mut Text, &mut Node, &mut TextFont, &mut TextColor, &mut UiTransform, &mut SoftShadow, &mut Visibility), With<TutorialText>>,
+    mut closing: Local<f32>,
 ) {
     let Ok(w) = window.single() else { return };
-    let Ok((mut text, mut n, mut f, mut c, mut tf, mut sh)) = line.single_mut() else {
-        if let Ok(h) = hud.single() {
+    let Ok((mut text, mut n, mut f, mut c, mut tf, mut sh, mut vis)) = line.single_mut() else {
+        // (its own layer beside the HUD's: a forced line shows while the HUD is hidden)
+        if hud.single().is_ok() {
             commands.spawn((
                 TutorialText,
                 Text::new(""),
@@ -110,12 +112,18 @@ fn tutorial_line(
                 shadow_of(&TUTORIAL, 1.0),
                 Node { position_type: PositionType::Absolute, ..default() },
                 UiTransform::default(),
+                Visibility::Inherited,
                 Pickable::IGNORE,
-                ChildOf(h),
+                DespawnOnExit(GameState::InGame),
             ));
         }
         return;
     };
+    // (the HUD hidden, a cinematic's: only a forced line)
+    let want = if hidden.0 && !msgs.tutorial_forced { Visibility::Hidden } else { Visibility::Inherited };
+    if *vis != want {
+        *vis = want;
+    }
     let ms = crate::hud::MovieSpace::of(w);
     let s = ms.s;
     let p = ms.px(TUTORIAL.at + LAID);
@@ -129,6 +137,7 @@ fn tutorial_line(
     let ease = |x: f32| 1.0 - (1.0 - x.clamp(0.0, 1.0)).powi(5);
     let (a, k) = match msgs.tutorial.as_ref().filter(|_| settings.tutorials) {
         Some((t, left, shown)) => {
+            *closing = 0.0;
             if text.0 != *t {
                 text.0 = t.clone();
             }
@@ -136,11 +145,16 @@ fn tutorial_line(
             (a, 1.1 - 0.1 * ease(shown / 0.15))
         }
         None => {
-            // (closed: nothing left showing, its shadow neither)
-            if !text.0.is_empty() {
-                text.0.clear();
+            // (put away: it fades as it closes; then nothing left showing, its shadow neither)
+            *closing += time.delta_secs();
+            if !text.0.is_empty() && *closing < 0.15 {
+                (1.0 - ease(*closing / 0.15), 1.0)
+            } else {
+                if !text.0.is_empty() {
+                    text.0.clear();
+                }
+                (0.0, 1.0)
             }
-            (0.0, 1.0)
         }
     };
     c.0 = TUTORIAL.color.with_alpha(a);

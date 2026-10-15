@@ -170,8 +170,11 @@ pub enum Effect {
     Door(Val, DoorCmd),
     Damage(Val, f32),
     Message(String),
-    /// a tutorial (`m_fTutorialDuration`: it stays longer)
-    Tutorial(String),
+    /// a tutorial line, up so long while shown (`m_fDuration`; unset: until put away), and
+    /// whether it shows while the HUD is hidden (`m_bForceDisplay`)
+    Tutorial(String, f32, bool),
+    /// a tutorial line put away (`DisSeqAct_SetTutorialMessage`'s "Hide")
+    HideTutorial(String),
     /// an objective added, updated, completed or failed (the objectives popup)
     Objective(crate::objnotify::ObjectiveNotice),
     /// a choice for the player (`DisSeqAct_DialogScriptedChoice`): the op, its options
@@ -850,6 +853,8 @@ pub struct Vm {
     pub ammo_mods: Vec<(u8, Vec<(u8, i32)>)>,
     /// the quick-access wheel shut (`DisSeqAct_TogglePowerWheel`)
     pub wheel_off: bool,
+    /// the tutorial lines up (`DisSeqAct_SetTutorialMessage`, by op): when shown, until when
+    tutorials_up: HashMap<u32, (f32, f32)>,
     /// characters dressed differently (`DisSeqAct_NPCSetMaterials`): targets, op, set (else
     /// back to their own)
     pub npc_materials: Vec<(Vec<Val>, u32, bool)>,
@@ -1111,6 +1116,7 @@ impl Vm {
             keys_taken: Vec::new(),
             ammo_mods: Vec::new(),
             wheel_off: false,
+            tutorials_up: HashMap::new(),
             switches: Switches::default(),
             severs: Vec::new(),
             music_box: HashMap::new(),
@@ -3329,14 +3335,30 @@ impl Vm {
                 self.fire(op, 0);
             }
             "DisSeqAct_SetTutorialMessage" | "DisSeqAct_ShowHUDMessage" => {
-                if input == 0 {
-                    let text = g.ops[op as usize].props.iter().find_map(|(k, v)| match v {
-                        KVal::Str(s) if k.contains("Message") || k.contains("Text") => Some(s.clone()),
-                        _ => None,
-                    });
-                    if let Some(t) = text {
-                        let t = clean_text(&t);
-                        self.effects.push(if class == "DisSeqAct_SetTutorialMessage" { Effect::Tutorial(t) } else { Effect::Message(t) });
+                let text = g.ops[op as usize].props.iter().find_map(|(k, v)| match v {
+                    KVal::Str(s) if k.contains("Message") || k.contains("Text") => Some(clean_text(s)),
+                    _ => None,
+                });
+                if let Some(t) = text {
+                    if class == "DisSeqAct_SetTutorialMessage" {
+                        // shown (0) for its `m_fDuration` on screen, unset: until hidden (1), as
+                        // the HUD's tutorial stack keeps it (by the op's `m_TutorialID`)
+                        // (both at once, as a gate's one output drives them: shown if it isn't
+                        // up, hidden if it is, as the exe's activation sees the two impulses)
+                        match input {
+                            0 if !self.tutorials_up.get(&op).is_some_and(|up| self.time < up.1) => {
+                                let secs = self.pf(op, "m_fDuration").filter(|d| *d > 0.0).unwrap_or(f32::INFINITY);
+                                self.effects.push(Effect::Tutorial(t, secs, self.pb(op, "m_bForceDisplay").unwrap_or(false)));
+                                self.tutorials_up.insert(op, (self.time, self.time + secs));
+                            }
+                            1 if self.tutorials_up.get(&op).is_some_and(|up| up.0 != self.time) => {
+                                self.effects.push(Effect::HideTutorial(t));
+                                self.tutorials_up.remove(&op);
+                            }
+                            _ => {}
+                        }
+                    } else if input == 0 {
+                        self.effects.push(Effect::Message(t));
                     }
                 }
                 self.fire(op, 0);
@@ -5209,12 +5231,14 @@ fn setup(
     }
     commands.insert_resource(vm);
     commands.insert_resource(ScriptUi::default());
-    // UI: objectives (top right), location banner (top centre), fade overlay
+    // UI: objectives (top right), location banner (top centre), fade overlay (a camera fade
+    // darkens the view; the HUD's movies draw over it, as Scaleform renders after UE3's canvas:
+    // "Six Months Later", the subtitles over black)
     commands.spawn((
         FadeOverlay,
         Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, ..default() },
         BackgroundColor(Color::NONE),
-        GlobalZIndex(5),
+        GlobalZIndex(-2),
         DespawnOnExit(GameState::InGame),
     ));
     commands.spawn((
@@ -6502,7 +6526,9 @@ pub fn apply_effects(
                 }
             },
             Effect::Message(m) => msgs.push(m),
-            Effect::Tutorial(m) => msgs.tutorial(m, 10.0),
+            Effect::Tutorial(m, secs, false) => msgs.tutorial(m, secs),
+            Effect::Tutorial(m, secs, true) => msgs.tutorial_forced(m, secs),
+            Effect::HideTutorial(m) => msgs.drop_tutorial(&m),
             Effect::Objective(n) => commands.queue(move |w: &mut World| {
                 if let Some(mut q) = w.get_resource_mut::<crate::objnotify::ObjectiveQueue>() {
                     q.push(n);

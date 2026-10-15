@@ -928,7 +928,14 @@ fullscreen display, vertical sync and the crosshair.
   HUD tweak's titles), stay 6 s and fade, as the original's objectives window opens and closes;
   the journal keeps them (`DH_OBJECTIVES=1` keeps the list up). Game messages show at the
   bottom of the screen like the movie's `gameMsg_mc`, for the HUD tweak's
-  `m_fGameMessageDuration` (5 s); the scripts' tutorials stay `m_fTutorialDuration` (10 s).
+  `m_fGameMessageDuration` (5 s); the scripts' tutorials (`DisSeqAct_SetTutorialMessage`) stay
+  their `m_fDuration` while on screen, and unset (all but one) until the scripts hide them (its
+  "Hide" input: Corvo crouches, leaves the ledge, the countdown moves on), fading as they go;
+  both inputs at once (a gate's one output) show one not up and hide one that is, as the exe's
+  activation takes them. Those marked `m_bForceDisplay` show while a cinematic hides the HUD
+  ("Use your mouse to look around" over the Tower's boat ride, the challenges' briefings), and
+  a camera fade darkens the view under the HUD, as Scaleform draws after UE3's canvas: the
+  subtitles and such lines show over black. The game's own stay `m_fTutorialDuration` (10 s).
 - **Target cards** (`targetcard.rs`, the HUD movie's `TargetNotification`): when the scripts
   report a target's fate (`DisSeqAct_ShowTargetNotification`: assassinated, neutralized,
   rescued, spared), the card comes up at the top right with the target's portrait
