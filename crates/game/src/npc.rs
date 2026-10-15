@@ -1097,6 +1097,11 @@ fn ash_marked(
 /// material's noise eating it away, and nothing is left. A body it burns goes the same way, lying
 /// as it is. (Our reading of the settings: the fade's begin is a time, its end the parameter's
 /// last value; the material's mask leaves nothing below 0.5, so the fade can't start lower.)
+/// One set on fire standing (an incendiary bolt's): it burns with its own clip
+/// (`DisNPCAnim_Immolate`: `Generic_Immolation`) until nothing is left.
+#[derive(Component)]
+pub struct Immolated;
+
 #[derive(Component)]
 pub struct Electrocuted {
     t: f32,
@@ -2484,11 +2489,12 @@ fn npc_hits(
                 sfx.write(crate::audio::PostEvent::named("Snd_DLC06_AI_Cough_Male", Some(pos + Vec3::Y)));
             }
             HitKind::Fire => {
-                // `NPCImmolationTime`: they burn, then nothing is left
+                // `NPCImmolationTime`: they burn, flailing in the flames (`DisNPCAnim_Immolate`),
+                // then nothing is left
                 npc.health = 0.0;
                 npc.set_mode(Mode::Dead);
                 stats.killed(&npc.pawn, !npc.hostile());
-                commands.entity(e).try_insert(Ashes(-0.9));
+                commands.entity(e).try_insert((Ashes(-0.9), Immolated));
                 sfx.write(crate::audio::PostEvent::named("Amb_Fire_Alcohol_Immolation", Some(pos + Vec3::Y)));
                 fx.write(crate::particles::SpawnEffect { follow: Some(e), secs: 1.6, ..crate::particles::SpawnEffect::at("immolation", Vec3::ZERO) });
                 noise.write(Noise { pos, radius: 14.0, kind: NoiseKind::Danger });
@@ -4730,8 +4736,10 @@ pub struct NpcClips {
     blink: Option<ClipId>,
     death: Vec<ClipId>,
     death_fast: Option<ClipId>,
-    /// a wall of light's death (`DisNPCAnim_DeathWallOfLight`)
+    /// a wall of light's death (`DisNPCAnim_DeathWallOfLight`), and burning to death
+    /// (`DisNPCAnim_Immolate`)
     electrified: Option<ClipId>,
+    immolate: Option<ClipId>,
     /// lying poses (last frames) to settle into after a reaction that ends mid-fall
     lie_back: Option<ClipId>,
     lie_front: Option<ClipId>,
@@ -4947,6 +4955,7 @@ impl NpcClips {
             },
             death_fast: lib.find("Generic_DeathFast_Front"),
             electrified: lib.find("Generic_Electrified"),
+            immolate: lib.find("Generic_Immolation"),
             lie_back: lib.first(&["Generic_DeathFrontA", "Corpses_DeathPose_OnBack1", "Generic_DeathFront_A", "Generic_DeathA"]),
             lie_front: lib.first(&["Generic_DeathBackA", "Generic_DeathFrontA", "Generic_DeathBack_A", "Generic_DeathB"]),
             assassinated: lib.all(&["Generic_Assassination_Back_Slave", "Generic_Assassination_FastBack_Slave"]),
@@ -5416,7 +5425,7 @@ fn npc_select_anim(
             Option<&AssassinClip>,
             Option<&mut FinisherClip>,
             Option<&crate::carry::Falling>,
-            (Has<crate::ragdoll::Ragdoll>, Has<crate::ragdoll::GoLimp>, Has<crate::musicbox::TunePlaying>, Option<&Electrocuted>),
+            (Has<crate::ragdoll::Ragdoll>, Has<crate::ragdoll::GoLimp>, Has<crate::musicbox::TunePlaying>, Option<&Electrocuted>, Has<Immolated>),
         ),
         Without<ScriptedAnim>,
     >,
@@ -5425,7 +5434,7 @@ fn npc_select_anim(
 ) {
     let ppos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
     let swarmed: std::collections::HashSet<Entity> = swarmed.read().map(|s| s.0).collect();
-    for (e, mut npc, mut st, mut anim, t, children, dropped, assassin, finisher, falling, (limp, going_limp, tune, electrocuted)) in &mut npcs {
+    for (e, mut npc, mut st, mut anim, t, children, dropped, assassin, finisher, falling, (limp, going_limp, tune, electrocuted, immolated)) in &mut npcs {
         let scale = tc.npc_scale(npc.out_of_bend).max(0.0);
         let dt = time.delta_secs() * scale;
         anim.time_scale = scale;
@@ -5451,8 +5460,8 @@ fn npc_select_anim(
         let st = &mut *st;
         let clips = st.clips.clone();
         let lib = anim.lib.clone();
-        // (a wall of light's dead: its death clip, struck standing, and no going limp)
-        let electrified = electrocuted.filter(|el| el.standing).and(clips.electrified);
+        // (its own death, and no going limp: a wall of light's dead, struck standing; one burning)
+        let own_death = electrocuted.filter(|el| el.standing).and(clips.electrified).or(clips.immolate.filter(|_| immolated));
         // a weak hit's flinch, laid over whatever it does (its clip played through once)
         npc.weak_hits = clips.weak_hit.iter().all(Option::is_some);
         if let Some(side) = npc.weak_hit.take() {
@@ -5705,7 +5714,7 @@ fn npc_select_anim(
             if !st.down {
                 st.down = true;
                 st.oneshot = false;
-                let (clip, settle) = if let Some(c) = electrified {
+                let (clip, settle) = if let Some(c) = own_death {
                     (Some(c), None)
                 } else if npc.corpse {
                     (pick(&clips.corpse).or(clips.lie_back), None)
@@ -5736,7 +5745,7 @@ fn npc_select_anim(
                 }
             }
             // its clip goes limp where it says (`DishonoredNotify_Ragdoll`), else at its end
-            if st.ragdoll && !far && electrified.is_none() {
+            if st.ragdoll && !far && own_death.is_none() {
                 let due = anim.finished() || anim.current().and_then(|p| st.marks.get(&p.clip).and_then(|m| m.ragdoll).map(|r| p.t >= r)).unwrap_or(true);
                 if due {
                     commands.entity(e).try_insert(crate::ragdoll::GoLimp::soon());

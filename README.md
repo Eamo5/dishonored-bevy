@@ -1840,6 +1840,9 @@ against the install's own data where it carries them, then implemented independe
   - The crossbow's Range upgrade doubles its bolts' speed.
   - Bolts double on the head or torso of someone not fighting Corvo, and do at most 15 to a limb.
   - An incendiary bolt does 50, never killing outright, and sets its target alight 0.5 s later.
+    It burns to ash flailing in the flames with its own clip (`DisNPCAnim_Immolate`:
+    `Generic_Immolation`) rather than falling as from a blow (the bolt's damage type,
+    `DisDamageType_Arrow_Flare`: `m_bPutToFire`, `m_bCannotKillNPC`, no hit reaction).
   - Grenades bounce the original's way: floors and walls lose different amounts, bodies almost all.
     The fuse runs out whatever they hit, and a sticky grenade does 75 more to whoever it is stuck
     to. A sticky grenade sinks 5 cm into what it sticks to; on a wall it goes off just out of it.
