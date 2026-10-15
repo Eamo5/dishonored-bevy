@@ -35,6 +35,7 @@ impl Plugin for NpcPlugin {
             .add_systems(OnEnter(GameState::InGame), spawn_npcs.after(LevelSpawnSet))
             .add_systems(First, log_jumps.run_if(in_state(GameState::InGame)))
             .add_systems(Update, sticky_struck.before(npc_select_anim).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, npc_faces.after(npc_select_anim).before(npc_animate).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, model_details.run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, log_jumps.after(bevy_rapier3d::plugin::PhysicsSet::Writeback).run_if(in_state(GameState::InGame)))
             .add_systems(
@@ -2172,6 +2173,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 limp_in: None,
                 rise_next: None,
                 flinch: None,
+                faces: std::collections::HashMap::new(),
                 walk_phase: f32::NAN,
                 counter: None,
                 gun_phase: GunPhase::Away,
@@ -5013,6 +5015,8 @@ pub struct NpcAnim {
     rise_next: Option<ClipId>,
     /// a weak hit's flinch under way: its clip and how far through
     flinch: Option<(ClipId, f32)>,
+    /// each body clip's face clip, as found
+    faces: std::collections::HashMap<ClipId, Option<ClipId>>,
     /// how far through its relaxed walk's loop (0..1; NaN not walking it): its feet landing
     walk_phase: f32,
     /// its bow drawn (a tallboy's)
@@ -5211,7 +5215,7 @@ fn pick(v: &[ClipId]) -> Option<ClipId> {
 fn log_npc_clips(
     player: Query<&Transform, With<Player>>,
     npcs: Query<(Entity, &Npc, &Animator, &Transform, Has<ScriptedAnim>)>,
-    mut last: Local<std::collections::HashMap<Entity, (Option<ClipId>, Option<ClipId>)>>,
+    mut last: Local<std::collections::HashMap<Entity, (Option<ClipId>, Option<ClipId>, Option<ClipId>)>>,
 ) {
     let ppos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
     for (e, npc, anim, t, scripted) in &npcs {
@@ -5220,13 +5224,15 @@ fn log_npc_clips(
         }
         let cur = anim.current().map(|p| p.clip);
         let upper = anim.upper_clip();
-        if last.get(&e) != Some(&(cur, upper)) {
-            last.insert(e, (cur, upper));
+        let face = anim.face_clip();
+        if last.get(&e) != Some(&(cur, upper, face)) {
+            last.insert(e, (cur, upper, face));
             info!(
-                "npc clip: {} -> {} upper {} (mode {:?} alert {:?} hit {:.2} stagger {:.2} attack {:?} scripted {scripted})",
+                "npc clip: {} -> {} upper {} face {} (mode {:?} alert {:?} hit {:.2} stagger {:.2} attack {:?} scripted {scripted})",
                 npc.name,
                 cur.map(|c| anim.lib.clip(c).name.as_str()).unwrap_or("-"),
                 upper.map(|c| anim.lib.clip(c).name.as_str()).unwrap_or("-"),
+                face.map(|c| anim.lib.clip(c).name.as_str()).unwrap_or("-"),
                 npc.mode,
                 npc.alert,
                 npc.hit_react,
@@ -5234,6 +5240,61 @@ fn log_npc_clips(
                 npc.attack_t
             );
         }
+    }
+}
+
+/// A body clip's face clip (its `DisAnimation` steps' `m_FaceAnimName`, by the names they
+/// follow: the clip's own `_Face`; its variants' (`Sword_Attack_ShortSmallB` ->
+/// `Sword_Attack_ShortSmall_Face`); a big blow's `Sword_Attack_Big_Face`; a hit's small hit's
+/// (`Empty_SmallHit_Face`, else `_Hit_Face`); a surprise's `_Surprised_Face`).
+fn face_of(lib: &crate::anim::CharAnims, body: ClipId) -> Option<ClipId> {
+    let name = lib.clip(body).name.clone();
+    if name.ends_with("_Face") {
+        return None;
+    }
+    let face = |n: &str| lib.find(&format!("{n}_Face"));
+    if let Some(f) = face(&name) {
+        return Some(f);
+    }
+    // (a variant: its trailing letter)
+    let bytes = name.as_bytes();
+    if bytes.len() > 2 && bytes[bytes.len() - 1].is_ascii_uppercase() && bytes[bytes.len() - 2].is_ascii_lowercase() {
+        if let Some(f) = face(&name[..name.len() - 1]) {
+            return Some(f);
+        }
+    }
+    let prefix = name.split('_').next().unwrap_or("");
+    let others = ["Sword", "Empty"];
+    let any = |n: &str| std::iter::once(prefix).chain(others).find_map(|p| face(&format!("{p}_{n}")));
+    if name.contains("Attack") && name.contains("Big") {
+        return any("Attack_Big");
+    }
+    if name.contains("Surprised") {
+        return any("Surprised");
+    }
+    if name.contains("Hit") && !name.contains("Attack") {
+        return any("SmallHit").or_else(|| any("Hit"));
+    }
+    None
+}
+
+/// Each character's face plays its body's clip's face clip (`face_of`), held to the body's time:
+/// its expression (an upper-body action's over the legs' clip; a weak hit's flinch over both).
+/// Speaking, its line's face animation has it (`facefx`); far off, none.
+fn npc_faces(player: Query<&Transform, With<Player>>, mut npcs: Query<(&mut NpcAnim, &mut Animator, &Transform, Has<crate::facefx::FaceAnim>), With<Npc>>) {
+    let ppos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
+    for (mut st, mut anim, t, speaking) in &mut npcs {
+        if speaking || t.translation.distance_squared(ppos) > 30.0 * 30.0 {
+            anim.set_face(None, 0.2);
+            continue;
+        }
+        let body = st.flinch.map(|(c, ft)| (c, ft, false)).or_else(|| anim.upper_playing().or(anim.current()).map(|p| (p.clip, p.t, p.looping)));
+        let face = body.and_then(|(c, bt, looping)| {
+            let lib = anim.lib.clone();
+            let f = *st.faces.entry(c).or_insert_with(|| face_of(&lib, c));
+            f.map(|f| (f, if looping { bt.rem_euclid(lib.duration(f)) } else { bt }))
+        });
+        anim.set_face(face, 0.2);
     }
 }
 

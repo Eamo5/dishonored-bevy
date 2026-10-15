@@ -446,7 +446,12 @@ fullscreen display, vertical sync and the crosshair.
   with 60 for the torso behind it, 60 up and 35 down), eased in and out over a quarter of a
   second; a scene's own look-at takes precedence. Characters blink: their sets' `Blink` on the eyelid bones
   alone, every 0.5-6 s at 1-2 times its pace (`ArkComponentLookatConfig`), over whatever they
-  play; a line's own face animation takes the eyelids while it lasts.
+  play; a line's own face animation takes the eyelids while it lasts. Their faces play the
+  face clip of what their body does, held to its time (the `DisAnimation` steps'
+  `m_FaceAnimName`, found by the names they follow: the clip's own `_Face`, its variants'
+  `Sword_Attack_ShortSmall_Face`, a big blow's `Sword_Attack_Big_Face`, a hit's
+  `Empty_SmallHit_Face`, a surprise's `_Surprised_Face`), fading between them under the blink.
+  An upper-body action's face shows over the legs' clip, and a weak flinch's over both.
   Weepers carry the plague (`plague.rs`, their pawns' `m_bHasPlague` tweaks cooked as
   `NpcPlague`). They have no blow: they follow, grab, weep standing (`Empty_Weep_Idle`) and
   cough. After any weeper's grab, none grabs for 20 s (`DisGlobalCombatManager`'s

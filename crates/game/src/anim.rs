@@ -310,6 +310,9 @@ pub struct Animator {
     /// an upper-body layer over the base (masked by `upper_mask`: a character's actions from
     /// the spine up while its legs keep the base's locomotion)
     upper: Layer,
+    /// a face layer over the body (a character's face clip for what its body does, held to the
+    /// body's time: its expression), under the overlay (the eyelids' blink)
+    face: Layer,
     overlay: Layer,
     /// Multiplies the playback rate (Bend Time).
     pub time_scale: f32,
@@ -355,6 +358,7 @@ impl Animator {
             bind_t,
             base: Layer { weight: 1.0, target: 1.0, ..Default::default() },
             upper: Layer::default(),
+            face: Layer::default(),
             overlay: Layer::default(),
             time_scale: 1.0,
             frozen: false,
@@ -452,6 +456,35 @@ impl Animator {
         }
     }
 
+    /// The face's clip at its time (held to the body's), fading in over `blend` s; `None` fades
+    /// it out.
+    pub fn set_face(&mut self, face: Option<(ClipId, f32)>, blend: f32) {
+        match face {
+            Some((clip, t)) => {
+                if self.face.cur.is_none_or(|c| c.clip != clip) {
+                    self.face.restart(clip, false, 0.0, blend);
+                    if self.face.weight <= 0.0 {
+                        self.face.prev = None;
+                    }
+                }
+                self.face.target = 1.0;
+                self.face.weight_rate = 1.0 / blend.max(0.01);
+                if let Some(c) = &mut self.face.cur {
+                    c.t = t.clamp(0.0, self.lib.duration(clip));
+                }
+            }
+            None => {
+                self.face.target = 0.0;
+                self.face.weight_rate = 1.0 / blend.max(0.01);
+            }
+        }
+    }
+
+    /// The face layer's clip (while it's on).
+    pub fn face_clip(&self) -> Option<ClipId> {
+        self.face.cur.filter(|_| self.face.target > 0.0).map(|c| c.clip)
+    }
+
     /// Fade the upper-body layer out.
     pub fn stop_upper(&mut self, blend: f32) {
         self.upper.target = 0.0;
@@ -545,6 +578,9 @@ impl Animator {
         if self.upper.weight > 0.5 {
             pending.extend(up);
         }
+        // (the face's clip is held to its body's time: `set_face`; it has no notifies)
+        let mut fc = Vec::new();
+        self.face.advance(&lib, 0.0, &mut fc);
         // the overlay's notifies only while it's audible
         let mut ov = Vec::new();
         self.overlay.advance(&lib, dt, &mut ov);
@@ -557,10 +593,11 @@ impl Animator {
     fn pose(&mut self) {
         self.rot.copy_from_slice(&self.bind_rot);
         self.trans.copy_from_slice(&self.bind_t);
-        for li in 0..3 {
+        for li in 0..4 {
             let layer = match li {
                 0 => &self.base,
                 1 => &self.upper,
+                2 => &self.face,
                 _ => &self.overlay,
             };
             let Some(cur) = layer.cur else { continue };
@@ -582,7 +619,7 @@ impl Animator {
             // (the layer's branch filter: the joints outside it keep the pose beneath)
             let mask = match li {
                 1 => self.upper_mask.as_ref(),
-                2 => self.overlay_mask.as_ref(),
+                3 => self.overlay_mask.as_ref(),
                 _ => None,
             };
             if let Some(mask) = mask {
