@@ -1020,6 +1020,39 @@ fn run_script(
                 });
             }
         }
+        "heed" => {
+            // (tests) heed [NAME] [BEHIND]: the nearest standing hostile character (whose name or
+            // pawn holds NAME) head-tracks a spot BEHIND metres (default 3) behind it, its
+            // attention at that level, as if it had heard something there
+            let named = cmd.get(1).cloned().unwrap_or_default();
+            let behind = cmd.get(2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(3.0);
+            if let Some((e, _, nt)) = npc_ents.iter().filter(|(_, n, _)| n.hostile() && !n.is_down() && (named.is_empty() || n.name.contains(&named) || n.pawn.contains(&named))).min_by(|a, b| a.2.translation.distance(t.translation).total_cmp(&b.2.translation.distance(t.translation))) {
+                let from = nt.translation;
+                commands.queue(move |w: &mut World| {
+                    if let Some(mut n) = w.get_mut::<Npc>(e) {
+                        n.awareness = 0.3;
+                        n.attn_level = 1;
+                        n.last_seen = Some(from - n.forward() * behind);
+                        info!("script: heed {} ({behind} m behind)", n.name);
+                    }
+                });
+            }
+        }
+        "befriend" => {
+            // (tests) befriend [NAME]: the nearest standing character (whose name or pawn holds
+            // NAME) is no enemy of Corvo's, as a script's disposition makes it, unaware again
+            let named = cmd.get(1).cloned().unwrap_or_default();
+            if let Some((e, _, _)) = npc_ents.iter().filter(|(_, n, _)| !n.is_down() && (named.is_empty() || n.name.contains(&named) || n.pawn.contains(&named))).min_by(|a, b| a.2.translation.distance(t.translation).total_cmp(&b.2.translation.distance(t.translation))) {
+                commands.queue(move |w: &mut World| {
+                    if let Some(mut n) = w.get_mut::<Npc>(e) {
+                        n.enemy = false;
+                        n.alert = crate::npc::Alert::Unaware;
+                        n.awareness = 0.0;
+                        info!("script: befriend {}", n.name);
+                    }
+                });
+            }
+        }
         "lookhere" => {
             // (tests) lookhere [NAME]: the nearest standing character (whose name or pawn holds
             // NAME) watches Corvo, whatever its attention

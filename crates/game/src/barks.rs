@@ -75,8 +75,9 @@ pub struct BarkState {
     taunt: bool,
     /// begging: time to its next plea
     beg: f32,
-    /// a blow under way (as last seen)
+    /// a blow under way, its attention's level (as last seen)
     swinging: bool,
+    attn: u8,
     act_seen: u32,
     shot: f32,
 }
@@ -304,6 +305,7 @@ fn npc_barks(
                 taunt: false,
                 beg: 0.0,
                 swinging: false,
+                attn: npc.attn_level,
                 act_seen: npc.act.1,
                 shot: 10.0,
             });
@@ -493,6 +495,11 @@ fn npc_barks(
                 (Alert::Suspicious, Alert::Unaware) => Some(&["ATTENTION_NOTICE_END", "SEARCH_MUSTHAVEBEENARAT", "SEARCH_STOPHUNTING"]),
                 _ => None,
             };
+        } else if !down && npc.attn_level == 1 && st.attn == 0 && npc.alert == Alert::Unaware && matches!(npc.mode, Mode::Idle | Mode::Patrol | Mode::Return) {
+            // its head turned by something (the head-tracking level begun, standing, on its
+            // rounds or going back: `DisAISubProcessHeadTrackBark` of the idle, patrol and
+            // scripted-move behaviours, our reading of its bark, `ATTENTION_HEADTRACK`: "Huh?")
+            want = Some(&["ATTENTION_HEADTRACK"]);
         } else if !down && npc.mode == Mode::Search && st.mode != Mode::Search && npc.alert != Alert::Combat {
             // a search begun (`SEARCH`, its group's among others)
             want = Some(if grouped { &["SEARCH_GROUP", "SEARCH"] } else { &["SEARCH", "SEARCH_GROUP"] });
@@ -525,6 +532,7 @@ fn npc_barks(
         }
         st.alert = npc.alert;
         st.swinging = npc.attack_t.is_some();
+        st.attn = npc.attn_level;
         st.down = down;
         st.health = npc.health;
         st.mode = npc.mode;

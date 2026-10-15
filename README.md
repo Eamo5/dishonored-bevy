@@ -444,8 +444,16 @@ fullscreen display, vertical sync and the crosshair.
   puts the sword away with its clip (`Sword_Patrol_UnEquip`), the blade going into the holster
   at its unequip cue, not at once. A character that has just noticed Corvo (its attention at
   the head-tracking level: the original posts its look-at there and clears it at any other, as
-  roshan's research decoded it; turning to face him the whole body turns) or speaks with him
-  close by turns to him with the original's look-at grids (`DisLookatConfig.DefaultLookatConfig`,
+  roshan's research decoded it; turning to face him the whole body turns; standing or on its
+  rounds it says so as its head first turns, `DisAISubProcessHeadTrackBark`, our reading of its
+  bark, `ATTENTION_HEADTRACK`: "Huh?"; on its walk, with
+  what it heeds within 45 degrees of its back, it stops and turns a quarter its way, walking on
+  once that is within 90 degrees of where it was heading, `DisAISubProcessHeadTrackPause`'s
+  `m_fRearHalfAngleWidthToPause_Deg` and `m_fFrontHalfAngleWidthToResume_Deg`, as roshan's
+  research decoded the pause) or speaks with him
+  close by (or, not his enemy, now and then catches sight of him within 5 m before it: every
+  8-15 s for 1.5-3 s, `DisAISubProcessFleetingGaze`'s `m_GazeInterval` and `m_GazeDuration`, its
+  `m_fGazeRadius` 500 uu and `m_fGazeAngleDegrees` 80 either side, our reading) turns to him with the original's look-at grids (`DisLookatConfig.DefaultLookatConfig`,
   an `ArkComponentLookatConfig`, as roshan's r614/blink research read it). Each of its modes, by
   stance (empty-handed, sword drawn, a search's patrol stance: the stance of the clip it plays) and
   gait (idle, walk, run), gives the torso's and the head's reach right, left, up and down (an
@@ -570,8 +578,11 @@ fullscreen display, vertical sync and the crosshair.
   Corvo's block with a kick (`DisTweaks_NPCBash`: it breaks the block and shoves him back);
   a guard who parries plays its parry (`Sword_Ready_ParryWin_*`) and strikes back straight
   after (`DisTweaks_NPCRiposte`), one whose blow Corvo parries reels (`..ParryLost_*`), and
-  one who isn't his enemy shoves him out of its way when he crowds it (`DisTweaks_NPCPush`,
-  `Sword_PushBack_*`, with its "personal space" bark);
+  one who isn't his enemy minds its personal space (`DisAISubProcessPersonalSpace`): crowded,
+  it stops, turns to him and warns him off (`PATROL_PERSONAL_SPACE_WARNING`: "You there, move
+  along!"), and with him still in its way as the warning runs out (`m_fWarnDuration`, 2.5 s)
+  shoves him (`DisTweaks_NPCPush`, `Sword_PushBack_*`, with its "personal space" bark), warning
+  again no sooner than 2.5 s and shoving 5 s (`m_fWarnCooldown`, `m_fPushCooldown`);
   they meet his blows and aim as their combat behaviour's `DisTweaks_AISubProcess_ManageAttacks`
   paces them (as roshan's r614/blink research decoded `DisAISubProcessManageAttacks`): a blow of
   his that threatens one (within `m_fAngleOfPerceivedMeleeThreat`, 30 degrees, of his facing) it

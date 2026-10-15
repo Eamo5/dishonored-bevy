@@ -178,10 +178,17 @@ pub struct Npc {
     pub melee_cd: Vec<f32>,
     /// a gesture to play once (1 its parry won, 2 its blow parried, 3 a shove; 12 a taunt, 13 a
     /// weeper's cough) and its count;
-    /// a riposte due in (s); how long Corvo has crowded it
+    /// a riposte due in (s)
     pub act: (u8, u32),
     pub riposte: f32,
-    pub crowded: f32,
+    /// its personal space (`DisAISubProcessPersonalSpace`): warning Corvo off (s left), and till
+    /// when it won't warn him, or shove him, again
+    pub warn: Option<f32>,
+    pub warn_cd: f32,
+    pub push_cd: f32,
+    /// stopped on its walk by something it head-tracks behind it (`DisAISubProcessHeadTrackPause`):
+    /// the heading it walked (`m_OriginalPauseYaw`)
+    pub track_pause: Option<f32>,
     /// a bark asked for (its count, the hook)
     pub bark_req: (u32, &'static str),
     /// its blade locked with Corvo's (`combat::Versus`): it holds
@@ -1444,7 +1451,33 @@ pub struct HeadTrack {
     torso: f32,
     /// its look about while nothing holds its eye (`LOOK_PATTERNS`)
     idle: Option<IdleLook>,
+    /// till its next glance at Corvo, and how long the glance under way lasts (s)
+    gaze: (f32, f32),
 }
+
+/// A glance (`TweaksBehavior_Idle_Default`'s `DisTweaks_AISubProcess_FleetingGaze`, the
+/// patrol's, search's and its search patrol's alike): how near (m), how far off its facing
+/// (degrees), how often and how long (s).
+const GAZE_RADIUS: f32 = 5.0;
+const GAZE_ANGLE: f32 = 80.0;
+const GAZE_INTERVAL: [f32; 2] = [8.0, 15.0];
+const GAZE_DURATION: [f32; 2] = [1.5, 3.0];
+
+/// Personal space (`TweaksBehavior_TakePosition_Default`'s and the search patrol's
+/// `DisTweaks_AISubProcess_PersonalSpace`): how long its warning runs (`m_fWarnDuration`), and
+/// till it warns again (`m_fWarnCooldown`) or shoves again (`m_fPushCooldown`) (s); out of its way
+/// beyond the shove's reach (`DisTweaks_NPCPush`'s 250 uu), shoved within its ideal 150 (m).
+const SPACE_WARN: f32 = 2.5;
+const SPACE_WARN_CD: f32 = 2.5;
+const SPACE_PUSH_CD: f32 = 5.0;
+const SPACE_LEFT: f32 = 2.5;
+const SPACE_PUSH: f32 = 1.5;
+
+/// A walk paused for what it head-tracks behind it (`TweaksBehavior_Patrol_Default`'s
+/// `DisTweaks_AISubProcess_HeadTrackPause`): within `m_fRearHalfAngleWidthToPause_Deg` of its
+/// back, and on again within `m_fFrontHalfAngleWidthToResume_Deg` of its heading (degrees).
+const PAUSE_REAR: f32 = 45.0;
+const PAUSE_RESUME: f32 = 90.0;
 
 /// A look-about under way: its pattern, sequence and rule, the rule's time and repeats left,
 /// where it goes (yaw left, pitch up, radians) and how fast.
@@ -1627,6 +1660,24 @@ fn head_track(
         let flat = to.with_y(0.0).length();
         let yaw = ((-to.x).atan2(-to.z) - npc.yaw + PI).rem_euclid(TAU) - PI;
         let near = flat < 6.0;
+        // now and then a glance at Corvo, not its enemy, seen close by before it
+        // (`DisAISubProcessFleetingGaze`: its top noted proxy within `m_fGazeRadius` 500 uu and
+        // `m_fGazeAngleDegrees` 80 of its facing, every `m_GazeInterval` 8-15 s for
+        // `m_GazeDuration` 1.5-3 s; the player alone, and the angle either side, our reading)
+        track.gaze.0 = (track.gaze.0 - dt).max(0.0);
+        track.gaze.1 = (track.gaze.1 - dt).max(0.0);
+        let can_gaze = !npc.hostile()
+            && npc.sees_player
+            && flat < GAZE_RADIUS
+            && yaw.abs() < GAZE_ANGLE.to_radians()
+            && matches!(npc.mode, Mode::Idle | Mode::Patrol | Mode::Return | Mode::Search)
+            && !scripted;
+        if !can_gaze {
+            track.gaze.1 = 0.0;
+        } else if track.gaze.0 <= 0.0 {
+            track.gaze = (GAZE_INTERVAL[0] + rand::random::<f32>() * (GAZE_INTERVAL[1] - GAZE_INTERVAL[0]), GAZE_DURATION[0] + rand::random::<f32>() * (GAZE_DURATION[1] - GAZE_DURATION[0]));
+        }
+        let gazing = track.gaze.1 > 0.0;
         // a clip it plays (the body's, the upper body's or a gesture's) turning its look off
         // (`DisNotify_NPCDisableLookAt`, from its
         // `m_LookAtFilter` down: from the eyes or the head, the whole look; from the torso, the
@@ -1647,7 +1698,7 @@ fn head_track(
             && npc.mode != Mode::Combat
             && flat > 0.3
             && yaw.abs() < LOOK_YAW
-            && ((npc.attn_level == 1 && (npc.sees_player || npc.last_seen.is_some())) || (speaking && near) || forced);
+            && ((npc.attn_level == 1 && (npc.sees_player || npc.last_seen.is_some())) || (speaking && near) || forced || npc.warn.is_some() || gazing);
         // nothing holding its eye, a patrolling or searching character looks about (its pattern:
         // a patrol's, or a search's with its sword drawn or not), near enough to be seen doing it
         let pattern = match npc.mode {
@@ -1697,7 +1748,7 @@ fn head_track(
             continue;
         }
         if std::env::var("DH_LOOK_LOG").is_ok() {
-            info!("look: {} weight {:.2} torso {:.2} yaw {:.0} pitch {:.0} (attention {}, speaking {speaking}, off {look_off:?})", npc.name, track.weight, track.torso, track.yaw.to_degrees(), track.pitch.to_degrees(), npc.attn_level);
+            info!("look: {} weight {:.2} torso {:.2} yaw {:.0} pitch {:.0} (attention {}, speaking {speaking}, off {look_off:?}, gaze {gazing})", npc.name, track.weight, track.torso, track.yaw.to_degrees(), track.pitch.to_degrees(), npc.attn_level);
         }
         // (laid by its look-at grids, `look_grids`; else turned here)
         if grids {
@@ -2089,7 +2140,10 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         melee_cd: Vec::new(),
         act: (0, 0),
         riposte: 0.0,
-        crowded: 0.0,
+        warn: None,
+        warn_cd: 0.0,
+        push_cd: 0.0,
+        track_pause: None,
         bark_req: (0, ""),
         versus: false,
         ambush: None,
@@ -3397,6 +3451,7 @@ pub(crate) fn npc_brain(
     }
     let Ok((pe, pt, psword, pl)) = player.single() else { return };
     let ppos = pt.translation;
+    let space_log = std::env::var("DH_SPACE_LOG").is_ok();
     // (his feet: his capsule's centre above them, standing or crouched)
     let pfeet = ppos.y - if pl.crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF } - crate::player::RADIUS;
     let blocking = psword.is_some_and(|s| s.blocking);
@@ -3580,18 +3635,49 @@ pub(crate) fn npc_brain(
                 continue;
             }
         }
-        // Corvo in its way, not an enemy: a shove (`DisTweaks_NPCPush`, within 2 m, every 1 s at
-        // most) with its "personal space" bark
-        if !npc.enemy && npc.alert != Alert::Combat && npc.has_move("Push") && npc.attack_t.is_none() {
+        // Corvo in its way, not an enemy (`DisAISubProcessPersonalSpace`): it stops, turns to him
+        // and warns him off (`PATROL_PERSONAL_SPACE_WARNING`); still in its way as the warning
+        // runs out, a shove (`DisTweaks_NPCPush`) with its "personal space" bark
+        npc.warn_cd = (npc.warn_cd - dt).max(0.0);
+        npc.push_cd = (npc.push_cd - dt).max(0.0);
+        if !npc.enemy && npc.alert != Alert::Combat && npc.has_move("Push") && npc.attack_t.is_none() && matches!(npc.mode, Mode::Idle | Mode::Patrol | Mode::Return | Mode::Search) {
             let to = (ppos - pos).with_y(0.0);
-            let close = to.length() < 1.1 && (ppos.y - pos.y).abs() < 1.2 && to.normalize_or_zero().dot(npc.forward()) > 0.3;
-            npc.crowded = if close { npc.crowded + dt } else { 0.0 };
-            if npc.crowded > 0.8 {
-                npc.crowded = -0.2;
-                npc.gesture(3);
-                npc.bark_req = (npc.bark_req.0.wrapping_add(1), "PATROL_PERSONAL_SPACE");
-                hit_writer.write(PlayerHit { npc: e, from: pos, damage: 0.0, kick: false, big: false, push: true, unblockable: false, missile: false });
+            let level = (ppos.y - pos.y).abs() < 1.2;
+            let close = to.length() < 1.1 && level && to.normalize_or_zero().dot(npc.forward()) > 0.3;
+            match npc.warn {
+                None if close && npc.warn_cd <= 0.0 => {
+                    if space_log {
+                        info!("space: {} warns", npc.name);
+                    }
+                    npc.warn = Some(SPACE_WARN);
+                    npc.bark_req = (npc.bark_req.0.wrapping_add(1), "PATROL_PERSONAL_SPACE_WARNING");
+                }
+                // (out of its space: over)
+                Some(_) if !(level && to.length() < SPACE_LEFT) => {
+                    if space_log {
+                        info!("space: {} lets it go ({:.1} m)", npc.name, to.length());
+                    }
+                    npc.warn = None;
+                    npc.warn_cd = SPACE_WARN_CD;
+                }
+                Some(left) if left > dt => npc.warn = Some(left - dt),
+                Some(_) => {
+                    npc.warn = None;
+                    npc.warn_cd = SPACE_WARN_CD;
+                    if space_log {
+                        info!("space: {} warned ({:.1} m)", npc.name, to.length());
+                    }
+                    if to.length() < SPACE_PUSH && npc.push_cd <= 0.0 {
+                        npc.push_cd = SPACE_PUSH_CD;
+                        npc.gesture(3);
+                        npc.bark_req = (npc.bark_req.0.wrapping_add(1), "PATROL_PERSONAL_SPACE");
+                        hit_writer.write(PlayerHit { npc: e, from: pos, damage: 0.0, kick: false, big: false, push: true, unblockable: false, missile: false });
+                    }
+                }
+                None => {}
             }
+        } else {
+            npc.warn = None;
         }
         // on its way to ring an alarm bell: nothing else (the bell's slot, Alert, is above
         // Combat's)
@@ -3608,6 +3694,43 @@ pub(crate) fn npc_brain(
         }
         // what caught its eye (the turn-to-face level): it stops and turns to look
         if npc.attn_level == 2 && npc.alert == Alert::Unaware && matches!(npc.mode, Mode::Idle | Mode::Patrol | Mode::Return) {
+            npc.target = None;
+            npc.track_pause = None;
+            continue;
+        }
+        // warning Corvo off: it stands
+        if npc.warn.is_some() {
+            npc.target = None;
+            continue;
+        }
+        // on its walk with what it head-tracks behind it (within `m_fRearHalfAngleWidthToPause_Deg`
+        // of its back): it stops and turns a quarter its way, the heading it walked kept, till
+        // that is within `m_fFrontHalfAngleWidthToResume_Deg` of the heading, or gone
+        // (`DisAISubProcessHeadTrackPause`, `TweaksBehavior_Patrol_Default`'s; its workings as
+        // roshan's r614/blink research decoded them)
+        let yaw_to = |p: Vec3| {
+            let d = p - pos;
+            (-d.x).atan2(-d.z)
+        };
+        let wrap = |a: f32| (a + PI).rem_euclid(TAU) - PI;
+        let paused = npc.track_pause.is_some();
+        let proxy = npc.last_seen.filter(|_| npc.attn_level == 1 && npc.alert == Alert::Unaware && matches!(npc.mode, Mode::Patrol | Mode::Return));
+        npc.track_pause = match (proxy, npc.track_pause) {
+            (Some(p), Some(h)) => (wrap(yaw_to(p) - h).abs() >= PAUSE_RESUME.to_radians()).then_some(h),
+            // (as far off where it heads as it must come back within to walk on: not on a turn
+            // towards it)
+            (Some(p), None) => npc
+                .target
+                .filter(|t| t.with_y(0.0).distance(pos.with_y(0.0)) > 0.3)
+                .filter(|_| wrap(yaw_to(p) - (npc.yaw + PI)).abs() <= PAUSE_REAR.to_radians())
+                .map(yaw_to)
+                .filter(|&h| wrap(yaw_to(p) - h).abs() >= PAUSE_RESUME.to_radians()),
+            (None, _) => None,
+        };
+        if space_log && npc.track_pause.is_some() != paused {
+            info!("pause: {} {} (proxy {:?}, attention {})", npc.name, if paused { "walks on" } else { "stops" }, proxy, npc.attn_level);
+        }
+        if npc.track_pause.is_some() {
             npc.target = None;
             continue;
         }
@@ -4830,6 +4953,13 @@ fn npc_move(
             }
             _ if new_h.length() > 0.3 => Some(new_h),
             _ if npc.attn_level == 2 && npc.alert == Alert::Unaware && npc.target.is_none() => npc.last_seen.map(|l| (l - pos).with_y(0.0)),
+            (_, Some(p)) if npc.warn.is_some() => Some((p - pos).with_y(0.0)),
+            // (paused: a quarter from the heading it walked, to the side what it watches is on)
+            _ if npc.track_pause.is_some() => npc.last_seen.zip(npc.track_pause).map(|(l, h)| {
+                let d = l - pos;
+                let side = ((-d.x).atan2(-d.z) - (h + PI) + PI).rem_euclid(TAU) - PI;
+                Quat::from_rotation_y(h + PI + FRAC_PI_2.copysign(side)) * Vec3::NEG_Z
+            }),
             (Mode::Idle, _) if npc.target.is_none() => Some(Quat::from_rotation_y(npc.home_yaw) * Vec3::NEG_Z),
             _ => None,
         };
