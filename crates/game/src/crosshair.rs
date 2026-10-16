@@ -75,9 +75,10 @@ fn info_line(
     focus: Res<crate::interact::InteractFocus>,
     level: Option<Res<crate::level::LevelInfo>>,
     npcs: Query<&crate::npc::Npc>,
-    mut line: Query<(&mut Text, &mut TextFont, &mut Node, &mut Visibility, &mut crate::softshadow::SoftShadow), With<InfoText>>,
+    carry: Res<crate::carry::Carry>,
+    mut line: Query<(&mut Text, &mut TextFont, &mut Node, &mut Visibility, &mut crate::softshadow::SoftShadow, &ComputedNode), With<InfoText>>,
 ) {
-    let Ok((mut t, mut f, mut n, mut v, mut sh)) = line.single_mut() else {
+    let Ok((mut t, mut f, mut n, mut v, mut sh, cn)) = line.single_mut() else {
         if let Ok(h) = hud.single() {
             commands.spawn((
                 InfoText,
@@ -96,8 +97,10 @@ fn info_line(
         return;
     };
     let Ok(w) = window.single() else { return };
+    // (not the body on his shoulder)
     let asleep = focus
         .1
+        .filter(|e| carry.body != Some(*e))
         .and_then(|e| npcs.get(e).ok())
         .filter(|n| n.mode == crate::npc::Mode::Unconscious)
         .map(|n| n.npc_type.and_then(|ty| level.as_ref()?.scene.npc_types.get(ty as usize)?.stats.as_ref()).map(|s| s.asleep_text.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| "(Unconscious)".into()));
@@ -111,10 +114,11 @@ fn info_line(
     }
     let s = (w.width() / 1280.0).min(w.height() / 720.0).max(0.01);
     let off = (Vec2::new(w.width(), w.height()) - Vec2::new(1280.0, 720.0) * s) * 0.5;
+    // (centred in its field: a line laid out unwrapped is as wide as its words)
     let p = off + INFO_AT * s;
-    n.left = Val::Px(p.x);
+    let tw = cn.size().x * cn.inverse_scale_factor();
+    n.left = Val::Px(p.x + (INFO_W * s - tw) * 0.5);
     n.top = Val::Px(p.y);
-    n.width = Val::Px(INFO_W * s);
     let fs = bevy::text::FontSize::Px(INFO_SIZE * s);
     if f.font_size != fs {
         f.font_size = fs;

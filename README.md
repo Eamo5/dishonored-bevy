@@ -80,7 +80,7 @@ fullscreen display, vertical sync and the crosshair.
 | 1–0, mouse wheel | Shortcuts (the original auto-assign order) |
 | Middle mouse (hold) | Quick-access wheel (time slows) |
 | F | Use (doors, pickups, levers, whale oil tanks, rewire, alarms); pick up / drop a body |
-| Left mouse (falling onto someone / carrying a body) | Drop assassination / throw the body |
+| Left mouse (falling onto someone / carrying a body) | Drop assassination / drop the body |
 | Alt | Zoom (mask optics; F while zoomed: the second lens) |
 | R / T | Health / mana elixir |
 | J (Tab / Shift+Tab: pages, Left/Right: sub tabs, arrows: lists, Enter: act) | Journal: objectives, notes, powers (runes), bone charms, inventory |
@@ -567,7 +567,10 @@ are in the settings file, `pad_binding_set` 0-3):
 - **Bone charms** (the 29 originals, found at random, worn up to the slot count), **stores**
   (Piero's workshop, Griff) with the original items, prices and blueprint requirements.
   Acrobat's `MantleAnimRate` speeds up the climb and its head animation together.
-  Strong Arms shortens the choke hold and its progress indicator; Whirlwind speeds up
+  Strong Arms shortens the choke hold and its progress indicator (the hold is `ChokeTime`,
+  1.5 s, and the victim's In clip, 0.667 s: 2.2 s, as roshan's r614/blink research decoded the
+  choke's states; let go once its loop begins and the victim breaks free, both held through
+  the Lose chain, 2.23 s; won, the Win chain plays out, 2.47 s); Whirlwind speeds up
   sword hits and their arm animation; Fleet Fighter removes the drawn-weapon movement
   penalty. Healthy Appetite, Twist of Fortune (including automatic remedies), Unnerving
   Target, Plague Resistant and Plague Affinity now feed their gameplay effects. Remaining
@@ -995,7 +998,7 @@ are in the settings file, `pad_binding_set` 0-3):
   unaware, pickpocket `[F]`, a drop assassination falling onto someone, a Blood Thirst
   fatality `[Left Control] + [Left Mouse Button]`, a ledge to mantle `[Space Bar]`), stacked
   from the bottom and faded in 0.35 s; and its `InteractionsMessage` at the left — what Corvo
-  holds or is in the middle of (`[F] Drop` / `[Left Mouse Button] Throw` a body or a prop,
+  holds or is in the middle of (`[F] Drop` a body, `[F] Drop` / `[Left Mouse Button] Throw` a prop,
   `[F] Drop` / `[Space Bar] Jump off` a chain, `[F] Exit Keyhole`, `Mash [Left Mouse Button] !`
   in a weeper's grip, `[Left Alt] Exit Spyglass`, `[Right Mouse Button] End Bend Time`,
   `End Dark Vision`, `End Possess`) sliding in under its rule. The words are the HUD
@@ -1191,8 +1194,12 @@ are in the settings file, `pad_binding_set` 0-3):
 - **Carrying bodies**: the unconscious and the dead ([F] Pick up), carried over the shoulder
   with the original carry clips (`Ply_Empty_CarryCorpse_as`; the body plays the matching
   `Corpses_CarryCorpse_*_Slave` clips in step, drawn with the view model), slower
-  (`GroundSpeedCarryingCorpse`) and without sprinting or the sword; [F] puts the body down
-  (the original drop clips) and attacking throws it. The level scripts hear of it
+  (`GroundSpeedCarryingCorpse`) and without sprinting or the sword; [F] or attacking puts the
+  body down (the original drop clips: the carry has no throw, as roshan's r614/blink research
+  found it, the HUD's corpse-throw text never shown). A won chokehold's body is lifted
+  straight from the hold with Use held 0.2 s through its Win (`m_fHoldTimeForAutoCarry`:
+  `Sword_Choke_CarryCorpse_Master`, the body's `Generic_Choke_CarryCorpse_Slave`). The level
+  scripts hear of it
   (`DisSeqEvent_Corpse`: picked up, dropped, discovered by a guard; the guard who finds it runs
   to it and looks it over, `Sword_CorpseCheck`, before searching about), and an unconscious body
   that ends up in water drowns (a kill).
@@ -1226,7 +1233,7 @@ are in the settings file, `pad_binding_set` 0-3):
   knock-out goes limp where its clip says (`DishonoredNotify_Ragdoll`, near the end of the deaths,
   the assassinations, the wind blast's stagger; else at the clip's end), the bodies keeping the
   clip's motion. The blown away go limp at once (Wind Blast's push, a blast away from its centre),
-  and so do bodies Corvo drops or throws from his shoulder (brought back to this side of a wall he
+  and so do bodies Corvo drops from his shoulder (brought back to this side of a wall he
   stands against). The bones follow the bodies, and the character's own place follows its hips.
   Once still the bodies are put away and the bones kept where they lay, in saves too. Blasts and
   Wind Blast push bodies already lying there. Picking one up gives it back to its clips; the

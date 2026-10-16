@@ -1,8 +1,11 @@
 //! Carrying bodies: Corvo picks up the unconscious and the dead ([F]), carries them over his
 //! shoulder (`Ply_Empty_CarryCorpse_as`, the body playing the matching `Corpses_CarryCorpse_*
-//! _Slave` clips in step), and drops them where he stands ([F]) or throws them (attack). The
-//! carried body is drawn with the view model; the level scripts hear of it
-//! (`DisSeqEvent_Corpse`: picked up, dropped), and the unconscious drown in water.
+//! _Slave` clips in step), and drops them where he stands ([F], or attack: the original's
+//! carry has no throw, as roshan's r614/blink research found it). A won chokehold's body is
+//! lifted straight from the hold (`Sword_Choke_CarryCorpse_Master`, the body's
+//! `Generic_Choke_CarryCorpse_Slave`). The carried body is drawn with the view model; the
+//! level scripts hear of it (`DisSeqEvent_Corpse`: picked up, dropped), and the unconscious
+//! drown in water.
 
 use crate::anim::Animator;
 use crate::arms::ArmsRoot;
@@ -47,6 +50,8 @@ pub enum CarryPhase {
     None,
     /// lifting it onto the shoulder
     In,
+    /// lifting it from a won chokehold
+    ChokeIn,
     Hold,
     Drop(DropKind),
 }
@@ -71,6 +76,8 @@ pub struct Carry {
     /// Last master clip and cursor; retained across saves during lift/drop transitions.
     pub(crate) animation: Option<(String, f32)>,
     pub(crate) resume_animation: bool,
+    /// a won chokehold's body to lift (`combat::chokehold`)
+    pub request: Option<Entity>,
 }
 
 impl Carry {
@@ -128,6 +135,7 @@ pub fn master_clip(phase: CarryPhase, moving: bool) -> Option<&'static str> {
     Some(match phase {
         CarryPhase::None => return None,
         CarryPhase::In => "Empty_CarryCorpse_In_Master",
+        CarryPhase::ChokeIn => "Sword_Choke_CarryCorpse_Master",
         CarryPhase::Hold if moving => "Empty_CarryCorpse_Walk_Master",
         CarryPhase::Hold => "Empty_CarryCorpse_Idle_Master",
         CarryPhase::Drop(DropKind::Low) => "Empty_CarryCorpse_DropLow_Master",
@@ -173,8 +181,11 @@ fn carry_input(
         CarryPhase::None => {
             // pick up the body looked at
             let restoring = restore.0.as_ref();
+            let choked = carry.request.take();
             let target = if let Some(saved) = restoring {
                 npcs.iter().find(|(_, npc, from, _)| from.0 == saved.spawner && npc.is_down()).map(|(e, _, _, _)| e)
+            } else if choked.is_some() {
+                choked
             } else { focus.1.filter(|_| keys.just_pressed(bind.key(crate::bindings::Act::Use))) };
             let Some(e) = target else { return };
             let Ok((_, npc, from, children)) = npcs.get(e) else { return };
@@ -218,51 +229,26 @@ fn carry_input(
                 }
             }
             commands.entity(e).try_insert(ScriptedAnim);
-            let phase = restoring.map(|s| s.phase).unwrap_or(CarryPhase::In);
+            let phase = restoring.map(|s| s.phase).unwrap_or(if choked.is_some() { CarryPhase::ChokeIn } else { CarryPhase::In });
             let time = restoring.map(|s| s.time).unwrap_or(0.0);
             let animation = restoring.and_then(|s| s.animation.clone());
             let resume_animation = restoring.is_some();
-            *carry = Carry { body: Some(e), phase, seq: carry.seq + 1, view_parts, world_parts, visual: Some((visual, vt)), swords, spawner: Some(from.0), t: time, animation, resume_animation };
+            *carry = Carry { body: Some(e), phase, seq: carry.seq + 1, view_parts, world_parts, visual: Some((visual, vt)), swords, spawner: Some(from.0), t: time, animation, resume_animation, request: None };
             if restore.0.take().is_none() {
                 used.write(Interaction::Corpse { spawner: from.0, what: 0 });
             }
             let _ = &mut msgs;
         }
-        CarryPhase::In => {
+        CarryPhase::In | CarryPhase::ChokeIn => {
             if carry.t > 0.3 && arms_done {
                 carry.phase = CarryPhase::Hold;
                 carry.t = 0.0;
             }
         }
         CarryPhase::Hold => {
-            let drop = keys.just_pressed(bind.key(crate::bindings::Act::Use));
-            let throw = mouse.just_pressed(MouseButton::Left);
-            if !(drop || throw) || p.locked {
-                return;
-            }
-            if throw {
-                // off the shoulder along the view
-                let dir = cam.single().map(|c| c.forward().as_vec3()).unwrap_or(Vec3::NEG_Z);
-                let Some(b) = carry.body else { return };
-                let hips = release_hips(b);
-                if std::env::var_os("DH_CARRY_LOG").is_some() {
-                    info!("carry: sampled release hips {hips:?} before throw pose");
-                }
-                // (limp from the shoulder, where it has a ragdoll)
-                if npc_anims.get(b).is_ok_and(|a| a.ragdoll) {
-                    let eye = cam.single().map(|c| c.translation()).ok();
-                    commands.entity(b).try_insert(crate::ragdoll::GoLimp::now(dir * 6.0 + Vec3::Y * 1.5, eye));
-                } else {
-                    commands.entity(b).try_insert(Falling { vel: dir * 6.0 + Vec3::Y * 1.5, placed: false, release_hips: hips });
-                    if let Ok(mut a) = anims.get_mut(b) {
-                        lay_down(&mut a);
-                    }
-                }
-                let spawner = carry.spawner;
-                release(&mut commands, &mut carry, &mut vis, None);
-                if let Some(s) = spawner {
-                    used.write(Interaction::Corpse { spawner: s, what: 1 });
-                }
+            // Use drops it, and so does attack: the carry has no throw
+            let drop = keys.just_pressed(bind.key(crate::bindings::Act::Use)) || mouse.just_pressed(MouseButton::Left);
+            if !drop || p.locked {
                 return;
             }
             let kind = if p.crouched { DropKind::LowSneak } else if p.velocity.length() < 0.5 { DropKind::NoMove } else { DropKind::Low };
@@ -379,9 +365,14 @@ fn sync_body(mut carry: ResMut<Carry>, arms: Query<&Animator, With<ArmsRoot>>, m
     let Ok(mut anim) = bodies.get_mut(b) else { return };
     let Some(cur) = arms.current() else { return };
     let name = &arms.lib.clip(cur.clip).name;
-    let Some(rest) = name.strip_prefix("Empty_CarryCorpse_") else { return };
+    // (the lift from a chokehold: its own pair)
+    let slave = if name == "Sword_Choke_CarryCorpse_Master" {
+        "Generic_Choke_CarryCorpse_Slave".to_string()
+    } else {
+        let Some(rest) = name.strip_prefix("Empty_CarryCorpse_") else { return };
+        format!("Corpses_CarryCorpse_{}", rest.replace("_Master", "_Slave"))
+    };
     carry.animation = Some((name.clone(), cur.t));
-    let slave = format!("Corpses_CarryCorpse_{}", rest.replace("_Master", "_Slave"));
     let Some(clip) = anim.lib.find(&slave) else {
         if std::env::var("DH_CARRY_LOG").is_ok() {
             warn!("carry: no {slave} for the body");

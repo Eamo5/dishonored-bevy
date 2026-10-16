@@ -332,8 +332,10 @@ fn wanted_context(
 ) -> Vec<usize> {
     use crate::powers::Power;
     let mut out = Vec::new();
+    // (a body is only dropped: the tweak's corpse throw, `m_InteractionTexts[11]`, is never
+    // shown, the carry having no throw)
     if carry.body.is_some() && carry.phase == crate::carry::CarryPhase::Hold {
-        out.extend([CORPSE_DROP, CORPSE_THROW]);
+        out.push(CORPSE_DROP);
     }
     if held.0.is_some() {
         out.extend([MOVABLE_DROP, MOVABLE_THROW]);

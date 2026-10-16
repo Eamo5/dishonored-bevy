@@ -202,6 +202,8 @@ struct ArmClips {
     choke_in: Option<ClipId>,
     choke_loop: Option<ClipId>,
     choke_win: Option<ClipId>,
+    choke_lose: Option<ClipId>,
+    choke_cancel: Option<ClipId>,
     // held by a weeper; pinned by a wolfhound, its teeth in his arm (`Ply_WolfhoundAttacks_as`:
     // `Sword_ArmAttack_GrabArm_Minigame`, `_GrabLoop_`, `_GrabOut_`, its arm attack's linked
     // clips), where the level has them
@@ -330,6 +332,8 @@ impl ArmClips {
             choke_in: lib.find("Sword_Choke_In_Master"),
             choke_loop: lib.find("Sword_Choke_Loop_Master"),
             choke_win: lib.find("Sword_Choke_Win_Master"),
+            choke_lose: lib.find("Sword_Choke_Lose_Master"),
+            choke_cancel: lib.find("Sword_Choke_Cancel_Master"),
             grabbed_in: lib.find("Sword_Weeper_ArmGrab_In"),
             grabbed_loop: lib.find("Sword_Weeper_ArmGrab_Loop"),
             grabbed_out: lib.find("Sword_Weeper_ArmGrab_Out"),
@@ -413,6 +417,8 @@ struct ArmsAnim {
     /// a grenade cooking (as last seen)
     cooking: bool,
     choking: bool,
+    /// the chokehold's part playing: 1 the hold, 2 its Win, 3 its Lose
+    choke_phase: u8,
     grabbed: bool,
     /// (by a wolfhound)
     pinned: bool,
@@ -732,6 +738,7 @@ fn spawn_arms(
                 blink_aiming: false,
                 cooking: false,
                 choking: false,
+                choke_phase: 0,
                 grabbed: false,
                 pinned: false,
                 oneshot: false,
@@ -1088,13 +1095,25 @@ fn animate_arms(
         }
     }
     if base_busy {
-    } else if choking.is_some() {
-        if !st.choking {
+    } else if let Some(ch) = choking {
+        // the hold (its In, then its loop), then its Win or Lose chain played through
+        let phase = match ch.end {
+            None => 1,
+            Some(crate::combat::ChokeEnd::Win(_)) => 2,
+            Some(crate::combat::ChokeEnd::Lose(_)) => 3,
+        };
+        if !st.choking || st.choke_phase != phase {
             st.choking = true;
-            if let Some(cl) = c.choke_in.or(c.choke_loop) {
+            st.choke_phase = phase;
+            let cl = match phase {
+                1 => c.choke_in.or(c.choke_loop),
+                2 => c.choke_win,
+                _ => c.choke_lose,
+            };
+            if let Some(cl) = cl {
                 anim.restart(cl, false, 1.0, 0.15);
             }
-        } else if anim.finished() {
+        } else if phase == 1 && anim.finished() {
             if let Some(cl) = c.choke_loop {
                 anim.play(cl, true, 1.0, 0.1);
             }
@@ -1102,12 +1121,14 @@ fn animate_arms(
         base_busy = true;
     } else if st.choking {
         st.choking = false;
-        if let Some(cl) = c.choke_win {
-            // the release: Corvo lets the body drop
-            anim.restart(cl, false, 1.6, 0.1);
-            anim.seek(1.2);
-            st.oneshot = true;
+        // let go during the hold (the victim gone): its Cancel
+        if st.choke_phase == 1 && !carry.carrying() {
+            if let Some(cl) = c.choke_cancel {
+                anim.restart(cl, false, 1.0, 0.1);
+                st.oneshot = true;
+            }
         }
+        st.choke_phase = 0;
     }
     // a sword lock: the struggle, then how it went
     if !base_busy && versus.seq != st.versus_seq.0 {

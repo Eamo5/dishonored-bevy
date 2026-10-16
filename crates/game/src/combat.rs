@@ -348,10 +348,24 @@ pub struct SwordModel;
 #[derive(Component)]
 pub struct SwordRig;
 
-/// Seconds of a chokehold before the victim goes limp, without `ChokeTime`: the choke's loop
-/// (`Sword_Choke_Loop_Master`, 5.03 s). The original's hold is `ChokeTime` (1.5 s, less with
-/// Strong Arms) and then the loop, about 6.5 s, as roshan's r614/blink research decoded it.
-pub const CHOKE_TIME: f32 = 5.033;
+/// A chokehold's timings, as roshan's r614/blink research decoded the choke's states
+/// (`StatePlayerMasterChoke`): the hold lasts `ChokeTime` (1.5 s, less with Strong Arms) and the
+/// victim's In clip (`Generic_Choke_In_Slave`, 0.667 s), the button kept down once its loop
+/// begins; won, the Win chain plays out (`Sword_Choke_Win_Master`, 2.470 s), lost, the Lose
+/// chain (`Sword_Choke_Lose_Master`, 2.229 s). Use held 0.2 s through the Win
+/// (`m_fHoldTimeForAutoCarry`) lifts the body straight onto the shoulder
+/// (`Sword_Choke_CarryCorpse_Master`).
+pub const CHOKE_IN: f32 = 0.667;
+pub const CHOKE_WIN: f32 = 2.470;
+pub const CHOKE_LOSE: f32 = 2.229;
+pub const AUTO_CARRY_HOLD: f32 = 0.2;
+
+/// How a chokehold ended, and how long ago (s).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ChokeEnd {
+    Win(f32),
+    Lose(f32),
+}
 
 /// Active chokehold on an NPC.
 #[derive(Component)]
@@ -359,6 +373,10 @@ pub struct Choking {
     pub npc: Entity,
     pub t: f32,
     pub duration: f32,
+    /// won or lost (its chain playing out)
+    pub end: Option<ChokeEnd>,
+    /// Use held through the Win (s)
+    pub use_held: f32,
 }
 
 pub fn spawn_view_model(
@@ -1043,7 +1061,7 @@ mod pause_tests {
             grounded: true, lean: 0.0, noclip: false, eye_height: crate::player::STAND_EYE,
             locked: true, air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
             fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0, speed_cap: 0.0,
-        }, Transform::IDENTITY, Choking { npc: target, t: 0.5, duration: 3.0 })).id();
+        }, Transform::IDENTITY, Choking { npc: target, t: 0.5, duration: 3.0, end: None, use_held: 0.0 })).id();
         app.update();
         assert_eq!(app.world().get::<Choking>(player).map(|ch| ch.t), Some(0.5));
         assert!(app.world().get::<Player>(player).unwrap().locked);
@@ -1061,7 +1079,7 @@ fn chokehold(
     time: Res<Time>,
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
     stats: Res<PlayerStats>,
-    (attrs, held, carry, possession): (Res<crate::gamedata::Attrs>, Res<crate::props::Held>, Res<crate::carry::Carry>, Res<crate::possession::Possession>),
+    (attrs, held, mut carry, possession): (Res<crate::gamedata::Attrs>, Res<crate::props::Held>, ResMut<crate::carry::Carry>, Res<crate::possession::Possession>),
     mut msgs: ResMut<HudMessages>,
     mut hits: MessageWriter<NpcHit>,
     mut player: Query<(Entity, &Transform, &mut Player, Option<&mut Choking>), Without<Npc>>,
@@ -1078,20 +1096,47 @@ fn chokehold(
         return;
     }
     if let Some(mut ch) = choking {
-        ch.t += time.delta_secs();
-        // the hold must be kept through its loop: let go then and the victim breaks free
-        let in_loop = ch.t > ch.duration - CHOKE_TIME;
+        let dt = time.delta_secs();
+        ch.t += dt;
+        // won or lost: its chain plays out; won, Use held lifts the body onto the shoulder
+        match ch.end {
+            Some(ChokeEnd::Win(w)) => {
+                let w = w + dt;
+                ch.end = Some(ChokeEnd::Win(w));
+                ch.use_held = if keys.pressed(bind.key(crate::bindings::Act::Use)) { ch.use_held + dt } else { 0.0 };
+                if ch.use_held >= AUTO_CARRY_HOLD {
+                    carry.request = Some(ch.npc);
+                    p.locked = false;
+                    commands.entity(pe).remove::<Choking>();
+                } else if w >= CHOKE_WIN {
+                    p.locked = false;
+                    commands.entity(pe).remove::<Choking>();
+                }
+                return;
+            }
+            Some(ChokeEnd::Lose(l)) => {
+                ch.end = Some(ChokeEnd::Lose(l + dt));
+                if l + dt >= CHOKE_LOSE {
+                    p.locked = false;
+                    commands.entity(pe).remove::<Choking>();
+                }
+                return;
+            }
+            None => {}
+        }
+        // the hold must be kept through its loop: let go then and the victim breaks free (both
+        // held through the Lose chain)
+        let in_loop = ch.t > CHOKE_IN;
         if in_loop && !keys.pressed(bind.key(crate::bindings::Act::Block)) && ch.t < ch.duration {
             if let Ok((_, mut npc, _)) = npcs.get_mut(ch.npc) {
                 npc.mode = Mode::Combat;
                 npc.alert = Alert::Combat;
                 npc.awareness = 1.0;
-                npc.stagger = 1.0;
+                npc.stagger = CHOKE_LOSE;
                 npc.last_seen = Some(pt.translation);
             }
             msgs.push("The victim broke free");
-            p.locked = false;
-            commands.entity(pe).remove::<Choking>();
+            ch.end = Some(ChokeEnd::Lose(0.0));
             return;
         }
         let target = ch.npc;
@@ -1102,10 +1147,11 @@ fn chokehold(
             nt.translation = nt.translation.lerp(Vec3::new(want.x, nt.translation.y, want.z), 0.3);
             npc.yaw = p.yaw;
             npc.mode = Mode::Choked;
+            // won: the victim goes limp as the Win chain begins (its own Win clip), Corvo held
+            // through his
             if ch.t >= ch.duration {
                 hits.write(NpcHit { npc: target, damage: 0.0, kind: HitKind::Choke, from: pt.translation });
-                p.locked = false;
-                commands.entity(pe).remove::<Choking>();
+                ch.end = Some(ChokeEnd::Win(0.0));
             }
         } else {
             p.locked = false;
@@ -1135,8 +1181,8 @@ fn chokehold(
     npc.mode = Mode::Choked;
     npc.attack_t = None;
     p.locked = true;
-    // its start (`ChokeTime`: Strong Arms shortens it), then the loop
-    commands.entity(pe).insert(Choking { npc: e, t: 0.0, duration: attrs.choke_time.max(0.0) + CHOKE_TIME });
+    // `ChokeTime` (Strong Arms shortens it) and the victim's In clip
+    commands.entity(pe).insert(Choking { npc: e, t: 0.0, duration: attrs.choke_time.max(0.0) + CHOKE_IN, end: None, use_held: 0.0 });
     msgs.push(format!("Choking {}...", npc.name));
 }
 
