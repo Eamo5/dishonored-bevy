@@ -157,7 +157,14 @@ struct Popup {
     base: Vec<(&'static str, Mat)>,
     /// the task shown (index, since when)
     task: Option<(usize, f32)>,
+    /// none before this runs out (`m_fPopupTimer` from `m_fPopupDelayOnGameStart`, 2 s, at each
+    /// level's start; it stands still while paused)
+    delay: f32,
 }
+
+/// The popups' wait at a level's start (`m_fPopupDelayOnGameStart`, as roshan's r614/blink
+/// research read the HUD's queue).
+const START_DELAY: f32 = 2.0;
 
 #[derive(Component)]
 struct PopupClip;
@@ -194,8 +201,16 @@ fn play_popup(
     mut texts: Query<(&PopupText, &mut Text, &mut TextFont, &mut TextColor, &mut Node, &ComputedNode), (Without<PopupClip>, Without<TaskMark>)>,
     mut sounds: MessageWriter<crate::audio::PostEvent>,
     settings: Res<crate::settings::Settings>,
+    (paused, level): (Res<crate::hud::Paused>, Option<Res<crate::level::LevelInfo>>),
 ) {
     let dt = time.delta_secs();
+    // (each level's first popup waits; the queue keeps what comes meanwhile)
+    if level.as_ref().is_some_and(|l| l.is_changed()) {
+        popup.delay = START_DELAY;
+    }
+    if !paused.0 {
+        popup.delay = (popup.delay - dt).max(-1.0);
+    }
     let Ok(w) = window.single() else { return };
     let ms = crate::hud::MovieSpace::of(w);
     let s = ms.s;
@@ -204,6 +219,9 @@ fn play_popup(
         queue.0.clear();
     }
     if popup.playing.is_none() {
+        if popup.delay >= 0.0 {
+            return;
+        }
         let Some(n) = queue.0.pop_front() else { return };
         let (Ok(h), Some(tl)) = (hud.single(), timelines.get(MOVIE)) else { return };
         let Some(c) = Clip::export(&tl, SYMBOL) else { return };

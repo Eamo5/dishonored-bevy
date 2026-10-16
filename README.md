@@ -242,7 +242,8 @@ are in the settings file, `pad_binding_set` 0-3):
 - **The save and load screens as `UI_LoadGame` draws them** (`savescreen.rs`): the list turned
   -2.5 degrees, each save on its brushed card with its mission's strip (`UI_Mission_Small`),
   its date in the original's `m_DateFormat` (local time) over its chapter (`AUTOSAVE - ` /
-  `QUICKSAVE - ` before it), the chosen card light; saving offers `CREATE A NEW SAVE` first;
+  `QUICKSAVE - ` before it), the chosen card light; saving offers `CREATE A NEW SAVE` first,
+  while there is room among the original's 40 manual saves (`SGS_Dishonored0..39`);
   in the main menu the chosen save's mission picture with its date and name up the turned
   banners (`LoadGameDetails`). Its help bar (`SaveList`): `ACCEPT`, `DELETE SAVE` (X, Shift:
   asked first, "Do you want to delete this save?", then the save is gone), `BACK`.
@@ -1036,7 +1037,8 @@ are in the settings file, `pad_binding_set` 0-3):
   objective's name on the dark bar, the lozenge and its state's mark (`!`, a check, a red X
   with shards), then its tasks one at a time beneath (each fading in with a glow of its
   state's colour and its own mark, 3.5 s each), everything sliding and spinning in and out as
-  the class tweens it, with the UI theme's objective sounds; popups queue. Script:
+  the class tweens it, with the UI theme's objective sounds; popups queue, the first of a level
+  waiting 2 s (`m_fPopupDelayOnGameStart`, the wait standing still while paused). Script:
   `objpopup added|updated|completed|failed NAME|TASK|TASK:completed`.
 - **Breath under water** (`oxygen.rs`, the HUD movie's `hud_oMeter` and its `OxygenGauge`
   class): the crystal gauge swings in at the bottom right over its swirling backing, its fill
@@ -1412,7 +1414,7 @@ are in the settings file, `pad_binding_set` 0-3):
 - **Attachments** (`SeqAct_AttachToActor`): emitters ride the character or prop they're attached to; triggers attached to a character move with it.
 - **Level-script AI**: noises (`DisSeqAct_AINoise`, by loudness and context), distractions, suspicion, searches, guarding a place, scripted Whaler teleports, clearing and psychic attention, following someone, scripted shots (`DisSeqAct_AIShoot`: shots, accuracy), level swarms sent somewhere (`DisSeqAct_SetRatSwarmCustomBehavior`); an actor factory's "Spawned" is its spawn point (a PA speaker's announcements play from there); security circuitry panels ("[F] Rewire", with a Rewire Tool) rewire the nearest device of their kind. Brain flags (`DisSeqAct_AISetBrainFlags`, enabled, disabled or toggled: no attacking, no melee, no shooting, civilians who won't panic) hold the Flooded District assassins and others back; `DisSeqEvent_PlayerHeard` fires as a character hears Corvo, `DisSeqEvent_RatPossess` as he goes into a rat and out; `DisSeqAct_BodyShadowKill` marks characters whose bodies turn to ash as they die (Daud's Whalers).
 - **Usable objects** (`DishonoredUsableObject` + `DisTweaks_UsableObject`, 626 across the maps: lockers, bins, chests, trunks, hatches, sewer plates, switches, crank wheels, valves, safes and their dials, security panels): the moving part is cooked as an animated type (its skeletal mesh and the tweak's anim sets, following the tweak's named fallback chain) and replaces its bind pose in the level; each use moves it into its next stage (`m_Stages`: the stage's sequence and sounds, its prompt override, `m_bDeactivateUsableWhenDone`) and raises its `DisSeqEvent_Used`; `DisSeqAct_ActivateUsable` sets a stage (`m_TargetStageIndex`) or the next. Kept in saves. Script: `usable [LABEL] [D]`.
-- **Paths**: characters walk the original navigation meshes (each level's `DisPylon` `NavigationMeshBase`, version 28: vertices, the edge storage table, polygons, then `FNavMeshEdgeBase` / `FNavMeshPathObjectEdge` records in the table's order), cooked into `scene.navmesh`: A* over the polygons through their shared edges, then the funnel through those edges (kept clear of their ends) for the corners; 12 searches a frame, again when the goal moves. They open the unlocked doors in their way. `census` reports how many walk paths.
+- **Paths**: characters walk the original navigation meshes (each level's `DisPylon` `NavigationMeshBase`, version 28: vertices, the edge storage table, polygons, then `FNavMeshEdgeBase` / `FNavMeshPathObjectEdge` records in the table's order), cooked into `scene.navmesh`: A* over the polygons through their shared edges, then the funnel through those edges (kept clear of their ends) for the corners; 12 searches a frame, again when the goal moves. They open the unlocked doors in their way (within `m_fNPCClosenessToOpen`, 2 m) and close them behind them once through, no one within 4 m and Corvo farther (`m_fNPCClosenessToNotClose`, `m_fPlayerClosenessToNotClose`), unless he or a script opened them, as roshan's r614/blink research read the door's tick. `census` reports how many walk paths.
 - **Level-script world actions**: patrols (`DisSeqAct_AISetPatrol`, from a route's nav point), senses (`DisSeqAct_AISetSenses`: blind, deaf), dispositions (`DisSeqAct_SetDisposition`: ally / neutral / enemy, reciprocated or one way, set, cleared or all cleared, between Corvo, factions and characters; kept in saves), `DisSeqAct_LimitPawnMinHealth`, `SeqAct_ChangeCollision`, the security devices (`DisSeqAct_WallofLightControl` off/on/toggle/polarity, `DisSeqAct_AlarmBell`, `DisSeqAct_PlugWhaleOilBattery`), `DisSeqAct_GivePickup` (its tweak's ammunition, coins, runes, charms, items and tutorial notes, cooked onto the op) and `DisSeqAct_GameOver` (the original's "Game Over" with the script's reason). Also object lists (`SeqAct_ModifyObjectList`, `SeqAct_IsInObjectList`), `SeqAct_Timer`, `DisSeqAct_GetAbstractItemQuantity` (how many rat viscera Corvo carries), `DisSeqAct_BendTime` (the scripts' own stopped time), `DisSeqAct_CancelPlayerActivePower`, `DisSeqAct_NPCMarkForVanish` (characters gone once out of sight), matinee fog tracks (`DisFogComponent.Opacity`, planes, height), `SeqAct_SetMaterial` (the new material cooked onto the op and made for each target surface at load, with that surface's lighting), `SeqAct_SetMatInstScalarParam` (the material instance's parameter slot, by its cooked name, in every material made from it: the Outsider's shrines fade in, Corvo's mark glows), `DisSeqAct_ToggleHUDElement` (the HUD's health, mana, equipment and crosshair: the Tower's opening shows none), `DisSeqAct_NPCTrackTarget` (heads follow Corvo), `SeqAct_GetDistance`, `DisSeqAct_Add/RemoveInventoryItem` (characters' swords and guns; Corvo starts the Tower unarmed and is handed a sword when the assassins strike), `DisSeqAct_Lock` on usable objects (and their keys), `DisSeqAct_SetIgnoreDeath`, `DisSeqAct_AIRingAlarm`, `DisSeqAct_RemoveAbstractItem`, `DisSeqAct_PlayerTrackTarget` (Corvo's view turned and held on someone), `DisSeqAct_EquipItemType` (empty hands in the Hound Pits: attacking or blocking draws the sword with its equip clip; a pistol, crossbow or the Heart selected), `DisSeqAct_AttachPickup` (a key hung on someone's belt, pickpocketable), `DisSeqAct_ToggleTutorial` (see the game's own tutorials), `DisSeqAct_SpawnCameraLensEffect` (the effect tweak's particle system cooked onto the op, held before the eye and turning with it at a third of UE3's 90-unit distance, nearer or further for the view's field of view as `EmitterCameraLensEffectBase` does (made for 80 degrees): rain on the lens, the Hound Pits sickness, water after a dive; looping ones run until "Stop Looping" or their life span, then "Finished"), `DisSeqAct_SetRainEmitter` (see Rain), matinee light `Brightness` tracks (the light's passes, its characters' passes and its Bevy light; the dominant sun's colour for the Lighthouse's lightning); events for line of sight (`SeqEvent_LOS`), patrol points reached, possession started / finished, props picked up, broken and knocked about (`SeqEvent_RigidBodyCollision`, over its `MinCollisionVelocity`), characters' behaviours starting (`DisSeqEvent_BehaviorStarted`: panic, patrol, react, search, combat), whale oil receptacles plugged / unplugged and characters calming down (`DisSeqEvent_AttentionDecreasedTo`). Named variables resolve within their own sequence first (each prefab's). Events take their
   class's trigger limit when the level leaves it unset (`MaxTriggerCount`, cooked from the
   class default: remote events and dialogue outputs are unlimited; at UE3's base of 1 a
@@ -1510,7 +1512,10 @@ are in the settings file, `pad_binding_set` 0-3):
 - **Keyholes**: a shut door whose mesh has a keyhole (`KeyHole` socket) shows "Hold [Use]
   Keyhole": a tap opens the door, a hold puts Corvo's eye to the keyhole (the view from the
   far side through the HUD movie's keyhole shape, at `m_fKeyHoleFOV`, the look held near
-  straight through) until [Use] again; the level scripts' `DisSeqEvent_KeyHoleUsed` fire.
+  straight through, its sensitivity held down as `DisTweaks_PlayerInput` limits it:
+  `m_fLimitedMouseSensitivity_Keyhole` 7 against the mouse's 13, the pad's 0.5; sprinting, the
+  look is held down the same way, to 10 and 0.85) until [Use] again; the level scripts'
+  `DisSeqEvent_KeyHoleUsed` fire.
 - **Mask optics**: [Zoom] (Alt) magnifies the view through the mask's lens once Corvo has the
   first optics upgrade, as the post-process graph's zoom lens draws it: `PPG_LensVectors` blurs
   and bends the lens's outer ring into the motion blur's field, `PPG_LensCompose` darkens the
@@ -1950,7 +1955,11 @@ against the install's own data where it carries them, then implemented independe
   r614/blink research found). The hard one is `m_Action_JumpLandBig`, which stops him sneaking
   (`m_bAutomaticallyStopSneaking`: he stands once there's room) and takes his left hand until
   its clip's exit (`m_bActionUsesLeftHand`, 0.935 s): no power, gun or gadget until then.
-  Agility plays them half again as fast (`LandAnimRate` +50%).
+  Agility plays them half again as fast (`LandAnimRate` +50%). What the guards hear of a
+  landing is the original's (as roshan's r614/blink research read its landing): none for a fall
+  not from a jump that lasted no more than `m_fAnimateFallTime` (0.25 s: steps down are silent),
+  past `m_fFall_Stun_Vel` the stun landing (`JumpLand_Big`, 8 m), else nothing for a fall
+  begun sneaking (`JumpLand_Stealth`) and 4 m for any other (`JumpLand`), each an anomaly.
   A mantle plays the arms' climb from `Ply_Player_Mantle_at` (in the full-body picker): low,
   medium or high by the edge's height (to 1.2 m, 1.7 m, `m_LowMantleMaxEdgeHeight` /
   `m_MediumMantleMaxEdgeHeight`), the sneaking ones while sneaking or into a space too low to

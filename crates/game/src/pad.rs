@@ -234,7 +234,7 @@ const UNITS: f32 = 65536.0 / std::f32::consts::TAU;
 
 /// A look sensitivity's scale (0-100, 50 the tweaks' own rates): halved at 0, doubled at 100
 /// (our reading: the original's mapping is native and unread).
-fn look_scale(v: f32) -> f32 {
+pub fn look_scale(v: f32) -> f32 {
     2f32.powf((v.clamp(0.0, 100.0) - 50.0) / 50.0)
 }
 

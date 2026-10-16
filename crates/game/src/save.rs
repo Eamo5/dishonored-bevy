@@ -87,8 +87,27 @@ fn save_blocked(
 pub const AUTOSAVE_SLOT: usize = 9;
 pub const AUTOSAVE_SLOT_B: usize = 10;
 pub const MISSION_SLOT: usize = 11;
-/// The last slot there is.
+/// The last mission start's slot.
 pub const LAST_SLOT: usize = MISSION_SLOT + 8;
+/// The manual saves: the original's 40 (`SGS_Dishonored0..39`, `DISHONORED0..39.SAV`, as
+/// roshan's r614/blink research listed the slots), here slots 1-8 and then the 32 after the
+/// mission starts' (the first eight kept where earlier saves have them).
+pub const MORE_MANUAL: usize = LAST_SLOT + 1;
+pub const MAX_SLOT: usize = MORE_MANUAL + 31;
+
+/// The manual saves' slots, in order.
+pub fn manual_slots() -> impl Iterator<Item = usize> {
+    (1..=8).chain(MORE_MANUAL..=MAX_SLOT)
+}
+
+pub fn is_manual(slot: usize) -> bool {
+    (1..=8).contains(&slot) || (MORE_MANUAL..=MAX_SLOT).contains(&slot)
+}
+
+/// A manual save's number (1-40).
+pub fn manual_number(slot: usize) -> usize {
+    if slot >= MORE_MANUAL { slot - MORE_MANUAL + 9 } else { slot }
+}
 
 /// An autosave's slot (either of the two).
 pub fn is_autosave(slot: usize) -> bool {
@@ -388,7 +407,7 @@ pub fn mission_index(map: &str) -> usize {
 impl SaveSlots {
     pub fn scan() -> SaveSlots {
         let mut slots = Vec::new();
-        for slot in 0..=LAST_SLOT {
+        for slot in 0..=MAX_SLOT {
             #[derive(Deserialize)]
             struct Head {
                 map: String,
@@ -421,7 +440,7 @@ impl SaveSlots {
             0 => "Quicksave".to_string(),
             s if is_autosave(s) => "Autosave".to_string(),
             s if is_mission_save(s) => "Mission start".to_string(),
-            _ => format!("Slot {slot}"),
+            _ => format!("Slot {}", manual_number(slot)),
         };
         Some(format!("{name}  -  {}  -  {}", s.2, ago(s.3)))
     }
@@ -651,7 +670,7 @@ fn save_game(
         Ok(()) => {
             saving.write(crate::globalui::ShowSaving);
             if !auto {
-                msgs.push(if slot == 0 { "Quicksaved".to_string() } else { format!("Saved to slot {slot}") });
+                msgs.push(if slot == 0 { "Quicksaved".to_string() } else { format!("Saved to slot {}", manual_number(slot)) });
             }
             *slots = SaveSlots::scan();
         }
@@ -984,5 +1003,18 @@ pub(crate) fn restore_npcs(mut commands: Commands, mut q: Query<(Entity, &Restor
             commands.entity(e).insert(falling.clone());
         }
         commands.entity(e).remove::<RestoreNpc>();
+    }
+}
+
+#[cfg(test)]
+mod slot_tests {
+    use super::*;
+
+    #[test]
+    fn forty_manual_slots_apart_from_the_others() {
+        let all: Vec<usize> = manual_slots().collect();
+        assert_eq!(all.len(), 40);
+        assert!(all.iter().all(|s| is_manual(*s) && !is_autosave(*s) && !is_mission_save(*s) && *s != 0));
+        assert_eq!(all.iter().map(|s| manual_number(*s)).collect::<Vec<_>>(), (1..=40).collect::<Vec<_>>());
     }
 }

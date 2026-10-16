@@ -215,6 +215,9 @@ pub struct Door {
     /// what is left of a breakable one (`m_Health`), and whether it lies in pieces
     pub health: f32,
     pub broken: bool,
+    /// opened by a character on its way (not by Corvo or a script): who, the side it came
+    /// from, and whether it has gone through
+    pub npc_opened: Option<(Entity, f32, bool)>,
 }
 
 /// A blast of wind (Wind Blast) through the doors before it: from, which way, how far, its
@@ -390,6 +393,7 @@ fn setup_interactables(
                 travel: travel_door(&li.actor),
                 health: def.map(|d| d.health).unwrap_or(0.0),
                 broken: false,
+                npc_opened: None,
             });
         }
     }
@@ -832,6 +836,8 @@ pub fn use_focus(
                 return;
             }
         }
+        // (his to open and close from now)
+        door.npc_opened = None;
         if door.target > 0.5 {
             door.target = 0.0;
             if let Some(s) = sounds {
@@ -854,15 +860,41 @@ pub fn use_focus(
     }
 }
 
-/// Characters open the unlocked doors in their way (swinging them away), as the original's
-/// path objects let them through.
+/// Characters open the unlocked doors in their way (swinging them away, within
+/// `m_fNPCClosenessToOpen`, 200 uu), as the original's path objects let them through; and close
+/// one behind them once through, no one within `m_fNPCClosenessToNotClose` (400 uu) and Corvo
+/// farther than `m_fPlayerClosenessToNotClose` (400 uu), unless he or a script opened it (the
+/// door's tick as roshan's r614/blink research read it).
 fn npc_doors(
     level: Option<Res<LevelInfo>>,
     mut timed: ResMut<crate::audio::TimedSounds>,
     mut doors: Query<(&mut Door, &GlobalTransform, &LevelInstance)>,
-    npcs: Query<(&crate::npc::Npc, &Transform)>,
+    npcs: Query<(Entity, &crate::npc::Npc, &Transform)>,
+    player: Query<&Transform, With<crate::player::Player>>,
 ) {
-    for (n, nt) in &npcs {
+    // behind them: the opener through, no one near, Corvo away
+    let pt = player.single().ok().map(|t| t.translation);
+    for (mut door, gt, li) in &mut doors {
+        let Some((opener, side, through)) = door.npc_opened else { continue };
+        if door.target < 0.5 {
+            door.npc_opened = None;
+            continue;
+        }
+        let at = gt.translation();
+        let face = gt.rotation() * door.normal;
+        let through = through || npcs.get(opener).map_or(true, |(_, n, t)| n.is_down() || (face.dot(t.translation - at) > 0.0) != (side > 0.0));
+        door.npc_opened = Some((opener, side, through));
+        let near = |p: Vec3| (p - at).with_y(0.0).length() < NOT_CLOSE && (p.y - at.y).abs() < 2.0;
+        if !through || npcs.iter().any(|(_, n, t)| !n.is_down() && near(t.translation)) || pt.is_some_and(near) {
+            continue;
+        }
+        door.target = 0.0;
+        door.npc_opened = None;
+        if let Some(s) = level.as_ref().and_then(|l| l.scene.door(&li.actor, li.index)) {
+            timed.schedule(&s.close, Some(at));
+        }
+    }
+    for (e, n, nt) in &npcs {
         let v = n.velocity.with_y(0.0);
         if n.is_down() || n.target.is_none() || v.length() < 0.3 {
             continue;
@@ -873,18 +905,24 @@ fn npc_doors(
                 continue;
             }
             let to = gt.translation() - nt.translation;
-            if to.with_y(0.0).length() > 1.6 || to.y.abs() > 2.0 || to.with_y(0.0).normalize_or_zero().dot(dir) < -0.2 {
+            if to.with_y(0.0).length() > TO_OPEN || to.y.abs() > 2.0 || to.with_y(0.0).normalize_or_zero().dot(dir) < -0.2 {
                 continue;
             }
             let side = (gt.rotation() * door.normal).dot(nt.translation - gt.translation());
             door.dir = if side > 0.0 { -1.0 } else { 1.0 };
             door.target = 1.0;
+            door.npc_opened = Some((e, side, false));
             if let Some(s) = level.as_ref().and_then(|l| l.scene.door(&li.actor, li.index)) {
                 timed.schedule(&s.open, Some(gt.translation()));
             }
         }
     }
 }
+
+/// A door's reach for characters: to open it (`m_fNPCClosenessToOpen`), and to keep it open
+/// (`m_fNPCClosenessToNotClose`, `m_fPlayerClosenessToNotClose`), m.
+const TO_OPEN: f32 = 2.0;
+const NOT_CLOSE: f32 = 4.0;
 
 fn animate_doors(
     time: Res<Time>,

@@ -1093,10 +1093,10 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
         // a new save first (the first free slot), then the saves to overwrite
         (_, Page::Save) => {
             let mut v: Vec<(String, Action)> = Vec::new();
-            if let Some(free) = (1..=8).find(|i| slots.describe(*i).is_none()) {
+            if let Some(free) = crate::save::manual_slots().find(|i| slots.describe(*i).is_none()) {
                 v.push(("Create a new save".into(), Action::Save(free)));
             }
-            v.extend(slots.list().into_iter().filter(|(i, _)| (1..=8).contains(i)).map(|(i, desc)| (desc, Action::Save(i))));
+            v.extend(slots.list().into_iter().filter(|(i, _)| crate::save::is_manual(*i)).map(|(i, desc)| (desc, Action::Save(i))));
             v
         }
         // (the help's rows: above)

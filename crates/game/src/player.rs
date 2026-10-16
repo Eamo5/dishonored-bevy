@@ -311,6 +311,14 @@ mod look_tests {
     }
 }
 
+/// The original's default mouse sensitivity (`DefaultInput.ini` `MouseSensitivity`), the
+/// options' 2.0, and the look's limits while peeking and sprinting.
+const MOUSE_SENSITIVITY: f32 = 13.0;
+const LIMIT_MOUSE_KEYHOLE: f32 = 7.0;
+const LIMIT_MOUSE_SPRINT: f32 = 10.0;
+const LIMIT_PAD_KEYHOLE: f32 = 0.5;
+const LIMIT_PAD_SPRINT: f32 = 0.85;
+
 fn player_look(
     motion: Res<AccumulatedMouseMotion>,
     cursor: Single<&CursorOptions>,
@@ -321,15 +329,27 @@ fn player_look(
     (wheel, zoom, aim, paused): (Res<crate::wheel::Wheel>, Res<crate::zoom::Zoom>, Res<crate::aim::Aim>, Res<Paused>),
     mut last: Local<Vec2>,
     pad: Option<Res<crate::pad::Pad>>,
+    (peek, game_settings): (Option<Res<crate::keyhole::Peek>>, Option<Res<crate::settings::Settings>>),
 ) {
     let Ok((mut p, mut t)) = q.single_mut() else { *last = Vec2::ZERO; return };
     if p.is_added() { *last = Vec2::ZERO; }
+    // the look's sensitivity held down while peeking through a keyhole or sprinting
+    // (`DisTweaks_PlayerInput`: `m_fLimitedMouseSensitivity_Keyhole` 7 and `_Sprint` 10 against
+    // the mouse's 13, the pad's `m_fLimitedJoySensitivity_Keyhole` 0.5 and `_Sprint` 0.85, as
+    // roshan's r614/blink research found them limiting it)
+    let peeking = peek.as_ref().is_some_and(|k| k.at.is_some());
+    let limit = if peeking { Some((LIMIT_MOUSE_KEYHOLE, LIMIT_PAD_KEYHOLE)) } else if p.sprinting { Some((LIMIT_MOUSE_SPRINT, LIMIT_PAD_SPRINT)) } else { None };
+    let mouse_cap = limit.map_or(1.0, |(m, _)| (m / (MOUSE_SENSITIVITY * settings.sensitivity / 0.002).max(1e-3)).min(1.0));
+    let pad_cap = limit.map_or(1.0, |(_, j)| {
+        let user = game_settings.as_ref().map_or(1.0, |s| crate::pad::look_scale(s.pad_look_x));
+        (j / user.max(1e-3)).min(1.0)
+    });
     // the wheel takes the mouse while it's open; the lens slows the aim
     if !paused.0 && cursor.grab_mode != CursorGrabMode::None && scripted.is_none() && !wheel.open {
         let raw = motion.delta;
         let d = if settings.smoothing { (raw + *last) * 0.5 } else { raw };
         *last = if settings.smoothing { raw } else { Vec2::ZERO };
-        let sens = settings.sensitivity / zoom.factor.max(1.0);
+        let sens = settings.sensitivity / zoom.factor.max(1.0) * mouse_cap;
         p.yaw -= d.x * sens;
         let dy = if settings.invert_y { -d.y } else { d.y };
         p.pitch = (p.pitch - dy * sens).clamp(-1.5, 1.5);
@@ -341,7 +361,7 @@ fn player_look(
     // the pad's right stick (`pad`: its turn and look this frame), the lens slowing it too
     let pad_look = pad.as_ref().map_or(Vec2::ZERO, |p| p.look);
     if !paused.0 && !wheel.open && pad_look != Vec2::ZERO {
-        let k = 1.0 / zoom.factor.max(1.0);
+        let k = pad_cap / zoom.factor.max(1.0);
         p.yaw += pad_look.x * k;
         p.pitch = (p.pitch + pad_look.y * k).clamp(-1.5, 1.5);
     }
@@ -353,6 +373,19 @@ fn player_look(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// How the fall under way began: sneaking (`m_bIsStealthFall`, from the sneak at the fall's
+/// start), and whether from a jump.
+#[derive(Default)]
+struct FallStart {
+    sneaking: bool,
+    jumped: bool,
+    /// set at the fall's start, cleared on the ground
+    airborne: bool,
+}
+
+/// A fall not from a jump lasting no longer than this is no landing (`m_fAnimateFallTime`).
+const ANIMATE_FALL_TIME: f32 = 0.25;
+
 fn player_move(
     time: Res<Time>,
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
@@ -374,6 +407,7 @@ fn player_move(
         &mut Collider,
         Option<&KinematicCharacterControllerOutput>,
     )>,
+    mut fall: Local<FallStart>,
 ) {
     let Ok((entity, mut p, mut t, mut kcc, mut col, out)) = q.single_mut() else { return };
     if paused.0 {
@@ -509,6 +543,13 @@ fn player_move(
         if host.is_some() && o.desired_translation.y < -1e-4 && o.effective_translation.y > o.desired_translation.y * 0.3 {
             p.grounded = true;
         }
+        // off an edge (not a jump: its own start is kept): how the fall began, on its first
+        // frame in the air
+        if !p.grounded && !fall.airborne {
+            *fall = FallStart { sneaking: p.crouched, jumped: false, airborne: true };
+        } else if p.grounded && was_grounded {
+            fall.airborne = false;
+        }
         if p.grounded && !was_grounded {
             // landing: noise and fall damage (by the height fallen)
             let v = p.fall_speed;
@@ -521,15 +562,26 @@ fn player_move(
                     auto.0 = true;
                 }
             }
+            // a landing (as roshan's r614/blink research read the original's): none at all for
+            // a fall not from a jump that lasted no more than `m_fAnimateFallTime` (0.25 s: a
+            // step down); harder than `m_fFall_Stun_Vel` the stun landing (`JumpLand_Big`, 8 m),
+            // else a fall begun sneaking lands silently (`JumpLand_Stealth`), else `JumpLand`
+            // (4 m), each heard as an anomaly
             let fell = v * v / (2.0 * GRAVITY);
-            if fell > 0.24 {
+            let landing = fall.jumped || p.air_time > ANIMATE_FALL_TIME;
+            fall.airborne = false;
+            if landing {
                 let gait = if fell > 2.1 { Gait::LandHigh } else { Gait::LandSmall };
                 steps.write(Footfall { pos: t.translation, gait, who: Walker::Player });
                 // the original ignores footfalls for a moment after landing
                 p.step_timer = 0.8;
-            }
-            if fell > 0.24 && !p.crouched {
-                noise.write(Noise { pos: t.translation, radius: if fell > 2.1 { 8.0 } else { 4.0 }, kind: NoiseKind::Anomaly });
+                let radius = if v > FALL_STUN { Some(8.0) } else if fall.sneaking { None } else { Some(4.0) };
+                if std::env::var_os("DH_NOISE_LOG").is_some() {
+                    info!("landing: {v:.1} m/s after {:.2} s (jumped {}, sneaking {}): heard {radius:?} m", p.air_time, fall.jumped, fall.sneaking);
+                }
+                if let Some(radius) = radius {
+                    noise.write(Noise { pos: t.translation, radius, kind: NoiseKind::Anomaly });
+                }
             }
             // the original's: none up to `MaxSpeedBeforeFallingDamage`, all of his health at
             // `MaxSpeedBeforeFallingDeath`, in between in proportion (whole points; Agility
@@ -662,6 +714,7 @@ fn player_move(
             } else {
                 p.velocity.y = if carry.carrying() { attrs.jump_carrying } else { attrs.jump };
                 p.grounded = false;
+                *fall = FallStart { sneaking: p.crouched, jumped: true, airborne: true };
                 // (the jump button's time held while rising, for Agility's push)
                 p.power_jump = 0.0;
             }

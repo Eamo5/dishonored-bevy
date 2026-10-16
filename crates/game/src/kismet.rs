@@ -6532,6 +6532,8 @@ pub fn apply_effects(
                             door.locked = false;
                             door.dir = if cw { 1.0 } else { -1.0 };
                             door.target = 1.0;
+                            // (the script's: not for the characters to close)
+                            door.npc_opened = None;
                         }
                         DoorCmd::Close => door.target = 0.0,
                         DoorCmd::Lock => door.locked = true,
