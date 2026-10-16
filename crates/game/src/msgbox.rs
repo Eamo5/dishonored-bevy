@@ -27,13 +27,18 @@ const MOVIE: &str = "Global";
 const PALE: Color = Color::srgb(227.0 / 255.0, 242.0 / 255.0, 214.0 / 255.0);
 const DARK: Color = Color::srgb(23.0 / 255.0, 25.0 / 255.0, 28.0 / 255.0);
 
-fn click(mut menu: ResMut<Menu>, buttons: Query<(&Interaction, &MsgButton), Changed<Interaction>>, scripted: Option<Res<crate::script::Scripted>>) {
+fn click(mut menu: ResMut<Menu>, mut journal: ResMut<crate::journal::Journal>, buttons: Query<(&Interaction, &MsgButton), Changed<Interaction>>, scripted: Option<Res<crate::script::Scripted>>) {
     if scripted.is_some() {
         return;
     }
     for (i, b) in &buttons {
         if *i == Interaction::Pressed {
-            menu.confirm_click = Some(b.0);
+            // (the journal's question, else the menu's)
+            if journal.question().is_some() {
+                journal.confirm_click = Some(b.0);
+            } else {
+                menu.confirm_click = Some(b.0);
+            }
         }
     }
 }
@@ -41,7 +46,7 @@ fn click(mut menu: ResMut<Menu>, buttons: Query<(&Interaction, &MsgButton), Chan
 #[allow(clippy::too_many_arguments)]
 fn draw(
     mut commands: Commands,
-    menu: Res<Menu>,
+    (menu, journal): (Res<Menu>, Res<crate::journal::Journal>),
     data: Res<crate::gamedata::Data>,
     mut timelines: ResMut<crate::flash::MovieTimelines>,
     fonts: Res<crate::ui_fonts::UiFonts>,
@@ -50,7 +55,7 @@ fn draw(
     mut shown: Local<Option<(String, usize, UVec2)>>,
 ) {
     let Ok(w) = window.single() else { return };
-    let want = menu.question().map(|(q, c)| (q.to_string(), c, UVec2::new(w.width() as u32, w.height() as u32)));
+    let want = menu.question().or_else(|| journal.question()).map(|(q, c)| (q.to_string(), c, UVec2::new(w.width() as u32, w.height() as u32)));
     if want == *shown {
         return;
     }

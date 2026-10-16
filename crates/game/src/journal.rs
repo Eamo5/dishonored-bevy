@@ -73,12 +73,31 @@ pub struct Journal {
     flashing: u8,
     /// the objectives' history shown (the journal's `OnToggleObjectivesListHistory`)
     history: bool,
+    /// a purchase asked first (`t_Q_BuyPower`): its words, the button chosen (0: yes)
+    confirm: Option<(String, usize)>,
+    /// a button of the question clicked (`msgbox`)
+    pub confirm_click: Option<usize>,
     dirty: bool,
 }
 
 impl Default for Journal {
     fn default() -> Self {
-        Journal { open: false, viewed: 0, page: PAGE_MISSION, obj_tab: 0, obj_sel: 0, log_tab: 0, note: 0, selected: 1, charm_sel: 0, inv_tab: 0, inv_sel: 0, flashing: 0, history: false, dirty: false }
+        Journal { open: false, viewed: 0, page: PAGE_MISSION, obj_tab: 0, obj_sel: 0, log_tab: 0, note: 0, selected: 1, charm_sel: 0, inv_tab: 0, inv_sel: 0, flashing: 0, history: false, confirm: None, confirm_click: None, dirty: false }
+    }
+}
+
+impl Journal {
+    /// The question asked over it (its words, the button chosen), if any (`msgbox`).
+    pub fn question(&self) -> Option<(&str, usize)> {
+        self.confirm.as_ref().map(|c| (c.0.as_str(), c.1))
+    }
+}
+
+/// A power's tutorial (its `EDisTutorialNote`): the Powers page's `SEE TUTORIAL` reads it.
+fn power_note(name: &str) -> String {
+    match name {
+        "Possess" => "DTN_Possession".to_string(),
+        n => format!("DTN_{n}"),
     }
 }
 
@@ -141,12 +160,14 @@ fn window_page(img: u8) -> Option<(u8, u8)> {
     }
 }
 
-/// An item of the Inventory page: its name, description, icon (`items/<icon>_Large`), count.
+/// An item of the Inventory page: its name, description, icon (`items/<icon>_Large`), count,
+/// and which elixir it is (`bIsElixir`: true for mana), drunk from the page.
 pub(crate) struct InvEntry {
     pub name: String,
     pub desc: String,
     pub icon: String,
     pub count: Option<u32>,
+    pub elixir: Option<bool>,
 }
 
 /// The mission's items Corvo carries (abstract items the journal shows under Mission Items:
@@ -162,7 +183,7 @@ pub(crate) fn mission_items(data: &Data, stats: &PlayerStats) -> Vec<InvEntry> {
             }
             let (name, desc) = data.0.abstract_items.get(k).cloned().unwrap_or_default();
             let count = stats.items.get(k).copied().filter(|n| *n > 1);
-            Some(InvEntry { name, desc: crate::gamedata::readable(&desc), icon: if icon.is_empty() { "MissionItems".into() } else { icon.clone() }, count })
+            Some(InvEntry { name, desc: crate::gamedata::readable(&desc), icon: if icon.is_empty() { "MissionItems".into() } else { icon.clone() }, count, elixir: None })
         })
         .collect()
 }
@@ -178,11 +199,11 @@ pub(crate) fn inventory(data: &Data, stats: &PlayerStats, tab: u8) -> Vec<InvEnt
     let store = |item: &str| data.0.stores.iter().flat_map(|s| s.items.iter()).find(|i| i.item == item);
     let from_store = |item: &str, icon: &str, count: u32| -> Option<InvEntry> {
         let s = store(item)?;
-        Some(InvEntry { name: crate::gamedata::readable(&s.name), desc: crate::gamedata::readable(&s.description), icon: if s.icon.is_empty() { icon.to_string() } else { s.icon.clone() }, count: Some(count) })
+        Some(InvEntry { name: crate::gamedata::readable(&s.name), desc: crate::gamedata::readable(&s.description), icon: if s.icon.is_empty() { icon.to_string() } else { s.icon.clone() }, count: Some(count), elixir: None })
     };
     let arm = |tweak: &str, icon: &str| -> InvEntry {
         let t = |k: &str| data.0.texts.get(&format!("INV.{tweak}.{k}")).map(|s| crate::gamedata::readable(s.trim())).unwrap_or_default();
-        InvEntry { name: t("m_Name"), desc: t("m_Description"), icon: icon.to_string(), count: None }
+        InvEntry { name: t("m_Name"), desc: t("m_Description"), icon: icon.to_string(), count: None, elixir: None }
     };
     let mut out = Vec::new();
     match tab {
@@ -201,12 +222,13 @@ pub(crate) fn inventory(data: &Data, stats: &PlayerStats, tab: u8) -> Vec<InvEnt
                 desc: coins.map(|c| c.1).unwrap_or_default(),
                 icon: "Money".into(),
                 count: Some(stats.coins),
+                elixir: None,
             });
             if stats.health_elixirs > 0 {
-                out.extend(from_store("Elixir_Health_twk", "HealthElixir", stats.health_elixirs));
+                out.extend(from_store("Elixir_Health_twk", "HealthElixir", stats.health_elixirs).map(|e| InvEntry { elixir: Some(false), ..e }));
             }
             if stats.mana_elixirs > 0 {
-                out.extend(from_store("Elixir_Mana_twk", "ManaElixir", stats.mana_elixirs));
+                out.extend(from_store("Elixir_Mana_twk", "ManaElixir", stats.mana_elixirs).map(|e| InvEntry { elixir: Some(true), ..e }));
             }
             if stats.runes > 0 {
                 out.extend(from_store("Rune_twk", "Rune", stats.runes));
@@ -215,7 +237,7 @@ pub(crate) fn inventory(data: &Data, stats: &PlayerStats, tab: u8) -> Vec<InvEnt
         1 => {
             let desc = data.0.texts.get("INV.Key.m_Description").cloned().unwrap_or_default();
             for k in &stats.keys {
-                out.push(InvEntry { name: k.clone(), desc: desc.clone(), icon: "Key".into(), count: None });
+                out.push(InvEntry { name: k.clone(), desc: desc.clone(), icon: "Key".into(), count: None, elixir: None });
             }
         }
         2 => {
@@ -252,7 +274,7 @@ pub(crate) fn inventory(data: &Data, stats: &PlayerStats, tab: u8) -> Vec<InvEnt
         _ => {
             for u in &stats.upgrades {
                 if let Some(def) = data.0.upgrades.iter().find(|d| d.id == *u) {
-                    out.push(InvEntry { name: crate::gamedata::readable(&def.name), desc: crate::gamedata::readable(&def.description), icon: def.icon.clone(), count: None });
+                    out.push(InvEntry { name: crate::gamedata::readable(&def.name), desc: crate::gamedata::readable(&def.description), icon: def.icon.clone(), count: None, elixir: None });
                 }
             }
         }
@@ -345,8 +367,12 @@ fn toggle(
         open_journal(&mut journal, &mut paused, &mut cursor, &mut sfx);
         return;
     }
-    // (a note being read: `notescreen`)
-    if note.open.is_some() {
+    // (a note being read, or put away this frame: `notescreen`)
+    if note.open.is_some() || note.shut {
+        return;
+    }
+    // (a question asked over it answers the keys)
+    if journal.open && journal.confirm.is_some() {
         return;
     }
     let _ = &data;
@@ -426,11 +452,48 @@ fn interact(
     mut sfx: MessageWriter<PostEvent>,
     mut msgs: ResMut<crate::gameplay::HudMessages>,
     (tabs, subs, rows, acts, helps): (Query<(&Interaction, &JTab), Changed<Interaction>>, Query<(&Interaction, &JSub), Changed<Interaction>>, Query<(&Interaction, &JRow), Changed<Interaction>>, Query<&Interaction, (With<JAct>, Changed<Interaction>)>, Query<(&Interaction, &JHelp), Changed<Interaction>>),
-    (playback, mut graphs, mut press): (Res<crate::audiograph::Playback>, MessageWriter<crate::audiograph::PlayAudiograph>, ResMut<HelpPress>),
+    (playback, mut graphs, mut press, mut read, note, attrs): (Res<crate::audiograph::Playback>, MessageWriter<crate::audiograph::PlayAudiograph>, ResMut<HelpPress>, MessageWriter<ReadNote>, Res<crate::notescreen::NoteScreen>, Res<crate::gamedata::Attrs>),
     mut vm: Option<ResMut<crate::kismet::Vm>>,
     scripted: Option<Res<crate::script::Scripted>>,
 ) {
     if !journal.open {
+        return;
+    }
+    // (a note read from it: `notescreen`)
+    if note.open.is_some() || note.shut {
+        return;
+    }
+    // a purchase asked first: Left / Right choose, Enter answers, Escape says no
+    if let Some((_, choice)) = journal.confirm.clone() {
+        let mut choice = choice;
+        if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyA) || keys.just_pressed(KeyCode::KeyD) {
+            choice = 1 - choice.min(1);
+        }
+        let click = journal.confirm_click.take();
+        if let Some(c) = click {
+            choice = c;
+        }
+        if keys.just_pressed(KeyCode::Escape) {
+            journal.confirm = None;
+        } else if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::KeyE) || click.is_some() {
+            journal.confirm = None;
+            if choice == 0 {
+                let (name, _) = crate::jview::POWER_SLOTS[journal.selected.min(9)];
+                let level = stats.power(name);
+                if let Some(cost) = next_cost(&data, name, level).filter(|c| stats.runes >= *c) {
+                    stats.runes -= cost;
+                    stats.powers.insert(name.to_string(), level + 1);
+                    sfx.write(PostEvent::named("UI_J_BuyPower", None));
+                    let what = ENTRIES.iter().find(|e| e.0 == name).map(|e| data.text(J, e.1)).unwrap_or_default();
+                    msgs.push(if level == 0 { format!("{what} acquired") } else { format!("{what} upgraded") });
+                }
+            }
+            journal.dirty = true;
+        } else if let Some(c) = journal.confirm.as_mut() {
+            if c.1 != choice {
+                c.1 = choice;
+            }
+        }
         return;
     }
     // (the Bone Charms shown: the charm is new no more, as the tab's content clears the HUD's)
@@ -454,6 +517,25 @@ fn interact(
     }
     // the Objectives' help bar: the history shown or hidden, the chosen objective's markers
     let help = helps.iter().filter(|_| pointer).find(|(i, _)| **i == Interaction::Pressed).map(|(_, h)| h.0).or(press.0.take());
+    // an elixir chosen in the Inventory drunk (its help bar's `ConsumeElixir`, or its action)
+    let drink = |journal: &mut Journal, stats: &mut PlayerStats, sfx: &mut MessageWriter<PostEvent>| {
+        let elixir = inventory(&data, stats, journal.inv_tab).get(journal.inv_sel).and_then(|i| i.elixir);
+        if let Some(mana) = elixir {
+            if crate::powers::drink_elixir(stats, &attrs, mana, sfx) {
+                journal.dirty = true;
+            }
+        }
+    };
+    if journal.page == PAGE_INVENTORY && help == Some(crate::jview::HELP_CONSUME) {
+        drink(&mut journal, &mut stats, &mut sfx);
+        return;
+    }
+    // the Powers' help bar: the chosen power's tutorial (`OnPowerInfosRequest`: its note read)
+    if journal.page == PAGE_POWERS && help == Some(crate::jview::HELP_TUTORIAL) {
+        let (name, _) = crate::jview::POWER_SLOTS[journal.selected.min(9)];
+        read.write(ReadNote(format!("{}{}", crate::tutorials::KEY, power_note(name))));
+        return;
+    }
     if journal.page == PAGE_MISSION && journal.obj_tab == 0 {
         if let Some(h) = help {
             match h {
@@ -627,13 +709,13 @@ fn interact(
                 sfx.write(PostEvent::named("UI_Failure", None));
                 return;
             }
-            stats.runes -= cost;
-            stats.powers.insert(name.to_string(), level + 1);
-            sfx.write(PostEvent::named("UI_J_BuyPower", None));
+            // asked first, as the Powers page's buy does (`t_Q_BuyPower`, `_plural`: the power's
+            // name and its cost; yes buys it)
             let what = ENTRIES.iter().find(|e| e.0 == name).map(|e| data.text(J, e.1)).unwrap_or_default();
-            msgs.push(if level == 0 { format!("{what} acquired") } else { format!("{what} upgraded") });
-            journal.dirty = true;
+            let q = data.text(J, if cost > 1 { "t_Q_BuyPower_plural" } else { "t_Q_BuyPower" }).replace("§POWER_NAME§", &what).replace("§RUNES_COST§", &cost.to_string());
+            journal.confirm = Some((q, 0));
         }
+        PAGE_INVENTORY => drink(&mut journal, &mut stats, &mut sfx),
         _ => {}
     }
 }

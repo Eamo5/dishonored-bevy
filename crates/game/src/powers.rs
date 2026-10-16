@@ -2271,25 +2271,34 @@ fn regenerate(
     }
     *last_health = stats.health;
     if keys.just_pressed(bind.key(crate::bindings::Act::HealthElixir)) {
-        if stats.health_elixirs > 0 && stats.health < stats.max_health {
-            stats.health_elixirs -= 1;
-            stats.health = (stats.health + attrs.health_elixir).min(stats.max_health);
+        if drink_elixir(&mut stats, &attrs, false, &mut sfx) {
             *last_health = stats.health;
-            sfx.write(PostEvent::named("Snd_UI_Ingame_Wheel_Life", None));
         } else if stats.health_elixirs == 0 {
             msgs.push("No health elixirs");
         }
     }
-    if keys.just_pressed(bind.key(crate::bindings::Act::ManaElixir)) {
-        if stats.mana_elixirs > 0 && stats.mana < stats.max_mana {
-            stats.mana_elixirs -= 1;
-            stats.mana = (stats.mana + attrs.mana_elixir_amount(stats.max_mana, rand::random::<f32>())).min(stats.max_mana);
-            stats.mana_cap = stats.mana_cap.max(stats.mana);
-            sfx.write(PostEvent::named("Snd_UI_Ingame_Wheel_Mana", None));
-        } else if stats.mana_elixirs == 0 {
-            msgs.push("No mana elixirs");
-        }
+    if keys.just_pressed(bind.key(crate::bindings::Act::ManaElixir)) && !drink_elixir(&mut stats, &attrs, true, &mut sfx) && stats.mana_elixirs == 0 {
+        msgs.push("No mana elixirs");
     }
+}
+
+/// An elixir drunk (its key's, or the journal's `ConsumeElixir`): Sokolov's for health, Piero's
+/// for mana, while there is one and the gauge isn't full. Whether it was.
+pub fn drink_elixir(stats: &mut PlayerStats, attrs: &Attrs, mana: bool, sfx: &mut MessageWriter<PostEvent>) -> bool {
+    if !mana && stats.health_elixirs > 0 && stats.health < stats.max_health {
+        stats.health_elixirs -= 1;
+        stats.health = (stats.health + attrs.health_elixir).min(stats.max_health);
+        sfx.write(PostEvent::named("Snd_UI_Ingame_Wheel_Life", None));
+        return true;
+    }
+    if mana && stats.mana_elixirs > 0 && stats.mana < stats.max_mana {
+        stats.mana_elixirs -= 1;
+        stats.mana = (stats.mana + attrs.mana_elixir_amount(stats.max_mana, rand::random::<f32>())).min(stats.max_mana);
+        stats.mana_cap = stats.mana_cap.max(stats.mana);
+        sfx.write(PostEvent::named("Snd_UI_Ingame_Wheel_Mana", None));
+        return true;
+    }
+    false
 }
 
 /// Dark Vision's grading over the world's (`Twk_DarkVision`'s `m_StaticUberAdjustement`), fading

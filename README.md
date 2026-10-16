@@ -179,14 +179,18 @@ fullscreen display, vertical sync and the crosshair.
   in the pickup log rather than the note reader). Notes: written notes (and the location
   maps, drawn in the details), books, audiographs (`PLAY AUDIOGRAPH` / `STOP`). Powers: the
   six powers and four enhancements on their discs (lit when owned, the buy arrow when the
-  runes allow, the `ACQUIRE` / `UPGRADE` tooltip that buys), with the mana it takes (`Very
+  runes allow, the `ACQUIRE` / `UPGRADE` tooltip that buys once the original's question is
+  answered yes: `t_Q_BuyPower`, "Do you want to buy this power (Blink) for 3 runes?", in the
+  message box; the help bar's `SEE TUTORIAL` reads the power's tutorial, as
+  `OnPowerInfosRequest` does), with the mana it takes (`Very
   Low`... `None`), cost and runes in the details over its two levels — `LEVEL I` / `LEVEL II`
   with their badges, `(acquired)`, each level's words and the strategic tips (`RPG.int`'s
   `DisUISelectionType`), pale once acquired, the wheel scrolling them. Bone charms: the charms found, worn ones in their sockets, the slot bar
   (`ACTIVATED BONE CHARMS: n/m`). Inventory: the original sub-tabs — `RESOURCES` (coins,
   elixirs, runes), `KEY RING`, `GADGETS` (his blade, pistol, crossbow, the Heart; grenades,
   springrazors, rewire tools), `AMMO`, `UPGRADES` — as the 4 x 3 tilted cards with counts,
-  the chosen one's picture, name and description beside them. Shapes cut out of bitmaps (the
+  the chosen one's picture, name and description beside them; an elixir chosen is drunk from
+  there (its help bar's `CONSUME ELIXIR`, `ConsumeElixir`). Shapes cut out of bitmaps (the
   targets' brush frames) are drawn at cook time with the bitmap as their pattern. It moves as
   the movie does: the page fades up as the journal opens (0.3 s), slides 250 in from the side
   it was moved towards when its page or sub tab changes (`SetContent`: 0.25 s, Strong.easeOut,

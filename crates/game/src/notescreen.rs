@@ -111,7 +111,7 @@ fn close(
     roots: Query<Entity, With<NoteRoot>>,
     mut sfx: MessageWriter<PostEvent>,
     scripted: Option<Res<crate::script::Scripted>>,
-    menu: Res<crate::menu::Menu>,
+    (menu, journal): (Res<crate::menu::Menu>, Res<crate::journal::Journal>),
 ) {
     // (only when set: a write marks it changed, which holds the pause menu shut)
     if note.shut {
@@ -135,8 +135,8 @@ fn close(
     for e in &roots {
         commands.entity(e).despawn();
     }
-    // (back to the game; or to the menu it was read from)
-    if menu.open.is_none() {
+    // (back to the game; or to the menu or the journal it was read from)
+    if menu.open.is_none() && !journal.open {
         paused.0 = false;
         cursor.visible = false;
         cursor.grab_mode = CursorGrabMode::Locked;

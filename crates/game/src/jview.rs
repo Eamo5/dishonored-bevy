@@ -944,6 +944,11 @@ fn inventory(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
     cx.sym(root, Vec2::ZERO, false, "j_inv_inventoryList", pg(-512.0, -155.0), |fc| fc.set_visible("maskContent", false));
     let items = crate::journal::inventory(data, stats, js.inv_tab);
     item_cards(cx, data, &items, js.inv_sel);
+    // an elixir chosen: its help bar drinks it (`j_InventoryList`'s `list_elixir`: `A`,
+    // `t_ConsumeElixir`)
+    if items.get(js.inv_sel).is_some_and(|i| i.elixir.is_some()) {
+        help_bar(cx, vec![(data.text(J, "t_ConsumeElixir"), Some(HELP_CONSUME))]);
+    }
 }
 
 /// Item cards (`sh_itemList_item`, 4 across and 3 down, the chosen one's row in view) and the
@@ -1090,6 +1095,8 @@ fn charms(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
 pub struct JHelp(pub u8);
 pub const HELP_HISTORY: u8 = 0;
 pub const HELP_MARKER: u8 = 1;
+pub const HELP_TUTORIAL: u8 = 2;
+pub const HELP_CONSUME: u8 = 3;
 
 /// The Objectives' help bar (`j_ObjectivesScreen.SetHelpBar`, `lib_dynamicHelpBar` ending at
 /// stage (1184,651)), its entries clickable: the history shown or hidden (`Y`:
@@ -1097,6 +1104,19 @@ pub const HELP_MARKER: u8 = 1;
 /// `t_HideHUDMarker`; locked, dimmed, on a finished objective).
 fn objectives_help(cx: &mut Ctx, js: &JState, data: &Data, rows: &[ObjRow]) {
     use crate::kismet::TaskState;
+    let mut entries = vec![(data.text(J, if js.history { "t_HideHistory" } else { "t_ShowHistory" }), Some(HELP_HISTORY))];
+    if let Some(r) = rows.get(js.obj_sel) {
+        let obj = rows.iter().find(|o| !o.task && o.objective == r.objective);
+        let active = obj.is_some_and(|o| o.state == TaskState::Active);
+        let shown = obj.is_some_and(|o| o.marker);
+        entries.push((data.text(J, if shown { "t_HideHUDMarker" } else { "t_ShowHUDMarker" }), active.then_some(HELP_MARKER)));
+    }
+    help_bar(cx, entries);
+}
+
+/// A page's help bar (`lib_dynamicHelpBar`, its entries right-aligned to end at stage
+/// (1184,651)).
+fn help_bar(cx: &mut Ctx, entries: Vec<(String, Option<u8>)>) {
     let s = cx.st.s;
     let end = cx.at(cx.root, Vec2::ZERO, Vec2::new(1184.0, 651.0));
     let bar = cx
@@ -1107,14 +1127,8 @@ fn objectives_help(cx: &mut Ctx, js: &JState, data: &Data, rows: &[ObjRow]) {
             ChildOf(cx.root),
         ))
         .id();
-    let history = data.text(J, if js.history { "t_HideHistory" } else { "t_ShowHistory" });
-    help_entry(cx, bar, history, Some(HELP_HISTORY));
-    if let Some(r) = rows.get(js.obj_sel) {
-        let obj = rows.iter().find(|o| !o.task && o.objective == r.objective);
-        let active = obj.is_some_and(|o| o.state == TaskState::Active);
-        let shown = obj.is_some_and(|o| o.marker);
-        let words = data.text(J, if shown { "t_HideHUDMarker" } else { "t_ShowHUDMarker" });
-        help_entry(cx, bar, words, active.then_some(HELP_MARKER));
+    for (words, id) in entries {
+        help_entry(cx, bar, words, id);
     }
 }
 
@@ -1282,6 +1296,8 @@ fn powers(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
         cx.hit(root, Vec2::ZERO, Rect::from_corners(Vec2::new(p.x - 50.0 - if right { 230.0 } else { 0.0 }, y - 25.0), Vec2::new(p.x + 230.0 - if right { 230.0 } else { 0.0 }, y + 27.0)), JAct);
     }
     power_details(cx, sel, data, stats);
+    // its help bar, over the details: the chosen power's tutorial (`X`: `t_SeeDetails`)
+    help_bar(cx, vec![(data.text(J, "t_SeeDetails"), Some(HELP_TUTORIAL))]);
 }
 
 /// The chosen power's details (`j_pow_powerDetails` at (420,-290)): its picture, name, mana,
@@ -1337,8 +1353,9 @@ fn power_details(cx: &mut Ctx, sel: usize, data: &Data, stats: &PlayerStats) {
     }
     // the levels (`j_pow_powerDetails_scrollView`'s `level1_mc`, `level2_mc`, 20 apart): LEVEL,
     // its badge (I, II: lit once acquired), "(acquired)", and the level's words (`RPG.int`'s
-    // `<power>_<level>_Description`), pale once acquired, else grey; the wheel scrolls them
-    let rect = Rect::from_corners(Vec2::new(at.x - 200.0 + 1.65, y), Vec2::new(at.x - 200.0 + 281.0, at.y + 550.0 + 120.0));
+    // `<power>_<level>_Description`), pale once acquired, else grey; the wheel scrolls them in
+    // the movie's zone (`_scrollViewZone_mc`: 281 x 295.4 from (-200,270.8)), above the help bar
+    let rect = Rect::from_corners(Vec2::new(at.x - 200.0 + 1.65, y), Vec2::new(at.x - 200.0 + 281.0, at.y + 270.8 + 295.4));
     let col = list_box(cx, rect);
     let s = cx.st.s;
     let level_word = data.text(J, "t_Level").to_uppercase();
