@@ -27,15 +27,17 @@ const MOVIE: &str = "Global";
 const PALE: Color = Color::srgb(227.0 / 255.0, 242.0 / 255.0, 214.0 / 255.0);
 const DARK: Color = Color::srgb(23.0 / 255.0, 25.0 / 255.0, 28.0 / 255.0);
 
-fn click(mut menu: ResMut<Menu>, mut journal: ResMut<crate::journal::Journal>, buttons: Query<(&Interaction, &MsgButton), Changed<Interaction>>, scripted: Option<Res<crate::script::Scripted>>) {
+fn click(mut menu: ResMut<Menu>, (mut journal, mut store): (ResMut<crate::journal::Journal>, ResMut<crate::store::Store>), buttons: Query<(&Interaction, &MsgButton), Changed<Interaction>>, scripted: Option<Res<crate::script::Scripted>>) {
     if scripted.is_some() {
         return;
     }
     for (i, b) in &buttons {
         if *i == Interaction::Pressed {
-            // (the journal's question, else the menu's)
+            // (the journal's question, the store's, else the menu's)
             if journal.question().is_some() {
                 journal.confirm_click = Some(b.0);
+            } else if store.question().is_some() {
+                store.confirm_click = Some(b.0);
             } else {
                 menu.confirm_click = Some(b.0);
             }
@@ -46,7 +48,7 @@ fn click(mut menu: ResMut<Menu>, mut journal: ResMut<crate::journal::Journal>, b
 #[allow(clippy::too_many_arguments)]
 fn draw(
     mut commands: Commands,
-    (menu, journal): (Res<Menu>, Res<crate::journal::Journal>),
+    (menu, journal, store): (Res<Menu>, Res<crate::journal::Journal>, Res<crate::store::Store>),
     data: Res<crate::gamedata::Data>,
     mut timelines: ResMut<crate::flash::MovieTimelines>,
     fonts: Res<crate::ui_fonts::UiFonts>,
@@ -55,7 +57,13 @@ fn draw(
     mut shown: Local<Option<(String, usize, UVec2)>>,
 ) {
     let Ok(w) = window.single() else { return };
-    let want = menu.question().or_else(|| journal.question()).map(|(q, c)| (q.to_string(), c, UVec2::new(w.width() as u32, w.height() as u32)));
+    let want = menu.question().or_else(|| journal.question()).or_else(|| store.question()).map(|(q, c)| (q.to_string(), c, UVec2::new(w.width() as u32, w.height() as u32)));
+    // (the store's buttons: PURCHASE / CANCEL; the others' YES / NO)
+    let buttons = if store.question().is_some() && menu.question().is_none() && journal.question().is_none() {
+        [("DisGFxMoviePlayerStore_Texts", "t_Purchase"), ("DisGFxMoviePlayerBase_Texts", "t_Cancel")]
+    } else {
+        [("DisGFxMoviePlayerBase_Texts", "t_Yes"), ("DisGFxMoviePlayerBase_Texts", "t_No")]
+    };
     if want == *shown {
         return;
     }
@@ -84,8 +92,7 @@ fn draw(
     let clean = question.replace("§C_BLUE§", "").replace("§C§", "").replace("<br>", "\n");
     commands.spawn((Text::new(clean), TextFont { font_size: FontSize::Px(23.0 * s), ..default() }, TextColor(PALE), TextLayout::new(Justify::Center, LineBreak::WordBoundary), Node { max_width: Val::Px(912.8 * s), ..default() }, Pickable::IGNORE, ChildOf(bx)));
     // its buttons on the bar (`btnBar_mc` at (-16.15,136.2))
-    let base = "DisGFxMoviePlayerBase_Texts";
-    for (i, (key, dx)) in [("t_Yes", -165.0), ("t_No", 165.0)].into_iter().enumerate() {
+    for (i, ((section, key), dx)) in buttons.into_iter().zip([-165.0, 165.0]).enumerate() {
         let at = centre + Vec2::new(-16.15 + dx, 136.2);
         let on = i == choice;
         if let Some(c) = Clip::export(&tl, "gl_msgBox_btn") {
@@ -103,6 +110,6 @@ fn draw(
         let b = commands
             .spawn((MsgButton(i), Button, Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y - 8.0 * s), width: Val::Px(242.15 * s), height: Val::Px(46.0 * s), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, ChildOf(root)))
             .id();
-        commands.spawn((Text::new(data.text(base, key).to_uppercase()), TextFont { font: fonts.title.clone().into(), font_size: FontSize::Px(24.0 * s), ..default() }, TextColor(if on { DARK } else { PALE }), Pickable::IGNORE, ChildOf(b)));
+        commands.spawn((Text::new(data.text(section, key).to_uppercase()), TextFont { font: fonts.title.clone().into(), font_size: FontSize::Px(24.0 * s), ..default() }, TextColor(if on { DARK } else { PALE }), Pickable::IGNORE, ChildOf(b)));
     }
 }

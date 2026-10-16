@@ -37,6 +37,42 @@ pub struct Store {
     tab: u8,
     selected: usize,
     dirty: bool,
+    /// an upgrade's purchase asked first (`t_PurchaseConfirmation`): its words, the button
+    /// chosen (0: purchase), the item
+    confirm: Option<(String, usize, usize)>,
+    /// a button of the question clicked (`msgbox`)
+    pub confirm_click: Option<usize>,
+}
+
+impl Store {
+    /// The question asked over it (its words, the button chosen), if any (`msgbox`).
+    pub fn question(&self) -> Option<(&str, usize)> {
+        self.confirm.as_ref().map(|c| (c.0.as_str(), c.1))
+    }
+}
+
+/// An item bought: its coins paid, the item given.
+fn purchase(stats: &mut PlayerStats, attrs: &crate::gamedata::Attrs, it: &StoreItem) {
+    stats.coins -= it.coins;
+    let q = it.quantity.max(1);
+    match it.item.as_str() {
+        id if crate::gadgets::ammo_type(id).is_some() => {
+            crate::gadgets::give_ammo(stats, attrs, crate::gadgets::ammo_type(id).unwrap(), q);
+        }
+        "Elixir_Mana_twk" => {
+            stats.give_elixirs(true, q, attrs.elixir_capacity(true));
+        }
+        "Elixir_Health_twk" => {
+            stats.give_elixirs(false, q, attrs.elixir_capacity(false));
+        }
+        "Rune_twk" => stats.runes += q,
+        id if id.starts_with("Twk_Upgrade_") => stats.upgrades.push(id.to_string()),
+        id if id.starts_with("BP_") => {
+            let base = id.trim_end_matches("_twk");
+            stats.upgrades.push(format!("{base}_AbsItm"));
+        }
+        id => *stats.items.entry(id.to_string()).or_default() += q,
+    }
 }
 
 #[derive(Component)]
@@ -136,6 +172,34 @@ fn input(
     let def = &data.0.stores[si];
     let tabs = has_tabs(def);
     let pointer = scripted.is_none();
+    // an upgrade's purchase asked first: Left / Right choose, Enter answers, Escape cancels
+    if let Some((_, choice, item)) = store.confirm.clone() {
+        let mut choice = choice;
+        if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyA) || keys.just_pressed(KeyCode::KeyD) {
+            choice = 1 - choice.min(1);
+        }
+        let click = store.confirm_click.take();
+        if let Some(c) = click {
+            choice = c;
+        }
+        if keys.just_pressed(KeyCode::Escape) {
+            store.confirm = None;
+        } else if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || click.is_some() {
+            store.confirm = None;
+            if choice == 0 {
+                if let Some(it) = def.items.get(item).filter(|it| stats.coins >= it.coins && !owned(&stats, it)) {
+                    purchase(&mut stats, &attrs, it);
+                    sfx.write(PostEvent::named("UI_S_ItemBuy", None));
+                }
+            }
+            store.dirty = true;
+        } else if let Some(c) = store.confirm.as_mut() {
+            if c.1 != choice {
+                c.1 = choice;
+            }
+        }
+        return;
+    }
     // the tabs: clicked, or Q / E (`LB` / `RB`)
     let mut tab = None;
     for (i, t) in tabs_q.iter().filter(|_| pointer) {
@@ -212,20 +276,15 @@ fn input(
         msgs.push("Not enough coins");
         return;
     }
-    stats.coins -= it.coins;
-    let q = it.quantity.max(1);
-    match it.item.as_str() {
-        id if crate::gadgets::ammo_type(id).is_some() => { crate::gadgets::give_ammo(&mut stats, &attrs, crate::gadgets::ammo_type(id).unwrap(), q); }
-        "Elixir_Mana_twk" => { stats.give_elixirs(true, q, attrs.elixir_capacity(true)); }
-        "Elixir_Health_twk" => { stats.give_elixirs(false, q, attrs.elixir_capacity(false)); }
-        "Rune_twk" => stats.runes += q,
-        id if id.starts_with("Twk_Upgrade_") => stats.upgrades.push(id.to_string()),
-        id if id.starts_with("BP_") => {
-            let base = id.trim_end_matches("_twk");
-            stats.upgrades.push(format!("{base}_AbsItm"));
-        }
-        id => *stats.items.entry(id.to_string()).or_default() += q,
+    // an upgrade is asked first, as the shop's upgrades list marks it (`confirmationRequired`:
+    // `t_PurchaseConfirmation`, the item and its price, PURCHASE / CANCEL); the purchases go
+    // straight through
+    if it.section > 0 {
+        let q = data.text(S, "t_PurchaseConfirmation").replace("§ITEM§", &it.name).replace("§PRICE§", &it.coins.to_string());
+        store.confirm = Some((q, 0, store.selected));
+        return;
     }
+    purchase(&mut stats, &attrs, &it);
     sfx.write(PostEvent::named("UI_S_ItemBuy", None));
     store.dirty = true;
 }

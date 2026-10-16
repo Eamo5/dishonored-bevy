@@ -368,7 +368,10 @@ fullscreen display, vertical sync and the crosshair.
 - **The store as `UI_Shop` draws it** (`store.rs`): `PURCHASES` and `UPGRADES` tabs (the
   upgrades under `Weapon Upgrades` / `Equipment Upgrades`), the tilted cards four across with
   their price tags (red and crossed out when out of reach, padlocked while a prerequisite is
-  missing), the chosen item's picture, `Owned:` count, cost and coins carried.
+  missing), the chosen item's picture, `Owned:` count, cost and coins carried. An upgrade's
+  purchase is asked first, as the shop's upgrades list marks its items `confirmationRequired`
+  ("Do you want to buy Fast Reload for 400?", `PURCHASE` / `CANCEL` in the message box); the
+  purchases tab's ammunition and elixirs go straight through.
 - **The mission statistics as `UI_MissionStats` draws them** (`mission.rs`): the mission's
   illustration under Corvo and the shards, its name on the brush with its dark shadows, the
   statistics list (values, ticked boxes) turned with its section bands, and the things found
