@@ -28,6 +28,7 @@ mod animbg;
 mod globalui;
 mod missionscreen;
 mod helpbar;
+mod scrollbar;
 mod msgbox;
 mod killcam;
 mod aim;

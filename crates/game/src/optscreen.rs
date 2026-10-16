@@ -358,6 +358,15 @@ fn draw(
             e.insert(MenuItem(i));
         }));
     }
+    // its scroll bar, the rows overrunning the list's mask (`o_OptionsList`'s 957 by 433, or
+    // `o_OptionsList_withTabs`' 385: at its left)
+    if count > shown_rows {
+        if let Some(lib) = lib.clone() {
+            let mask_h = if with_subs { 385.0 } else { 433.0 };
+            let bar = crate::scrollbar::Bar { mask_w: 957.0, mask_h, left: true, ratio: crate::scrollbar::ratio(count, first, 48.0, mask_h) };
+            crate::scrollbar::spawn(&mut commands, root, lib, s, off, origin, TURN, &bar);
+        }
+    }
     // the video settings over it (`DisplayVideoSettings`: the help bar shut, `CloseHelp`)
     if let Some(v) = menu.video.as_ref() {
         let (asked, dropped) = (v.asked.is_some(), v.drop.is_some());
@@ -526,6 +535,7 @@ fn video_screen(commands: &mut Commands, root: Entity, tl: &std::sync::Arc<dhcoo
     let rel = |p: Vec2| Vec2::new(0.0, VIDEO_WIDGET_Y) + rot(p);
     let mut hits: Vec<(Vec2, Vec2, VideoHit)> = Vec::new();
     let mut drop_list = None;
+    let mut drop_bar = None;
     // the lines
     let list = "_widget_mc.list_mc";
     let off_on = [data.text("Settings.ProfileSettingValues", "BP_False").to_uppercase(), data.text("Settings.ProfileSettingValues", "BP_True").to_uppercase()];
@@ -603,6 +613,10 @@ fn video_screen(commands: &mut Commands, root: Entity, tl: &std::sync::Arc<dhcoo
                             lc.tween("", PropsTo::default().x(p.x).y(p.y).alpha(1.0), 0.2, Ease::StrongOut);
                         }
                         drop_list = Some(lc);
+                        if words.len() > DROP_LINES {
+                            let bar = crate::scrollbar::Bar { mask_w: 259.0, mask_h: 194.5, left: false, ratio: crate::scrollbar::ratio(words.len(), top, 28.0, 195.0) };
+                            drop_bar = Some((p, bar));
+                        }
                     }
                 } else {
                     hits.push((wc, Vec2::new(328.0, 32.0), VideoHit::Drop));
@@ -635,6 +649,7 @@ fn video_screen(commands: &mut Commands, root: Entity, tl: &std::sync::Arc<dhcoo
     }
     // the buttons' key icons (`key_mc`: half the words' width and half its own before them)
     let mut icons = Vec::new();
+    let lib_bar = lib.clone();
     if let (Some(lib), false) = (lib, asked) {
         for (btn, x, part, hit) in [("A", -154.0, "accept_mc", VideoHit::Apply), ("B", 154.0, "cancel_mc", VideoHit::Cancel)] {
             hits.push((Vec2::new(x - 0.45, VIDEO_BAR_Y + 24.0), Vec2::new(272.0, 48.0), hit));
@@ -661,6 +676,9 @@ fn video_screen(commands: &mut Commands, root: Entity, tl: &std::sync::Arc<dhcoo
     commands.spawn((fc, node.clone(), Pickable::IGNORE, ChildOf(root)));
     for ic in icons.into_iter().chain(drop_list) {
         commands.spawn((ic, node.clone(), Pickable::IGNORE, ChildOf(root)));
+    }
+    if let (Some((p, bar)), Some(lib)) = (drop_bar, lib_bar) {
+        crate::scrollbar::spawn(commands, root, lib, s, off, Vec2::new(640.0, 360.0) + p, turn, &bar);
     }
     // what can be clicked (turned with it), while nothing is asked
     if asked {

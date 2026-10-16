@@ -540,6 +540,13 @@ fn refresh(
         ))
         .id();
     let origin = Vec2::new(list_at.x - 40.0, list_at.y);
+    // its scroll bar, the cards overrunning the list's mask (`sh_listPanel_list`: 718 wide; at
+    // its left), the lifter as far down as the list has scrolled
+    let content_h = cells.iter().map(|c| c.1.y + 95.0).fold(0.0, f32::max);
+    if let (true, Some(lib)) = (content_h > mask_h, lib.clone()) {
+        let bar = crate::scrollbar::Bar { mask_w: 718.0, mask_h, left: true, ratio: (scroll / (content_h - mask_h)).clamp(0.0, 1.0) };
+        crate::scrollbar::spawn(&mut commands, root, lib, s, off, list_at, crate::flash::IDENTITY, &bar);
+    }
     for (name, hy) in &heads {
         let at = list_at + Vec2::new(0.0, hy - scroll);
         clip(&mut commands, clipped, origin, &tl, MOVIE, "sh_list_sectionName", at, &mut |_| {});

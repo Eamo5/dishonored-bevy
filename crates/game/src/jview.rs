@@ -633,7 +633,8 @@ fn objectives(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats, vm: O
             // the mission's items (`j_obj_missionItems_list`): cards as the inventory's
             cx.sym(root, Vec2::ZERO, false, "j_obj_missionItems_list", pg(-512.0, -155.0), |fc| fc.set_visible("maskContent", false));
             let items = crate::journal::mission_items(data, stats);
-            item_cards(cx, data, &items, js.obj_sel);
+            // (its mask 651.1 by 444.3)
+            item_cards(cx, data, &items, js.obj_sel, 444.3);
         }
     }
 }
@@ -861,6 +862,14 @@ fn window(n: usize, sel: usize, shown: usize) -> usize {
     }
 }
 
+/// A list's scroll bar (`ScrollBarList`, left of it), its `n` lines `pitch` apart overrunning
+/// its mask (`shown` of them at once), the list's origin at a stage point.
+fn list_bar(cx: &mut Ctx, origin: Vec2, mask: Vec2, n: usize, first: usize, shown: usize, pitch: f32) {
+    let Some(lib) = cx.lib.clone().filter(|_| n > shown) else { return };
+    let bar = crate::scrollbar::Bar { mask_w: mask.x, mask_h: mask.y, left: true, ratio: crate::scrollbar::ratio(n, first, pitch, mask.y) };
+    crate::scrollbar::spawn(cx.c, cx.root, lib, cx.st.s, cx.st.off, origin, crate::flash::IDENTITY, &bar);
+}
+
 /// The Notes page (`j_LogsScreen`): written notes, books, audiographs.
 fn logs(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
     let root = cx.root;
@@ -870,6 +879,8 @@ fn logs(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
     let entries = log_entries(data, stats, js.log_tab);
     let sel = js.log_sel.min(entries.len().saturating_sub(1));
     let first = window(entries.len(), sel, 8);
+    // (its mask 651.1 by 448)
+    list_bar(cx, pg(-512.0, -155.0), Vec2::new(651.1, 448.0), entries.len(), first, 8, 56.0);
     let clipped = cx.clip_box(Rect::from_corners(pg(-511.0, -155.5), pg(-511.0 + 691.0, -155.5 + 448.0)), false);
     let origin = pg(-511.0, -155.5);
     for v in 0..8 {
@@ -937,16 +948,18 @@ fn inventory(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
     sub_tabs(cx, &labels, js.inv_tab);
     cx.sym(root, Vec2::ZERO, false, "j_inv_inventoryList", pg(-512.0, -155.0), |fc| fc.set_visible("maskContent", false));
     let items = crate::journal::inventory(data, stats, js.inv_tab);
-    item_cards(cx, data, &items, js.inv_sel);
+    // (its mask 651.1 by 459.9)
+    item_cards(cx, data, &items, js.inv_sel, 459.9);
 }
 
 /// Item cards (`sh_itemList_item`, 4 across and 3 down, the chosen one's row in view) and the
 /// chosen item's details: the Inventory's and the Mission Items'.
-fn item_cards(cx: &mut Ctx, data: &Data, items: &[crate::journal::InvEntry], sel: usize) {
+fn item_cards(cx: &mut Ctx, data: &Data, items: &[crate::journal::InvEntry], sel: usize, mask_h: f32) {
     let sel = sel.min(items.len().saturating_sub(1));
     // the rows shown: three, the chosen one's in them
     let rows = items.len().div_ceil(4).max(1);
     let first_row = if rows <= 3 { 0 } else { (sel / 4).saturating_sub(2).min(rows - 3) };
+    list_bar(cx, pg(-512.0, -155.0), Vec2::new(651.1, mask_h), rows, first_row, 3, 167.0);
     let clipped = cx.clip_box(Rect::from_corners(pg(-540.0, -155.0), pg(-540.0 + 710.0, -155.0 + 495.0)), false);
     let origin = pg(-540.0, -155.0);
     if items.is_empty() {
@@ -1032,6 +1045,8 @@ fn charms(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
     let owned = &stats.charms_owned;
     let sel = js.charm_sel.min(owned.len().saturating_sub(1));
     let first = window(owned.len(), sel, 8);
+    // (its mask 651.1 by 445.8)
+    list_bar(cx, list_at, Vec2::new(651.1, 445.8), owned.len(), first, 8, 56.0);
     let origin = pg(-504.0, -215.5);
     let clipped = cx.clip_box(Rect::from_corners(origin, origin + Vec2::new(691.0, 445.5)), false);
     let icon = cx.ui.file(cx.images, "itemsmall", "BoneCharms_Small");

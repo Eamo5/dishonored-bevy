@@ -125,6 +125,11 @@ fn draw(
         // its hit area (`btn`: the row's width)
         commands.spawn((MenuItem(i), Button, Node { position_type: PositionType::Absolute, left: Val::Px(off.x + (at.x - 7.65) * s), top: Val::Px(off.y + (at.y - 24.0) * s), width: Val::Px(935.0 * s), height: Val::Px(48.0 * s), ..default() }, ChildOf(root)));
     }
+    // its scroll bar, the notes overrunning the list's mask (1036.2 by 481: at its left)
+    if let (true, Some(lib)) = (n > ROWS, timelines.get("lib")) {
+        let bar = crate::scrollbar::Bar { mask_w: 1036.2, mask_h: 481.0, left: true, ratio: crate::scrollbar::ratio(n, first, ROW_PITCH, 481.0) };
+        crate::scrollbar::spawn(&mut commands, root, lib, s, off, LIST_AT, crate::flash::IDENTITY, &bar);
+    }
     // the help bar (`TutorialsScreen`: A Read Tutorial, B Back)
     if let Some(lib) = timelines.get("lib") {
         use crate::helpbar::{Btn, Entry};

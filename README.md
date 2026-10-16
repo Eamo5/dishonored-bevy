@@ -421,6 +421,14 @@ fullscreen display, vertical sync and the crosshair.
   menu's missions, the new game's difficulties, the save and load lists, the options, the
   pause menu's tutorials (`READ TUTORIAL`, `BACK`), the journal's pages, the shops and the note
   reader.
+- **Lists' scroll bars as `ScrollBarList` attaches them** (`scrollbar.rs`): a list whose items
+  overrun its mask has the library's `lib_scrollBar` beside it (25 before the list, or the
+  mask's width and 5 past, as the list's `_sbHAlignment` has it), its track as tall as the mask
+  less an arrow, its arrows dark and bobbing at either end, and its lifter
+  (`lib_LS_scroll_Multi`) as far along the track as the list has scrolled: the options' rows
+  (keyboard mapping, user interface), the save and load list, the pause menu's tutorials, the
+  video settings' resolutions, the journal's notes, bone charms and item cards, the shops'
+  cards.
 - **Notes read as `UI_Note` shows them** (`notescreen.rs`): a note or book picked up opens over
   the blurred game on the dimmed, drifting backdrop — its title dark on the brush, its words in
   the scrolling field — and a location map in its frame; Escape (or its help bar's `CLOSE`)

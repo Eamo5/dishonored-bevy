@@ -206,6 +206,12 @@ fn draw(
         commands.spawn((MenuItem(i), Button, Node { position_type: PositionType::Absolute, left: Val::Px(off.x + lo.x * s), top: Val::Px(off.y + lo.y * s), width: Val::Px((hi.x - lo.x) * s), height: Val::Px((hi.y - lo.y) * s), ..default() }, ChildOf(root)));
     }
     // the help bar (`SaveList`: A Accept, X Delete Save, B Back; an empty list's `back`)
+    // its scroll bar, the saves overrunning the list's mask (945.95 by 504: at its left,
+    // `LoadGameList`'s `_sbHAlignment`)
+    if let (true, Some(lib)) = (n > ROWS, timelines.get("lib")) {
+        let bar = crate::scrollbar::Bar { mask_w: 945.95, mask_h: 504.0, left: true, ratio: crate::scrollbar::ratio(n, first, ROW_PITCH, 504.0) };
+        crate::scrollbar::spawn(&mut commands, root, lib, s, off, LIST_AT, [LIST_M[0], LIST_M[1], LIST_M[2], LIST_M[3], 0.0, 0.0], &bar);
+    }
     if let Some(lib) = timelines.get("lib") {
         use crate::helpbar::{Btn, Entry};
         let base = "DisGFxMoviePlayerBase_Texts";
