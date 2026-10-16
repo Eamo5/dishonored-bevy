@@ -16,7 +16,7 @@ impl Plugin for HudPlugin {
             .add_systems(OnEnter(GameState::InGame), spawn_hud)
             .add_systems(
                 Update,
-                (update_adrenaline, update_texts, update_overlays, pause_and_restart, death_texts, hud_parts, fade_inventory).run_if(in_state(GameState::InGame)),
+                (update_texts, update_overlays, pause_and_restart, death_texts, hud_parts, fade_inventory).run_if(in_state(GameState::InGame)),
             );
     }
 }
@@ -170,12 +170,9 @@ fn spawn_hud(mut commands: Commands) {
         // tints (under everything)
         r.spawn((PowerOverlay, Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, ..default() }, BackgroundColor(Color::NONE)));
         r.spawn((DamageOverlay, Node { width: percent(100), height: percent(100), position_type: PositionType::Absolute, ..default() }, BackgroundColor(Color::NONE)));
-        // (health, mana and the left hand's icon: the original gauges, `gauges`)
-        // Blood Thirst's adrenaline, under them
-        r.spawn(Node { position_type: PositionType::Absolute, left: px(40), top: percent(40), ..default() }).with_children(|c| {
-            c.spawn((AdrenalineBar, Node { width: px(200), height: px(5), ..default() }, BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)), Visibility::Hidden))
-                .with_child((AdrenalineFill, Node { width: percent(0), height: percent(100), ..default() }, BackgroundColor(Color::srgb(0.85, 0.22, 0.1))));
-        });
+        // (health, mana and the left hand's icon: the original gauges, `gauges`; Blood
+        // Thirst's adrenaline has no gauge in the HUD movie: full, its screen effect,
+        // `ppgraph`, its stinger, `hudfx`, and the special move's icon, `prompts`)
         // inventory (bottom-right)
         r.spawn((InventoryText, HudPart("DHE_Equipment"), text("", 16.0, gold), TextLayout::justify(Justify::Right), Node { position_type: PositionType::Absolute, right: px(28), bottom: px(28), width: px(460), ..default() }));
         // messages: the HUD movie's `gameMsg_mc` (placed by `hudtext`)
@@ -252,34 +249,6 @@ fn death_texts(
         if x.0 != r {
             x.0 = r;
         }
-    }
-}
-
-#[derive(Component)]
-struct AdrenalineBar;
-
-#[derive(Component)]
-struct AdrenalineFill;
-
-#[allow(clippy::type_complexity)]
-fn update_adrenaline(
-    stats: Res<PlayerStats>,
-    attrs: Res<crate::gamedata::Attrs>,
-    mut bar: Query<&mut Visibility, With<AdrenalineBar>>,
-    mut fill: Query<(&mut Node, &mut BackgroundColor), With<AdrenalineFill>>,
-) {
-    let on = stats.power("BloodThirsty") > 0;
-    for mut v in &mut bar {
-        let want = if on { Visibility::Inherited } else { Visibility::Hidden };
-        if *v != want {
-            *v = want;
-        }
-    }
-    if let Ok((mut n, mut c)) = fill.single_mut() {
-        let k = (stats.adrenaline / attrs.adrenaline_max.max(1.0)).clamp(0.0, 1.0);
-        n.width = percent(100.0 * k);
-        // full: ready for a fatality
-        c.0 = if k >= 1.0 { Color::srgb(1.0, 0.45, 0.2) } else { Color::srgb(0.75, 0.18, 0.08) };
     }
 }
 

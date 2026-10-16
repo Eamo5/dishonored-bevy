@@ -157,6 +157,8 @@ struct Timelines {
     /// the scripts' knock-out and weepers' effects, 0..1
     ko: f32,
     weepers: f32,
+    /// Blood Thirst's adrenaline full (or the scripts' `Epp_Adrenaline`), 0..1
+    adrenaline: f32,
     /// the view's turning on screen (`vCamDir`), and where it looked last frame
     cam_dir: Vec2,
     last_fwd: Option<Vec3>,
@@ -176,6 +178,10 @@ fn curves_at(assets: &GameAssets, name: &str, t: f32) -> Option<Vec<(String, Vec
 
 /// Seconds a scripted screen effect fades in and out over.
 const SCRIPTED_FADE: f32 = 0.5;
+/// Seconds the adrenaline's effect fades in and out over (`DisTweaks_PlayerPawn_Combat`:
+/// `m_fAdrenalineFadeInDuration`, `m_fAdrenalineFadeOutDuration`).
+const ADRENALINE_IN: f32 = 5.0;
+const ADRENALINE_OUT: f32 = 6.0;
 
 fn debug_once(last: &mut Option<(bool, bool, usize)>, now: (bool, bool, usize)) {
     if *last != Some(now) {
@@ -212,7 +218,7 @@ fn update_graph(
     powers: Res<Powers>,
     tc: Res<TimeControl>,
     water: Res<crate::postfx::PostOverride>,
-    stats: Res<PlayerStats>,
+    (stats, attrs): (Res<PlayerStats>, Res<crate::gamedata::Attrs>),
     data: Res<Data>,
     assets: Option<Res<GameAssets>>,
     (mut graph, mut shaders, mut shader_assets, mut post): (ResMut<PostGraph>, ResMut<GraphShaders>, ResMut<Assets<Shader>>, ResMut<crate::postfx::PowerPost>),
@@ -275,6 +281,10 @@ fn update_graph(
     let step = |v: f32, on: bool| if on { (v + dt / SCRIPTED_FADE).min(1.0) } else { (v - dt / SCRIPTED_FADE).max(0.0) };
     tl.ko = step(tl.ko, scripted("Epp_Knocked"));
     tl.weepers = step(tl.weepers, scripted("Epp_Weepers"));
+    // Blood Thirst's adrenaline full: the graph's adrenaline vectors (`m_AdrenalinePp`) fade in
+    // over Corvo's `m_fAdrenalineFadeInDuration` (5 s) and out over `..FadeOutDuration` (6 s)
+    let full = stats.power("BloodThirsty") > 0 && attrs.adrenaline_max > 0.0 && stats.adrenaline >= attrs.adrenaline_max;
+    tl.adrenaline = if full || scripted("Epp_Adrenaline") { (tl.adrenaline + dt / ADRENALINE_IN).min(1.0) } else { (tl.adrenaline - dt / ADRENALINE_OUT).max(0.0) };
     // the view's turning, on screen (right, down)
     if let Ok(cg) = cam.single() {
         let fwd = cg.forward().as_vec3();
@@ -341,6 +351,11 @@ fn update_graph(
         let blur = pf("m_WhileMaxBlur", 0.0) + (pf("m_WarnMaxBlur", 0.0) - pf("m_WhileMaxBlur", 0.0)) * k;
         stages.extend(s("possession_vectors", &[("vParams", Vec4::new(distort, blur, 100.0, 1.0))]));
         nodes.push("PossessionVectors");
+    }
+    if tl.adrenaline > 0.0 {
+        let k = tl.adrenaline * tl.adrenaline * (3.0 - 2.0 * tl.adrenaline);
+        stages.extend(s("adrenaline_vectors", &[("vBendTimeOpacity", Vec4::splat(k))]));
+        nodes.push("AdrenalineVectors");
     }
     if tl.weepers > 0.0 {
         let k = tl.weepers * tl.weepers * (3.0 - 2.0 * tl.weepers);

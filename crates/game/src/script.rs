@@ -936,6 +936,11 @@ fn run_script(
             stats.mana = cmd.get(1).and_then(|v| v.parse().ok()).unwrap_or(stats.max_mana);
             stats.mana_cap = stats.max_mana;
         }
+        "adrenaline" => {
+            // adrenaline [N]: Blood Thirst's adrenaline (as the original's `PlayerFillAdrenaline`:
+            // full, `Attribute_AdrenalineMax` 250 on every difficulty)
+            stats.adrenaline = cmd.get(1).and_then(|v| v.parse().ok()).unwrap_or(250.0);
+        }
         "tpnpc" | "tpbody" => {
             // stand `D` metres (default 2.5) in front of the nearest living hostile NPC (whose
             // name holds `NAME`, if given), facing it; `tpbody`: the nearest body

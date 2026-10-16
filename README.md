@@ -571,7 +571,11 @@ are in the settings file, `pad_binding_set` 0-3):
   Blood Thirst uses the original adrenaline cooldown and burn rate; Sustained Rage
   extends the cooldown, Vengeance gains adrenaline from health actually lost (even if
   healed that frame), and Carrion Killer gains it for player rat kills. Enemy blasts
-  and music boxes do not earn Corvo rat-kill adrenaline. Cooldowns and pending gains
+  and music boxes do not earn Corvo rat-kill adrenaline. Full, the adrenaline shows as the
+  original shows it, with no gauge (the HUD movie has none): the post-process graph's
+  adrenaline vectors (`m_AdrenalinePp`) fade in over Corvo's `m_fAdrenalineFadeInDuration`
+  (5 s) and out over `..FadeOutDuration` (6 s), with his stinger and the fatality's icon and
+  keys among the special moves. Cooldowns and pending gains
   survive saves. Rat Scent (`Attribute_RatsAttackRadiusReduction`, 1) divides how near rats come
   before they bite Corvo, by one plus it (2 m standing, 0.6 m sneaking, halved); Scavenger
   (`Attribute_StatPickupCapacityBonusChance`, 0.5) gives each kind of ammunition of more than one
