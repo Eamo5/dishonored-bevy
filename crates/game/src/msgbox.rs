@@ -1,7 +1,8 @@
 //! The questions the menus ask as `UI_Global` asks them (`gl_msgBox`, `ShowMessageBox`): the
 //! screen veiled (its black and white backings, drifting blades, the vignette), the question in
 //! the middle (`$NormalFont` 23, pale, 912 wide, centred), and its buttons on the bar below
-//! (`gl_msgBox_btn`: YES, NO; the chosen one lit).
+//! (`gl_msgBox_btn`: YES, NO; the chosen one lit). A question with a countdown shows its
+//! seconds over the words (`gl_msgBox_timer` 80 above the middle: `SetTimer`).
 
 use crate::flash::{Clip, FlashClip};
 use crate::menu::Menu;
@@ -22,6 +23,9 @@ impl Plugin for MsgBoxPlugin {
 struct MsgRoot;
 #[derive(Component)]
 struct MsgButton(usize);
+/// The countdown's seconds (`timer_mc`).
+#[derive(Component)]
+struct MsgTimer;
 
 const MOVIE: &str = "Global";
 const PALE: Color = Color::srgb(227.0 / 255.0, 242.0 / 255.0, 214.0 / 255.0);
@@ -57,8 +61,17 @@ fn draw(
     window: Query<&Window, With<PrimaryWindow>>,
     roots: Query<Entity, With<MsgRoot>>,
     mut shown: Local<Option<(String, usize, UVec2)>>,
+    (mut timers, mut count_shown): (Query<&mut FlashClip, With<MsgTimer>>, Local<Option<u32>>),
 ) {
     let Ok(w) = window.single() else { return };
+    // the countdown's seconds as they go (`UpdateCountdown`)
+    let count = menu.countdown();
+    if count != *count_shown {
+        *count_shown = count;
+        for mut fc in &mut timers {
+            fc.set_text("_txt", count.unwrap_or(0).to_string());
+        }
+    }
     let size = UVec2::new(w.width() as u32, w.height() as u32);
     let want = menu.question().or_else(|| journal.question()).or_else(|| store.question()).map(|(q, c)| (q.to_string(), c, size)).or_else(|| end.as_ref().and_then(|e| e.question(&data)).map(|(q, c)| (q, c, size)));
     // (the store's buttons: PURCHASE / CANCEL; the others' YES / NO)
@@ -85,6 +98,14 @@ fn draw(
         fc.scale = s;
         let p = off + centre * s;
         commands.spawn((fc, Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), ..default() }, Pickable::IGNORE, ChildOf(root)));
+    }
+    // its countdown
+    if let (Some(n), Some(c)) = (count, Clip::export(&tl, "gl_msgBox_timer")) {
+        let mut fc = FlashClip::new(MOVIE, tl.clone(), c).real().with_texts();
+        fc.scale = s;
+        fc.set_text("_txt", n.to_string());
+        let p = off + (centre + Vec2::new(0.0, -80.0)) * s;
+        commands.spawn((MsgTimer, fc, Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), ..default() }, Pickable::IGNORE, ChildOf(root)));
     }
     // the question, middled on the box
     let p = off + (centre - Vec2::new(456.4, 60.0)) * s;

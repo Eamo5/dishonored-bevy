@@ -84,8 +84,8 @@ enum Opt {
     Sfx,
     Voice,
     Subtitles,
-    Fullscreen,
-    VSync,
+    /// the link to the video settings (fullscreen, vertical sync, resolution: `VideoSettings`)
+    VideoSettings,
     Crosshair,
     Brightness,
     Markers,
@@ -110,7 +110,6 @@ enum Opt {
     AutoSave,
     HeadBob,
     ClimbRelative,
-    Resolution,
     ModelDetails,
     LightShafts,
     RatShadows,
@@ -174,6 +173,9 @@ pub struct Menu {
     dirty: bool,
     /// the options' brightness screen open (`GammaSetting`): the brightness it opened with
     pub gamma: Option<f32>,
+    /// the options' video settings open (`VideoSettings`), and a part of it clicked
+    pub video: Option<VideoEdit>,
+    pub video_click: Option<VideoHit>,
     items: Vec<(String, Action)>,
     started: bool,
     /// waiting for the key to bind to this action
@@ -213,6 +215,77 @@ pub enum OptView {
     Link(String),
 }
 
+/// The display's settings on the video settings' lines (`FillVideoSettings`: Fullscreen,
+/// Vertical sync, Resolution; no resolution: the desktop's).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct VideoValues {
+    pub fullscreen: bool,
+    pub vsync: bool,
+    pub resolution: Option<[u32; 2]>,
+}
+
+impl VideoValues {
+    fn of(s: &Settings) -> Self {
+        VideoValues { fullscreen: s.fullscreen, vsync: s.vsync, resolution: s.resolution }
+    }
+    /// Put on the display (`OnApplyVideoSettings`; the settings left alone if they are these).
+    fn apply(&self, s: &mut Settings) {
+        if VideoValues::of(s) != *self {
+            (s.fullscreen, s.vsync, s.resolution) = (self.fullscreen, self.vsync, self.resolution);
+        }
+    }
+}
+
+/// The options' video settings, open (`VideoSettings`, the Graphics' link): its lines, changed
+/// on it alone until APPLY puts them on the display and asks whether they are right, a
+/// countdown putting them back unless they are kept (`t_Q_VideoSettings`, `AddMessageBoxTimer`).
+#[derive(Clone, Debug)]
+pub struct VideoEdit {
+    /// the settings as it opened (`_initSettingsList`)
+    pub init: VideoValues,
+    /// as its lines show them
+    pub lines: VideoValues,
+    /// the line chosen
+    pub sel: usize,
+    /// a line changed (`_bHasModifiedSettings`: set again as the settings are put back)
+    pub modified: bool,
+    /// the resolution's drop list open (`DropDownMenu_list`): the one chosen in it, and the
+    /// first of its lines shown
+    pub drop: Option<(usize, usize)>,
+    /// asked after APPLY: the question, the seconds since, the button chosen (0: yes)
+    pub asked: Option<(String, f32, usize)>,
+}
+
+/// The video settings' lines, as `FillVideoSettings` lists them.
+pub const VIDEO_LINES: [&str; 3] = ["PSI_GraphicsPC_bFullScreen", "PSI_GraphicsPC_bVSync", "PSI_GraphicsPC_Resolution"];
+/// The question's countdown (`AddMessageBoxTimer`: `SetMessageBoxTimer(10)`), and the lines the
+/// resolution's drop list shows at once (`CreateDropList`: `_nbListLines`).
+pub const VIDEO_COUNTDOWN: f32 = 10.0;
+pub const DROP_LINES: usize = 7;
+
+/// A part of the video settings clicked (`onRelease`).
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub enum VideoHit {
+    /// APPLY, CANCEL (`accept_mc`, `cancel_mc`)
+    Apply,
+    Cancel,
+    /// a line's choice (`bkgd0_mc`, `bkgd1_mc`: off, on)
+    Choice(usize, bool),
+    /// the resolution's box (`_bkgd_mc`: `OpenDropList`), a resolution in its list
+    Drop,
+    DropItem(usize),
+}
+
+impl VideoEdit {
+    /// Its lines' names and values: on or off, the resolution among those offered.
+    pub fn views(&self, data: &crate::gamedata::Data) -> Vec<(String, OptView)> {
+        let list = crate::settings::resolutions();
+        let at = resolution_at(self.lines.resolution, &list);
+        let values = [OptView::Toggle(self.lines.fullscreen), OptView::Toggle(self.lines.vsync), OptView::Stepper(list.iter().map(|r| format!("{}x{}", r[0], r[1])).collect(), at)];
+        VIDEO_LINES.iter().zip(values).map(|(k, v)| (data.text("Settings.ProfileSettingIDs", k), v)).collect()
+    }
+}
+
 /// The options' categories (`m_SettingsCategory_*`) and their sub-categories (none: an empty
 /// list).
 pub const OPT_CATEGORIES: [(&str, &[&str]); 4] = [
@@ -224,7 +297,7 @@ pub const OPT_CATEGORIES: [(&str, &[&str]); 4] = [
 
 impl Default for Menu {
     fn default() -> Self {
-        Menu { open: None, page: Page::Main, stack: Vec::new(), sel: 0, dirty: true, gamma: None, items: Vec::new(), started: false, capture: None, opt_cat: 0, opt_sub: 0, confirm: None, confirm_click: None, pending_challenge: None, gallery_view: None, board_row: None, board_over_results: false, tutorials: Vec::new() }
+        Menu { open: None, page: Page::Main, stack: Vec::new(), sel: 0, dirty: true, gamma: None, video: None, video_click: None, items: Vec::new(), started: false, capture: None, opt_cat: 0, opt_sub: 0, confirm: None, confirm_click: None, pending_challenge: None, gallery_view: None, board_row: None, board_over_results: false, tutorials: Vec::new() }
     }
 }
 
@@ -377,7 +450,12 @@ impl Menu {
     }
     /// The question asked (its words, the button chosen), if any (`msgbox`).
     pub fn question(&self) -> Option<(&str, usize)> {
-        self.confirm.as_ref().map(|c| (c.0.as_str(), c.2))
+        self.confirm.as_ref().map(|c| (c.0.as_str(), c.2)).or_else(|| self.video.as_ref()?.asked.as_ref().map(|a| (a.0.as_str(), a.2)))
+    }
+    /// The seconds the question's countdown shows (`Countdown`: whole seconds, down to 0).
+    pub fn countdown(&self) -> Option<u32> {
+        let t = self.video.as_ref()?.asked.as_ref()?.1;
+        Some((VIDEO_COUNTDOWN - t.floor()).max(0.0) as u32)
     }
     /// The options' category and sub-category shown.
     pub fn options_tab(&self) -> (u8, u8) {
@@ -407,17 +485,13 @@ impl Menu {
         let slider = |v: f32, lo: f32, hi: f32, shown: String| OptView::Slider(((v - lo) / (hi - lo)).clamp(0.0, 1.0), shown);
         Some(match self.items.get(i)?.1 {
             Action::Adjust(o) => match o {
-                // (its own screen: `GammaMenu`'s link)
+                // (its own screen: `GammaMenu`'s link; the video settings', `VideoSettings`)
                 Opt::Brightness => OptView::Link(data.text("DisGFxMoviePlayerMenuBase_Texts", "t_Modify_Gamma")),
+                Opt::VideoSettings => OptView::Link(data.text("DisGFxMoviePlayerMenuBase_Texts", "t_Modify_VideoSettings")),
                 Opt::Difficulty => OptView::Stepper(words(&["EDifficulty_Easy", "EDifficulty_Normal", "EDifficulty_Hard", "EDifficulty_VeryHard"]), s.difficulty as usize),
                 Opt::Crosshair => OptView::Stepper(words(&["CS_Off", "CS_Simple", "CS_Normal"]), s.crosshair_style.min(2) as usize),
                 Opt::HudGauges => OptView::Stepper(words(&["HV_Off", "HV_Contextual", "HV_Always"]), s.hud_gauges.min(2) as usize),
                 Opt::ModelDetails => OptView::Stepper(words(&["ModelDetails_Normal", "ModelDetails_High"]), s.model_details.min(1) as usize),
-                Opt::Resolution => {
-                    let list = crate::settings::resolutions();
-                    let i = resolution_index(s, &list);
-                    OptView::Stepper(list.iter().map(|r| format!("{}x{}", r[0], r[1])).collect(), i)
-                }
                 Opt::ObjPopups => OptView::Toggle(s.objective_popups),
                 Opt::Tutorials => OptView::Toggle(s.tutorials),
                 Opt::Interactions => OptView::Toggle(s.interactions),
@@ -443,8 +517,6 @@ impl Menu {
                 Opt::KillCam => OptView::Stepper(words(&["KCM_Off", "KCM_Normal", "KCM_Frequent"]), s.kill_cam.min(2) as usize),
                 Opt::Smoothing => OptView::Toggle(s.mouse_smoothing),
                 Opt::InvertY => OptView::Toggle(s.invert_y),
-                Opt::Fullscreen => OptView::Toggle(s.fullscreen),
-                Opt::VSync => OptView::Toggle(s.vsync),
                 Opt::Markers => OptView::Toggle(s.markers),
                 Opt::Sensitivity => slider(s.sensitivity, 0.5, 6.0, format!("{:.0}", (s.sensitivity - 0.5) / 5.5 * 100.0)),
                 Opt::Fov => slider(s.fov, 65.0, 110.0, format!("{:.0}", s.fov)),
@@ -632,12 +704,10 @@ fn opt_value(s: &Settings, o: Opt) -> String {
         Opt::Voice => pct(s.voice_volume),
         Opt::Subtitles => ["Off", "Main Dialogue", "All Speeches"][s.subtitle_mode.min(2) as usize].into(),
         Opt::Speakers => ["Auto", "Stereo", "5.1"][s.speaker_config.min(2) as usize].into(),
-        Opt::Fullscreen => if s.fullscreen { "Fullscreen" } else { "Windowed" }.into(),
-        Opt::VSync => if s.vsync { "On" } else { "Off" }.into(),
+        Opt::VideoSettings => String::new(),
         Opt::Crosshair => ["Off", "Simple", "Normal"][s.crosshair_style.min(2) as usize].into(),
         Opt::HudGauges => ["Off", "Contextual", "Always"][s.hud_gauges.min(2) as usize].into(),
         Opt::ModelDetails => ["Normal", "High"][s.model_details.min(1) as usize].into(),
-        Opt::Resolution => s.resolution.map(|r| format!("{}x{}", r[0], r[1])).unwrap_or_else(|| "Desktop".into()),
         Opt::CrosshairOpacity => format!("{:.0}", s.crosshair_opacity),
         Opt::HeadBob => pct(s.head_bob),
         Opt::ObjPopups => on(s.objective_popups),
@@ -666,8 +736,8 @@ fn opt_value(s: &Settings, o: Opt) -> String {
 }
 
 /// The resolution chosen among those offered (the desktop's: the largest).
-fn resolution_index(s: &Settings, list: &[[u32; 2]]) -> usize {
-    s.resolution.and_then(|r| list.iter().position(|x| *x == r)).unwrap_or(list.len().saturating_sub(1))
+fn resolution_at(r: Option<[u32; 2]>, list: &[[u32; 2]]) -> usize {
+    r.and_then(|r| list.iter().position(|x| *x == r)).unwrap_or(list.len().saturating_sub(1))
 }
 
 fn on(b: bool) -> String {
@@ -695,16 +765,10 @@ fn adjust(s: &mut Settings, o: Opt, dir: f32) {
         Opt::Voice => step(&mut s.voice_volume, 0.1, 0.0, 1.0),
         Opt::Subtitles => s.subtitle_mode = (s.subtitle_mode as f32 + dir).clamp(0.0, 2.0) as u8,
         Opt::Speakers => s.speaker_config = (s.speaker_config as f32 + dir).clamp(0.0, 2.0) as u8,
-        Opt::Fullscreen => s.fullscreen = !s.fullscreen,
-        Opt::VSync => s.vsync = !s.vsync,
+        Opt::VideoSettings => {}
         Opt::Crosshair => s.crosshair_style = (s.crosshair_style as f32 + dir).clamp(0.0, 2.0) as u8,
         Opt::HudGauges => s.hud_gauges = (s.hud_gauges as f32 + dir).clamp(0.0, 2.0) as u8,
         Opt::ModelDetails => s.model_details = (s.model_details as f32 + dir).clamp(0.0, 1.0) as u8,
-        Opt::Resolution => {
-            let list = crate::settings::resolutions();
-            let i = (resolution_index(s, &list) as f32 + dir).clamp(0.0, list.len().saturating_sub(1) as f32) as usize;
-            s.resolution = list.get(i).copied();
-        }
         // (`PSI_HUD_CrosshairOpacity` 0-100 by 10, `PSI_Gameplay_HeadBobAmount` 0-1 by 0.1)
         Opt::CrosshairOpacity => s.crosshair_opacity = (s.crosshair_opacity + 10.0 * dir).clamp(0.0, 100.0),
         Opt::HeadBob => s.head_bob = ((s.head_bob + 0.1 * dir).clamp(0.0, 1.0) * 10.0).round() / 10.0,
@@ -876,7 +940,8 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
         // (Back is the help bar's: `SecondaryScreen`)
         (_, Page::Difficulty) => ["Easy", "Normal", "Hard", "Very Hard"].iter().enumerate().map(|(i, n)| (n.to_string(), Action::Difficulty(i as u8))).collect(),
         (_, Page::Options) => {
-            let label = |k: &str| data.text("Settings.ProfileSettingIDs", k);
+            // (a setting's name; the video settings' link's, the menus' tweak's)
+            let label = |k: &str| if k.starts_with("m_") { data.text("Twk_GFxMoviePlayerMenuBase", k) } else { data.text("Settings.ProfileSettingIDs", k) };
             let rows: Vec<(&str, Opt)> = match (menu.opt_cat, menu.opt_sub) {
                 // (each sub-category's settings in `EProfileSettingID`'s order)
                 (0, 0) => vec![
@@ -918,9 +983,9 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
                 (1, _) => vec![("PSI_Mouse_Sensitivity", Opt::Sensitivity), ("PSI_Mouse_bInvertY", Opt::InvertY), ("PSI_Mouse_bSmooting", Opt::Smoothing)],
                 (2, _) => vec![
                     ("PSI_Graphics_Gamma", Opt::Brightness),
-                    ("PSI_GraphicsPC_Resolution", Opt::Resolution),
-                    ("PSI_GraphicsPC_bFullScreen", Opt::Fullscreen),
-                    ("PSI_GraphicsPC_bVSync", Opt::VSync),
+                    // (the display's resolution, fullscreen and vertical sync: on a screen of
+                    // their own, `VideoSettings`)
+                    ("m_SettingsSubMenu_VideoSettings", Opt::VideoSettings),
                     ("PSI_GraphicsPC_FOV", Opt::Fov),
                     ("PSI_GraphicsPC_TextureDetails", Opt::TextureDetail),
                     ("PSI_GraphicsPC_ModelDetails", Opt::ModelDetails),
@@ -977,6 +1042,137 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
     }
 }
 
+/// The video settings' keys (`VideoSettings`, `VideoSettingsList`, `P_DropDownMenu`): Up / Down
+/// its lines, Left / Right a line's value (Off / On; the resolution's drop list opened, as by
+/// Shift, `X`), Enter applies them (`APressed`: closed if none changed), Escape puts them back
+/// as they were and closes it (`BPressed`: `CancelModifications`). The drop list open: Up / Down,
+/// Enter takes the one chosen (`ConfirmChoice`), Escape shuts it. Asked after applying them:
+/// Left / Right choose, Enter answers, Escape says no; yes keeps them (saved), no or the
+/// countdown's end puts them back (`OnVideoSettingsConfirm`: `RestoreInitSettings`, which
+/// counts as a change again) and the screen stays.
+fn video_input(menu: &mut Menu, settings: &mut Settings, keys: &ButtonInput<KeyCode>, help: Option<crate::helpbar::Btn>, data: &crate::gamedata::Data, dt: f32, scripted: bool) {
+    use crate::helpbar::Btn;
+    let Some(mut v) = menu.video.clone() else { return };
+    let hit = menu.video_click.take().filter(|_| !scripted);
+    let click = menu.confirm_click.take();
+    let up = keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW);
+    let down = keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS);
+    let lr = if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) {
+        1
+    } else if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) {
+        -1
+    } else {
+        0
+    };
+    let enter = keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::KeyE) || help == Some(Btn::A) || hit == Some(VideoHit::Apply);
+    let escape = keys.just_pressed(KeyCode::Escape) || help == Some(Btn::B) || hit == Some(VideoHit::Cancel);
+    let list = crate::settings::resolutions();
+    let before = (v.sel, v.lines, v.drop, v.asked.as_ref().map(|a| a.2));
+    // asked whether they are right
+    if let Some((q, t, choice)) = v.asked.clone() {
+        let t = t + dt;
+        let mut choice = choice;
+        if lr != 0 {
+            choice = 1 - choice.min(1);
+        }
+        if let Some(c) = click {
+            choice = c;
+        }
+        let kept = if t >= VIDEO_COUNTDOWN || escape {
+            Some(false)
+        } else if enter || click.is_some() {
+            Some(choice == 0)
+        } else {
+            None
+        };
+        match kept {
+            Some(true) => {
+                settings.save();
+                menu.video = None;
+                menu.dirty = true;
+                return;
+            }
+            Some(false) => {
+                v.lines = v.init;
+                v.init.apply(settings);
+                v.modified = true;
+                v.asked = None;
+            }
+            None => v.asked = Some((q, t, choice)),
+        }
+    } else if let Some((at, top)) = v.drop {
+        // the drop list: the one chosen kept in view
+        let mut at = at;
+        if up {
+            at = at.saturating_sub(1);
+        }
+        if down {
+            at = (at + 1).min(list.len().saturating_sub(1));
+        }
+        if let Some(VideoHit::DropItem(i)) = hit {
+            at = i;
+        }
+        let top = top.min(at).max((at + 1).saturating_sub(DROP_LINES));
+        v.drop = Some((at, top));
+        if enter || matches!(hit, Some(VideoHit::DropItem(_))) {
+            v.lines.resolution = list.get(at).copied();
+            v.modified = true;
+            v.drop = None;
+        } else if escape {
+            v.drop = None;
+        }
+    } else {
+        let n = VIDEO_LINES.len();
+        if up {
+            v.sel = (v.sel + n - 1) % n;
+        }
+        if down {
+            v.sel = (v.sel + 1) % n;
+        }
+        // a value stepped (`LeftPressed` / `RightPressed`: no further than off or on), clicked,
+        // or the drop list opened
+        let set = |line: usize, on: bool, v: &mut VideoEdit| {
+            let b = if line == 0 { &mut v.lines.fullscreen } else { &mut v.lines.vsync };
+            if *b != on {
+                *b = on;
+                v.modified = true;
+            }
+        };
+        match hit {
+            Some(VideoHit::Choice(line, on)) => {
+                v.sel = line;
+                set(line, on, &mut v);
+            }
+            Some(VideoHit::Drop) => v.sel = 2,
+            _ => {}
+        }
+        if v.sel < 2 && lr != 0 {
+            set(v.sel, lr > 0, &mut v);
+        }
+        if v.sel == 2 && !list.is_empty() && (lr != 0 || hit == Some(VideoHit::Drop) || help == Some(Btn::X)) {
+            let at = resolution_at(v.lines.resolution, &list);
+            v.drop = Some((at, (at + 1).saturating_sub(DROP_LINES)));
+        } else if enter {
+            if !v.modified {
+                menu.video = None;
+                menu.dirty = true;
+                return;
+            }
+            v.lines.apply(settings);
+            v.asked = Some((data.text("DisGFxMoviePlayerMenuBase_Texts", "t_Q_VideoSettings"), 0.0, 0));
+        } else if escape {
+            v.init.apply(settings);
+            menu.video = None;
+            menu.dirty = true;
+            return;
+        }
+    }
+    if before != (v.sel, v.lines, v.drop, v.asked.as_ref().map(|a| a.2)) {
+        menu.dirty = true;
+    }
+    menu.video = Some(v);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn menu_input(
     keys: Res<ButtonInput<KeyCode>>,
@@ -989,7 +1185,7 @@ fn menu_input(
     (mut save, mut load, slots): (MessageWriter<SaveRequest>, MessageWriter<LoadRequest>, Res<SaveSlots>),
     hovered: Query<(&Interaction, &MenuItem), Changed<Interaction>>,
     (vm, mut campaign, scripted, mut intro): (Option<ResMut<Vm>>, ResMut<crate::gameplay::Campaign>, Option<Res<crate::script::Scripted>>, ResMut<crate::movie::IntroPending>),
-    (data, mut launch): (Res<crate::gamedata::Data>, ResMut<crate::challenge::ChallengeLaunch>),
+    (data, mut launch, real): (Res<crate::gamedata::Data>, ResMut<crate::challenge::ChallengeLaunch>, Res<Time<Real>>),
     (mut profile, movies, mut play): (ResMut<crate::challenge::ChallengeProfile>, Res<crate::movie::Movies>, MessageWriter<crate::movie::PlayMovie>),
     (note, mut read): (Res<crate::notescreen::NoteScreen>, MessageWriter<crate::journal::ReadNote>),
     (help, stats_up, taps, mut delete): (Query<(&Interaction, &crate::helpbar::HelpButton), Changed<Interaction>>, Option<Res<crate::mission::MissionEnd>>, Res<crate::helpbar::Taps>, MessageWriter<crate::save::DeleteSave>),
@@ -1044,6 +1240,11 @@ fn menu_input(
             menu.gamma = None;
             menu.dirty = true;
         }
+        return;
+    }
+    // the video settings (`VideoSettings`)
+    if menu.video.is_some() {
+        video_input(&mut menu, &mut settings, &keys, help, &data, real.delta_secs(), scripted.is_some());
         return;
     }
     // a question asked: Left / Right choose, Enter answers, Escape says no
@@ -1279,9 +1480,9 @@ fn menu_input(
         menu.dirty = true;
     }
     if left_right != 0.0 {
-        // (the brightness's link opens its screen: not stepped)
+        // (the brightness's link and the video settings' open their screens: not stepped)
         if let Some((_, Action::Adjust(o))) = menu.items.get(menu.sel) {
-            if !matches!(o, Opt::Brightness) {
+            if !matches!(o, Opt::Brightness | Opt::VideoSettings) {
                 activate = Some(menu.sel);
                 dir = left_right;
             }
@@ -1337,6 +1538,13 @@ fn menu_input(
         // the brightness's link: its screen (`DisplayGammaSetting`)
         Action::Adjust(Opt::Brightness) => {
             menu.gamma = Some(settings.brightness);
+            menu.dirty = true;
+        }
+        // the video settings' link: its screen (`DisplayVideoSettings`), on its first line
+        Action::Adjust(Opt::VideoSettings) => {
+            let v = VideoValues::of(&settings);
+            menu.video = Some(VideoEdit { init: v, lines: v, sel: 0, modified: false, drop: None, asked: None });
+            menu.video_click = None;
             menu.dirty = true;
         }
         Action::Adjust(o) => {

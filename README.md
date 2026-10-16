@@ -249,8 +249,15 @@ fullscreen display, vertical sync and the crosshair.
   "Adjust brightness until you can barely see the darkest symbol", its slider, and
   `UI_Gamma.GammaImage`'s five Outsider's marks taken down to `m_BrightnessValues` (0.2% to
   20% of their grey) in their faint frames, shown as the brightness would show them; Left /
-  Right change it as it shows, Enter keeps it, Escape puts it back), `Resolution` (the display's video
-  modes: an exclusive full-screen mode, or the window's size), full screen, v-sync, field of
+  Right change it as it shows, Enter keeps it, Escape puts it back), `Video Settings` (the
+  original's link, "Modify video settings", to its own screen as `VideoSettings` draws it: over
+  the options, a dark veil and a torn paper turned -2.5 degrees coming in from 120%, "VIDEO
+  SETTINGS", its lines `Fullscreen`, `Vertical sync` (Off / On, the chosen word underlined) and
+  `Resolution` (the display's video modes in a drop list: seven at a time, the one set dotted;
+  an exclusive full-screen mode, or the window's size), APPLY and CANCEL with their keys' icons;
+  its changes wait for APPLY, which puts them on the display and asks "New settings have been
+  applied. Are they correct?" over a 10-second countdown, yes keeping them, no or the
+  countdown's end putting them back; CANCEL leaves them as they were), field of
   view (65-110), `Texture Details` Low / Medium / High (a level loads its textures up to 512,
   1024 or their full 2048), `Model Details` Normal / High (the characters' lesser LODs at a
   distance, or never), `Light Shafts`, `Anti-Aliasing Mode` Off / MLAA (SMAA) / FXAA (over 4x

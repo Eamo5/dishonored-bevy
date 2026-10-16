@@ -7,7 +7,8 @@
 //! 48 apart (`o_options_line`, the chosen one `over`: light, its words dark, slid 20 right),
 //! each with its widget at x 680: the two choices side by side (`OptionsStepperB_widget`), a
 //! value between arrows (`OptionsStepper_widget`), a slider's thumb along its track
-//! (`Slider_widget`), or a key binding's box (`o_MappingList_item`).
+//! (`Slider_widget`), or a key binding's box (`o_MappingList_item`). The brightness and the
+//! video settings open screens of their own over it (`GammaSetting`, `VideoSettings`).
 
 use crate::flash::{Clip, FlashClip, Mat};
 use crate::menu::{Menu, MenuItem, OptView, OPT_CATEGORIES};
@@ -21,7 +22,7 @@ pub struct OptScreenPlugin;
 
 impl Plugin for OptScreenPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (tabs_input, draw).chain().after(crate::menu::MenuSet).run_if(in_state(GameState::InGame)));
+        app.add_systems(Update, (tabs_input, video_clicks, draw).chain().after(crate::menu::MenuSet).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -63,6 +64,16 @@ fn tabs_input(mut menu: ResMut<Menu>, tabs: Query<(&Interaction, &OptTab), Chang
     }
 }
 
+/// A part of the video settings clicked: for the menu's keys to act on (`video_input`).
+fn video_clicks(mut menu: ResMut<Menu>, hits: Query<(&Interaction, &crate::menu::VideoHit), Changed<Interaction>>, scripted: Option<Res<crate::script::Scripted>>) {
+    if scripted.is_some() || menu.video.is_none() {
+        return;
+    }
+    if let Some((_, h)) = hits.iter().find(|(i, _)| **i == Interaction::Pressed) {
+        menu.video_click = Some(*h);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw(
     mut commands: Commands,
@@ -75,7 +86,7 @@ fn draw(
     roots: Query<Entity, With<OptRoot>>,
     mut shown: Local<Option<String>>,
     (mut ui, mut images): (ResMut<crate::ui_images::UiImages>, ResMut<Assets<Image>>),
-    mut gamma_shown: Local<bool>,
+    (mut gamma_shown, mut video_shown): (Local<bool>, Local<Option<(bool, bool)>>),
 ) {
     let Ok(w) = window.single() else { return };
     let page = menu.front_page().filter(|p| p.0 == 7);
@@ -93,6 +104,8 @@ fn draw(
             .collect();
         // (the brightness screen open: its value)
         let views = format!("{}|{:?}", views.join(","), menu.gamma.map(|_| (settings.brightness * 100.0).round() as i32));
+        // (the video settings open: their lines, the one chosen, the drop list, the question)
+        let views = format!("{views}|{:?}", menu.video.as_ref().map(|v| (v.sel, v.lines, v.drop, v.asked.is_some())));
         format!("{:?}|{}|{:?}|{}|{}x{}|{}", menu.options_tab(), menu.selected(), p.1, views, w.width(), w.height(), menu.in_main())
     });
     if key == *shown {
@@ -301,14 +314,15 @@ fn draw(
                 words(&mut commands, wc, Vec2::new(222.0, 30.0), word, normal_font(25.0), if on { Color::WHITE } else { GREY }, Justify::Center, false);
             }
             Some(OptView::Toggle(b)) => {
+                let off_on = [data.text("Settings.ProfileSettingValues", "BP_False").to_uppercase(), data.text("Settings.ProfileSettingValues", "BP_True").to_uppercase()];
                 place(&mut commands, &tl, MOVIE, "OptionsStepperB_widget", wc, TURN, &mut |fc| {
                     fc.goto(if b { "bkgd1_mc" } else { "bkgd0_mc" }, "selected", true);
+                    underline(fc, "", b, &off_on[b as usize]);
                     if !on {
                         fc.goto("_leftArrow_mc", "locked", false);
                         fc.goto("_rightArrow_mc", "locked", false);
                     }
                 });
-                let off_on = [data.text("Settings.ProfileSettingValues", "BP_False").to_uppercase(), data.text("Settings.ProfileSettingValues", "BP_True").to_uppercase()];
                 let chosen = if on { DARK } else { DARK.with_alpha(0.9) };
                 words(&mut commands, turned(wc, Vec2::new(-70.0, 0.0)), Vec2::new(130.0, 30.0), off_on[0].clone(), normal_font(23.0), if !b { chosen } else { GREY }, Justify::Right, false);
                 words(&mut commands, turned(wc, Vec2::new(71.0, 0.0)), Vec2::new(130.0, 30.0), off_on[1].clone(), normal_font(23.0), if b { chosen } else { GREY }, Justify::Left, false);
@@ -344,6 +358,21 @@ fn draw(
             e.insert(MenuItem(i));
         }));
     }
+    // the video settings over it (`DisplayVideoSettings`: the help bar shut, `CloseHelp`)
+    if let Some(v) = menu.video.as_ref() {
+        let (asked, dropped) = (v.asked.is_some(), v.drop.is_some());
+        let anim = match *video_shown {
+            None => VideoAnim::Open,
+            Some((false, _)) if asked => VideoAnim::Hide,
+            Some((true, _)) if !asked => VideoAnim::Show,
+            _ => VideoAnim::Still,
+        };
+        let anim_drop = dropped && !video_shown.is_some_and(|p| p.1);
+        *video_shown = Some((asked, dropped));
+        video_screen(&mut commands, root, &tl, lib.clone(), s, off, v, &data, anim, anim_drop);
+        return;
+    }
+    *video_shown = None;
     // the help bar (`Options_main`: X Restore Settings, B Back); a key being bound, its prompt
     if menu.capturing_binding() {
         let p = off + Vec2::new(1184.0 - 700.0, 651.0 - 16.0) * s;
@@ -353,6 +382,18 @@ fn draw(
         let entries = [Entry::new(Btn::X, data.text("DisGFxMoviePlayerMenuBase_Texts", "t_RestoreSettings")), Entry::new(Btn::B, data.text("DisGFxMoviePlayerBase_Texts", "t_Back"))];
         crate::helpbar::spawn(&mut commands, root, lib, s, off + crate::helpbar::END * s, &entries, &mut ui, &mut images, !opening);
     }
+}
+
+/// A boolean stepper's chosen word underlined (`P_OptionsStepperBoolean.SetWidget` / `SetValue`:
+/// its button `selected`, the line as wide as the word, `line_mc.mc` 30 across; under the
+/// right-set Off, held to its right), within the widget at `w` (a path to it and a dot, or
+/// nothing: the clip itself).
+fn underline(fc: &mut FlashClip, w: &str, on: bool, word: &str) {
+    let k = on as usize;
+    fc.goto(&format!("{w}btn{k}"), "selected", true);
+    let width = crate::ui_fonts::measure(false, 23.0, word);
+    let x = if on { 0.0 } else { 129.75 - width - 6.0 };
+    fc.set(&format!("{w}btn{k}.line_mc.mc"), crate::flash::PropsTo::default().x(x).xscale(width / 30.0));
 }
 
 /// The brightness's picture (`DisGFxMoviePlayerGamma.m_BrightnessValues`, `DefaultUI.ini`): a
@@ -424,5 +465,209 @@ fn gamma_screen(commands: &mut Commands, root: Entity, tl: &std::sync::Arc<dhcoo
         use crate::helpbar::{Btn, Entry};
         let base = "DisGFxMoviePlayerBase_Texts";
         crate::helpbar::spawn(commands, root, lib, s, off + crate::helpbar::END * s, &[Entry::new(Btn::A, data.text(base, "t_Validate")), Entry::new(Btn::B, data.text(base, "t_Back"))], ui, images, !opening);
+    }
+}
+
+/// The video settings' layout as `VideoSettings.InitWidget` sets it once its lines are in: the
+/// button bar 20 under the list (at 57.9, its three lines 48 apart: 144.65 high), the widget
+/// raised by half its height (276.55, from the title's rules to the bar's foot), its paper as
+/// deep as the bar's foot and 20 more, its stroke 50 wider than the paper (682) and 40 deeper
+/// than the widget (313.1), turned -2; the widget turned -2.5.
+const VIDEO_WIDGET_Y: f32 = -138.3;
+const VIDEO_BAR_Y: f32 = 222.55;
+const VIDEO_PAPER_H: f32 = 307.1;
+const VIDEO_STROKE: Vec2 = Vec2::new(732.0, 353.1);
+const VIDEO_TURN: f32 = -2.5;
+
+/// How the video settings come in: opening (from 120%, `Open`), their paper fading out as the
+/// question is asked or back as it is answered no (`APressed`, `OnVideoSettingsConfirm`), or
+/// drawn again as they stand.
+#[derive(Clone, Copy, PartialEq)]
+enum VideoAnim {
+    Open,
+    Hide,
+    Show,
+    Still,
+}
+
+/// The video settings as `VideoSettings` draws them (`o_videoSettings` at the stage's middle)
+/// over the options: its dark veil (90%); its paper (`_widget_mc`) and stroke; the title
+/// (`title_mc`: the link's name in capitals); its lines (`o_options_line_s`, 48 apart, the
+/// chosen one `over` and slid 20 right, `OptionsList`'s), each with its widget 400 along (Off /
+/// On side by side, `OptionsStepperB_widget`; the resolution's box, `DropDownMenu_widget`, its
+/// list under it while open: `DropDownMenu_list`, seven lines 28 apart on a paper 20 wider, the
+/// one set dotted, the one chosen lit); and its buttons (`buttonBar_mc`: APPLY, CANCEL, each
+/// with its key's icon before its words, `lib_A_Multi` and `lib_B_Multi` on their PC frames).
+/// The parts it acts on can be clicked (the lines' choices, the box and its list, the buttons).
+#[allow(clippy::too_many_arguments)]
+fn video_screen(commands: &mut Commands, root: Entity, tl: &std::sync::Arc<dhcook::format::Timelines>, lib: Option<std::sync::Arc<dhcook::format::Timelines>>, s: f32, off: Vec2, v: &crate::menu::VideoEdit, data: &crate::gamedata::Data, anim: VideoAnim, anim_drop: bool) {
+    use crate::flash::{Ease, PropsTo, IDENTITY};
+    use crate::menu::{VideoHit, DROP_LINES};
+    // (the options under it not to be pointed at)
+    commands.spawn((Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }, ChildOf(root)));
+    let Some(c) = Clip::export(tl, "o_videoSettings") else { return };
+    let mut fc = FlashClip::new(MOVIE, tl.clone(), c).real().with_texts();
+    fc.scale = s;
+    let asked = v.asked.is_some();
+    fc.set("_widget_mc", PropsTo::default().y(VIDEO_WIDGET_Y).rotation(VIDEO_TURN));
+    fc.set("_widget_mc.bkgd_mc", PropsTo::default().y(VIDEO_PAPER_H * 0.5).yscale(VIDEO_PAPER_H / 256.0));
+    fc.set("_widget_mc.stroke_mc", PropsTo::default().y(VIDEO_PAPER_H * 0.5).xscale(VIDEO_STROKE.x / 280.0).yscale(VIDEO_STROKE.y / 36.0).rotation(-2.0));
+    fc.set("_widget_mc.buttonBar_mc", PropsTo::default().y(VIDEO_BAR_Y));
+    fc.set_visible("_widget_mc.buttonBar_mc", !asked);
+    fc.set_text("_widget_mc.title_mc.txt", data.text(MENU_BASE, "m_SettingsSubMenu_VideoSettings").to_uppercase());
+    let base = "DisGFxMoviePlayerBase_Texts";
+    let bar = "_widget_mc.buttonBar_mc";
+    fc.set_text(&format!("{bar}.accept_mc._txt_mc.txt"), data.text(base, "t_Apply").to_uppercase());
+    fc.set_text(&format!("{bar}.cancel_mc._txt_mc.txt"), data.text(base, "t_Cancel").to_uppercase());
+    // the widget's turn, and where its points stand on the stage
+    let (sn, cs) = VIDEO_TURN.to_radians().sin_cos();
+    let turn = [cs, sn, -sn, cs, 0.0, 0.0];
+    let rot = |p: Vec2| Vec2::new(cs * p.x - sn * p.y, sn * p.x + cs * p.y);
+    let rel = |p: Vec2| Vec2::new(0.0, VIDEO_WIDGET_Y) + rot(p);
+    let mut hits: Vec<(Vec2, Vec2, VideoHit)> = Vec::new();
+    let mut drop_list = None;
+    // the lines
+    let list = "_widget_mc.list_mc";
+    let off_on = [data.text("Settings.ProfileSettingValues", "BP_False").to_uppercase(), data.text("Settings.ProfileSettingValues", "BP_True").to_uppercase()];
+    for (i, (label, view)) in v.views(data).into_iter().enumerate() {
+        let on = i == v.sel;
+        let name = format!("widget{i}");
+        let x = if on { 20.0 } else { 0.0 };
+        let y = 24.0 + 48.0 * i as f32;
+        fc.attach(list, "o_options_line_s", &name, [1.0, 0.0, 0.0, 1.0, x, y]);
+        let line = format!("{list}.{name}");
+        fc.goto_frame(&format!("{line}._bkgd_mc.mc"), i % 3 + 1, false);
+        if on {
+            fc.goto(&line, "over", true);
+        }
+        fc.set_text(&format!("{line}._txt_mc.txt"), label);
+        // (its widget's middle, in the widget's space)
+        let wc = Vec2::new(-330.55 + x + 400.0, 57.9 + y);
+        match view {
+            OptView::Toggle(b) => {
+                fc.attach(&line, "OptionsStepperB_widget", "_stepperB_mc", [1.0, 0.0, 0.0, 1.0, 400.0, 0.0]);
+                let w = format!("{line}._stepperB_mc");
+                fc.goto_frame(&format!("{w}.btn0.txt_mc"), 2, false);
+                fc.set_text(&format!("{w}.btn0.txt_mc.txt"), off_on[0].clone());
+                fc.set_text(&format!("{w}.btn1.txt_mc.txt"), off_on[1].clone());
+                let k = b as usize;
+                fc.goto(&format!("{w}.bkgd{k}_mc"), "selected", true);
+                underline(&mut fc, &format!("{w}."), b, &off_on[k]);
+                if on {
+                    fc.goto(&w, "over", true);
+                } else {
+                    fc.goto(&format!("{w}._leftArrow_mc"), "locked", false);
+                    fc.goto(&format!("{w}._rightArrow_mc"), "locked", false);
+                }
+                hits.push((wc + Vec2::new(-70.5, 0.0), Vec2::new(141.0, 32.0), VideoHit::Choice(i, false)));
+                hits.push((wc + Vec2::new(70.5, 0.0), Vec2::new(141.0, 32.0), VideoHit::Choice(i, true)));
+            }
+            OptView::Stepper(words, at) => {
+                fc.attach(&line, "DropDownMenu_widget", "_stepper_mc", [1.0, 0.0, 0.0, 1.0, 400.0, 0.0]);
+                let w = format!("{line}._stepper_mc");
+                fc.set_text(&format!("{w}._txt_mc.txt_mc.txt"), words.get(at).cloned().unwrap_or_default());
+                fc.set_visible(&format!("{w}._btn_mc.key_mc"), false);
+                if on {
+                    fc.goto(&format!("{w}._btn_mc"), if v.drop.is_some() { "list_open" } else { "over" }, true);
+                    fc.goto(&format!("{w}._txt_mc"), "over", true);
+                }
+                if let Some((chosen, top)) = v.drop {
+                    // its list, under the box (`CreateDropList`: over all else, drawn on its own)
+                    if let Some(c) = Clip::export(tl, "DropDownMenu_list") {
+                        let mut lc = FlashClip::new(MOVIE, tl.clone(), c).real().with_texts();
+                        lc.scale = s;
+                        let shown = words.len().saturating_sub(top).min(DROP_LINES);
+                        lc.set_visible("maskContent", false);
+                        // (its paper as deep as its lines and 8 more, 20 wider than it)
+                        lc.set("_bkgd_mc", PropsTo::default().xscale(303.0 / 128.0).yscale((27.5 * shown as f32 + 8.0) / 128.0));
+                        lc.create_empty("", "_list_mc", IDENTITY);
+                        for k in 0..shown {
+                            let n = top + k;
+                            let item = format!("item{n}");
+                            let iy = 14.0 + 28.0 * k as f32;
+                            lc.attach("_list_mc", "DropDownMenu_list_item", &item, [1.0, 0.0, 0.0, 1.0, 0.0, iy]);
+                            let p = format!("_list_mc.{item}");
+                            lc.set_text(&format!("{p}._txt_mc.txt"), words[n].clone());
+                            lc.set_visible(&format!("{p}._txt_mc._active_mc"), n == at);
+                            if n == chosen {
+                                lc.goto(&p, "over", true);
+                            }
+                            hits.push((wc + Vec2::new(-143.45 + 129.6, 16.0 + iy), Vec2::new(258.5, 26.6), VideoHit::DropItem(n)));
+                        }
+                        let p = rel(wc + Vec2::new(-143.45, 16.0));
+                        lc.m = [turn[0], turn[1], turn[2], turn[3], p.x, p.y];
+                        // (in from 15 above as it opens: `ShowList`)
+                        if anim_drop {
+                            let from = p - rot(Vec2::new(0.0, 15.0));
+                            lc.set("", PropsTo::default().x(from.x).y(from.y).alpha(0.0));
+                            lc.tween("", PropsTo::default().x(p.x).y(p.y).alpha(1.0), 0.2, Ease::StrongOut);
+                        }
+                        drop_list = Some(lc);
+                    }
+                } else {
+                    hits.push((wc, Vec2::new(328.0, 32.0), VideoHit::Drop));
+                }
+            }
+            _ => {}
+        }
+    }
+    // its coming in, its paper fading
+    match anim {
+        VideoAnim::Open => {
+            fc.set("", PropsTo::default().scale(1.2).alpha(0.0));
+            fc.tween("", PropsTo::default().scale(1.0).alpha(1.0), 0.25, Ease::StrongOut);
+            fc.set("_black_mc", PropsTo::default().alpha(0.0));
+            fc.tween("_black_mc", PropsTo::default().alpha(0.9), 0.25, Ease::StrongOut);
+        }
+        VideoAnim::Hide => {
+            fc.set("_black_mc", PropsTo::default().alpha(0.9));
+            fc.tween("_widget_mc", PropsTo::default().alpha(0.0), 0.25, Ease::StrongOut);
+        }
+        VideoAnim::Show => {
+            fc.set("_black_mc", PropsTo::default().alpha(0.9));
+            fc.set("_widget_mc", PropsTo::default().alpha(0.0));
+            fc.tween("_widget_mc", PropsTo::default().alpha(1.0), 0.25, Ease::StrongOut);
+        }
+        VideoAnim::Still => {
+            fc.set("_black_mc", PropsTo::default().alpha(0.9));
+            fc.set("_widget_mc", PropsTo::default().alpha(if asked { 0.0 } else { 1.0 }));
+        }
+    }
+    // the buttons' key icons (`key_mc`: half the words' width and half its own before them)
+    let mut icons = Vec::new();
+    if let (Some(lib), false) = (lib, asked) {
+        for (btn, x, part, hit) in [("A", -154.0, "accept_mc", VideoHit::Apply), ("B", 154.0, "cancel_mc", VideoHit::Cancel)] {
+            hits.push((Vec2::new(x - 0.45, VIDEO_BAR_Y + 24.0), Vec2::new(272.0, 48.0), hit));
+            let words_w = fc.text_width(&format!("{bar}.{part}._txt_mc.txt")).unwrap_or(0.0);
+            let Some(c) = Clip::export(&lib, &format!("lib_{btn}_Multi")) else { continue };
+            let mut ic = FlashClip::new("lib", lib.clone(), c).real();
+            ic.scale = s;
+            ic.goto("", "PC", false);
+            let key_w = ic.size("").map(|v| v.x).unwrap_or(36.0);
+            let p = rel(Vec2::new(x - 0.5 * words_w - 0.5 * key_w, VIDEO_BAR_Y + 24.0));
+            ic.m = [turn[0], turn[1], turn[2], turn[3], p.x, p.y];
+            if anim == VideoAnim::Open {
+                ic.set("", PropsTo::default().x(p.x * 1.2).y(p.y * 1.2).scale(1.2).alpha(0.0));
+                ic.tween("", PropsTo::default().x(p.x).y(p.y).scale(1.0).alpha(1.0), 0.25, Ease::StrongOut);
+            } else if anim == VideoAnim::Show {
+                ic.set("", PropsTo::default().alpha(0.0));
+                ic.tween("", PropsTo::default().alpha(1.0), 0.25, Ease::StrongOut);
+            }
+            icons.push(ic);
+        }
+    }
+    let at = off + Vec2::new(640.0, 360.0) * s;
+    let node = Node { position_type: PositionType::Absolute, left: Val::Px(at.x), top: Val::Px(at.y), ..default() };
+    commands.spawn((fc, node.clone(), Pickable::IGNORE, ChildOf(root)));
+    for ic in icons.into_iter().chain(drop_list) {
+        commands.spawn((ic, node.clone(), Pickable::IGNORE, ChildOf(root)));
+    }
+    // what can be clicked (turned with it), while nothing is asked
+    if asked {
+        return;
+    }
+    for (c, size, h) in hits {
+        let p = off + (Vec2::new(640.0, 360.0) + rel(c) - size * 0.5) * s;
+        commands.spawn((h, Button, Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(size.x * s), height: Val::Px(size.y * s), ..default() }, UiTransform { rotation: Rot2::degrees(VIDEO_TURN), ..default() }, ChildOf(root)));
     }
 }
