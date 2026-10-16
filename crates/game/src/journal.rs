@@ -10,7 +10,7 @@ use crate::audio::PostEvent;
 use crate::gamedata::Data;
 use crate::gameplay::PlayerStats;
 use crate::hud::Paused;
-use crate::jview::{JAct, JRow, JSub, JTab};
+use crate::jview::{JAct, JHelp, JRow, JSub, JTab};
 use crate::ui_fonts::UiFonts;
 use crate::ui_images::UiImages;
 use crate::GameState;
@@ -22,12 +22,17 @@ pub struct JournalPlugin;
 impl Plugin for JournalPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Journal>()
+            .init_resource::<HelpPress>()
             .add_message::<ReadNote>()
             .add_plugins(crate::jview::JViewPlugin)
             .add_systems(OnEnter(GameState::InGame), |mut j: ResMut<Journal>| *j = Journal::default())
             .add_systems(Update, (toggle, interact, refresh).chain().run_if(in_state(GameState::InGame)));
     }
 }
+
+/// (tests) A help bar entry pressed by the script (`jhelp N`: `jview::HELP_*`).
+#[derive(Resource, Default)]
+pub struct HelpPress(pub Option<u8>);
 
 /// A note was picked up: it opens in the journal.
 #[derive(Message, Clone)]
@@ -66,12 +71,14 @@ pub struct Journal {
     /// the tabs flashing (`bFlashingTab`, by the tabs' order): set as it opens, each put out as
     /// it is left
     flashing: u8,
+    /// the objectives' history shown (the journal's `OnToggleObjectivesListHistory`)
+    history: bool,
     dirty: bool,
 }
 
 impl Default for Journal {
     fn default() -> Self {
-        Journal { open: false, viewed: 0, page: PAGE_MISSION, obj_tab: 0, obj_sel: 0, log_tab: 0, note: 0, selected: 1, charm_sel: 0, inv_tab: 0, inv_sel: 0, flashing: 0, dirty: false }
+        Journal { open: false, viewed: 0, page: PAGE_MISSION, obj_tab: 0, obj_sel: 0, log_tab: 0, note: 0, selected: 1, charm_sel: 0, inv_tab: 0, inv_sel: 0, flashing: 0, history: false, dirty: false }
     }
 }
 
@@ -399,7 +406,7 @@ fn toggle(
 /// How many entries the page's list holds (its chosen one wraps within them).
 fn list_len(journal: &Journal, data: &Data, stats: &PlayerStats, vm: Option<&crate::kismet::Vm>) -> usize {
     match journal.page {
-        PAGE_MISSION if journal.obj_tab == 0 => crate::jview::objective_rows(vm).len(),
+        PAGE_MISSION if journal.obj_tab == 0 => crate::jview::objective_rows(vm, journal.history).len(),
         PAGE_MISSION if journal.obj_tab == 2 => mission_items(data, stats).len(),
         PAGE_NOTES => crate::jview::log_entries(data, stats, journal.log_tab).len(),
         PAGE_POWERS => crate::jview::POWER_SLOTS.len(),
@@ -418,9 +425,9 @@ fn interact(
     keys: Res<ButtonInput<KeyCode>>,
     mut sfx: MessageWriter<PostEvent>,
     mut msgs: ResMut<crate::gameplay::HudMessages>,
-    (tabs, subs, rows, acts): (Query<(&Interaction, &JTab), Changed<Interaction>>, Query<(&Interaction, &JSub), Changed<Interaction>>, Query<(&Interaction, &JRow), Changed<Interaction>>, Query<&Interaction, (With<JAct>, Changed<Interaction>)>),
-    (playback, mut graphs): (Res<crate::audiograph::Playback>, MessageWriter<crate::audiograph::PlayAudiograph>),
-    vm: Option<Res<crate::kismet::Vm>>,
+    (tabs, subs, rows, acts, helps): (Query<(&Interaction, &JTab), Changed<Interaction>>, Query<(&Interaction, &JSub), Changed<Interaction>>, Query<(&Interaction, &JRow), Changed<Interaction>>, Query<&Interaction, (With<JAct>, Changed<Interaction>)>, Query<(&Interaction, &JHelp), Changed<Interaction>>),
+    (playback, mut graphs, mut press): (Res<crate::audiograph::Playback>, MessageWriter<crate::audiograph::PlayAudiograph>, ResMut<HelpPress>),
+    mut vm: Option<ResMut<crate::kismet::Vm>>,
     scripted: Option<Res<crate::script::Scripted>>,
 ) {
     if !journal.open {
@@ -444,6 +451,30 @@ fn interact(
         let k = tabs.iter().position(|p| *p == journal.page).unwrap_or(0);
         let back = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         page = Some(tabs[if back { (k + tabs.len() - 1) % tabs.len() } else { (k + 1) % tabs.len() }]);
+    }
+    // the Objectives' help bar: the history shown or hidden, the chosen objective's markers
+    let help = helps.iter().filter(|_| pointer).find(|(i, _)| **i == Interaction::Pressed).map(|(_, h)| h.0).or(press.0.take());
+    if journal.page == PAGE_MISSION && journal.obj_tab == 0 {
+        if let Some(h) = help {
+            match h {
+                crate::jview::HELP_HISTORY => {
+                    journal.history = !journal.history;
+                    journal.obj_sel = 0;
+                    sfx.write(PostEvent::named("UI_J_ToggleHistory", None));
+                }
+                _ => {
+                    // (locked on a finished objective)
+                    let rows = crate::jview::objective_rows(vm.as_deref(), journal.history);
+                    let r = rows.get(journal.obj_sel).filter(|r| rows.iter().any(|o| !o.task && o.objective == r.objective && o.state == crate::kismet::TaskState::Active));
+                    if let (Some(r), Some(vm)) = (r, vm.as_mut()) {
+                        let on = vm.toggle_objective_markers(&r.objective);
+                        sfx.write(PostEvent::named(if on { "UI_J_MarkerOn" } else { "UI_J_MarkerOff" }, None));
+                    }
+                }
+            }
+            journal.dirty = true;
+            return;
+        }
     }
     if let Some(p) = page {
         // (the tab left flashes no more: `TabsHandler`)
@@ -681,6 +712,7 @@ fn refresh(
         inv_tab: journal.inv_tab,
         inv_sel: journal.inv_sel,
         flashing: journal.flashing,
+        history: journal.history,
         playing: playing.as_deref(),
     };
     let mut cx = crate::jview::Ctx { c: &mut commands, root, frame: root, st: crate::jview::Stage::of(w), tl, lib, title: fonts.title.clone().into(), ui: &mut ui, images: &mut images };

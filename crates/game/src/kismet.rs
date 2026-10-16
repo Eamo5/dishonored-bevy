@@ -588,6 +588,9 @@ pub struct VmSave {
     /// the tutorial lines up by op: shown at, gone at (none: until hidden)
     #[serde(default)]
     tutorials_up: Vec<(u32, f32, Option<f32>)>,
+    /// objectives whose markers the journal turned the other way
+    #[serde(default)]
+    marker_flips: Vec<String>,
 }
 
 /// What a conversation's speaker is doing that ends it (`DisConvoEndReasonEnum`: death,
@@ -858,6 +861,8 @@ pub struct Vm {
     pub wheel_off: bool,
     /// the tutorial lines up (`DisSeqAct_SetTutorialMessage`, by op): when shown, until when
     tutorials_up: HashMap<u32, (f32, f32)>,
+    /// objectives whose markers the journal turned the other way (`OnToggleHUDMarker`)
+    marker_flips: std::collections::BTreeSet<String>,
     /// characters dressed differently (`DisSeqAct_NPCSetMaterials`): targets, op, set (else
     /// back to their own)
     pub npc_materials: Vec<(Vec<Val>, u32, bool)>,
@@ -1120,6 +1125,7 @@ impl Vm {
             ammo_mods: Vec::new(),
             wheel_off: false,
             tutorials_up: HashMap::new(),
+            marker_flips: Default::default(),
             switches: Switches::default(),
             severs: Vec::new(),
             music_box: HashMap::new(),
@@ -4633,7 +4639,23 @@ impl Vm {
             tower_shots: self.tower_shots.clone(),
             tower_cmds: self.tower_cmds.clone(),
             tutorials_up: self.tutorials_up.iter().map(|(op, up)| (*op, up.0, up.1.is_finite().then_some(up.1))).collect(),
+            marker_flips: self.marker_flips.iter().cloned().collect(),
         }
+    }
+
+    /// Whether an objective's tasks show their markers: its `m_bShowHUDMarkers`, as the
+    /// journal's toggle left it (`OnToggleHUDMarker` flips the objective's own flag).
+    pub fn objective_markers(&self, o: &dhcook::format::KObjective) -> bool {
+        !o.no_markers != self.marker_flips.contains(&o.path)
+    }
+
+    /// The journal turns an objective's markers the other way; whether they show now.
+    pub fn toggle_objective_markers(&mut self, path: &str) -> bool {
+        if !self.marker_flips.remove(path) {
+            self.marker_flips.insert(path.to_string());
+        }
+        let g = self.g.clone();
+        g.objectives.iter().find(|o| o.path == path).is_some_and(|o| self.objective_markers(o))
     }
 
     /// Restore a saved state (of the same cooked scripts).
@@ -4668,6 +4690,7 @@ impl Vm {
         self.tower_shots = s.tower_shots;
         self.tower_cmds = s.tower_cmds;
         self.tutorials_up = s.tutorials_up.into_iter().map(|(op, at, until)| (op, (at, until.unwrap_or(f32::INFINITY)))).collect();
+        self.marker_flips = s.marker_flips.into_iter().collect();
         if let Some(i) = s.inert {
             self.inert = i;
         }
@@ -4684,6 +4707,7 @@ impl Vm {
         let (flags, objectives, tasks, task_targets, travel, switches) =
             (self.flags.clone(), self.objectives.clone(), self.tasks.clone(), self.task_targets.clone(), self.travel.clone(), self.switches.clone());
         let task_vanish = self.task_vanish.clone();
+        let marker_flips = self.marker_flips.clone();
         let campaign = self.campaign_state();
         if !self.restore_state(s) {
             return false;
@@ -4693,6 +4717,7 @@ impl Vm {
         self.tasks = tasks;
         self.task_targets = task_targets;
         self.task_vanish = task_vanish;
+        self.marker_flips = marker_flips;
         self.travel = travel;
         self.switches = switches;
         if let Some((vals, st)) = campaign {

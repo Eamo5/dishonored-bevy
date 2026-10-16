@@ -102,7 +102,7 @@ pub fn task_targets(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: im
     }
     for path in &vm.objectives {
         let Some(o) = vm.g.objectives.iter().find(|o| o.path == *path) else { continue };
-        if o.no_markers {
+        if !vm.objective_markers(o) {
             continue;
         }
         if vm.tasks.get(path).is_some_and(|t| t.0 != TaskState::Active) {

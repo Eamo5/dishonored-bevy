@@ -182,6 +182,8 @@ pub struct JState<'a> {
     pub inv_sel: usize,
     /// the tabs flashing, by their places
     pub flashing: u8,
+    /// the objectives' history shown
+    pub history: bool,
     pub playing: Option<&'a str>,
 }
 
@@ -512,17 +514,21 @@ fn empty_list(cx: &mut Ctx, centre: Vec2, words: String) {
     cx.c.entity(t).insert(UiTransform { rotation: Rot2::degrees(-2.5), ..default() });
 }
 
-/// An objectives list row: the objective's or task's words, its state, whether optional.
+/// An objectives list row: the objective's or task's words, its state, whether optional,
+/// whether its markers show, the objective it is (or belongs to).
 pub struct ObjRow {
     pub text: String,
     pub task: bool,
     pub state: crate::kismet::TaskState,
     pub optional: bool,
     pub marker: bool,
+    pub objective: String,
 }
 
-/// The objectives in the list's order: primary ones first, each with its visible tasks.
-pub fn objective_rows(vm: Option<&crate::kismet::Vm>) -> Vec<ObjRow> {
+/// The objectives in the list's order: primary ones first, each with its visible tasks. As the
+/// exe's list: the active objectives with their tasks to do; with the history shown
+/// (`OnToggleObjectivesListHistory`) the completed and failed objectives and tasks too.
+pub fn objective_rows(vm: Option<&crate::kismet::Vm>, history: bool) -> Vec<ObjRow> {
     use crate::kismet::TaskState;
     let mut out = Vec::new();
     let Some(vm) = vm else { return out };
@@ -537,12 +543,19 @@ pub fn objective_rows(vm: Option<&crate::kismet::Vm>) -> Vec<ObjRow> {
                 .iter()
                 .filter_map(|t| {
                     let (state, hidden) = vm.tasks.get(&t.path).copied().unwrap_or((TaskState::Inactive, t.hidden));
-                    (!hidden && state != TaskState::Inactive && !t.text.is_empty()).then(|| ObjRow { text: crate::kismet::clean_text(&t.text), task: true, state, optional, marker: false })
+                    (!hidden && state != TaskState::Inactive && !t.text.is_empty()).then(|| ObjRow { text: crate::kismet::clean_text(&t.text), task: true, state, optional, marker: false, objective: o.path.clone() })
                 })
                 .collect();
-            let state = if !tasks.is_empty() && tasks.iter().all(|t| t.state == TaskState::Completed) { TaskState::Completed } else { TaskState::Active };
-            out.push(ObjRow { text: crate::kismet::clean_text(&o.text), task: false, state, optional, marker: !o.no_markers && state == TaskState::Active });
-            out.extend(tasks);
+            // (its own state; one whose tasks are all done is done)
+            let own = vm.tasks.get(path).map(|t| t.0).unwrap_or(TaskState::Active);
+            let state = if own != TaskState::Active { own } else if !tasks.is_empty() && tasks.iter().all(|t| t.state == TaskState::Completed) { TaskState::Completed } else { TaskState::Active };
+            let active = state == TaskState::Active;
+            if !active && !history {
+                continue;
+            }
+            out.push(ObjRow { text: crate::kismet::clean_text(&o.text), task: false, state, optional, marker: vm.objective_markers(o) && active, objective: o.path.clone() });
+            // (a task done shows with the history; one to do, under an active objective)
+            out.extend(tasks.into_iter().filter(|t| if matches!(t.state, TaskState::Completed | TaskState::Failed) { history } else { active }));
         }
     }
     out
@@ -563,7 +576,7 @@ fn objectives(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats, vm: O
             // the list (`j_obj_objectivesList_list` at (-512,-155); its mask 628 x 414)
             cx.sym(root, Vec2::ZERO, false, "j_obj_objectivesList_list", pg(-512.0, -155.0), |fc| fc.set_visible("maskContent", false));
             let mask = Rect::from_corners(pg(-511.2, -155.5), pg(-511.2 + 628.12, -155.5 + 414.34));
-            let rows = objective_rows(vm);
+            let rows = objective_rows(vm, js.history);
             if rows.is_empty() {
                 empty_list(cx, pg(-512.0 + 314.0, -155.0 + 207.0), data.text(J, "t_EmptyObjectivesList"));
             } else {
@@ -571,6 +584,7 @@ fn objectives(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats, vm: O
                 objective_list(cx, list, &rows, js.obj_sel, data);
             }
             chapter_details(cx, data, chapter);
+            objectives_help(cx, js, data, &rows);
         }
         1 => {
             // the mission's clues (`j_obj_chapterNotes`), the mission's picture beside them
@@ -1069,6 +1083,58 @@ fn charms(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
         let words = data.text(J, if wearing { "t_RemoveBoneCharm" } else { "t_ActivateBoneCharm" });
         action_button(cx, pg(180.0, 265.0), words);
     }
+}
+
+/// A help bar entry clicked (`HELP_HISTORY`, `HELP_MARKER`).
+#[derive(Component)]
+pub struct JHelp(pub u8);
+pub const HELP_HISTORY: u8 = 0;
+pub const HELP_MARKER: u8 = 1;
+
+/// The Objectives' help bar (`j_ObjectivesScreen.SetHelpBar`, `lib_dynamicHelpBar` ending at
+/// stage (1184,651)), its entries clickable: the history shown or hidden (`Y`:
+/// `t_ShowHistory` / `t_HideHistory`), the chosen objective's marker (`X`: `t_ShowHUDMarker` /
+/// `t_HideHUDMarker`; locked, dimmed, on a finished objective).
+fn objectives_help(cx: &mut Ctx, js: &JState, data: &Data, rows: &[ObjRow]) {
+    use crate::kismet::TaskState;
+    let s = cx.st.s;
+    let end = cx.at(cx.root, Vec2::ZERO, Vec2::new(1184.0, 651.0));
+    let bar = cx
+        .c
+        .spawn((
+            Node { position_type: PositionType::Absolute, left: Val::Px(0.0), width: Val::Px(end.x), top: Val::Px(end.y - 18.0 * s), flex_direction: FlexDirection::Row, justify_content: JustifyContent::FlexEnd, column_gap: Val::Px(12.0 * s), ..default() },
+            Pickable::IGNORE,
+            ChildOf(cx.root),
+        ))
+        .id();
+    let history = data.text(J, if js.history { "t_HideHistory" } else { "t_ShowHistory" });
+    help_entry(cx, bar, history, Some(HELP_HISTORY));
+    if let Some(r) = rows.get(js.obj_sel) {
+        let obj = rows.iter().find(|o| !o.task && o.objective == r.objective);
+        let active = obj.is_some_and(|o| o.state == TaskState::Active);
+        let shown = obj.is_some_and(|o| o.marker);
+        let words = data.text(J, if shown { "t_HideHUDMarker" } else { "t_ShowHUDMarker" });
+        help_entry(cx, bar, words, active.then_some(HELP_MARKER));
+    }
+}
+
+/// A help bar entry: its words on the dark chip, clickable unless locked (dimmed).
+fn help_entry(cx: &mut Ctx, bar: Entity, words: String, id: Option<u8>) {
+    let s = cx.st.s;
+    let color = if id.is_some() { PALE } else { LOCKED };
+    let l = Look::title(20.0, color).flat();
+    let font = cx.font(&l);
+    let mut e = cx.c.spawn((Node { padding: UiRect::axes(Val::Px(12.0 * s), Val::Px(5.0 * s)), ..default() }, BackgroundColor(DARK.with_alpha(0.85)), ChildOf(bar)));
+    match id {
+        Some(id) => {
+            e.insert((JHelp(id), Button));
+        }
+        None => {
+            e.insert(Pickable::IGNORE);
+        }
+    }
+    let b = e.id();
+    cx.c.spawn((Text::new(words.to_uppercase()), font, TextColor(color), Pickable::IGNORE, ChildOf(b)));
 }
 
 /// An action shown as the help bar's would be (the original's `A` prompt), clickable.

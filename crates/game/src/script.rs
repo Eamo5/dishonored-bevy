@@ -887,6 +887,52 @@ fn run_script(
                 vm.inventory_ops.push((cmd.get(1).is_some_and(|s| s == "stash"), true));
             }
         }
+        "jhelp" => {
+            // jhelp N: the journal's help bar entry N pressed (0 the history, 1 the marker)
+            let n = f(1) as u8;
+            commands.queue(move |w: &mut World| w.resource_mut::<crate::journal::HelpPress>().0 = Some(n));
+        }
+        "addobjective" => {
+            // addobjective NAME: the objective whose path holds NAME added, its tasks to do (as
+            // `DisSeqAct_AddObjective`)
+            let name = cmd.get(1).cloned().unwrap_or_default().to_ascii_lowercase();
+            commands.queue(move |w: &mut World| {
+                if let Some(mut vm) = w.get_resource_mut::<crate::kismet::Vm>() {
+                    let g = vm.g.clone();
+                    if let Some(o) = g.objectives.iter().find(|o| o.path.to_ascii_lowercase().contains(&name)) {
+                        if !vm.objectives.contains(&o.path) {
+                            for t in &o.tasks {
+                                vm.tasks.entry(t.path.clone()).or_insert((crate::kismet::TaskState::Active, t.hidden));
+                            }
+                            vm.objectives.push(o.path.clone());
+                            vm.tasks.insert(o.path.clone(), (crate::kismet::TaskState::Active, false));
+                            info!("script: objective {}", o.path);
+                        }
+                    }
+                }
+            });
+        }
+        "taskstate" => {
+            // taskstate NAME done|failed|active: the objective or task whose path holds NAME set so
+            // (the journal's history in tests)
+            let name = cmd.get(1).cloned().unwrap_or_default().to_ascii_lowercase();
+            let state = match cmd.get(2).map(String::as_str) {
+                Some("done") => crate::kismet::TaskState::Completed,
+                Some("failed") => crate::kismet::TaskState::Failed,
+                _ => crate::kismet::TaskState::Active,
+            };
+            commands.queue(move |w: &mut World| {
+                if let Some(mut vm) = w.get_resource_mut::<crate::kismet::Vm>() {
+                    let key = vm.tasks.keys().filter(|k| k.to_ascii_lowercase().contains(&name)).min().cloned();
+                    if let Some(k) = key {
+                        info!("script: {k} -> {state:?}");
+                        if let Some(t) = vm.tasks.get_mut(&k) {
+                            t.0 = state;
+                        }
+                    }
+                }
+            });
+        }
         "runes" => {
             stats.runes = cmd.get(1).and_then(|v| v.parse().ok()).unwrap_or(10);
         }
