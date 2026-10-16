@@ -363,6 +363,25 @@ mod conversation_tests {
     }
 
     #[test]
+    fn a_soiree_holds_a_blocking_conversation_and_is_skipped_in_another() {
+        for blocking in [true, false] {
+            let mut vm = speaker(None);
+            let cv = &mut Arc::get_mut(&mut vm.g).unwrap().dialog_trees[0].conversations[0];
+            cv.steps = vec![S::Matinee("none".into()), S::Line("after".into(), 0), S::End];
+            cv.blocking = blocking;
+            vm.start_conversation(0, 0, 0);
+            vm.tick_conversations(0.1);
+            // (no such matinee here: a blocking one goes on once its start has passed)
+            assert_eq!(said(&mut vm).len(), if blocking { 0 } else { 1 });
+            vm.tick_conversations(0.6);
+            vm.tick_conversations(0.1);
+            if blocking {
+                assert_eq!(said(&mut vm), ["after"]);
+            }
+        }
+    }
+
+    #[test]
     fn subtitles_go_by_voice_radius_main_first() {
         let line = |text: &str, d: f32, radius: f32, main: bool| Said { text: text.into(), left: 1.0, by: Some((None, Vec3::new(d, 0.0, 0.0))), radius, main, priority: false };
         let weight = |s: &Said| 1.0 - s.by.unwrap().1.x / s.radius;
@@ -748,6 +767,9 @@ pub struct Vm {
     pub player_group: Option<String>,
     conv_busy: HashMap<u32, Option<Busy>>,
     conv_ending: HashSet<u32>,
+    /// a conversation's soiree playing (its actor -> the matinee ops), waited out before the
+    /// conversation goes on (`DisConv_Soiree`)
+    conv_soiree: HashMap<u32, Vec<u32>>,
     walked_away: HashSet<u32>,
     /// speakers and the tree they answer with (for the player approaching / loitering),
     /// their positions, and their approach and loiter hooks' watch (by speaker and node)
@@ -1052,6 +1074,7 @@ impl Vm {
             player_group: None,
             conv_busy: HashMap::new(),
             conv_ending: HashSet::new(),
+            conv_soiree: HashMap::new(),
             walked_away: HashSet::new(),
             // one-shot dialogue actors answer from where they stand
             speaker_tree: g.dialogs.iter().map(|d| (d.actor, d.tree as usize)).collect(),
@@ -4269,6 +4292,17 @@ impl Vm {
             let mute = |speaker: i32| ending && speaker == 0 && busy == Some(Busy::Down);
             let mut voice_len = None;
             let mut reach = None;
+            // (a soiree's matinee played out before what follows it)
+            if c.4 <= 0.0 {
+                if let Some(ops) = self.conv_soiree.get(&c.0) {
+                    let playing = |op: &u32| self.latent.iter().any(|l| matches!(l, Latent::Interp { op: o, .. } if o == op));
+                    if !ending && ops.iter().any(playing) {
+                        c.4 = 0.1;
+                    } else {
+                        self.conv_soiree.remove(&c.0);
+                    }
+                }
+            }
             while c.4 <= 0.0 && c.3 < steps.len() {
                 match &steps[c.3] {
                     dhcook::format::KDialogStep::Reach(radius, main) => reach = Some((*radius, *main)),
@@ -4329,12 +4363,17 @@ impl Vm {
                         c.3 = begins[darkness_branch(self.darkness, *level)].map(|b| b as usize).unwrap_or(steps.len());
                         continue;
                     }
+                    // (skipped in a conversation that doesn't hold its speakers)
+                    dhcook::format::KDialogStep::Matinee(_) if !cv.blocking => {}
                     dhcook::format::KDialogStep::Matinee(guid) => {
+                        let mut ops = Vec::new();
                         for (i, op) in g.ops.iter().enumerate() {
                             if op.class == "SeqAct_Interp" && matches!(op.props.get("m_MatineeGUID"), Some(KVal::Str(x)) if x == guid) {
                                 self.queue.push_back((i as u32, 0));
+                                ops.push(i as u32);
                             }
                         }
+                        self.conv_soiree.insert(c.0, ops);
                         c.4 = 0.6;
                         if ending {
                             c.3 = steps.len();
@@ -6945,6 +6984,7 @@ fn update_ui(
     mut fade: Query<&mut BackgroundColor, With<FadeOverlay>>,
     mut subtitle: Query<(&mut Text, &mut TextColor), (With<SubtitleText>, Without<ObjectivesText>)>,
     (npcs, player): (Query<(&Npc, &Transform), Without<Player>>, Query<&Transform, With<Player>>),
+    dominant: Option<Res<crate::audio::DominantSpeaker>>,
 ) {
     let dt = time.delta_secs();
     for b in barks.read() {
@@ -6963,8 +7003,10 @@ fn update_ui(
         s.left > 0.0 && s.by.and_then(|b| b.0).is_none_or(|e| npcs.get(e).is_ok_and(|(n, _)| !n.is_down()))
     });
     let ear = player.single().ok().map(|t| t.translation);
+    let dominant = dominant.and_then(|d| d.0);
     let weight = |s: &Said| -> f32 {
-        if s.priority {
+        // (an audiograph's words; the dominant line's speaker's, the dominant hook's 99)
+        if s.priority || dominant.is_some_and(|d| s.by.and_then(|b| b.0) == Some(d)) {
             return 99.0;
         }
         match (s.by, ear) {

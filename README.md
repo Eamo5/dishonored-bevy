@@ -405,7 +405,9 @@ are in the settings file, `pad_binding_set` 0-3):
   one another as the original's conversation manager has them (roshan's r614/blink research):
   the dominant line (the nearest within 40 % of its reach; one heard everywhere above all) keeps
   its volume and the others fall to 30 %, blended at 5 a second. Pausing the game
-  pauses what was sounding (the original's `Pause_All` / `Resume_All`).
+  pauses what was sounding (the original's `Pause_All` / `Resume_All`), and so does the
+  window going into the background: the world stands still until it comes back
+  (`BaseEngine.ini` `bPauseOnLossOfFocus`; not in the scripted test runs).
 - **The painterly debug branch** (`kuwahara.rs`): the post-process graph's `KOKuwa` /
   `KuwaHalfRes` / `KuwaFullRes` nodes, which the original shows only on its debug exec `KUWA`
   (`KuwaSwitch` off by default): on F4, the scene at half size through the original's 5 x 5
@@ -1051,8 +1053,9 @@ are in the settings file, `pad_binding_set` 0-3):
   (`m_fVoiceRadius`: 30 m by default, the barks mostly 45 m), both cooked per line; each list
   offers the line whose speaker is nearest for its radius (`1 - distance / radius`, none past
   it), and the HUD shows the main list's, else the secondary's (Main Dialogue: never). An
-  audiograph's words come first. A line without words still plays its voice (a grunt). Not
-  done: the dominant hook's weight of 99 and the other voices' ducking.
+  audiograph's words come first, and so do those of whoever says the dominant line (the
+  one the voices' ducking keeps loud, below: the dominant hook's weight of 99). A line
+  without words still plays its voice (a grunt).
 - **Subtitles, game messages and tutorials** (`hudtext.rs`): placed, sized and coloured as
   the HUD movie's fields are, scaled with its stage — the subtitles (the body font at 24,
   `#e8f7db`, centred in a box from 582 units down; no speaker's name, as the shipped HUD's
@@ -1562,7 +1565,11 @@ are in the settings file, `pad_binding_set` 0-3):
   talking to a character ([F] Talk to Piero Joplin) enter through the trees' hooks, whose
   story-flag, conversation-already-had, time-limit and branch nodes pick what is said; lines
   are voiced from the speaker and subtitled, and conversations set
-  their story flags and raise their Kismet outputs. The player's answers in conversations
+  their story flags and raise their Kismet outputs. A conversation's soiree
+  (`DisConv_Soiree`) plays its matinee and holds the conversation until it ends, then goes on
+  down its output 0; its output 1 is the editor's preview of the lines, played only with
+  `m_UsePreviewBlurbsOnly` (which no shipped soiree sets), and a conversation that doesn't
+  hold its speakers skips it, as roshan's r614/blink research decoded it. The player's answers in conversations
   (`DisConv_PlayerChoice`, 63 across the game: leaving the Hound Pits with Samuel, Piero's
   workshop, Slackjaw and Granny Rags, the Boyle sisters, the mask at the end) are offered like
   the scripts' choices, each option going on down its own branch (cooked flat, with jumps).

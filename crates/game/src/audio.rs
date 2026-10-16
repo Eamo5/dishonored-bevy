@@ -29,6 +29,7 @@ impl Plugin for GameAudioPlugin {
             .init_resource::<TimedSounds>()
             .init_resource::<Music>()
             .init_resource::<Rtpcs>()
+            .init_resource::<DominantSpeaker>()
             .add_systems(Startup, |mut commands: Commands, settings: Res<crate::settings::Settings>| commands.insert_resource(Output::open(settings.speaker_config)))
             .add_systems(OnEnter(GameState::InGame), (reset_audio_state, setup_ambients.after(LevelSpawnSet)))
             .add_systems(Update, apply_speakers)
@@ -339,8 +340,9 @@ pub struct Emitter {
     reach: f32,
     positional: bool,
     pub music: bool,
-    /// a spoken line
+    /// a spoken line, and who says it
     voice: bool,
+    speaker: Option<Entity>,
     /// the ambient emitter that started it
     ambient: Option<usize>,
     /// a looping random container: the variations to continue with (and the next one,
@@ -352,6 +354,11 @@ pub struct Emitter {
     /// its RTPC curves
     curves: Arc<Vec<RtpcCurve>>,
 }
+
+/// Who says the dominant line (`attenuate`'s, the voices' ducking): its subtitle comes first
+/// (`kismet`: the dominant hook's weight of 99).
+#[derive(Resource, Default)]
+pub struct DominantSpeaker(pub Option<Entity>);
 
 /// Dialogue's ducking: the share of its reach within which a line can be the dominant one, the
 /// others' volume, and how fast they blend (a second's worth).
@@ -501,6 +508,7 @@ fn start_play(
                 positional,
                 music: play.music,
                 voice: s.voice,
+                speaker: s.speaker,
                 ambient: s.ambient,
                 playlist: pl,
                 fade: if s.fade_in { 0.0 } else { 1.0 },
@@ -643,6 +651,7 @@ fn advance_playlists(
                     positional: em.positional,
                     music: em.music,
                     voice: em.voice,
+                    speaker: em.speaker,
                     ambient: em.ambient,
                     playlist: p,
                     fade: em.fade,
@@ -687,7 +696,7 @@ fn attenuate(
     listener: Query<&GlobalTransform, With<SpatialListener>>,
     voices: Query<(Entity, &Transform, &Emitter, &Voice)>,
     (time, mut log_t, mut ducks): (Res<Time>, Local<f32>, Local<HashMap<Entity, f32>>),
-    (rooms, movies): (Res<crate::audiorooms::AudioRooms>, Res<crate::movie::Movies>),
+    (rooms, movies, mut dominant_speaker): (Res<crate::audiorooms::AudioRooms>, Res<crate::movie::Movies>, ResMut<DominantSpeaker>),
 ) {
     let Ok(l) = listener.single() else { return };
     // (a movie's own soundtrack over the music: the trials' credits over their menu's)
@@ -716,6 +725,10 @@ fn attenuate(
     // `m_fAudioDuckBlendSpeed`, as roshan's r614/blink research decoded them)
     let dominance = |t: &Transform, em: &Emitter| if em.positional { 1.0 - t.translation.distance(ear) / (DOMINANT_REACH * em.reach).max(0.1) } else { 1.0 };
     let dominant = voices.iter().filter(|(_, _, em, _)| em.voice).map(|(e, t, em, _)| (e, dominance(t, em))).filter(|(_, d)| *d > 1e-8).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(e, _)| e);
+    let speaker = dominant.and_then(|d| voices.get(d).ok()).and_then(|(_, _, em, _)| em.speaker);
+    if dominant_speaker.0 != speaker {
+        dominant_speaker.0 = speaker;
+    }
     ducks.retain(|e, _| voices.contains(*e));
     let blend = DUCK_BLEND * time.delta_secs();
     for (e, t, em, voice) in &voices {

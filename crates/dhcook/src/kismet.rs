@@ -1499,10 +1499,18 @@ fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<
                     steps.push(KDialogStep::Line(text.unwrap_or_default(), speaker));
                 }
             }
+            // (as roshan's r614/blink research decoded it: the matinee plays, or with
+            // `m_UsePreviewBlurbsOnly` the editor's preview blurbs linked from output 1, which
+            // no shipped soiree sets; output 0 goes on after either)
             "DisConv_Soiree" => {
-                if let Some(g) = guid(&p, "m_SoireeGUID") {
+                let outs: Vec<Option<i32>> = struct_array(pkg, &p, "m_OutputLinks").iter().map(|l| l.object("m_pLink").filter(|o| *o > 0)).collect();
+                if matches!(p.get("m_UsePreviewBlurbsOnly"), Some(Value::Bool(true))) {
+                    walk_steps(pkg, outs.get(1).copied().flatten(), voices, steps, seen);
+                } else if let Some(g) = guid(&p, "m_SoireeGUID") {
                     steps.push(KDialogStep::Matinee(g));
                 }
+                node = outs.first().copied().flatten();
+                continue;
             }
             "DisConv_KismetActivateRemoteEvent" => {
                 if let Some(Value::Name(e)) = p.get("m_EventName") {

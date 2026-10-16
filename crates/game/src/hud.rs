@@ -333,8 +333,13 @@ fn pause_and_restart(
     mut rapier_cfg: Query<&mut RapierConfiguration>,
     mut next: ResMut<NextState<GameState>>,
     mut exit: MessageWriter<AppExit>,
+    window: Query<&Window, With<bevy::window::PrimaryWindow>>,
 ) {
-    let want_pause = paused.0;
+    // (the world also stands still while the window is in the background, its sounds held:
+    // `BaseEngine.ini` `bPauseOnLossOfFocus`, as roshan's r614/blink research points out; not
+    // for the scripted test runs, which live in an unfocused window)
+    let background = window.single().is_ok_and(|w| !w.focused) && std::env::var("DH_SCRIPT").is_err();
+    let want_pause = paused.0 || background;
     if want_pause && !time.is_paused() {
         time.pause();
     } else if !want_pause && time.is_paused() {
@@ -343,7 +348,7 @@ fn pause_and_restart(
     for mut c in &mut rapier_cfg {
         c.physics_pipeline_active = !want_pause;
     }
-    if want_pause || stats.dead {
+    if paused.0 || stats.dead {
         cursor.visible = true;
         cursor.grab_mode = CursorGrabMode::None;
     }
@@ -372,5 +377,27 @@ mod tests {
         // 5:4: 152 above and below
         let m = MovieSpace::of_size(Vec2::new(1280.0, 1024.0));
         assert!((m.empty.y - 152.0).abs() < 1e-3 && (m.min.y - (1024.0 * 0.05 - 152.0)).abs() < 1e-3);
+    }
+    #[test]
+    fn the_world_stands_still_while_the_window_is_in_the_background() {
+        if std::env::var("DH_SCRIPT").is_ok() {
+            return;
+        }
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::state::app::StatesPlugin)
+            .init_state::<GameState>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<PlayerStats>()
+            .init_resource::<Paused>()
+            .add_message::<AppExit>()
+            .add_systems(Update, pause_and_restart);
+        // (the window brings its cursor options)
+        let w = app.world_mut().spawn((Window { focused: false, ..default() }, bevy::window::PrimaryWindow)).id();
+        app.update();
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+        app.world_mut().get_mut::<Window>(w).unwrap().focused = true;
+        app.update();
+        assert!(!app.world().resource::<Time<Virtual>>().is_paused());
     }
 }
