@@ -99,8 +99,8 @@ are in the settings file, `pad_binding_set` 0-3):
 | Right stick / click | Look / zoom |
 | A / B / X / Y | Jump / sneak / use / lean (with the left stick) |
 | RT / LT | Sword / left hand |
-| RB / LB (hold) | Block / quick-access wheel (either stick points) |
-| D-pad | Shortcuts 1-4 |
+| RB / LB (hold) | Block / quick-access wheel (either stick points; B / X drink a health / mana elixir) |
+| D-pad | The pad's four shortcuts (in the wheel: put what it points at on one) |
 | Back / Start | Journal / pause menu |
 | In menus: D-pad or left stick, A, B, X / Y, RB / LB, RT / LT | Steer, act, back, the help bar's extra buttons, tabs, sub tabs |
 
@@ -465,14 +465,16 @@ are in the settings file, `pad_binding_set` 0-3):
   note's words (right of its mask, shown once they overrun it).
 - **The gamepad as the original binds it** (`pad.rs`, `DefaultInput.ini`): the control scheme's
   buttons (`m_PadBindingSet1`..`4`) press what the keyboard's bindings would, Back opens the
-  journal and Start the pause menu, the D-pad picks the shortcuts
-  (`Dis_WheelShortcuts_GamepadSelect`); the left stick walks him slower below full, the right
+  journal and Start the pause menu, the D-pad picks the pad's own shortcuts
+  (`Dis_WheelShortcuts_GamepadSelect`), B and X drink the elixirs with the wheel open; the left
+  stick walks him slower below full, the right
   turns him as `DisTweaks_PlayerInput` has it (the turn's scale from 230 up to 700 while the
   stick is held full, rising 500 a second; the look up's 150; each times UE3's 100 a second in
   its rotation units), with its own sensitivities and inversion; the left stick's click sprints
   until he slows (`m_bUseSprintToggle_GamePad`, `m_fStopSprint_Threshold`), the lean button with
   the stick leans (`m_bLeanWithAnalogStick`), either stick points at the quick-access wheel's
-  items. In the menus the pad steers as the arrows do (repeating while held), A acts, B and Start
+  items (past `m_fStickDeadZone` 0.4, from 0.25 s after it opens, `m_fWheelInputDelay`, as
+  roshan's r614/blink research read the native wheel). In the menus the pad steers as the arrows do (repeating while held), A acts, B and Start
   go back, the shoulders change tabs and the triggers sub tabs, X and Y are the help bar's extra
   buttons. Whichever was used last, pad or keyboard and mouse, the help bars' button icons
   follow (the libraries' `_Multi` icons' pad frame or their `PC` frame: `m_bUsingGamepad`).
@@ -943,6 +945,19 @@ are in the settings file, `pad_binding_set` 0-3):
   it): at the bottom right of the HUD's safe area, the health elixirs above the mana ones, each
   with its count and the key that drinks it, slid in from 150 to the right (0.45 s, 0.55 s); an
   empty count dims its icon and key, and a drink plays its icon's stroke.
+- **The pad's D-pad shortcuts** (`powers::Shortcuts::pad`, `dpad.rs`): four slots of their own,
+  filled from `m_AutoAssign_GamepadItemOrder` (the pistol, Blink and the Heart first) by the
+  power wheel tweak's kinds and priorities (`m_AutoAssign_ShortcutUp`..: the Heart up, a power
+  down, weapons right then left). A direction held shows the movie's `shortcuts_mc`
+  (`ShortcutsHandler`, disassembled from the movie) at the safe area's bottom left: the D-pad
+  (`lib_quickPotionDPAD_Multi`) with the four discs round it, the direction's grown to 90 %,
+  glowing, its arrow lit; let go, the D-pad and the others fade, the slot glows and slides to
+  the middle, the whole fades, and what it holds is taken. With the wheel open (a pad in use)
+  it shows instead of the dock, and a direction puts what the wheel points at on its slot (or
+  takes it off). The elixir counters are then the pad's (`potions_mc`, `PotionsCount`): side by
+  side, health right with B and mana left with X, the buttons that drink them in the wheel; the
+  elixir tutorials say so (the console's `m_AcquiredElixirTutorialMessage`,
+  `m_UseElixirTutorialMessage`, not the PC's `_PC` ones).
 - **The crosshair** (`crosshair.rs`, the HUD movie's crosshair symbols): the original dot,
   and over something to use the HUD tweak's `m_InteractionCrosshairSettings` symbol by
   `eCrossHairStatus` (a hand to take, a note with an eye to read, a hand to carry, a padlock

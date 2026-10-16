@@ -4,7 +4,10 @@
 //! mana ones, each with its count and the key that drinks it. They open with the wheel, the
 //! health slid in from 150 to the right over 0.45 s and the mana over 0.55 s; an empty count
 //! dims its icon and key (the element's `empty`); a drink plays its icon's stroke
-//! (`stroke_mc`, `consume`).
+//! (`stroke_mc`, `consume`). A pad in use, the pad's (`PotionsCount`, `potions_mc`) instead:
+//! side by side, health right and mana left, each with the button that drinks it in the wheel
+//! (`key_mc` at `B`, `X`), the whole's middle half its size in from the safe area's bottom
+//! right (`SetPosition`).
 
 use crate::bindings::{display, Act, Bindings};
 use crate::flash::{Clip, Ease, FlashClip, MovieTimelines, PropsTo};
@@ -25,6 +28,7 @@ impl Plugin for ElixirsPlugin {
 const MOVIE: &str = "powerwheel";
 const MOVIE_DLC06: &str = "powerwheel_DLC06";
 const SYMBOL: &str = "shPC_potions";
+const SYMBOL_PAD: &str = "potions_mc";
 /// The two elements (health, mana): their clips, where the movie has them across, and how long
 /// each takes to slide in (s) from `SLIDE` to the right.
 const PARTS: [(&str, f32); 2] = [("_potionsHealth_mc", 0.45), ("_potionsMana_mc", 0.55)];
@@ -39,6 +43,8 @@ struct Counters {
     /// the counts shown (to see a drink), and how far through its fade-out it is
     shown: [u32; 2],
     closing: Option<f32>,
+    /// the pad's (its size as made, for its place)
+    pad: Option<Vec2>,
 }
 
 #[derive(Component)]
@@ -64,19 +70,26 @@ fn counters(
         (true, None) => {
             let movie = if data.is_daud() && timelines.get(MOVIE_DLC06).is_some() { MOVIE_DLC06 } else { MOVIE };
             let Some(tl) = timelines.get(movie) else { return };
-            let Some(c) = Clip::export(&tl, SYMBOL) else { return };
+            let pad = crate::pad::using();
+            let Some(c) = Clip::export(&tl, if pad { SYMBOL_PAD } else { SYMBOL }) else { return };
             let mut fc = FlashClip::new(movie, tl.clone(), c).real().with_texts();
+            let size = fc.size("").unwrap_or(Vec2::ZERO);
             for (i, (part, dur)) in PARTS.iter().enumerate() {
                 fc.goto(&format!("{part}.ic"), if i == 0 { "health" } else { "mana" }, false);
-                // (the gamepad's button art: the key's own label shows on PC)
-                fc.set_visible(&format!("{part}.key_mc"), false);
-                fc.set(part, PropsTo::default().x(PART_X + SLIDE));
-                fc.tween(part, PropsTo::default().x(PART_X), *dur, Ease::StrongOut);
+                // (on PC the key's own label; the pad's its button art, B and X)
+                fc.set_visible(&format!("{part}.key_mc"), pad);
+                fc.set_visible(&format!("{part}.keyPC_mc"), !pad);
+                if pad {
+                    fc.goto(&format!("{part}.key_mc"), if i == 0 { "B" } else { "X" }, false);
+                }
+                let x = if pad { fc.props(part).map(|p| p.x).unwrap_or(0.0) } else { PART_X };
+                fc.set(part, PropsTo::default().x(x + SLIDE));
+                fc.tween(part, PropsTo::default().x(x), *dur, Ease::StrongOut);
             }
             let root = commands
                 .spawn((CountersClip, fc, Node { position_type: PositionType::Absolute, ..default() }, GlobalZIndex(71), Pickable::IGNORE, DespawnOnExit(GameState::InGame)))
                 .id();
-            *st = Counters { root: Some(root), shown: counts, closing: None };
+            *st = Counters { root: Some(root), shown: counts, closing: None, pad: pad.then_some(size) };
             return;
         }
         (true, Some(_)) => st.closing = None,
@@ -96,7 +109,7 @@ fn counters(
     let Ok(w) = window.single() else { return };
     // (at the safe area's bottom right: `hud::MovieSpace`)
     let ms = crate::hud::MovieSpace::of(w);
-    let p = ms.px(ms.max);
+    let p = ms.px(ms.max - st.pad.map(|s| s * 0.5).unwrap_or(Vec2::ZERO));
     n.left = Val::Px(p.x);
     n.top = Val::Px(p.y);
     fc.scale = ms.s;
@@ -110,8 +123,10 @@ fn counters(
             fc.goto(&format!("{part}.quantity"), state, false);
         }
         fc.set_text(&format!("{part}.quantity.txt"), count.to_string());
-        let key = bind.key(if i == 0 { Act::HealthElixir } else { Act::ManaElixir });
-        fc.set_text(&format!("{part}.keyPC_mc.txt"), display(key));
+        if st.pad.is_none() {
+            let key = bind.key(if i == 0 { Act::HealthElixir } else { Act::ManaElixir });
+            fc.set_text(&format!("{part}.keyPC_mc.txt"), display(key));
+        }
         // one drunk: its stroke
         if count < st.shown[i] {
             fc.goto(&format!("{part}.ic.stroke_mc"), "consume", true);

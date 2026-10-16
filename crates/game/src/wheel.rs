@@ -41,6 +41,8 @@ pub struct Wheel {
     seps: Vec<f32>,
     /// Daud's (The Knife of Dunwall's movie)
     daud: bool,
+    /// how long it has been open (s, real)
+    since: f32,
 }
 
 impl Wheel {
@@ -52,6 +54,11 @@ impl Wheel {
 
 /// The original's time scale while the wheel is open.
 pub const WHEEL_TIME: f32 = 0.05;
+/// The pad's sticks point past `m_fStickDeadZone` (0.4), and not until `m_fWheelInputDelay`
+/// (0.25 s) after it opens (the pad's only), as roshan's r614/blink research read the native
+/// wheel.
+const STICK_DEAD: f32 = 0.4;
+const PAD_DELAY: f32 = 0.25;
 
 const MOVIE: &str = "powerwheel";
 const MOVIE_DLC06: &str = "powerwheel_DLC06";
@@ -159,11 +166,13 @@ fn wheel(
     (mut equipped, mut sfx, vm): (MessageWriter<PowerEquipped>, MessageWriter<PostEvent>, Option<Res<crate::kismet::Vm>>),
     data: Res<crate::gamedata::Data>,
     pad: Res<crate::pad::Pad>,
+    real: Res<Time<bevy::time::Real>>,
 ) {
     // (the scripts may shut it: `DisSeqAct_TogglePowerWheel`)
     let held = mouse.pressed(MouseButton::Middle) && !stats.dead && !vm.as_ref().is_some_and(|v| v.wheel_off);
     if held && !w.open {
         w.open = true;
+        w.since = 0.0;
         w.aim = Vec2::ZERO;
         w.daud = data.is_daud();
         let (items, seps) = arrange(&stats, w.daud);
@@ -225,8 +234,9 @@ fn wheel(
     // point with the mouse: the item nearest the direction (`stickinessAngle` aside)
     w.aim += motion.delta;
     // (opened from the pad: either stick points at the item, `Dis_Wheel_Open` with the pad)
+    w.since += real.delta_secs();
     let stick = if pad.sticks[0].length() >= pad.sticks[1].length() { pad.sticks[0] } else { pad.sticks[1] };
-    if stick.length() > 0.3 {
+    if stick.length() > crate::pad::past_dead(STICK_DEAD) && w.since >= PAD_DELAY {
         w.aim = Vec2::new(stick.x, -stick.y) * 160.0;
     }
     let len = w.aim.length();

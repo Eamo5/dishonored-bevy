@@ -1040,6 +1040,18 @@ fn run_script(
                 }
             });
         }
+        "pawntext" => {
+            // pawntext KEY: one of Corvo's pawn strings as a tutorial, as the trackers would say
+            // it (tests: the PC's or, a pad in use, the console's words)
+            let key = cmd.get(1).cloned().unwrap_or_default();
+            commands.queue(move |w: &mut World| {
+                let t = w.resource::<crate::gamedata::Data>().pawn_text(&key, "");
+                info!("script: pawntext {key}: {t:?}");
+                if let Some(mut m) = w.get_resource_mut::<crate::gameplay::HudMessages>() {
+                    m.tutorial(t, 10.0);
+                }
+            });
+        }
         "location" => {
             // location NAME: the location banner (tests)
             let name = cmd[1..].join(" ").replace('_', " ");

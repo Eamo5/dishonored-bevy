@@ -48,7 +48,7 @@ const IC_IMAGE: f32 = 100.0;
 
 /// A value eased from one to another over a time.
 #[derive(Clone, Copy)]
-struct Tw {
+pub(crate) struct Tw {
     from: f32,
     to: f32,
     t: f32,
@@ -57,19 +57,19 @@ struct Tw {
 }
 
 impl Tw {
-    fn at(v: f32) -> Tw {
+    pub(crate) fn at(v: f32) -> Tw {
         Tw { from: v, to: v, t: 0.0, dur: 0.0, ease: Ease::None }
     }
-    fn now(&self) -> f32 {
+    pub(crate) fn now(&self) -> f32 {
         if self.dur <= 0.0 {
             return self.to;
         }
         self.from + (self.to - self.from) * self.ease.at(self.t / self.dur)
     }
-    fn to(&mut self, to: f32, dur: f32, ease: Ease) {
+    pub(crate) fn to(&mut self, to: f32, dur: f32, ease: Ease) {
         *self = Tw { from: self.now(), to, t: 0.0, dur, ease };
     }
-    fn step(&mut self, dt: f32) {
+    pub(crate) fn step(&mut self, dt: f32) {
         self.t = (self.t + dt).min(self.dur);
     }
 }
@@ -195,7 +195,8 @@ fn dock(
     };
     let phase = d.phase;
     match phase {
-        Phase::Hidden | Phase::Leaving(_) if wheel.open => open(&mut *d, &mut commands, true, None),
+        // (a pad in use: its own shortcuts with the wheel instead, `dpad`)
+        Phase::Hidden | Phase::Leaving(_) if wheel.open && !crate::pad::using() => open(&mut *d, &mut commands, true, None),
         Phase::Hidden => {
             if let Some(s) = shown {
                 open(&mut *d, &mut commands, false, Some(s));
@@ -228,7 +229,7 @@ fn dock(
             }
         },
         Phase::Taking(t) => {
-            if wheel.open {
+            if wheel.open && !crate::pad::using() {
                 open(&mut *d, &mut commands, true, None);
             } else if let Some(s) = shown {
                 open(&mut *d, &mut commands, false, Some(s));

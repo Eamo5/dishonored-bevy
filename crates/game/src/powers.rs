@@ -93,10 +93,38 @@ pub const SHORTCUT_ORDER: [Power; 20] = [
     Power::ArcMine,
 ];
 
+/// The pad's (`m_AutoAssign_GamepadItemOrder`): the pistol, Blink and the Heart first.
+pub const PAD_SHORTCUT_ORDER: [Power; 20] = [
+    Power::Pistol,
+    Power::Blink,
+    Power::Heart,
+    Power::Crossbow,
+    Power::Grenade,
+    Power::Windblast,
+    Power::DevouringSwarm,
+    Power::BendTime,
+    Power::DarkVision,
+    Power::Possess,
+    Power::SummonAssassin,
+    Power::SleepDart,
+    Power::IncendiaryBolt,
+    Power::SpringRazor,
+    Power::StickyGrenade,
+    Power::ExplosiveBullet,
+    Power::ExplosiveBolt,
+    Power::Chokedust,
+    Power::StunMine,
+    Power::ArcMine,
+];
+
 /// The shortcut order for whoever plays: Daud's Void Gaze and Transversal have places of their
 /// own (`DPWI_DLC06_DaudDarkVision`, `DPWI_DLC06_Transversal`: after Possession).
 pub fn shortcut_order(daud: bool) -> Vec<Power> {
-    let mut o = SHORTCUT_ORDER.to_vec();
+    order_for(&SHORTCUT_ORDER, daud)
+}
+
+fn order_for(base: &[Power], daud: bool) -> Vec<Power> {
+    let mut o = base.to_vec();
     if daud {
         o.retain(|p| !matches!(p, Power::Blink | Power::DarkVision));
         let at = o.iter().position(|p| *p == Power::SummonAssassin).unwrap_or(o.len());
@@ -747,7 +775,20 @@ pub struct Shortcuts {
     pub held: Option<usize>,
     /// the mouse wheel stepping: the slot shown, and how long before it's taken
     pub stepping: Option<(usize, f32)>,
+    /// the pad's four on the D-pad (`ShortcutsHandler`'s `slot_up`, `_down`, `_left`,
+    /// `_right`), filled the same way from the pad's order: the Heart up, a power down,
+    /// weapons right and left (`m_AutoAssign_ShortcutUp`..: kinds and priorities 4, 3, 1, 2)
+    pub pad: [Option<Power>; 4],
+    pub pad_mine: [bool; 4],
+    /// a D-pad direction held (`Dis_WheelShortcuts_GamepadSelect`): its slot shown on the
+    /// D-pad's display, taken as it's let go (`..GamepadUse`)
+    pub pad_held: Option<usize>,
 }
+
+/// The pad's slots' kinds (up, down, left, right), and the order they're filled in (their
+/// priorities, highest first).
+const PAD_KIND: [u8; 4] = [1, 2, 0, 0];
+const PAD_FILL: [usize; 4] = [0, 1, 3, 2];
 
 /// The mouse wheel's steps settle this long after the last (`m_fShortcutsInputTimer`).
 const SHORTCUT_SETTLE: f32 = 0.33;
@@ -785,6 +826,31 @@ impl Shortcuts {
             let pick = order.iter().copied().find(|p| Shortcuts::kind_of(*p) == Shortcuts::kind(i) && p.owned(stats) && !self.slots.contains(&Some(*p)));
             self.slots[i] = pick;
         }
+        // the pad's, from its own order
+        for s in self.pad.iter_mut() {
+            if s.is_some_and(|p| !p.owned(stats)) {
+                *s = None;
+            }
+        }
+        let order = order_for(&PAD_SHORTCUT_ORDER, daud);
+        for i in PAD_FILL {
+            if self.pad[i].is_some() || self.pad_mine[i] {
+                continue;
+            }
+            self.pad[i] = order.iter().copied().find(|p| Shortcuts::kind_of(*p) == PAD_KIND[i] && p.owned(stats) && !self.pad.contains(&Some(*p)));
+        }
+    }
+    /// Put an item on one of the pad's slots (or take it off), as `assign` does.
+    pub fn assign_pad(&mut self, slot: usize, p: Power) -> bool {
+        let on = self.pad[slot] != Some(p);
+        for s in self.pad.iter_mut() {
+            if *s == Some(p) {
+                *s = None;
+            }
+        }
+        self.pad[slot] = on.then_some(p);
+        self.pad_mine[slot] = true;
+        on
     }
     /// Put an item on a slot (or take it off, when it's there already): his own choice.
     pub fn assign(&mut self, slot: usize, p: Power) -> bool {
@@ -814,7 +880,7 @@ fn select_power(
     mut sfx: MessageWriter<PostEvent>,
     (possession, choice, paused): (Res<crate::possession::Possession>, Res<crate::choice::Choice>, Res<crate::hud::Paused>),
     data: Res<Data>,
-    (mut slots, wheel, time): (ResMut<Shortcuts>, Res<crate::wheel::Wheel>, Res<Time>),
+    (mut slots, wheel, time, pad): (ResMut<Shortcuts>, Res<crate::wheel::Wheel>, Res<Time>, Option<Res<crate::pad::Pad>>),
 ) {
     // the number keys answer a choice on screen
     if paused.0 || possession.host.is_some() || choice.pending.is_some() {
@@ -856,6 +922,28 @@ fn select_power(
             if let Some(p) = slots.slots[i] {
                 sel = Some(p);
                 slots.last = i;
+            }
+        }
+    }
+    // the D-pad: the wheel open, what it points at goes to the direction's slot (or leaves
+    // it); else the slot shown on the D-pad's display while held, taken as it's let go
+    if let Some(pad) = pad.as_deref() {
+        for i in 0..4 {
+            if pad.dpad_pressed[i] {
+                if let Some(p) = wheel.hovered() {
+                    let on = slots.assign_pad(i, p);
+                    sfx.write(PostEvent::named(if on { "UI_P_AssignShortcut" } else { "UI_P_UnassignShortcut" }, None));
+                } else if !wheel.open {
+                    slots.pad_held = Some(i);
+                    slots.held = None;
+                    slots.stepping = None;
+                }
+            }
+            if pad.dpad_released[i] && slots.pad_held == Some(i) {
+                slots.pad_held = None;
+                if let Some(p) = slots.pad[i] {
+                    sel = Some(p);
+                }
             }
         }
     }
@@ -2177,6 +2265,24 @@ mod elixir_input_tests {
         assert!(!sc.assign(9, Power::Blink));
         sc.refresh(&stats, false);
         assert_eq!(sc.slots[9], None);
+    }
+
+    #[test]
+    fn pad_shortcuts_fill_by_their_kinds_and_order() {
+        let mut stats = PlayerStats::default();
+        stats.weapons = true;
+        stats.powers.insert("Blink".into(), 1);
+        let mut sc = Shortcuts::default();
+        sc.refresh(&stats, false);
+        // the Heart up, Blink down, the pistol right (priority 2), the crossbow left
+        assert_eq!(sc.pad, [Some(Power::Heart), Some(Power::Blink), Some(Power::Crossbow), Some(Power::Pistol)]);
+        // put on another slot by him: off its old one, the old one kept empty
+        assert!(sc.assign_pad(2, Power::Blink));
+        sc.refresh(&stats, false);
+        assert_eq!(sc.pad[2], Some(Power::Blink));
+        assert_eq!(sc.pad[1], None);
+        // the keyboard's slots are their own
+        assert_eq!(sc.slots[6], Some(Power::Blink));
     }
 
     #[test]

@@ -148,6 +148,13 @@ impl Data {
     }
     /// One of Corvo's pawn tweak's strings (`m_HeartTargetTutorialMessage`), else `fallback`.
     pub fn pawn_text(&self, key: &str, fallback: &str) -> String {
+        // (a pad in use: the console's words for the PC's own, `m_..._PC` without its `_PC`:
+        // the elixirs drunk from the wheel with B and X)
+        if crate::pad::using() && key.contains("_PC") {
+            if let Some(t) = self.0.texts.get(&format!("Pawn.{}", key.replacen("_PC", "", 1))).filter(|t| !t.trim().is_empty()) {
+                return readable(t);
+            }
+        }
         readable(self.0.texts.get(&format!("Pawn.{key}")).map(|s| s.as_str()).unwrap_or(fallback))
     }
     pub fn pawn(&self, key: &str, default: f32) -> f32 {
@@ -618,8 +625,11 @@ pub fn readable(s: &str) -> String {
     for (k, v) in keys {
         out = out.replace(k, &v);
     }
-    // (the pad's own words: its lean button)
+    // (the pad's own words: its lean button, its face buttons)
     out = out.replace("`GBA_Lean_Gamepad`", &crate::bindings::hint(Act::LeanLeft));
+    for b in ["A", "B", "X", "Y"] {
+        out = out.replace(&format!("`KEY_{b}`"), &format!("[{}{b}]", crate::pad::MARK));
+    }
     out = out.replace("<br />", "
 ").replace("<br>", "
 ").replace("\r", "

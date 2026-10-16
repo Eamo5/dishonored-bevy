@@ -1,8 +1,9 @@
 //! The gamepad as the original binds it (`DefaultInput.ini`): the control scheme's buttons
 //! (`m_PadBindingSet1`..`4`, by `PSI_Gamepad_BindingSet`) press what the keyboard's bindings
 //! would (the actions' keys, the mouse's buttons), Back opens the journal and Start the pause
-//! menu (the base bindings), the D-pad picks the shortcuts (`Dis_WheelShortcuts_GamepadSelect`
-//! 0-3); the left stick moves Corvo (analogue: slower below full, as `m_fWalk_Trigger_Threshold`
+//! menu (the base bindings), the D-pad picks the pad's own four shortcuts
+//! (`Dis_WheelShortcuts_GamepadSelect` 0-3: `powers::Shortcuts::pad`), and with the wheel open
+//! B and X drink the elixirs (`PotionsCount`: B health, X mana); the left stick moves Corvo (analogue: slower below full, as `m_fWalk_Trigger_Threshold`
 //! has it), the right stick turns him (`DisTweaks_PlayerInput`: the turn's scale from
 //! `m_fLookTurnScale_Min` 230 up to `_Max` 700 while the stick is held full, 500 a second; the
 //! look up's 150, each times UE3's 100 a second, in its rotation units), the left stick's click
@@ -135,6 +136,10 @@ pub struct Pad {
     pub look: Vec2,
     /// the sticks past their dead zones (left, right: x right, y up), for the wheel
     pub sticks: [Vec2; 2],
+    /// the D-pad's directions (up, down, left, right) pressed and let go this frame, in the
+    /// game
+    pub dpad_pressed: [bool; 4],
+    pub dpad_released: [bool; 4],
     /// what the pad holds down for the keyboard and mouse
     held: Vec<Emu>,
     /// the left stick's click sprints until he slows (`DisToggleSprint`)
@@ -192,6 +197,11 @@ fn scheme(set: u8) -> [(GamepadButton, Cmd); 10] {
 
 /// The sticks' dead zone, the menus' steering threshold and repeat.
 const DEAD: f32 = 0.2;
+
+/// A raw stick reach (0-1) as the dead-zoned sticks (`Pad::sticks`) read it.
+pub fn past_dead(raw: f32) -> f32 {
+    ((raw - DEAD) / (1.0 - DEAD)).max(0.0)
+}
 const STEER: f32 = 0.5;
 const STEER_FIRST: f32 = 0.4;
 const STEER_EVERY: f32 = 0.12;
@@ -264,6 +274,9 @@ fn pad_input(
     pad.walk = Vec2::ZERO;
     pad.look = Vec2::ZERO;
     pad.sticks = [left, right];
+    const DPAD: [GamepadButton; 4] = [B::DPadUp, B::DPadDown, B::DPadLeft, B::DPadRight];
+    pad.dpad_pressed = [false; 4];
+    pad.dpad_released = [false; 4];
     if ui {
         pad.sprint = false;
         // the menus: A Enter, B (and Start) Escape, X and Y the Shift and Alt taps, the
@@ -324,7 +337,8 @@ fn pad_input(
         SCHEME.store(set, std::sync::atomic::Ordering::Relaxed);
         let mut lean = false;
         for (b, c) in scheme(set) {
-            if !pressed(b) {
+            // (the wheel open: B and X are the elixirs')
+            if !pressed(b) || (wheel.open && matches!(b, B::East | B::West)) {
                 continue;
             }
             match c {
@@ -359,16 +373,24 @@ fn pad_input(
         if pad.sprint {
             want.push(Emu::Key(bind.key(Act::Sprint)));
         }
-        // Back the journal, Start the pause menu, the D-pad the shortcuts
+        // Back the journal, Start the pause menu, the D-pad the pad's shortcuts
         if pressed(B::Select) {
             want.push(Emu::Key(bind.key(Act::Journal)));
         }
         if pressed(B::Start) {
             want.push(Emu::Key(KeyCode::Escape));
         }
-        for (b, k) in [(B::DPadUp, KeyCode::Digit1), (B::DPadDown, KeyCode::Digit2), (B::DPadLeft, KeyCode::Digit3), (B::DPadRight, KeyCode::Digit4)] {
-            if pressed(b) {
-                want.push(Emu::Key(k));
+        for (i, b) in DPAD.into_iter().enumerate() {
+            pad.dpad_pressed[i] = just(b);
+            pad.dpad_released[i] = prev.contains(&b) && !down.contains(&b);
+        }
+        // the wheel open: B a health elixir, X a mana one
+        if wheel.open {
+            if pressed(B::East) {
+                want.push(Emu::Key(bind.key(Act::HealthElixir)));
+            }
+            if pressed(B::West) {
+                want.push(Emu::Key(bind.key(Act::ManaElixir)));
             }
         }
         // the look: the turn's scale rising while the stick is held full
