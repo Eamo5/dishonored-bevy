@@ -3190,6 +3190,18 @@ pub struct GameData {
     /// The end-of-mission screens (`Twk_MissionStats.*`), by tweak name
     #[serde(default)]
     pub mission_stats: Vec<MissionStatsDef>,
+    /// the pad's rumbles (`ForceFeedbackWaveform`), by what plays them: `power.<name>.<level>`
+    /// (`m_RumbleAndShake`), `heart.beat.<n>` (`m_Heartbeats`), `heart.unequipped`,
+    /// `player.disabled_power` (`m_pDisabledPowerForceFeedback`), `contact.<striker>.<struck>`
+    /// with `.striker`, `.struck` or `.radius` (`DisContactSub_Rumble`; its radius in
+    /// `rumble_radius`)
+    #[serde(default)]
+    pub rumbles: std::collections::BTreeMap<String, Vec<RumbleSample>>,
+    #[serde(default)]
+    pub rumble_radius: std::collections::BTreeMap<String, f32>,
+    /// Corvo's clips' rumbles (`AnimNotify_Rumble`)
+    #[serde(default)]
+    pub anim_rumbles: Vec<AnimRumble>,
     /// What Corvo carries when a mission starts on its own (`Twk_PlayerLoadouts.*`)
     #[serde(default)]
     pub loadouts: Vec<LoadoutDef>,
@@ -3361,6 +3373,27 @@ pub struct ChapterDef {
     pub description: String,
     /// the targets: name and portrait (`cache/ui/portraits/<name>.png`)
     pub targets: Vec<(String, String)>,
+}
+
+/// A rumble's sample (`ForceFeedbackWaveform.Samples`): the left (large) and right (small)
+/// motors' amplitudes (0-100) and their shapes over it (`EWaveformFunction`: 0 constant, 1
+/// rising, 2 falling, 3 sine 0-90, 4 sine 90-180, 5 sine 0-180, 6 noise), its length (s).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct RumbleSample {
+    pub left: u8,
+    pub right: u8,
+    pub left_fn: u8,
+    pub right_fn: u8,
+    pub duration: f32,
+}
+
+/// A rumble one of Corvo's clips plays (`AnimNotify_Rumble`): its set and clip, when.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AnimRumble {
+    pub set: String,
+    pub clip: String,
+    pub time: f32,
+    pub wave: Vec<RumbleSample>,
 }
 
 /// A mission statistics screen (`DisTweaks_MissionStats`).

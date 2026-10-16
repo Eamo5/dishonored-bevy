@@ -1237,6 +1237,7 @@ fn swarm_brain(
                         let count = advance_bites(&mut swarm.delay, &mut swarm.bite_t, dt, w.bite_interval);
                         if count > 0 {
                             stats.take_damage(w.bite_damage(n) * count as f32);
+                            crate::rumble::play("contact.Rat.Player.struck");
                             stats.damage_flash = stats.damage_flash.max(0.4);
                             stats.slowed = 1.0;
                             if stats.health <= 0.0 {

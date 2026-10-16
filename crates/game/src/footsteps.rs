@@ -155,6 +155,7 @@ fn play_footfalls(
                 let wet = surface_below(&ctx, &surfaces, f.pos, 2.5).is_some_and(|s| SURFACES.get(s as usize) == Some(&"Water"));
                 out.write(PostEvent::named(if wet { "FS_TBoy_Base_Wet" } else { "FS_TBoy_Base" }, Some(f.pos)));
                 fx.write(crate::particles::SpawnEffect { secs: 2.0, ..crate::particles::SpawnEffect::at("tallboy_step", f.pos) });
+                crate::rumble::play_near("contact.Footfall_Tallboy.Environment.radius", f.pos);
                 continue;
             }
         };

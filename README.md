@@ -263,8 +263,9 @@ are in the settings file, `pad_binding_set` 0-3):
   `GamepadMapping` draws it: over a dark veil, the pad's picture (`UI_GamepadMapping`) and each
   button's line of the scheme (`m_GamepadMapping1`..`4`) by its button's icon, the scheme's
   stepper Type A to D on its line; Left / Right show the others, Enter keeps the one shown,
-  Escape puts it back; `Look X Sensitivity`, `Look Y Sensitivity` (0-100, 50 the tweaks' own
-  rates, halved at 0 and doubled at 100), `Invert Y`); `Graphics`: brightness (its row the original's link,
+  Escape puts it back; `Vibration` (the rumble, below), `Look X Sensitivity`,
+  `Look Y Sensitivity` (0-100, 50 the tweaks' own rates, halved at 0 and doubled at 100),
+  `Invert Y`); `Graphics`: brightness (its row the original's link,
   "Modify brightness", to its own screen as `GammaSetting` draws it: the setting's name over
   "Adjust brightness until you can barely see the darkest symbol", its slider, and
   `UI_Gamma.GammaImage`'s five Outsider's marks taken down to `m_BrightnessValues` (0.2% to
@@ -475,6 +476,17 @@ are in the settings file, `pad_binding_set` 0-3):
   go back, the shoulders change tabs and the triggers sub tabs, X and Y are the help bar's extra
   buttons. Whichever was used last, pad or keyboard and mouse, the help bars' button icons
   follow (the libraries' `_Multi` icons' pad frame or their `PC` frame: `m_bUsingGamepad`).
+- **The pad's rumble as the original's** (`rumble.rs`, with `Vibration` on): the original's
+  `ForceFeedbackWaveform`s, cooked into the game data, drive the large and small motors at
+  their amplitudes and in their samples' shapes (constant, rising, falling, the sine's quarters
+  and half, noise), several at once at the strongest. Corvo's clips play theirs as their
+  `AnimNotify_Rumble`s come (the pistol's and crossbow's shots, the powers' casts, a big
+  landing, the choke, the blades locked and parried); the powers theirs by level as they are
+  used (`m_RumbleAndShake`); the Heart's each beat (`m_Heartbeats`); a power refused for want
+  of mana (`m_pDisabledPowerForceFeedback`); and the contact system's (`DisContactSub_Rumble`)
+  for him struck by a blade or a thing thrown, his sword striking a body or a wall, the blades
+  meeting, a rat's bite, and, within 20 m and 10 m, a tallboy's step and an explosion. Paused,
+  the rumble stops.
 - **The menus' sounds as the movies ask for them** (`SoundHandler.PlaySound` through the
   `Default` sound theme, `UISoundTheme_Common` and the movies' own, to `Snd_UI_Ingame`): a
   move along a list (`UI_Move`; at its end `UI_Stop`, the lists going no further, as

@@ -912,6 +912,9 @@ fn explode(
             sfx.write(PostEvent::named(if b.kind == HitKind::ExplosiveBolt { "Snd_AI_TBoy_Arrow_Fire_Expl" } else { "Snd_Grenade_Explosion" }, Some(b.at)));
         }
         rats.write(crate::swarm::KillRats { at: b.at, radius: b.full.max(2.0), by_player: !matches!(b.kind, HitKind::EnemyExplosion | HitKind::ByOthers), source: b.at });
+        if !b.silent {
+            crate::rumble::play_near("contact.Explosion.DisContactType.radius", b.at);
+        }
         fx.write(SpawnEffect::at(b.effect, b.at));
         noise.write(Noise { pos: b.at, radius: 25.0, kind: NoiseKind::Threatening });
         let scale = |d: f32| if d <= b.full { 1.0 } else { (1.0 - (d - b.full) / (b.radius - b.full).max(0.1)).max(0.0) };

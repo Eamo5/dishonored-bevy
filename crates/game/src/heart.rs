@@ -117,6 +117,8 @@ fn beat(
     if heart.next_beat <= 0.0 {
         heart.next_beat = 1.0 / rate;
         heart.beat_toggle = !heart.beat_toggle;
+        // (each beat with its rumble: `m_Heartbeats`' `m_pRumbleWaveform`)
+        crate::rumble::play(if heart.beat_toggle { "heart.beat.0" } else { "heart.beat.1" });
         sfx.write(PostEvent::named(if heart.beat_toggle { "Heart_Gadget_Beat_1" } else { "Heart_Gadget_Beat_2" }, None));
         heart.pulse = if facing { 1.0 } else { 0.4 };
     }

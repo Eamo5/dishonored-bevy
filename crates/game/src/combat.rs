@@ -869,6 +869,7 @@ fn sword_input(
                         crate::impacts::spawn(&mut fx, &level.scene, crate::impacts::SWORD, "Sword", pt.translation + Vec3::Y * 1.45 + to * 0.7, -to);
                     }
                     sword.recoil = 0.3;
+                    crate::rumble::play("contact.Sword.Sword.struck");
                     // (Corvo's swing bounces off its blade: `BigHit`, the view jolted)
                     sword.bounce_seq += 1;
                     sword.bounce_wall = false;
@@ -877,6 +878,7 @@ fn sword_input(
                 } else {
                     npc.parries = 0;
                     hits.write(NpcHit { npc: e, damage: attrs.sword_damage, kind: HitKind::Sword, from: pt.translation });
+                    crate::rumble::play("contact.Sword.Body.striker");
                 }
                 for &(o, _) in swept.iter().skip(1) {
                     let Ok((_, mut other, ot)) = npcs.get_mut(o) else { continue };
@@ -929,6 +931,7 @@ fn sword_input(
                         shake.write(crate::player::ShakeCamera(CAM_SHAKE_ON_HIT_ENV));
                         sword.bounce_seq += 1;
                         sword.bounce_wall = true;
+                        crate::rumble::play("contact.Weapon.Environment.striker");
                         info!("sword: strikes {what} {toi:.2} m ahead");
                     }
                 }
@@ -1291,6 +1294,7 @@ fn receive_hits(
             noise.write(Noise { pos: pt.translation, radius: 8.0, kind: NoiseKind::Threatening });
             shake.write(crate::player::ShakeCamera(h.damage * CAM_SHAKE_BLOCK_SCALE));
             sfx.write(PostEvent::named("Snd_Imp_Sword_vs_Sword_ak", None));
+            crate::rumble::play("contact.Sword.Sword.struck");
             // (the blades' sparks where they meet)
             if let Some(level) = level.as_ref() {
                 crate::impacts::spawn(&mut fx, &level.scene, crate::impacts::SWORD, "Sword", pt.translation + Vec3::Y * 1.45 + to_npc * 0.7, -to_npc);
@@ -1333,6 +1337,8 @@ fn receive_hits(
         stats.take_damage(damage);
         stats.damage_flash = 1.0;
         stats.hit_from = Some(h.from);
+        // (the contact system's rumble for the one struck: a blade's, or a thing thrown)
+        crate::rumble::play(if h.missile { "contact.DishonoredGameContent.Body.struck" } else { "contact.Weapon.Body.struck" });
         stats.blow = (stats.blow.0.wrapping_add(1), side_of(h.from, pt.translation, p.yaw));
         if !h.missile {
             sfx.write(PostEvent::named("Snd_Imp_Sword_on_Body_cue_ak", None));

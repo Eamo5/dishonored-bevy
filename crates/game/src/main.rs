@@ -29,6 +29,7 @@ mod globalui;
 mod missionscreen;
 mod helpbar;
 mod pad;
+mod rumble;
 mod gammaout;
 mod scrollbar;
 mod msgbox;
@@ -245,7 +246,7 @@ fn main() -> AppExit {
         ))
         .add_plugins((audio::GameAudioPlugin, footsteps::FootstepsPlugin, music::MusicPlugin, barks::BarksPlugin, matinee::MatineePlugin, ui_fonts::UiFontsPlugin, ui_images::UiImagesPlugin))
         .add_plugins((assassin::AssassinPlugin, musicbox::MusicBoxPlugin, traps::TrapsPlugin, script_world::ScriptWorldPlugin, navmesh::NavMeshPlugin, usables::UsablesPlugin, audiograph::AudiographPlugin, distraction::DistractionPlugin, matparams::MatParamsPlugin, rain::RainPlugin, propanim::PropAnimPlugin, movie::MoviePlugin, facefx::FaceFxPlugin, darkvision::DarkVisionPlugin, dof::DofPlugin))
-        .add_plugins((missionscreen::MissionScreenPlugin, helpbar::HelpBarPlugin, gammaout::GammaOutPlugin, pad::PadPlugin))
+        .add_plugins((missionscreen::MissionScreenPlugin, helpbar::HelpBarPlugin, gammaout::GammaOutPlugin, pad::PadPlugin, rumble::RumblePlugin))
         .add_plugins((frontend::FrontendPlugin, animbg::AnimBgPlugin, savescreen::SaveScreenPlugin, optscreen::OptScreenPlugin, notescreen::NoteScreenPlugin, globalui::GlobalUiPlugin, msgbox::MsgBoxPlugin, killcam::KillCamPlugin,
             aim::AimPlugin,
             gore::GorePlugin,

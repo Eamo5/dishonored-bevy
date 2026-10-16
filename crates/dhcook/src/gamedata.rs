@@ -1,7 +1,7 @@
 //! Campaign-wide game data from the original tweak objects: Corvo's powers (active and
 //! passive), his attributes per difficulty, bone charms, upgrades and the stores.
 
-use crate::format::{AchievementDef, ActivePowerDef, BarkGroup, BarkHookRule, BarkRules, ChallengeDef, AttrMod, CharmDef, GalleryItemDef, GameData, PassiveLevel, PassivePowerDef, StatInfoDef, StoreDef, StoreItem, UpgradeDef};
+use crate::format::{AchievementDef, ActivePowerDef, AnimRumble, RumbleSample, BarkGroup, BarkHookRule, BarkRules, ChallengeDef, AttrMod, CharmDef, GalleryItemDef, GameData, PassiveLevel, PassivePowerDef, StatInfoDef, StoreDef, StoreItem, UpgradeDef};
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -1311,6 +1311,107 @@ const HOOK_ROWS: &[(u8, u8, f32, f32, u32)] = &[
     (125, 7, 1.0, 1.0, 0x86),
 ];
 
+/// A force feedback waveform's samples (`ForceFeedbackWaveform.Samples`).
+fn waveform(pkg: &Package, idx: i32) -> Vec<RumbleSample> {
+    let Some(p) = props(pkg, idx) else { return Vec::new() };
+    let Some((c, off, sz)) = p.array("Samples") else { return Vec::new() };
+    let shape = |s: &Props, n: &str| match s.name(n).unwrap_or("WF_Constant") {
+        "WF_LinearIncreasing" => 1,
+        "WF_LinearDecreasing" => 2,
+        "WF_Sin0to90" => 3,
+        "WF_Sin90to180" => 4,
+        "WF_Sin0to180" => 5,
+        "WF_Noise" => 6,
+        _ => 0,
+    };
+    upk::props::parse_struct_array(pkg, off, sz, c)
+        .unwrap_or_default()
+        .iter()
+        .map(|s| RumbleSample { left: s.byte("LeftAmplitude").unwrap_or(0), right: s.byte("RightAmplitude").unwrap_or(0), left_fn: shape(s, "LeftFunction"), right_fn: shape(s, "RightFunction"), duration: s.float("Duration").unwrap_or(0.0) })
+        .collect()
+}
+
+/// The pad's rumbles: the active powers' (`m_RumbleAndShake`, by level), the Heart's beats, the
+/// refused power's, the contact system's (`DisContactSub_Rumble`: for the striker, the struck,
+/// or all within a radius), and those Corvo's clips play (`AnimNotify_Rumble` in the `Ply_*`
+/// sets).
+fn rumbles(game: &Package, startup: &Package, d: &mut GameData) {
+    let mut radius = BTreeMap::new();
+    let mut put = |key: String, pkg: &Package, obj: Option<i32>| {
+        if let Some(o) = obj.filter(|o| *o > 0) {
+            let w = waveform(pkg, o);
+            if !w.is_empty() {
+                d.rumbles.insert(key, w);
+            }
+        }
+    };
+    for (name, path, _, _) in ACTIVES {
+        let Some(p) = game.find_export(path).and_then(|i| props(game, i)) else { continue };
+        for level in 0..2 {
+            let w = match p.get_idx("m_RumbleAndShake", level) {
+                Some(Value::Struct(_, s)) => Props(s.clone()).object("m_pRumbleCustomWaveForm"),
+                _ => None,
+            };
+            put(format!("power.{name}.{level}"), game, w);
+        }
+    }
+    if let Some(p) = startup.find_export("Twk_Inv_HeartBase.Twk_Inv_HeartBase").and_then(|i| props(startup, i)) {
+        for (k, s) in struct_array(startup, &p, "m_Heartbeats").iter().enumerate() {
+            put(format!("heart.beat.{k}"), startup, s.object("m_pRumbleWaveform"));
+        }
+        put("heart.unequipped".into(), startup, p.object("m_pUnequippedHeartBeatsRumbleWaveform"));
+    }
+    if let Some(p) = startup.find_export("Twk_Pawn_DefaultPlayer.Twk_Pawn_DefaultPlayer").and_then(|i| props(startup, i)) {
+        put("player.disabled_power".into(), startup, p.object("m_pDisabledPowerForceFeedback"));
+    }
+    // the contact system's intersections with a rumble
+    if let Some(p) = game.find_export("Phy_ContactSystem.ContactSystem.Dis_ContactSystem").and_then(|i| props(game, i)) {
+        let kind = |o: Option<i32>| o.filter(|o| *o != 0).map(|o| game.obj_name(o).trim_start_matches("DisContactType_").to_string());
+        for row in struct_array(game, &p, "m_Intersections") {
+            let (Some(striker), Some(struck)) = (kind(row.object("m_pStriker")), kind(row.object("m_pStruck"))) else { continue };
+            for sub in struct_array(game, &row, "m_SubIntersections") {
+                let Some(o) = sub.object("m_pSubIntersectObj").filter(|o| *o > 0) else { continue };
+                if game.class_name(o) != "DisContactSub_Rumble" {
+                    continue;
+                }
+                let Some(r) = props(game, o) else { continue };
+                let base = format!("contact.{striker}.{struck}");
+                put(format!("{base}.striker"), game, r.struct_props("m_RumbleForStriker").and_then(|s| s.object("m_pCustomWaveForm")));
+                put(format!("{base}.struck"), game, r.struct_props("m_RumbleForStruck").and_then(|s| s.object("m_pCustomWaveForm")));
+                if r.bool("m_bDoRumbleForRadius") == Some(true) {
+                    if let Some(s) = r.struct_props("m_RumbleForRadius") {
+                        put(format!("{base}.radius"), game, s.object("m_pCustomWaveForm"));
+                        radius.insert(format!("{base}.radius"), s.float("m_fProbeRadius").unwrap_or(0.0));
+                    }
+                }
+            }
+        }
+    }
+    d.rumble_radius = radius;
+    // Corvo's clips': each `Ply_*` set's sequences' rumble notifies
+    for i in startup.exports_of_class("AnimSequence").collect::<Vec<_>>() {
+        let path = startup.obj_path(i);
+        if !path.starts_with("Ply_") {
+            continue;
+        }
+        let Some(p) = props(startup, i) else { continue };
+        let Some((c, off, sz)) = p.array("Notifies") else { continue };
+        let clip = p.name("SequenceName").unwrap_or_default().to_string();
+        let set = path.split('.').next().unwrap_or_default().to_string();
+        for n in upk::props::parse_struct_array(startup, off, sz, c).unwrap_or_default() {
+            let Some(no) = n.object("Notify").filter(|o| *o > 0) else { continue };
+            if startup.class_name(no) != "AnimNotify_Rumble" {
+                continue;
+            }
+            let Some(w) = props(startup, no).and_then(|np| np.object("WaveForm")).filter(|o| *o > 0) else { continue };
+            let wave = waveform(startup, w);
+            if !wave.is_empty() {
+                d.anim_rumbles.push(AnimRumble { set: set.clone(), clip: clip.clone(), time: n.float("Time").unwrap_or(0.0), wave });
+            }
+        }
+    }
+}
+
 /// Each player item's arm pitch keys (`DisTweaks_InventoryItem_PlayerSpecific` and the empty
 /// hands' `DisTweaks_ItemEmpty_PlayerSpecific`: `m_ArmPitch_OffsetKeys`), by the item's tweak.
 fn arm_pitch(startup: &Package) -> BTreeMap<String, Vec<[f32; 2]>> {
@@ -1406,6 +1507,7 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
     challenges(&game, &mut d);
     d.bark_rules = bark_rules(&game);
     d.arm_pitch = arm_pitch(&startup);
+    rumbles(&game, &startup, &mut d);
     // Summoned swarms have distinct level tweaks, inheriting the swarm defaults.
     for level in 1..=2 {
         let prefix = format!("swarm.{level}.");

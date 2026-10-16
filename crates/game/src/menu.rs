@@ -114,9 +114,10 @@ enum Opt {
     LightShafts,
     RatShadows,
     Speakers,
-    /// the pad's: its control scheme (a link to its screen, `GamepadMapping`), its look's
-    /// sensitivities across and up, its look up inverted
+    /// the pad's: its control scheme (a link to its screen, `GamepadMapping`), its rumble, its
+    /// look's sensitivities across and up, its look up inverted
     PadScheme,
+    PadVibration,
     PadLookX,
     PadLookY,
     PadInvertY,
@@ -511,6 +512,7 @@ impl Menu {
                 Opt::PadLookX => slider(s.pad_look_x, 0.0, 100.0, format!("{:.0}", s.pad_look_x)),
                 Opt::PadLookY => slider(s.pad_look_y, 0.0, 100.0, format!("{:.0}", s.pad_look_y)),
                 Opt::PadInvertY => OptView::Toggle(s.pad_invert_y),
+                Opt::PadVibration => OptView::Toggle(s.pad_vibration),
                 Opt::Difficulty => OptView::Stepper(words(&["EDifficulty_Easy", "EDifficulty_Normal", "EDifficulty_Hard", "EDifficulty_VeryHard"]), s.difficulty as usize),
                 Opt::Crosshair => OptView::Stepper(words(&["CS_Off", "CS_Simple", "CS_Normal"]), s.crosshair_style.min(2) as usize),
                 Opt::HudGauges => OptView::Stepper(words(&["HV_Off", "HV_Contextual", "HV_Always"]), s.hud_gauges.min(2) as usize),
@@ -595,6 +597,7 @@ impl Menu {
                 s.pad_look_x = d.pad_look_x;
                 s.pad_look_y = d.pad_look_y;
                 s.pad_invert_y = d.pad_invert_y;
+                s.pad_vibration = d.pad_vibration;
             }
             (2, _) => {
                 s.brightness = d.brightness;
@@ -765,6 +768,7 @@ fn opt_value(s: &Settings, o: Opt) -> String {
         Opt::PadLookX => format!("{:.0}", s.pad_look_x),
         Opt::PadLookY => format!("{:.0}", s.pad_look_y),
         Opt::PadInvertY => on(s.pad_invert_y),
+        Opt::PadVibration => on(s.pad_vibration),
     }
 }
 
@@ -842,6 +846,7 @@ fn adjust(s: &mut Settings, o: Opt, dir: f32, flip: bool) {
         Opt::PadLookX => step(&mut s.pad_look_x, 10.0, 0.0, 100.0),
         Opt::PadLookY => step(&mut s.pad_look_y, 10.0, 0.0, 100.0),
         Opt::PadInvertY => set(&mut s.pad_invert_y),
+        Opt::PadVibration => set(&mut s.pad_vibration),
     }
 }
 
@@ -1033,6 +1038,7 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
                 (1, 1) => vec![("PSI_Mouse_Sensitivity", Opt::Sensitivity), ("PSI_Mouse_bSmooting", Opt::Smoothing), ("PSI_Mouse_bInvertY", Opt::InvertY)],
                 (1, _) => vec![
                     ("PSI_Gamepad_BindingSet", Opt::PadScheme),
+                    ("PSI_Gamepad_bVibration", Opt::PadVibration),
                     ("PSI_Gamepad_LookXSensitivity", Opt::PadLookX),
                     ("PSI_Gamepad_LookYSensitivity", Opt::PadLookY),
                     ("PSI_Gamepad_bInvertY", Opt::PadInvertY),

@@ -227,6 +227,9 @@ pub struct Playing {
     fresh: bool,
 }
 
+/// A rumble notify among a clip's sounds: this, then its place in `anim_rumbles`.
+const RUMBLE_MARK: char = '\u{1}';
+
 /// One clip at a time, crossfading from the previous one.
 #[derive(Default)]
 pub struct Layer {
@@ -258,6 +261,15 @@ impl Layer {
                     let hit = if t1 >= t0 { *t > t0 && *t <= t1 } else { *t > t0 || *t <= t1 };
                     if hit {
                         sounds.push(ev.clone());
+                    }
+                }
+            }
+            // (and Corvo's clips' rumbles, `AnimNotify_Rumble`: marked among the sounds)
+            if let Some(marks) = crate::rumble::MARKS.get().and_then(|m| m.get(&clip.name)).filter(|_| c.speed > 0.0 && dt > 0.0) {
+                let t1 = c.t;
+                for (t, i) in marks {
+                    if if t1 >= t0 { *t > t0 && *t <= t1 } else { *t > t0 || *t <= t1 } {
+                        sounds.push(format!("{RUMBLE_MARK}{i}"));
                     }
                 }
             }
@@ -688,6 +700,10 @@ fn pose_animators(
         a.advance(dt * scale);
         if a.sounds {
             for ev in &a.pending {
+                if let Some(i) = ev.strip_prefix(RUMBLE_MARK) {
+                    crate::rumble::play_anim(i.parse().unwrap_or(usize::MAX));
+                    continue;
+                }
                 sounds.write(crate::audio::PostEvent::named(ev, Some(gt.translation())));
             }
         }
