@@ -1,6 +1,9 @@
 // A ring filling round (the HUD's skip gauge: its `_mask_mc` wipe): the texture shows from
 // `start` (turns clockwise from the top) over `share` of the circle.
 #import bevy_ui::ui_vertex_output::UiVertexOutput
+#ifdef SRGB_OUTPUT
+#import bevy_render::color_operations::linear_to_srgb
+#endif
 
 // (share, start, alpha, -)
 @group(1) @binding(0) var<uniform> params: vec4<f32>;
@@ -17,5 +20,10 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     }
     let rel = fract(a - params.y + 1.0);
     let shown = select(0.0, 1.0, rel <= params.x);
+    // (gamma-encoded for a camera compositing in sRGB)
+#ifdef SRGB_OUTPUT
+    return vec4<f32>(linear_to_srgb(c.rgb), c.a * params.z * shown);
+#else
     return vec4<f32>(c.rgb, c.a * params.z * shown);
+#endif
 }

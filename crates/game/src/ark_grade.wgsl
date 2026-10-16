@@ -70,7 +70,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
             for (var i = 0; i < 8; i++) {
                 let a = (f32(i) + f32(ring) * 0.5) * 0.7853982;
                 let uv = in.uv + vec2<f32>(cos(a), sin(a)) * r * px;
-                let s = textureSample(screen, samp, uv).rgb;
+                let s = min(textureSample(screen, samp, uv).rgb, vec3<f32>(1.0));
                 let bright = max(luma(s) - g.misc.y, 0.0) / max(luma(s), 1e-4);
                 let w = 1.0 / f32(ring);
                 glow += s * bright * w;

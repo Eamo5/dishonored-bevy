@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/upk", "crates/dhcook", "crates/dhtool", "crates/game"]
+exclude = ["vendor"]
 
 [workspace.package]
 edition = "2021"
@@ -15,3 +16,9 @@ opt-level = 3
 [profile.release]
 opt-level = 3
 debug = false
+
+# Bevy's UI renderer with its colours put out gamma-encoded for a camera compositing in sRGB
+# (`CompositingSpace::Srgb`), as its sprite renderer already does: the interface then blends in
+# gamma space as Scaleform's does (see vendor/bevy_ui_render, "dishonored-bevy" notes)
+[patch.crates-io]
+bevy_ui_render = { path = "vendor/bevy_ui_render" }

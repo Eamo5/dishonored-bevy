@@ -204,6 +204,11 @@ pub fn spawn_player(mut commands: Commands, level: Option<Res<LevelInfo>>, confi
                 }),
                 Exposure { ev100: 6.5 },
                 Tonemapping::TonyMcMapface,
+                // (its frame HDR, finished gamma-encoded for the interface to blend over in
+                // gamma space: `gammaout`)
+                bevy::camera::Hdr,
+                bevy::camera::CompositingSpace::Srgb,
+                crate::gammaout::GammaOut,
                 // scene depth for the original translucent shaders (depth fading)
                 bevy::core_pipeline::prepass::DepthPrepass,
                 fog,

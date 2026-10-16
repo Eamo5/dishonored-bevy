@@ -175,7 +175,8 @@ fn start_movies(
     let mut ui = Vec::new();
     match req.layer {
         MovieLayer::Fullscreen => {
-            let cam = commands.spawn((MovieUi, Camera2d, Camera { order: 300, clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() })).id();
+            // (its interface blending in gamma space, as the game's: `CompositingSpace::Srgb`)
+            let cam = commands.spawn((MovieUi, Camera2d, Camera { order: 300, clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() }, bevy::camera::CompositingSpace::Srgb)).id();
             let root = commands
                 .spawn((
                     MovieUi,

@@ -38,12 +38,17 @@ impl Plugin for KuwaharaPlugin {
                 Core3d,
                 draw_kuwa
                     .in_set(Core3dSystems::PostProcess)
+                    .in_set(KuwaPass)
                     .after(bevy::anti_alias::fxaa::fxaa)
                     .after(bevy::anti_alias::smaa::smaa)
                     .after(bevy::core_pipeline::fullscreen_material::fullscreen_material_system::<crate::postfx::ArkGrade>),
             );
     }
 }
+
+/// The painterly pass (for the frame's last passes to follow).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KuwaPass;
 
 /// `KuwaSwitch`: the painterly branch on.
 #[derive(Resource, Default)]

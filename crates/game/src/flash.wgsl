@@ -47,5 +47,11 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     }
     let rgb = clamp(to_srgb(c.rgb) * mult.rgb + add.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
     let a = clamp(c.a * mult.a + add.a, 0.0, 1.0);
+    // (a camera compositing in sRGB takes the colour as it is: blended in gamma space, as
+    // Scaleform blends)
+#ifdef SRGB_OUTPUT
+    return vec4<f32>(rgb, a);
+#else
     return vec4<f32>(to_linear(rgb), a);
+#endif
 }

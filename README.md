@@ -421,6 +421,17 @@ fullscreen display, vertical sync and the crosshair.
   menu's missions, the new game's difficulties, the save and load lists, the options, the
   pause menu's tutorials (`READ TUTORIAL`, `BACK`), the journal's pages, the shops and the note
   reader.
+- **The interface blends in gamma space, as Scaleform's does** (`gammaout.rs`,
+  `vendor/bevy_ui_render`): the original draws its Flash movies over UE3's finished,
+  gamma-encoded frame, so a translucent layer mixes the encoded values (a 90% dark veil leaves a
+  tenth of the picture behind it). The player camera's frame is now HDR and put gamma-encoded as
+  its last pass (after the grade, its effects, the anti-aliasing), the camera compositing in sRGB
+  (`CompositingSpace::Srgb`); Bevy's UI renderer, vendored with one change, puts the interface's
+  colours out gamma-encoded for such a camera (its nodes, text and images, and the Flash fills,
+  meters and dials); the blit to the window decodes the result. The menus' veils, the journal's
+  and pause screen's backings, the HUD's shades and the text's edges read as dark as the
+  original's (before, blending in linear light, that veil left a third). The loading screen's and
+  the movies' cameras composite so too.
 - **Lists' scroll bars as `ScrollBarList` attaches them** (`scrollbar.rs`): a list whose items
   overrun its mask has the library's `lib_scrollBar` beside it (25 before the list, or the
   mask's width and 5 past, as the list's `_sbHAlignment` has it), its track as tall as the mask

@@ -440,7 +440,8 @@ fn spawn_loading_ui(
     let strip = ui_png(&mut images, "loading/ChapterTitleBg.png");
     let title = if menu { "DISHONORED".to_string() } else { crate::save::mission_name(&config.map) };
     let gold = Color::srgb(0.86, 0.80, 0.66);
-    let cam = commands.spawn((LoadingUi, Camera2d, Camera { order: 100, ..default() })).id();
+    // (its interface blending in gamma space, as the game's: `CompositingSpace::Srgb`)
+    let cam = commands.spawn((LoadingUi, Camera2d, Camera { order: 100, ..default() }, bevy::camera::CompositingSpace::Srgb)).id();
     commands
         .spawn((
             LoadingUi,
