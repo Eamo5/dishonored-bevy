@@ -4500,6 +4500,8 @@ impl Vm {
     fn start_conversation(&mut self, actor: u32, tree: usize, conv: u32) {
         self.conv_ending.remove(&actor);
         self.walked_away.remove(&actor);
+        // (the speaker taken by the new one: the old one's soiree no longer holds anything)
+        self.conv_soiree.remove(&actor);
         let busy = self.busy(actor);
         self.conv_busy.insert(actor, busy);
         if let Some(c) = self.g.dialog_trees.get(tree).and_then(|t| t.conversations.get(conv as usize)) {
