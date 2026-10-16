@@ -189,7 +189,7 @@ fn update_window(
     (paused, settings, msgs): (Res<crate::hud::Paused>, Res<crate::settings::Settings>, Res<crate::gameplay::HudMessages>),
     mut sfx: MessageWriter<crate::audio::PostEvent>,
     mut clips: Query<(&mut FlashClip, &mut Node, &mut Visibility), (With<WindowClip>, Without<WindowText>)>,
-    mut text: Query<(&mut Text, &mut TextFont, &mut TextColor, &mut TextShadow, &mut Node, &mut UiTransform, &mut Visibility), (With<WindowText>, Without<WindowClip>)>,
+    mut text: Query<(&mut crate::keytext::KeyText, &mut TextFont, &mut TextColor, &mut TextShadow, &mut Node, &mut UiTransform, &mut Visibility), (With<WindowText>, Without<WindowClip>)>,
 ) {
     let Ok(w) = window.single() else { return };
     // built once under the HUD
@@ -208,6 +208,7 @@ fn update_window(
             commands.spawn((
                 WindowText,
                 Text::new(""),
+                crate::keytext::KeyText::default(),
                 TextFont::default(),
                 TextColor(TEXT_COLOR),
                 TextShadow { offset: Vec2::splat(1.5), color: SHADOW },

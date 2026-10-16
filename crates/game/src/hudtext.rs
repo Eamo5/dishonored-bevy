@@ -96,7 +96,7 @@ fn tutorial_line(
     window: Query<&Window, With<PrimaryWindow>>,
     hud: Query<Entity, With<crate::hud::HudRoot>>,
     (msgs, settings, time, hidden): (Res<crate::gameplay::HudMessages>, Res<crate::settings::Settings>, Res<Time>, Res<crate::menu::HudHidden>),
-    mut line: Query<(&mut Text, &mut Node, &mut TextFont, &mut TextColor, &mut UiTransform, &mut SoftShadow, &mut Visibility), With<TutorialText>>,
+    mut line: Query<(&mut crate::keytext::KeyText, &mut Node, &mut TextFont, &mut TextColor, &mut UiTransform, &mut SoftShadow, &mut Visibility), With<TutorialText>>,
     mut closing: Local<f32>,
 ) {
     let Ok(w) = window.single() else { return };
@@ -106,6 +106,7 @@ fn tutorial_line(
             commands.spawn((
                 TutorialText,
                 Text::new(""),
+                crate::keytext::KeyText::default(),
                 TextFont::default(),
                 TextColor(TUTORIAL.color.with_alpha(0.0)),
                 TextLayout::justify(Justify::Center),

@@ -75,7 +75,7 @@ fn fallback(i: usize) -> &'static str {
 fn words(data: &crate::gamedata::Data, i: usize) -> String {
     use crate::bindings::{hint, Act};
     let raw = data.ui_text(&format!("HUD.m_InteractionTexts[{i}]")).map(|s| s.as_str()).unwrap_or(fallback(i));
-    let mut out = raw.replace("`GBA_Primary`", "[LMB]").replace("`GBA_Secondary`", "[RMB]");
+    let mut out = raw.replace("`GBA_Primary`", crate::bindings::LEFT_MOUSE).replace("`GBA_Secondary`", crate::bindings::RIGHT_MOUSE);
     for (k, a) in [("`GBA_Use`", Act::Use), ("`GBA_Block`", Act::Block), ("`GBA_Jump`", Act::Jump), ("`GBA_Zoom`", Act::Zoom)] {
         if out.contains(k) {
             out = out.replace(k, &hint(a));
@@ -195,7 +195,7 @@ fn special_icons(
     (pockets, npcs, settings): (Query<&crate::pickpocket::Pocket>, Query<&crate::npc::Npc>, Res<crate::settings::Settings>),
     mut roots: Query<(&mut Node, &mut Visibility), (With<IconsRoot>, Without<Icon>, Without<IconText>)>,
     mut icons: Query<(&Icon, &mut FlashClip, &mut Node, &mut Visibility), (Without<IconsRoot>, Without<IconText>)>,
-    mut texts: Query<(&IconText, &mut Text, &mut TextFont, &mut TextColor, &mut TextShadow, &mut Node, &mut Visibility), (Without<IconsRoot>, Without<Icon>)>,
+    mut texts: Query<(&IconText, &mut crate::keytext::KeyText, &mut TextFont, &mut TextColor, &mut TextShadow, &mut Node, &mut Visibility), (Without<IconsRoot>, Without<Icon>)>,
 ) {
     let Ok(w) = window.single() else { return };
     // built once under the HUD: a pool of icons, each with its words
@@ -216,6 +216,7 @@ fn special_icons(
                         r.spawn((
                             IconText(i),
                             Text::new(""),
+                            crate::keytext::KeyText::default(),
                             TextFont::default(),
                             TextColor(TEXT_COLOR),
                             TextShadow { offset: Vec2::splat(1.5), color: SHADOW },
@@ -380,7 +381,7 @@ fn context_line(
     (grabbed, versus): (Query<(), With<crate::npc::Grabbed>>, Res<crate::combat::Versus>),
     mut roots: Query<(&mut Node, &mut Visibility), (With<LineRoot>, Without<Rule>, Without<LineText>)>,
     mut rule: Query<(&mut FlashClip, &mut Node), (With<Rule>, Without<LineRoot>, Without<LineText>)>,
-    mut line: Query<(&mut Text, &mut TextFont, &mut TextColor, &mut TextShadow, &mut Node), (With<LineText>, Without<LineRoot>, Without<Rule>)>,
+    mut line: Query<(&mut crate::keytext::KeyText, &mut TextFont, &mut TextColor, &mut TextShadow, &mut Node), (With<LineText>, Without<LineRoot>, Without<Rule>)>,
 ) {
     let Ok(w) = window.single() else { return };
     let root = match st.line_root.filter(|r| roots.contains(*r)) {
@@ -394,6 +395,7 @@ fn context_line(
                     r.spawn((
                         LineText,
                         Text::new(""),
+                        crate::keytext::KeyText::default(),
                         TextFont::default(),
                         TextColor(TEXT_COLOR),
                         TextShadow { offset: Vec2::splat(1.5), color: SHADOW },

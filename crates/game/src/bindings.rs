@@ -205,8 +205,65 @@ pub fn parse_key(s: &str) -> Option<KeyCode> {
     SUPPORTED.iter().copied().find(|k| key_name(*k) == s)
 }
 
-/// How a key reads on screen ("W", "Left Shift", "F5").
+/// How the original names a key (`Settings.int` `[Keys]`, by its UE3 name: `SpaceBar` "Space
+/// Bar", `LeftControl` "Left Control", `One` "One").
+fn original_name(k: KeyCode) -> Option<&'static str> {
+    use KeyCode::*;
+    Some(match k {
+        Digit0 => "Zero",
+        Digit1 => "One",
+        Digit2 => "Two",
+        Digit3 => "Three",
+        Digit4 => "Four",
+        Digit5 => "Five",
+        Digit6 => "Six",
+        Digit7 => "Seven",
+        Digit8 => "Eight",
+        Digit9 => "Nine",
+        Space => "Space Bar",
+        ShiftLeft => "Left Shift",
+        ShiftRight => "Right Shift",
+        ControlLeft => "Left Control",
+        ControlRight => "Right Control",
+        AltLeft => "Left Alt",
+        AltRight => "Right Alt",
+        CapsLock => "Caps Lock",
+        Backspace => "Back Space",
+        Backquote => "Tilde",
+        Minus => "Underscore",
+        Equal => "Equals",
+        BracketLeft => "Left Bracket",
+        BracketRight => "Right Bracket",
+        PageUp => "Page Up",
+        PageDown => "Page Down",
+        ArrowUp => "Up",
+        ArrowDown => "Down",
+        ArrowLeft => "Left",
+        ArrowRight => "Right",
+        Numpad0 => "Num Pad Zero",
+        Numpad1 => "Num Pad One",
+        Numpad2 => "Num Pad Two",
+        Numpad3 => "Num Pad Three",
+        Numpad4 => "Num Pad Four",
+        Numpad5 => "Num Pad Five",
+        Numpad6 => "Num Pad Six",
+        Numpad7 => "Num Pad Seven",
+        Numpad8 => "Num Pad Eight",
+        Numpad9 => "Num Pad Nine",
+        _ => return None,
+    })
+}
+
+/// The mouse's buttons as the original names them (`Settings.int` `[Keys]`).
+pub const LEFT_MOUSE: &str = "[Left Mouse Button]";
+pub const RIGHT_MOUSE: &str = "[Right Mouse Button]";
+pub const MIDDLE_MOUSE: &str = "[Middle Mouse Button]";
+
+/// How a key reads on screen, as the original names it ("W", "Left Shift", "Space Bar", "F5").
 pub fn display(k: KeyCode) -> String {
+    if let Some(n) = original_name(k) {
+        return n.to_string();
+    }
     let n = key_name(k);
     if let Some(l) = n.strip_prefix("Key") {
         return l.to_string();
@@ -214,15 +271,7 @@ pub fn display(k: KeyCode) -> String {
     if let Some(d) = n.strip_prefix("Digit") {
         return d.to_string();
     }
-    match k {
-        KeyCode::ShiftLeft => "Left Shift".into(),
-        KeyCode::ShiftRight => "Right Shift".into(),
-        KeyCode::ControlLeft => "Left Ctrl".into(),
-        KeyCode::ControlRight => "Right Ctrl".into(),
-        KeyCode::AltLeft => "Left Alt".into(),
-        KeyCode::AltRight => "Right Alt".into(),
-        _ => n,
-    }
+    n
 }
 
 static CURRENT: std::sync::RwLock<Option<Bindings>> = std::sync::RwLock::new(None);

@@ -783,7 +783,7 @@ are in the settings file, `pad_binding_set` 0-3):
   parry is a block begun within `m_fTapForPerfectParryWindow` (0.2 s), within his sword's
   `m_fBlockAngle` (50 degrees). When his blow and a guard's land together (their attack
   zones within `m_fVersusZoneMaxTime`, each facing the other) the blades lock
-  (`StatePlayerMasterVersus`): "Mash [LMB] !" (`DUI_Context_Versus`), the guard straining in
+  (`StatePlayerMasterVersus`): "Mash [Left Mouse Button] !" (`DUI_Context_Versus`), the guard straining in
   `Sword_Versus_MinigameUU` and his arms in `Sword_Ready_Versus_MinigameUU`. His presses over
   1.6 s against his `MeleeVersusMiniGame_WinBig` (10) / `_WinMedium` (5) / `_LoseMedium` (2)
   settle it: a big win leaves it reeling (`Sword_Versus_BigLose`, the next blow a fatality),
@@ -948,19 +948,28 @@ are in the settings file, `pad_binding_set` 0-3):
   the dot where the tweak does; otherwise
   the left hand's reticle (pistol, crossbow, grenade, sticky grenade, spring razor, power) in
   its `EDisCrosshairState`: ready, empty (no ammunition, too little mana) or red over an enemy.
+- **Keys named in the HUD's words in the PC converter's blue** (`keytext.rs`): the original's
+  `ConvertButtonTags`, on PC, sets each bracketed key in `#B1C0D7` within the words around it
+  (`[F] Open`, `Press [J] to read`): in the interaction window's actions, the special moves'
+  words, the context line, the game messages, the tutorial line and window, and the tutorial
+  notes; the rest of each text keeps its own colour, the keys fading with it. The keys are
+  named as the original names them (`Settings.int` `[Keys]`: `[Space Bar]`,
+  `[Left Control]`, `[Left Mouse Button]`; in the options' keyboard mapping too, `One` for
+  the 1 key), bracketed in the tutorials and messages as in the interaction texts.
 - **The interaction window** (`intwindow.rs`, the HUD movie's `hud_intWindow`): right of the
   crosshair, the name of what Corvo looks at over a faint rule and what he can do with it,
   in the HUD tweak's `m_InteractionTexts` (`[F] Loot` to take, `Hold [F] Carry` a body or a
   prop), on the window's brushed backing.
 - **Move and context prompts** (`prompts.rs`): the HUD movie's `InteractionsIcons` at the
   bottom right — for each special move within reach, its `hud_interactionIc` icon and keys
-  (assassinate `[LMB]` and choke `[Ctrl] [Hold]` behind someone unaware, pickpocket `[F]`,
-  a drop assassination falling onto someone, a Blood Thirst fatality `[Ctrl] + [LMB]`, a
-  ledge to mantle `[Space]`), stacked from the bottom and faded in 0.35 s; and its
-  `InteractionsMessage` at the left — what Corvo holds or is in the middle of (`[F] Drop` /
-  `[LMB] Throw` a body or a prop, `[F] Drop` / `[Space] Jump off` a chain, `[F] Exit
-  Keyhole`, `Mash [LMB] !` in a weeper's grip, `[Alt] Exit Spyglass`, `[RMB] End Bend
-  Time`, `End Dark Vision`, `End Possess`) sliding in under its rule. The words are the HUD
+  (assassinate `[Left Mouse Button]` and choke `[Left Control] [Hold]` behind someone
+  unaware, pickpocket `[F]`, a drop assassination falling onto someone, a Blood Thirst
+  fatality `[Left Control] + [Left Mouse Button]`, a ledge to mantle `[Space Bar]`), stacked
+  from the bottom and faded in 0.35 s; and its `InteractionsMessage` at the left — what Corvo
+  holds or is in the middle of (`[F] Drop` / `[Left Mouse Button] Throw` a body or a prop,
+  `[F] Drop` / `[Space Bar] Jump off` a chain, `[F] Exit Keyhole`, `Mash [Left Mouse Button] !`
+  in a weeper's grip, `[Left Alt] Exit Spyglass`, `[Right Mouse Button] End Bend Time`,
+  `End Dark Vision`, `End Possess`) sliding in under its rule. The words are the HUD
   tweak's `m_InteractionTexts` by `EDisUIInteraction`, cooked from `Twk_InGameUI.int`.
 - **The tutorial window** (`tutwindow.rs`, the HUD movie's `TutorialWindow` at the bottom
   left): the first new rune, bone charm and mission clue bring up the HUD tweak's hint
@@ -1395,7 +1404,7 @@ are in the settings file, `pad_binding_set` 0-3):
     height, every 8-12 s. It leaps (`Attack_ArmAttack_JumpGlide_Minigame`, landing at his arm as
     its clip ends) and, with him within `m_ArmGrabRange` 1.5 m, bites his arm and holds on
     (`_GrabArm_`, `_GrabLoop_Minigame`). Its teeth take 5 every 0.75/0.5/0.25/0.125 s by
-    difficulty until he breaks free with 1/2/3/4 presses ("Mash [LMB] !": its `m_LoopSettings`,
+    difficulty until he breaks free with 1/2/3/4 presses ("Mash [Left Mouse Button] !": its `m_LoopSettings`,
     `DisTweaks_Minigame`'s 3 presses and 0.5 s where they say none). Then it is thrown off
     (`_GrabOut_`), or it carries on past him (`_GrabMiss_Minigame`), carried as its clips go.
     His arms play their side of it (`Ply_WolfhoundAttacks_as`, cooked where the level's script

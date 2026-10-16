@@ -214,7 +214,8 @@ fn draw(
                 }
                 let words = crate::tutorials::words(&data, &n.name, k);
                 if !words.is_empty() {
-                    fc.set_text(&format!("{CONTENT}.txt{k}"), words);
+                    // (its keys in the key colour: `SetTutorial`'s `ConvertButtonTags`)
+                    fc.set_text(&format!("{CONTENT}.txt{k}"), crate::keytext::html(&words));
                 }
             }
             // (the journal's: its tabs' names, as the journal shows its first four)

@@ -56,7 +56,7 @@ fn update_window(
     mut roots: Query<(&mut Node, &mut Visibility), (With<WindowRoot>, Without<Title>, Without<Lines>)>,
     mut clip: Query<&mut FlashClip, With<WindowClip>>,
     mut title: Query<(&mut Text, &mut TextFont, &mut Node), (With<Title>, Without<Lines>, Without<WindowRoot>)>,
-    mut lines: Query<(&mut Text, &mut TextFont, &mut Node), (With<Lines>, Without<Title>, Without<WindowRoot>)>,
+    mut lines: Query<(&mut crate::keytext::KeyText, &mut TextFont, &mut Node), (With<Lines>, Without<Title>, Without<WindowRoot>)>,
 ) {
     let Ok(w) = window.single() else { return };
     let s = (w.width() / 1280.0).min(w.height() / 720.0).max(0.01);
@@ -72,7 +72,8 @@ fn update_window(
                 .with_children(|r| {
                     r.spawn((WindowClip, FlashClip::new(MOVIE, tl.clone(), c), Node { position_type: PositionType::Absolute, ..default() }, Pickable::IGNORE));
                     r.spawn((Title, Text::new(""), TextFont::default(), TextColor(Color::WHITE), TextLayout::new(Justify::Left, bevy::text::LineBreak::NoWrap), Node { position_type: PositionType::Absolute, ..default() }, Pickable::IGNORE));
-                    r.spawn((Lines, Text::new(""), TextFont::default(), TextColor(LINES_COLOR), Node { position_type: PositionType::Absolute, ..default() }, Pickable::IGNORE));
+                    // (its keys in the key colour: `ConvertButtonTags`)
+                    r.spawn((Lines, Text::new(""), crate::keytext::KeyText::default(), TextFont::default(), TextColor(LINES_COLOR), Node { position_type: PositionType::Absolute, ..default() }, Pickable::IGNORE));
                 })
                 .id();
             state.root = Some(r);
@@ -110,7 +111,15 @@ fn update_window(
         set(&mut t, &mut f, &mut n, &focus.3, TITLE_SIZE, TITLE_AT);
     }
     if let Ok((mut t, mut f, mut n)) = lines.single_mut() {
-        set(&mut t, &mut f, &mut n, &focus.2, LINES_SIZE, LINES_AT);
+        if t.0 != focus.2 {
+            t.0.clone_from(&focus.2);
+        }
+        let fs = bevy::text::FontSize::Px(LINES_SIZE * s);
+        if f.font_size != fs {
+            f.font_size = fs;
+        }
+        n.left = Val::Px(LINES_AT.x * s);
+        n.top = Val::Px(LINES_AT.y * s);
         n.width = Val::Px(LINES_W * s);
     }
 }

@@ -579,25 +579,13 @@ mod tests {
     }
 }
 
-/// Resolve the original strings' `GBA_*` binding tokens (the PC defaults) and markup.
+/// Resolve the original strings' `GBA_*` binding tokens (the key bound, bracketed as the PC's
+/// texts name keys: `[F]`, `[Right Mouse Button]`) and markup.
 pub fn readable(s: &str) -> String {
-    const KEYS: [(&str, &str); 16] = [
-        ("`GBA_Secondary`", "Right Mouse"),
-        ("`GBA_Primary`", "Left Mouse"),
-        ("`GBA_Block`", "Ctrl"),
-        ("`GBA_Jump`", "Space"),
-        ("`GBA_Journal`", "J"),
-        ("`GBA_Use`", "F"),
-        ("`GBA_Sneak`", "C"),
-        ("`GBA_Sprint`", "Shift"),
-        ("`GBA_Wheel`", "Middle Mouse"),
-        ("`GBA_LeanLeft`", "Q"),
-        ("`GBA_LeanRight`", "E"),
-        ("`GBA_HealthElixir`", "R"),
-        ("`GBA_ManaElixir`", "T"),
-        ("`GBA_Zoom`", "Alt"),
-        ("`GBA_QuickSave`", "F5"),
-        ("`GBA_QuickLoad`", "F9"),
+    const KEYS: [(&str, &str); 3] = [
+        ("`GBA_Secondary`", crate::bindings::RIGHT_MOUSE),
+        ("`GBA_Primary`", crate::bindings::LEFT_MOUSE),
+        ("`GBA_Wheel`", crate::bindings::MIDDLE_MOUSE),
     ];
     let mut out = s.to_string();
     // keyboard actions name the key bound now
@@ -615,10 +603,10 @@ pub fn readable(s: &str) -> String {
         ("`GBA_ManaElixir`", Act::ManaElixir),
         ("`GBA_QuickSave`", Act::QuickSave),
         ("`GBA_QuickLoad`", Act::QuickLoad),
+        ("`GBA_Zoom`", Act::Zoom),
     ] {
         if out.contains(k) {
-            let h = crate::bindings::hint(a);
-            out = out.replace(k, h.trim_start_matches('[').trim_end_matches(']'));
+            out = out.replace(k, &crate::bindings::hint(a));
         }
     }
     for (k, v) in KEYS {

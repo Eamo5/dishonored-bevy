@@ -179,7 +179,8 @@ fn spawn_hud(mut commands: Commands) {
         // inventory (bottom-right)
         r.spawn((InventoryText, HudPart("DHE_Equipment"), text("", 16.0, gold), TextLayout::justify(Justify::Right), Node { position_type: PositionType::Absolute, right: px(28), bottom: px(28), width: px(460), ..default() }));
         // messages: the HUD movie's `gameMsg_mc` (placed by `hudtext`)
-        r.spawn((MessagesText, text("", 24.0, Color::WHITE), TextLayout::justify(Justify::Center), Node { position_type: PositionType::Absolute, ..default() }));
+        // (its keys in the key colour: `InteractionsMessage.InitConvertButtonTags`)
+        r.spawn((MessagesText, text("", 24.0, Color::WHITE), crate::keytext::KeyText::default(), TextLayout::justify(Justify::Center), Node { position_type: PositionType::Absolute, ..default() }));
         // crosshair + prompt (centre)
         r.spawn(Node {
             position_type: PositionType::Absolute,
@@ -287,7 +288,7 @@ fn update_texts(
     msgs: Res<HudMessages>,
     mut texts: ParamSet<(
         Query<&mut Text, With<InventoryText>>,
-        Query<&mut Text, With<MessagesText>>,
+        Query<&mut crate::keytext::KeyText, With<MessagesText>>,
     )>,
 ) {
     if let Ok(mut t) = texts.p0().single_mut() {
@@ -305,7 +306,10 @@ fn update_texts(
         );
     }
     if let Ok(mut t) = texts.p1().single_mut() {
-        t.0 = msgs.items.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>().join("\n");
+        let want = msgs.items.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>().join("\n");
+        if t.0 != want {
+            t.0 = want;
+        }
     }
 }
 
