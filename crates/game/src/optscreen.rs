@@ -75,6 +75,7 @@ fn draw(
     roots: Query<Entity, With<OptRoot>>,
     mut shown: Local<Option<String>>,
     (mut ui, mut images): (ResMut<crate::ui_images::UiImages>, ResMut<Assets<Image>>),
+    mut gamma_shown: Local<bool>,
 ) {
     let Ok(w) = window.single() else { return };
     let page = menu.front_page().filter(|p| p.0 == 7);
@@ -86,10 +87,13 @@ fn draw(
                 Some(OptView::Stepper(_, i)) => format!("s{i}"),
                 Some(OptView::Slider(_, v)) => format!("v{v}"),
                 Some(OptView::Key(k, c)) => format!("k{k}{c}"),
+                Some(OptView::Link(_)) => "l".to_string(),
                 None => String::new(),
             })
             .collect();
-        format!("{:?}|{}|{:?}|{}|{}x{}|{}", menu.options_tab(), menu.selected(), p.1, views.join(","), w.width(), w.height(), menu.in_main())
+        // (the brightness screen open: its value)
+        let views = format!("{}|{:?}", views.join(","), menu.gamma.map(|_| (settings.brightness * 100.0).round() as i32));
+        format!("{:?}|{}|{:?}|{}|{}x{}|{}", menu.options_tab(), menu.selected(), p.1, views, w.width(), w.height(), menu.in_main())
     });
     if key == *shown {
         return;
@@ -166,6 +170,14 @@ fn draw(
             }
         }
     }
+    // the brightness screen in its place (the options faded away under it: `DisplayGammaSetting`)
+    if menu.gamma.is_some() {
+        let opening = !*gamma_shown;
+        *gamma_shown = true;
+        gamma_screen(&mut commands, root, &tl, lib.clone(), s, off, &settings, &data, &fonts, &mut ui, &mut images, opening);
+        return;
+    }
+    *gamma_shown = false;
     place(&mut commands, &tl, MOVIE, "o_OptionsScreen", Vec2::new(640.0, 360.0), crate::flash::IDENTITY, &mut |_| {});
     // the title
     if let Some(lib) = lib.as_ref() {
@@ -320,6 +332,10 @@ fn draw(
                 let word = if waiting { "Press a key...".to_string() } else { k };
                 words(&mut commands, wc, Vec2::new(350.0, 30.0), word, normal_font(25.0), if on { DARK } else { PALE }, Justify::Center, false);
             }
+            // a link to its screen (`SetLink`: the brightness's "Modify brightness")
+            Some(OptView::Link(word)) => {
+                words(&mut commands, wc, Vec2::new(350.0, 30.0), word, normal_font(25.0), if on { DARK } else { PALE }, Justify::Center, false);
+            }
             None => {}
         }
         // its hit area (`btn`)
@@ -336,5 +352,77 @@ fn draw(
         use crate::helpbar::{Btn, Entry};
         let entries = [Entry::new(Btn::X, data.text("DisGFxMoviePlayerMenuBase_Texts", "t_RestoreSettings")), Entry::new(Btn::B, data.text("DisGFxMoviePlayerBase_Texts", "t_Back"))];
         crate::helpbar::spawn(&mut commands, root, lib, s, off + crate::helpbar::END * s, &entries, &mut ui, &mut images, !opening);
+    }
+}
+
+/// The brightness's picture (`DisGFxMoviePlayerGamma.m_BrightnessValues`, `DefaultUI.ini`): a
+/// mark each, its grey taken down to 1 - value (`GammaMc.SetGammaImages`).
+const BRIGHTNESS_VALUES: [f32; 5] = [0.998, 0.99, 0.95, 0.90, 0.80];
+
+/// The brightness screen as `GammaSetting` draws it (`o_Options_gammaSetting` at the stage's
+/// middle): its dark veil, the setting's name (`_title_txt`) over the hint (`_desc_txt`,
+/// `t_GammaHint`), the slider on its line (`_widget_mc`, the slider at its origin); the picture
+/// under it (`UI_Gamma.GammaImage`'s `GammaMc` at (640,555): the Outsider's mark, 90%, 20 apart,
+/// each darkened to 1 - its value and framed by its faint corners, `gamma_logo_indic` at 12.5%);
+/// the help bar (`SecondaryScreen`: A Accept, B Back). It rises 150 into place as it opens. The
+/// marks show the brightness as the screen's gamma would (the display's value to the power of
+/// 1 / brightness, as the scene takes it: our reading of the original's gamma ramp).
+#[allow(clippy::too_many_arguments)]
+fn gamma_screen(commands: &mut Commands, root: Entity, tl: &std::sync::Arc<dhcook::format::Timelines>, lib: Option<std::sync::Arc<dhcook::format::Timelines>>, s: f32, off: Vec2, settings: &Settings, data: &crate::gamedata::Data, fonts: &crate::ui_fonts::UiFonts, ui: &mut crate::ui_images::UiImages, images: &mut Assets<Image>, opening: bool) {
+    let _ = fonts;
+    let rise = |fc: &mut FlashClip| {
+        if opening {
+            fc.set("", crate::flash::PropsTo::default().y(150.0).alpha(0.0));
+            fc.tween("", crate::flash::PropsTo::default().y(0.0).alpha(1.0), 0.25, crate::flash::Ease::StrongOut);
+        }
+    };
+    let node = |p: Vec2| Node { position_type: PositionType::Absolute, left: Val::Px(off.x + p.x * s), top: Val::Px(off.y + p.y * s), ..default() };
+    if let Some(c) = Clip::export(tl, "o_Options_gammaSetting") {
+        let mut fc = FlashClip::new(MOVIE, tl.clone(), c).real().with_texts();
+        fc.scale = s;
+        fc.set_text("_title_txt", data.text("Settings.ProfileSettingIDs", "PSI_Graphics_Gamma").to_uppercase());
+        fc.set_text("_desc_txt", data.text("DisGFxMoviePlayerMenuBase_Texts", "t_GammaHint"));
+        rise(&mut fc);
+        commands.spawn((fc, node(Vec2::new(640.0, 360.0)), Pickable::IGNORE, ChildOf(root)));
+    }
+    // the slider, focused (`SetWidgetFocus`), its number on its thumb
+    let t = ((settings.brightness - 0.5) / 1.1).clamp(0.0, 1.0);
+    let tx = -128.95 + t * 257.9;
+    let at = Vec2::new(640.0 - 3.0, 360.0 + 90.95);
+    if let Some(c) = Clip::export(tl, "Slider_widget") {
+        let mut fc = FlashClip::new(MOVIE, tl.clone(), c).real();
+        fc.scale = s;
+        if let Some((m, _)) = fc.clip.placed_mut("_thumb_mc") {
+            m[4] = tx;
+        }
+        fc.goto("", "over", true);
+        rise(&mut fc);
+        commands.spawn((fc, node(at), Pickable::IGNORE, ChildOf(root)));
+    }
+    let p = off + (at + Vec2::new(tx - 26.0, -15.0)) * s;
+    let bx = commands.spawn((Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(52.0 * s), height: Val::Px(30.0 * s), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, Pickable::IGNORE, ChildOf(root))).id();
+    commands.spawn((Text::new(format!("{:.0}", t * 100.0)), TextFont { font_size: FontSize::Px(25.0 * s), ..default() }, TextColor(DARK), Pickable::IGNORE, ChildOf(bx)));
+    // the picture: the marks darkened to their values, as the brightness shows them
+    let srgb_lin = |x: f32| if x <= 0.04045 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) };
+    let base = 128.0 / 255.0;
+    let g = settings.brightness.max(0.05);
+    let n = BRIGHTNESS_VALUES.len() as f32;
+    for (i, v) in BRIGHTNESS_VALUES.iter().enumerate() {
+        let c = Vec2::new(640.0 + (i as f32 - (n - 1.0) * 0.5) * 148.0, 555.0);
+        if let Some((h, _)) = ui.get(images, "GammaImage", 5) {
+            let k = srgb_lin((base * (1.0 - v)).powf(1.0 / g)) / srgb_lin(base);
+            let size = 128.0 * 0.9;
+            let p = off + (c - Vec2::splat(size * 0.5)) * s;
+            commands.spawn((ImageNode::new(h).with_color(Color::linear_rgb(k, k, k)), Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(size * s), height: Val::Px(size * s), ..default() }, Pickable::IGNORE, ChildOf(root)));
+        }
+        if let Some((h, _)) = ui.get(images, "GammaImage", 40003) {
+            let p = off + (c - Vec2::new(65.0, 73.0)) * s;
+            commands.spawn((ImageNode::new(h).with_color(Color::WHITE.with_alpha(0.125)), Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(130.0 * s), height: Val::Px(139.0 * s), ..default() }, Pickable::IGNORE, ChildOf(root)));
+        }
+    }
+    if let Some(lib) = lib {
+        use crate::helpbar::{Btn, Entry};
+        let base = "DisGFxMoviePlayerBase_Texts";
+        crate::helpbar::spawn(commands, root, lib, s, off + crate::helpbar::END * s, &[Entry::new(Btn::A, data.text(base, "t_Validate")), Entry::new(Btn::B, data.text(base, "t_Back"))], ui, images, !opening);
     }
 }

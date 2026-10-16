@@ -8322,6 +8322,8 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         ("Dishonored_MainMenu", ""),
         ("UI_Journal_SF", ""),
         ("UI_Shop_SF", ""),
+        // (the options' gamma screen's picture: `OpenGammaImage`)
+        ("UI_Gamma_SF", ""),
         ("DishonoredGame", "UI_HUDFX."),
         // (the message boxes and help bar over every screen; the notes and tutorials read)
         ("DishonoredGame", "UI_Global."),

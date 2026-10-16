@@ -172,6 +172,8 @@ pub struct Menu {
     stack: Vec<Page>,
     sel: usize,
     dirty: bool,
+    /// the options' brightness screen open (`GammaSetting`): the brightness it opened with
+    pub gamma: Option<f32>,
     items: Vec<(String, Action)>,
     started: bool,
     /// waiting for the key to bind to this action
@@ -207,6 +209,8 @@ pub enum OptView {
     Slider(f32, String),
     /// the key bound (or "press a key" while one is awaited)
     Key(String, bool),
+    /// a link to a screen of its own (the brightness's: `t_Modify_Gamma`)
+    Link(String),
 }
 
 /// The options' categories (`m_SettingsCategory_*`) and their sub-categories (none: an empty
@@ -220,7 +224,7 @@ pub const OPT_CATEGORIES: [(&str, &[&str]); 4] = [
 
 impl Default for Menu {
     fn default() -> Self {
-        Menu { open: None, page: Page::Main, stack: Vec::new(), sel: 0, dirty: true, items: Vec::new(), started: false, capture: None, opt_cat: 0, opt_sub: 0, confirm: None, confirm_click: None, pending_challenge: None, gallery_view: None, board_row: None, board_over_results: false, tutorials: Vec::new() }
+        Menu { open: None, page: Page::Main, stack: Vec::new(), sel: 0, dirty: true, gamma: None, items: Vec::new(), started: false, capture: None, opt_cat: 0, opt_sub: 0, confirm: None, confirm_click: None, pending_challenge: None, gallery_view: None, board_row: None, board_over_results: false, tutorials: Vec::new() }
     }
 }
 
@@ -403,6 +407,8 @@ impl Menu {
         let slider = |v: f32, lo: f32, hi: f32, shown: String| OptView::Slider(((v - lo) / (hi - lo)).clamp(0.0, 1.0), shown);
         Some(match self.items.get(i)?.1 {
             Action::Adjust(o) => match o {
+                // (its own screen: `GammaMenu`'s link)
+                Opt::Brightness => OptView::Link(data.text("DisGFxMoviePlayerMenuBase_Texts", "t_Modify_Gamma")),
                 Opt::Difficulty => OptView::Stepper(words(&["EDifficulty_Easy", "EDifficulty_Normal", "EDifficulty_Hard", "EDifficulty_VeryHard"]), s.difficulty as usize),
                 Opt::Crosshair => OptView::Stepper(words(&["CS_Off", "CS_Simple", "CS_Normal"]), s.crosshair_style.min(2) as usize),
                 Opt::HudGauges => OptView::Stepper(words(&["HV_Off", "HV_Contextual", "HV_Always"]), s.hud_gauges.min(2) as usize),
@@ -442,7 +448,6 @@ impl Menu {
                 Opt::Markers => OptView::Toggle(s.markers),
                 Opt::Sensitivity => slider(s.sensitivity, 0.5, 6.0, format!("{:.0}", (s.sensitivity - 0.5) / 5.5 * 100.0)),
                 Opt::Fov => slider(s.fov, 65.0, 110.0, format!("{:.0}", s.fov)),
-                Opt::Brightness => slider(s.brightness, 0.5, 1.6, format!("{:.0}", (s.brightness - 0.5) / 1.1 * 100.0)),
                 Opt::Master => slider(s.master_volume, 0.0, 1.0, format!("{:.0}", s.master_volume * 100.0)),
                 Opt::Music => slider(s.music_volume, 0.0, 1.0, format!("{:.0}", s.music_volume * 100.0)),
                 Opt::Sfx => slider(s.sfx_volume, 0.0, 1.0, format!("{:.0}", s.sfx_volume * 100.0)),
@@ -1017,6 +1022,30 @@ fn menu_input(
         }
         return;
     }
+    // the brightness screen (`GammaSetting`): Left / Right change it as it shows, Enter keeps it
+    // (`A`), Escape puts it back as it was (`B`: `OnWidgetChange` to the start value)
+    if let Some(start) = menu.gamma {
+        let lr = if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) {
+            1.0
+        } else if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) {
+            -1.0
+        } else {
+            0.0
+        };
+        if lr != 0.0 {
+            adjust(&mut settings, Opt::Brightness, lr);
+        }
+        if keys.just_pressed(KeyCode::Enter) || help == Some(crate::helpbar::Btn::A) {
+            settings.save();
+            menu.gamma = None;
+            menu.dirty = true;
+        } else if keys.just_pressed(KeyCode::Escape) || help == Some(crate::helpbar::Btn::B) {
+            settings.brightness = start;
+            menu.gamma = None;
+            menu.dirty = true;
+        }
+        return;
+    }
     // a question asked: Left / Right choose, Enter answers, Escape says no
     let mut answered = None;
     if let Some((_, action, choice)) = menu.confirm.clone() {
@@ -1250,9 +1279,12 @@ fn menu_input(
         menu.dirty = true;
     }
     if left_right != 0.0 {
-        if let Some((_, Action::Adjust(_))) = menu.items.get(menu.sel) {
-            activate = Some(menu.sel);
-            dir = left_right;
+        // (the brightness's link opens its screen: not stepped)
+        if let Some((_, Action::Adjust(o))) = menu.items.get(menu.sel) {
+            if !matches!(o, Opt::Brightness) {
+                activate = Some(menu.sel);
+                dir = left_right;
+            }
         }
     }
     if (keys.just_pressed(KeyCode::Escape) || help == Some(crate::helpbar::Btn::B)) && activate.is_none() {
@@ -1301,6 +1333,11 @@ fn menu_input(
         }
         Action::Back => {
             menu.back();
+        }
+        // the brightness's link: its screen (`DisplayGammaSetting`)
+        Action::Adjust(Opt::Brightness) => {
+            menu.gamma = Some(settings.brightness);
+            menu.dirty = true;
         }
         Action::Adjust(o) => {
             adjust(&mut settings, o, dir);

@@ -244,7 +244,12 @@ fullscreen display, vertical sync and the crosshair.
   (the stealth shroud), objective, grenade, awareness and Heart markers, `Crosshair Style`
   Off / Simple (the dot alone) / Normal, `Crosshair Movement` (the reticles open with the
   weapon's dispersion), `Crosshair Opacity`; `Controls`: Keyboard Mapping, Mouse Settings
-  (sensitivity, invert, `Smoothing`); `Graphics`: gamma, `Resolution` (the display's video
+  (sensitivity, invert, `Smoothing`); `Graphics`: brightness (its row the original's link,
+  "Modify brightness", to its own screen as `GammaSetting` draws it: the setting's name over
+  "Adjust brightness until you can barely see the darkest symbol", its slider, and
+  `UI_Gamma.GammaImage`'s five Outsider's marks taken down to `m_BrightnessValues` (0.2% to
+  20% of their grey) in their faint frames, shown as the brightness would show them; Left /
+  Right change it as it shows, Enter keeps it, Escape puts it back), `Resolution` (the display's video
   modes: an exclusive full-screen mode, or the window's size), full screen, v-sync, field of
   view (65-110), `Texture Details` Low / Medium / High (a level loads its textures up to 512,
   1024 or their full 2048), `Model Details` Normal / High (the characters' lesser LODs at a
