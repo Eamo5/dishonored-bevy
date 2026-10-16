@@ -607,7 +607,7 @@ pub fn use_focus(
     mut doors: Query<(&mut Door, &GlobalTransform, &LevelInstance)>,
     player: Query<&Transform, With<Player>>,
     (level, mut timed, data, mut ambients, mut read, attrs): (Option<Res<LevelInfo>>, ResMut<crate::audio::TimedSounds>, Res<crate::gamedata::Data>, ResMut<crate::audio::Ambients>, MessageWriter<crate::journal::ReadNote>, Res<crate::gamedata::Attrs>),
-    (keyholes, peek, mut plog, mut tw): (Query<(), With<crate::keyhole::KeyholeDoor>>, Res<crate::keyhole::Peek>, ResMut<crate::pickuplog::PickupLog>, ResMut<crate::tutwindow::TutorialWindow>),
+    (keyholes, peek, mut plog, mut tw, settings, switches): (Query<(), With<crate::keyhole::KeyholeDoor>>, Res<crate::keyhole::Peek>, ResMut<crate::pickuplog::PickupLog>, ResMut<crate::tutwindow::TutorialWindow>, Res<crate::settings::Settings>, Res<crate::kismet::ScriptSwitches>),
 ) {
     if paused.0 { return; }
     let use_key = bind.key(crate::bindings::Act::Use);
@@ -724,6 +724,14 @@ pub fn use_focus(
                 msgs.push(format!("{}/{} Runes found", stats.runes_found, total));
                 if crate::journal::affordable(&data, &stats) > 0 {
                     tw.push(data.hud_text("m_PressKeyToBuyPowers", "New Rune added<br />Press `GBA_Journal` to acquire Powers"), crate::tutwindow::IMG_RUNE);
+                }
+                // from his second rune on, the powers' tutorial note (`DTN_PlayYourWay_Powers`,
+                // as the HUD's pickup gives it once `m_NumRunesPickedUp` passes 1, while the
+                // systemic tutorials are on): the journal's key reads it while its word is up
+                stats.runes_picked += 1;
+                const POWERS_NOTE: &str = "DTN_PlayYourWay_Powers";
+                if stats.runes_picked > 1 && settings.tutorials && !switches.0.systemic_off && !stats.tutorials.iter().any(|t| t == POWERS_NOTE) && crate::tutorials::received(&mut stats, POWERS_NOTE) {
+                    msgs.push(format!("{} {}", crate::bindings::hint(crate::bindings::Act::Journal), data.text("DisGFxMoviePlayerMenuBase_Texts", "t_ReadTutorial")));
                 }
             }
             PickupKind::BoneCharm => {

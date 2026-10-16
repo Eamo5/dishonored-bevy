@@ -378,8 +378,11 @@ fullscreen display, vertical sync and the crosshair.
   level scripts hand a tutorial over with a pickup (`DisSeqAct_GivePickup` of a
   `DisTweaks_AbstractItemPickupNote`: its `m_TutorialNote`, an `EDisTutorialNote`) and put up
   their message to read it ("Press J to view the Combat Tutorial"); the blueprints and the
-  rewire tool bring their own (`DisAbstractItem`'s `m_TutorialNote`). While the message is up
-  (`m_fTutorialDuration`, 10 s) the journal's key reads it as `UI_Note` shows it, its
+  rewire tool bring their own (`DisAbstractItem`'s `m_TutorialNote`); his second rune brings
+  the powers' (`DTN_PlayYourWay_Powers`, as the HUD's pickup gives it once its
+  `m_NumRunesPickedUp`, kept in saves, passes one, while the systemic tutorials are on).
+  While the message is up (`m_fTutorialDuration`, 10 s) the journal's key reads it as
+  `UI_Note` shows it, its
   tutorial page (`n_Tutorial`): the note's content at its label (`DisGFxMoviePlayerNote`'s
   `m_TutorialNotes`: its name and pictures' package), its pictures from `UI_Tuto_*`
   (`tuto_<note>_<n>`, the keyboard's where there is one) loaded into its `img<n>` in place of

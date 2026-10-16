@@ -292,6 +292,9 @@ pub struct PlayerStats {
     /// in its save data): the journal's Bone Charms tab flashes
     #[serde(default)]
     pub new_charm: bool,
+    /// runes picked up over the game (the HUD's `m_NumRunesPickedUp`, in its save data)
+    #[serde(default)]
+    pub runes_picked: u32,
     /// lethal / non-lethal totals of the missions before this one (chaos)
     pub past_kills: u32,
     pub past_knockouts: u32,
@@ -668,6 +671,7 @@ impl Default for PlayerStats {
             bone_charms: 0,
             hints: Vec::new(),
             new_charm: false,
+            runes_picked: 0,
             past_kills: 0,
             past_knockouts: 0,
             past_detected: 0,
