@@ -132,6 +132,8 @@ enum Action {
     ResetBindings,
     Load(usize),
     Save(usize),
+    /// a save deleted (asked first: `t_Q_DeleteSave`)
+    DeleteSave(usize),
     Resume,
     QuitToMenu,
     QuitGame,
@@ -866,11 +868,8 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
             ("Back to Main Menu".into(), Action::QuitToMenu),
             ("Back to Windows".into(), Action::QuitGame),
         ],
-        (_, Page::Difficulty) => {
-            let mut v: Vec<(String, Action)> = ["Easy", "Normal", "Hard", "Very Hard"].iter().enumerate().map(|(i, n)| (n.to_string(), Action::Difficulty(i as u8))).collect();
-            v.push(("Back".into(), Action::Back));
-            v
-        }
+        // (Back is the help bar's: `SecondaryScreen`)
+        (_, Page::Difficulty) => ["Easy", "Normal", "Hard", "Very Hard"].iter().enumerate().map(|(i, n)| (n.to_string(), Action::Difficulty(i as u8))).collect(),
         (_, Page::Options) => {
             let label = |k: &str| data.text("Settings.ProfileSettingIDs", k);
             let rows: Vec<(&str, Opt)> = match (menu.opt_cat, menu.opt_sub) {
@@ -988,15 +987,15 @@ fn menu_input(
     (data, mut launch): (Res<crate::gamedata::Data>, ResMut<crate::challenge::ChallengeLaunch>),
     (mut profile, movies, mut play): (ResMut<crate::challenge::ChallengeProfile>, Res<crate::movie::Movies>, MessageWriter<crate::movie::PlayMovie>),
     (note, mut read): (Res<crate::notescreen::NoteScreen>, MessageWriter<crate::journal::ReadNote>),
-    (help, stats_up): (Query<(&Interaction, &crate::helpbar::HelpButton), Changed<Interaction>>, Option<Res<crate::mission::MissionEnd>>),
+    (help, stats_up, taps, mut delete): (Query<(&Interaction, &crate::helpbar::HelpButton), Changed<Interaction>>, Option<Res<crate::mission::MissionEnd>>, Res<crate::helpbar::Taps>, MessageWriter<crate::save::DeleteSave>),
 ) {
     let Some(kind) = menu.open else { return };
     // (a mission's statistics over it: their keys are their own)
     if stats_up.is_some() {
         return;
     }
-    // the help bar's entries clicked: A as Enter, B as Escape
-    let help = crate::helpbar::clicked(&help).filter(|_| scripted.is_none());
+    // the help bar's entries clicked (A as Enter, B as Escape), or X (Shift tapped)
+    let help = crate::helpbar::clicked(&help).filter(|_| scripted.is_none()).or_else(|| crate::helpbar::Btn::X.just_pressed(&keys, &taps).then_some(crate::helpbar::Btn::X));
     // (a note read over it, or put away this frame: its keys are its own)
     if note.open.is_some() || note.shut {
         return;
@@ -1077,7 +1076,7 @@ fn menu_input(
             menu.set_options_tab(cat, if keys.just_pressed(KeyCode::KeyE) { (sub + 1) % nsub } else { (sub + nsub - 1) % nsub });
             return;
         }
-        if answered.is_none() && keys.just_pressed(KeyCode::KeyR) {
+        if answered.is_none() && help == Some(crate::helpbar::Btn::X) {
             // (asked first: `t_Q_RestoreSettings`, the category named in blue)
             let (cat, sub) = menu.options_tab();
             let (c, subs) = OPT_CATEGORIES[cat as usize];
@@ -1197,6 +1196,14 @@ fn menu_input(
             }
             return;
         }
+    }
+    // the save lists' X (`SaveList`): the chosen save deleted, asked first (`t_Q_DeleteSave`)
+    if matches!(menu.page, Page::Load | Page::Save) && answered.is_none() && help == Some(crate::helpbar::Btn::X) {
+        if let Some(slot) = menu.item_slot(menu.sel).filter(|s| slots.info(*s).is_some()) {
+            menu.confirm = Some((data.text("DisGFxMoviePlayerMenuBase_Texts", "t_Q_DeleteSave"), Action::DeleteSave(slot), 0));
+            menu.dirty = true;
+        }
+        return;
     }
     let mut activate = None;
     let mut dir = 0.0;
@@ -1343,6 +1350,10 @@ fn menu_input(
             save.write(SaveRequest(slot));
             menu.back();
         }
+        Action::DeleteSave(slot) => {
+            delete.write(crate::save::DeleteSave(slot));
+            menu.dirty = true;
+        }
         Action::Resume => {
             menu.open = None;
             menu.dirty = true;
@@ -1421,7 +1432,9 @@ fn menu_build(
     roots: Query<Entity, With<MenuRoot>>,
     (data, profile, challenge, stats): (Res<crate::gamedata::Data>, Res<crate::challenge::ChallengeProfile>, Res<crate::challenge::Challenge>, Res<crate::gameplay::PlayerStats>),
 ) {
-    if !menu.dirty && !(settings.is_changed() && menu.page == Page::Options) {
+    // (the saves read again, one deleted: the save lists rebuilt)
+    let saves = slots.is_changed() && matches!(menu.page, Page::Load | Page::Save);
+    if !menu.dirty && !(settings.is_changed() && menu.page == Page::Options) && !saves {
         return;
     }
     if menu.tutorials != stats.tutorials {

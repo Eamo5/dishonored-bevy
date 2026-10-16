@@ -44,6 +44,7 @@ fn draw(
     window: Query<&Window, With<PrimaryWindow>>,
     roots: Query<Entity, With<HelpRoot>>,
     mut shown: Local<Option<(usize, Vec<String>, UVec2)>>,
+    (mut ui, mut images): (ResMut<crate::ui_images::UiImages>, ResMut<Assets<Image>>),
 ) {
     let Ok(w) = window.single() else { return };
     let page = menu.front_page().filter(|p| p.0 == CODE);
@@ -51,6 +52,8 @@ fn draw(
     if key == *shown {
         return;
     }
+    // (its help bar comes in as the screen opens, then stays)
+    let opening = shown.is_none();
     *shown = key;
     for e in &roots {
         commands.entity(e).try_despawn();
@@ -121,5 +124,11 @@ fn draw(
         text(&mut commands, at + Vec2::new(52.85, -14.95), Vec2::new(826.95, 31.95), 0.0, labels[i].clone(), TextFont { font_size: FontSize::Px(28.0 * s), ..default() }, if on { DARK } else { PALE }, false);
         // its hit area (`btn`: the row's width)
         commands.spawn((MenuItem(i), Button, Node { position_type: PositionType::Absolute, left: Val::Px(off.x + (at.x - 7.65) * s), top: Val::Px(off.y + (at.y - 24.0) * s), width: Val::Px(935.0 * s), height: Val::Px(48.0 * s), ..default() }, ChildOf(root)));
+    }
+    // the help bar (`TutorialsScreen`: A Read Tutorial, B Back)
+    if let Some(lib) = timelines.get("lib") {
+        use crate::helpbar::{Btn, Entry};
+        let entries = [Entry::new(Btn::A, data.text("DisGFxMoviePlayerMenuBase_Texts", "t_ReadTutorial")), Entry::new(Btn::B, data.text("DisGFxMoviePlayerBase_Texts", "t_Back"))];
+        crate::helpbar::spawn(&mut commands, root, lib, s, off + crate::helpbar::END * s, &entries, &mut ui, &mut images, !opening);
     }
 }

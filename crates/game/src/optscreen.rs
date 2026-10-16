@@ -74,6 +74,7 @@ fn draw(
     window: Query<&Window, With<PrimaryWindow>>,
     roots: Query<Entity, With<OptRoot>>,
     mut shown: Local<Option<String>>,
+    (mut ui, mut images): (ResMut<crate::ui_images::UiImages>, ResMut<Assets<Image>>),
 ) {
     let Ok(w) = window.single() else { return };
     let page = menu.front_page().filter(|p| p.0 == 7);
@@ -93,6 +94,8 @@ fn draw(
     if key == *shown {
         return;
     }
+    // (its help bar comes in as the screen opens, then stays)
+    let opening = shown.is_none();
     *shown = key;
     for e in &roots {
         commands.entity(e).try_despawn();
@@ -325,15 +328,13 @@ fn draw(
             e.insert(MenuItem(i));
         }));
     }
-    // the help bar's: restore the category's settings, back
-    let help = if menu.capturing_binding() {
-        "PRESS A KEY    [Esc] CANCEL".to_string()
-    } else { format!(
-        "[Tab] {}    [R] {}    [Esc] {}",
-        data.text(MENU_BASE, OPT_CATEGORIES[((cat as usize) + 1) % n].0).to_uppercase(),
-        data.text("DisGFxMoviePlayerMenuBase_Texts", "t_RestoreSettings").to_uppercase(),
-        data.text("DisGFxMoviePlayerBase_Texts", "t_Back").to_uppercase()
-    ) };
-    let p = off + Vec2::new(1184.0 - 700.0, 651.0 - 16.0) * s;
-    commands.spawn((Text::new(help), title_font(21.0), TextColor(PALE), TextLayout::new(Justify::Right, LineBreak::NoWrap), Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(700.0 * s), ..default() }, Pickable::IGNORE, ChildOf(root)));
+    // the help bar (`Options_main`: X Restore Settings, B Back); a key being bound, its prompt
+    if menu.capturing_binding() {
+        let p = off + Vec2::new(1184.0 - 700.0, 651.0 - 16.0) * s;
+        commands.spawn((Text::new("PRESS A KEY    [Esc] CANCEL"), title_font(21.0), TextColor(PALE), TextLayout::new(Justify::Right, LineBreak::NoWrap), Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(700.0 * s), ..default() }, Pickable::IGNORE, ChildOf(root)));
+    } else if let Some(lib) = lib.clone() {
+        use crate::helpbar::{Btn, Entry};
+        let entries = [Entry::new(Btn::X, data.text("DisGFxMoviePlayerMenuBase_Texts", "t_RestoreSettings")), Entry::new(Btn::B, data.text("DisGFxMoviePlayerBase_Texts", "t_Back"))];
+        crate::helpbar::spawn(&mut commands, root, lib, s, off + crate::helpbar::END * s, &entries, &mut ui, &mut images, !opening);
+    }
 }

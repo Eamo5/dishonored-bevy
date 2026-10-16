@@ -111,6 +111,8 @@ fn draw(
     if key == *shown {
         return;
     }
+    // (its help bar comes in as the screen opens, then stays)
+    let opening = shown.as_ref().map(|k| k.0) != key.as_ref().map(|k| k.0);
     *shown = key;
     for e in &roots {
         commands.entity(e).try_despawn();
@@ -202,6 +204,17 @@ fn draw(
         let (a, b) = (list_pt(6.35, y - 31.65), list_pt(759.3, y + 30.4));
         let (lo, hi) = (a.min(b), a.max(b));
         commands.spawn((MenuItem(i), Button, Node { position_type: PositionType::Absolute, left: Val::Px(off.x + lo.x * s), top: Val::Px(off.y + lo.y * s), width: Val::Px((hi.x - lo.x) * s), height: Val::Px((hi.y - lo.y) * s), ..default() }, ChildOf(root)));
+    }
+    // the help bar (`SaveList`: A Accept, X Delete Save, B Back; an empty list's `back`)
+    if let Some(lib) = timelines.get("lib") {
+        use crate::helpbar::{Btn, Entry};
+        let base = "DisGFxMoviePlayerBase_Texts";
+        let entries = if slots.any() || save_mode {
+            vec![Entry::new(Btn::A, data.text(base, "t_Validate")), Entry::new(Btn::X, data.text("DisGFxMoviePlayerMenuBase_Texts", "t_DeleteSave")), Entry::new(Btn::B, data.text(base, "t_Back"))]
+        } else {
+            vec![Entry::new(Btn::B, data.text(base, "t_Back"))]
+        };
+        crate::helpbar::spawn(&mut commands, root, lib, s, off + crate::helpbar::END * s, &entries, &mut ui, &mut images, !opening);
     }
     // the chosen save's picture, date and name (main menu)
     if in_game {

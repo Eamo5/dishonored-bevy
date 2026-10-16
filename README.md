@@ -230,7 +230,8 @@ fullscreen display, vertical sync and the crosshair.
   its date in the original's `m_DateFormat` (local time) over its chapter (`AUTOSAVE - ` /
   `QUICKSAVE - ` before it), the chosen card light; saving offers `CREATE A NEW SAVE` first;
   in the main menu the chosen save's mission picture with its date and name up the turned
-  banners (`LoadGameDetails`).
+  banners (`LoadGameDetails`). Its help bar (`SaveList`): `ACCEPT`, `DELETE SAVE` (X, Shift:
+  asked first, "Do you want to delete this save?", then the save is gone), `BACK`.
 - **The options as `UI_OptionsMenu` draws them** (`optscreen.rs`): every setting of the
   original's `EProfileSettingID` in its order, with `ArkProfileSettings`' defaults and ranges
   (`General`: Gameplay — difficulty, `Kill Cam Mode`, `Auto Use Mana Elixir` (a power short of
@@ -254,8 +255,8 @@ fullscreen display, vertical sync and the crosshair.
   screen's -4 degree slant, their sub-categories on the
   dark band, the settings' rows with the original widgets — two choices side by side, a value
   between arrows, a slider's thumb with its number, a key binding's box — labelled with the
-  original words (`Settings.int`). Tab / Shift+Tab and Q / E move between them, R restores the
-  category's settings.
+  original words (`Settings.int`). Tab / Shift+Tab and Q / E move between them; the help bar's
+  `RESTORE SETTINGS` (X, Shift tapped: `Options_main`) restores the category's settings.
 - **Weapon dispersion and recoil** (`aim.rs`): the pistol's and crossbow's shots stray within
   a cone that closes to the weapon's least dispersion while Corvo keeps steady and opens to its
   most as he sprints, leaves the ground or blocks (`DisTweaks_WeaponRanged_Attributes` by
@@ -404,7 +405,8 @@ fullscreen display, vertical sync and the crosshair.
   on the torn band (its ends and the middle tiled as wide as the entries), coming in from the
   right. Each entry is clickable; under the pointer its key whitens, it rises and a line is
   drawn under its words; an entry locked is dimmed. On the mission statistics, the main
-  menu's missions and the journal's pages.
+  menu's missions, the new game's difficulties, the save and load lists, the options, the
+  pause menu's tutorials (`READ TUTORIAL`, `BACK`) and the journal's pages.
 - **Notes read as `UI_Note` shows them** (`notescreen.rs`): a note or book picked up opens over
   the blurred game on the dimmed, drifting backdrop — its title dark on the brush, its words in
   the scrolling field — and a location map in its frame; Escape puts it away (it stays in the
@@ -803,7 +805,8 @@ fullscreen display, vertical sync and the crosshair.
   slanted button bar at the bottom right laid out as `MainMenuButtonBar` lays it out —
   `m_MainMenu_btn_`s sized to their labels, the one chosen inverted on its light brush and
   grown); the new game's difficulties (`m_nGame`: the `lib_titleMc` title, the brushed list,
-  Corvo's portrait and the description for the one chosen); the pause screen (`p_bkgd` and
+  Corvo's portrait and the description for the one chosen, the help bar's `ACCEPT` and `BACK`:
+  `SecondaryScreen`); the pause screen (`p_bkgd` and
   `p_pauseMenu`: Corvo's mask, the brush frame, "PAUSE" up the left, the list masked to its
   slanted panel; its backdrop drifts as `_common.AnimatedBackground` makes it: the grain at
   15%, the shards and blades flying in and swaying). Dying, Corvo falls with his death's clip

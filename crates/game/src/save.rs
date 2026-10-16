@@ -20,6 +20,8 @@ impl Plugin for SavePlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<SaveRequest>()
             .add_message::<LoadRequest>()
+            .add_message::<DeleteSave>()
+            .add_systems(Update, delete_save)
             .insert_resource(SaveSlots::scan())
             .add_systems(OnEnter(GameState::InGame), arm_pending)
             .init_resource::<SaveBlocked>()
@@ -33,6 +35,20 @@ impl Plugin for SavePlugin {
 
 #[derive(Message, Clone, Copy)]
 pub struct SaveRequest(pub usize);
+
+/// A save deleted (the save list's `X`: `OnDeleteSaveConfirm`).
+#[derive(Message, Clone, Copy)]
+pub struct DeleteSave(pub usize);
+
+fn delete_save(mut requests: MessageReader<DeleteSave>, mut slots: ResMut<SaveSlots>) {
+    for r in requests.read() {
+        match std::fs::remove_file(slot_path(r.0)) {
+            Ok(()) => info!("save {} deleted", r.0),
+            Err(e) => warn!("save {}: not deleted: {e}", r.0),
+        }
+        *slots = SaveSlots::scan();
+    }
+}
 
 /// Whether Corvo may save now (a manual or quick save): not while fighting (nor for 1 s
 /// after), blinking, choking or assassinating someone, choosing (nor 0.1 s after), in a

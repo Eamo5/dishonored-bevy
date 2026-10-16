@@ -19,7 +19,7 @@ pub struct FrontendPlugin;
 
 impl Plugin for FrontendPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Frontend>().add_systems(Update, (build, layout).chain().after(crate::menu::MenuSet).run_if(in_state(GameState::InGame)));
+        app.init_resource::<Frontend>().add_systems(Update, (build, layout, new_game_help).chain().after(crate::menu::MenuSet).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -103,8 +103,6 @@ const NG_TEXT_AT: Vec2 = Vec2::new(2.25, -20.8);
 const NG_DESC_AT: Vec2 = Vec2::new(521.95, 18.7);
 const NG_DESC_W: f32 = 451.0;
 const NG_DESC_SIZE: f32 = 26.0;
-/// "BACK", where the help bar's would be
-const BACK_AT: Vec2 = Vec2::new(70.0, 680.0);
 /// the screen's title (`lib_titleMc` at `_title_mc`: its label `$TitleFont` 38 stretched 1.2
 /// high, dark on its light brush)
 const NG_TITLE_AT: Vec2 = Vec2::new(-545.75 - 0.15, -282.3 + 3.0);
@@ -269,23 +267,19 @@ fn build(
             if let Some(c) = Clip::export(&tl, "m_nGame") {
                 commands.spawn((MainClip, FlashClip::new(MOVIE, tl.clone(), c).real(), node(), Pickable::IGNORE, ChildOf(root)));
             }
-            // the difficulties (the last item, Back, is the help bar's)
-            let n = items.len().saturating_sub(1);
+            // the difficulties (Back is the help bar's: `new_game_help`)
             for (i, label) in items.iter().enumerate() {
-                if i < n {
-                    if let Some(c) = Clip::export(&tl, "m_nGame_btn") {
-                        let mut fc = FlashClip::new(MOVIE, tl.clone(), c).real();
-                        fc.alpha = 0.0;
-                        // (`_bMultiBkgdTypes`: the backings take the brush's frames in turn)
-                        let t2 = fc.tl.clone();
-                        if let Some(b) = fc.clip.child_mut("_bkgd_mc") {
-                            b.goto(&t2, i % 3, false);
-                        }
-                        commands.spawn((BtnClip(i), fc, node(), Pickable::IGNORE, ChildOf(root)));
+                if let Some(c) = Clip::export(&tl, "m_nGame_btn") {
+                    let mut fc = FlashClip::new(MOVIE, tl.clone(), c).real();
+                    fc.alpha = 0.0;
+                    // (`_bMultiBkgdTypes`: the backings take the brush's frames in turn)
+                    let t2 = fc.tl.clone();
+                    if let Some(b) = fc.clip.child_mut("_bkgd_mc") {
+                        b.goto(&t2, i % 3, false);
                     }
+                    commands.spawn((BtnClip(i), fc, node(), Pickable::IGNORE, ChildOf(root)));
                 }
-                let text = if i < n { label.clone() } else { data.text("DisGFxMoviePlayerBase_Texts", "t_Back") };
-                commands.spawn((BtnText(i), Text::new(text), TextFont { font: title.clone(), ..default() }, TextColor(TEXT_COLOR.with_alpha(0.0)), TextLayout::new(Justify::Left, bevy::text::LineBreak::NoWrap), node(), UiTransform::default(), Pickable::IGNORE, ChildOf(root)));
+                commands.spawn((BtnText(i), Text::new(label.clone()), TextFont { font: title.clone(), ..default() }, TextColor(TEXT_COLOR.with_alpha(0.0)), TextLayout::new(Justify::Left, bevy::text::LineBreak::NoWrap), node(), UiTransform::default(), Pickable::IGNORE, ChildOf(root)));
                 commands.spawn((MenuItem(i), Button, node(), ChildOf(root)));
             }
             let t = data.text("DisGFxMoviePlayerMainMenu_Texts", "t_NewGame").to_uppercase();
@@ -412,7 +406,7 @@ fn pause(dt: f32, s: f32, off: Vec2, box_at: Vec2, open: f32, menu: &Menu, fe: &
 /// The new game screen laid out: its list, the description and portrait for the one chosen.
 #[allow(clippy::too_many_arguments)]
 fn new_game(dt: f32, s: f32, off: Vec2, open: f32, menu: &Menu, fe: &mut Frontend, main: &mut MainQuery, btns: &mut BtnQuery, texts: &mut TextQuery, hits: &mut HitQuery, desc: &mut DescQuery, data: &crate::gamedata::Data) {
-    let n = fe.over.len().saturating_sub(1);
+    let n = fe.over.len();
     let menu_local = main.iter().next().and_then(|(fc, _)| fc.clip.placed("_menu_mc")).map(|(m, _)| m).unwrap_or([0.99757385, -0.06976318, 0.06976318, 0.99757385, -426.5, -25.95]);
     let mm = concat(&translate(NEWGAME_AT.x, NEWGAME_AT.y), &menu_local);
     let angle = mm[1].atan2(mm[0]);
@@ -465,35 +459,22 @@ fn new_game(dt: f32, s: f32, off: Vec2, open: f32, menu: &Menu, fe: &mut Fronten
         if f.font_size != fs {
             f.font_size = fs;
         }
-        let center = if t.0 < n {
-            // the label's box, its middle (stretched 1.2 high), on the stage
-            let local = at(t.0, e) + NG_TEXT_AT + Vec2::new(size.x / s * 0.5, size.y / s * 0.6);
-            off + apply(&mm, local) * s
-        } else {
-            off + BACK_AT * s
-        };
+        // the label's box, its middle (stretched 1.2 high), on the stage
+        let local = at(t.0, e) + NG_TEXT_AT + Vec2::new(size.x / s * 0.5, size.y / s * 0.6);
+        let center = off + apply(&mm, local) * s;
         node.left = Val::Px(center.x - size.x * 0.5);
         node.top = Val::Px(center.y - size.y * 0.5);
-        ut.rotation = Rot2::radians(if t.0 < n { angle } else { 0.0 });
-        ut.scale = Vec2::new(1.0, if t.0 < n { 1.2 } else { 1.0 });
-        let ok = if t.0 < n { k } else if over.get(t.0).is_some_and(|o| o.1) { 1.0 } else { 0.0 };
-        let c = if t.0 < n { TEXT_COLOR.mix(&OVER_COLOR, ok) } else { TEXT_COLOR.with_alpha(if sel == t.0 { 1.0 } else { 0.7 }) };
+        ut.rotation = Rot2::radians(angle);
+        ut.scale = Vec2::new(1.0, 1.2);
+        let c = TEXT_COLOR.mix(&OVER_COLOR, k);
         col.0 = c.with_alpha(c.alpha() * open);
     }
     for (h, _, mut node) in hits.iter_mut() {
-        if h.0 < n {
-            let c = off + apply(&mm, at(h.0, 0.0) + Vec2::new(66.0, 0.0)) * s;
-            node.left = Val::Px(c.x - 190.0 * s);
-            node.top = Val::Px(c.y - NG_BTN_H * 0.5 * s);
-            node.width = Val::Px(380.0 * s);
-            node.height = Val::Px(NG_BTN_H * s);
-        } else {
-            let c = off + BACK_AT * s;
-            node.left = Val::Px(c.x - 60.0 * s);
-            node.top = Val::Px(c.y - 20.0 * s);
-            node.width = Val::Px(120.0 * s);
-            node.height = Val::Px(40.0 * s);
-        }
+        let c = off + apply(&mm, at(h.0, 0.0) + Vec2::new(66.0, 0.0)) * s;
+        node.left = Val::Px(c.x - 190.0 * s);
+        node.top = Val::Px(c.y - NG_BTN_H * 0.5 * s);
+        node.width = Val::Px(380.0 * s);
+        node.height = Val::Px(NG_BTN_H * s);
     }
     // the description of the one chosen
     let words = data.text("DisGFxMoviePlayerMainMenu_Texts", &format!("t_difficulty{chosen}Desc"));
@@ -514,6 +495,41 @@ fn new_game(dt: f32, s: f32, off: Vec2, open: f32, menu: &Menu, fe: &mut Fronten
         ut.rotation = Rot2::radians(angle);
         col.0 = TEXT_COLOR.with_alpha(open);
     }
+}
+
+/// The new game's help bar (`SecondaryScreen`: A Accept, B Back), as the screen opens
+/// (`OnOpened`).
+#[derive(Component)]
+struct NewGameHelp;
+
+#[allow(clippy::too_many_arguments)]
+fn new_game_help(
+    mut commands: Commands,
+    menu: Res<Menu>,
+    window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut timelines: ResMut<MovieTimelines>,
+    data: Res<crate::gamedata::Data>,
+    (mut ui, mut images): (ResMut<crate::ui_images::UiImages>, ResMut<Assets<Image>>),
+    bars: Query<Entity, With<NewGameHelp>>,
+    mut shown: Local<Option<UVec2>>,
+) {
+    let Ok(w) = window.single() else { return };
+    let key = menu.front_page().filter(|p| p.0 == 2).map(|_| UVec2::new(w.width() as u32, w.height() as u32));
+    if key == *shown {
+        return;
+    }
+    let opening = shown.is_none();
+    *shown = key;
+    for e in &bars {
+        commands.entity(e).try_despawn();
+    }
+    let (Some(_), Some(lib)) = (key, timelines.get("lib")) else { return };
+    let (s, off) = stage(w);
+    let root = commands.spawn((NewGameHelp, Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }, GlobalZIndex(51), Pickable::IGNORE, DespawnOnExit(GameState::InGame))).id();
+    use crate::helpbar::{Btn, Entry};
+    let base = "DisGFxMoviePlayerBase_Texts";
+    let entries = [Entry::new(Btn::A, data.text(base, "t_Validate")), Entry::new(Btn::B, data.text(base, "t_Back"))];
+    crate::helpbar::spawn(&mut commands, root, lib, s, off + crate::helpbar::END * s, &entries, &mut ui, &mut images, !opening);
 }
 
 /// Back.easeOut and Strong.easeOut (as Flash's tweens).
