@@ -320,6 +320,7 @@ fn player_look(
     mut cam: Query<&mut Transform, With<PlayerCamera>>,
     (wheel, zoom, aim, paused): (Res<crate::wheel::Wheel>, Res<crate::zoom::Zoom>, Res<crate::aim::Aim>, Res<Paused>),
     mut last: Local<Vec2>,
+    pad: Res<crate::pad::Pad>,
 ) {
     let Ok((mut p, mut t)) = q.single_mut() else { *last = Vec2::ZERO; return };
     if p.is_added() { *last = Vec2::ZERO; }
@@ -336,6 +337,12 @@ fn player_look(
         // Menu/wheel motion belongs to the UI. Do not replay the last gameplay
         // delta through the smoothing filter when mouse-look resumes.
         *last = Vec2::ZERO;
+    }
+    // the pad's right stick (`pad`: its turn and look this frame), the lens slowing it too
+    if !paused.0 && !wheel.open && pad.look != Vec2::ZERO {
+        let k = 1.0 / zoom.factor.max(1.0);
+        p.yaw += pad.look.x * k;
+        p.pitch = (p.pitch + pad.look.y * k).clamp(-1.5, 1.5);
     }
     t.rotation = Quat::from_rotation_y(p.yaw);
     if let Ok(mut ct) = cam.single_mut() {
@@ -357,6 +364,7 @@ fn player_move(
     (swim, waters, carry, possession): (Res<crate::swim::Swim>, Option<Res<crate::swim::Waters>>, Res<crate::carry::Carry>, Res<crate::possession::Possession>),
     (mut climb, climbables, mut sfx): (ResMut<crate::climb::Climb>, Option<Res<crate::climb::Climbables>>, MessageWriter<crate::audio::PostEvent>),
     (cine, settings, paused, tc, mut slide, mut auto, mut hard): (Res<crate::script_world::Cinematic>, Res<crate::settings::Settings>, Res<Paused>, Res<crate::gameplay::TimeControl>, ResMut<Slide>, ResMut<AutoCrouch>, ResMut<HardLanding>),
+    pad: Res<crate::pad::Pad>,
     mut q: Query<(
         Entity,
         &mut Player,
@@ -393,9 +401,12 @@ fn player_move(
         wish -= right;
     }
     wish += fwd * vinput.forward;
+    // the pad's left stick: as far as it is pushed (`pad`)
+    let analog = pad.walk != Vec2::ZERO;
+    wish += fwd * pad.walk.y + right * pad.walk.x;
     // the scripts' cinematics hold Corvo where he is
     let held = cine.holds_movement();
-    let wish = if held { Vec3::ZERO } else { wish.normalize_or_zero() };
+    let wish = if held { Vec3::ZERO } else if analog { wish.clamp_length_max(1.0) } else { wish.normalize_or_zero() };
     let jump_pressed = !held && (keys.just_pressed(bind.key(crate::bindings::Act::Jump)) || std::mem::take(&mut vinput.jump));
     // (held in the air with the world while Daud's Blink is aimed)
     let dt = if wish == Vec3::ZERO && !jump_pressed { dt * tc.aim_freeze.clamp(0.0, 1.0) } else { dt };

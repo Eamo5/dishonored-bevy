@@ -158,6 +158,7 @@ fn wheel(
     roots: Query<Entity, With<WheelRoot>>,
     (mut equipped, mut sfx, vm): (MessageWriter<PowerEquipped>, MessageWriter<PostEvent>, Option<Res<crate::kismet::Vm>>),
     data: Res<crate::gamedata::Data>,
+    pad: Res<crate::pad::Pad>,
 ) {
     // (the scripts may shut it: `DisSeqAct_TogglePowerWheel`)
     let held = mouse.pressed(MouseButton::Middle) && !stats.dead && !vm.as_ref().is_some_and(|v| v.wheel_off);
@@ -223,6 +224,11 @@ fn wheel(
     }
     // point with the mouse: the item nearest the direction (`stickinessAngle` aside)
     w.aim += motion.delta;
+    // (opened from the pad: either stick points at the item, `Dis_Wheel_Open` with the pad)
+    let stick = if pad.sticks[0].length() >= pad.sticks[1].length() { pad.sticks[0] } else { pad.sticks[1] };
+    if stick.length() > 0.3 {
+        w.aim = Vec2::new(stick.x, -stick.y) * 160.0;
+    }
     let len = w.aim.length();
     if len > 160.0 {
         w.aim *= 160.0 / len;

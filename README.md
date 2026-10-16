@@ -90,6 +90,20 @@ fullscreen display, vertical sync and the crosshair.
 | F3 / V | Debug overlay / noclip |
 | F4 | The original's debug exec `KUWA`: the post-process graph's painterly Kuwahara branch |
 
+A gamepad plays as the original's default control scheme (`m_PadBindingSet1`; the other three
+are in the settings file, `pad_binding_set` 0-3):
+
+| Pad | Action |
+| --- | --- |
+| Left stick / click | Move (slower below full) / sprint (until he slows) |
+| Right stick / click | Look / zoom |
+| A / B / X / Y | Jump / sneak / use / lean (with the left stick) |
+| RT / LT | Sword / left hand |
+| RB / LB (hold) | Block / quick-access wheel (either stick points) |
+| D-pad | Shortcuts 1-4 |
+| Back / Start | Journal / pause menu |
+| In menus: D-pad or left stick, A, B, X / Y, RB / LB, RT / LT | Steer, act, back, the help bar's extra buttons, tabs, sub tabs |
+
 ## What's in
 
 - **Powers** (levels, ranges, durations from the original tweaks): Blink (its target marked as
@@ -442,6 +456,19 @@ fullscreen display, vertical sync and the crosshair.
   cards, the trials' gallery; and, following them as they scroll, the journal's objectives
   (left of the list) and a power's levels (right of their zone, `AnalogScrollView`) and a
   note's words (right of its mask, shown once they overrun it).
+- **The gamepad as the original binds it** (`pad.rs`, `DefaultInput.ini`): the control scheme's
+  buttons (`m_PadBindingSet1`..`4`) press what the keyboard's bindings would, Back opens the
+  journal and Start the pause menu, the D-pad picks the shortcuts
+  (`Dis_WheelShortcuts_GamepadSelect`); the left stick walks him slower below full, the right
+  turns him as `DisTweaks_PlayerInput` has it (the turn's scale from 230 up to 700 while the
+  stick is held full, rising 500 a second; the look up's 150; each times UE3's 100 a second in
+  its rotation units), with its own sensitivities and inversion; the left stick's click sprints
+  until he slows (`m_bUseSprintToggle_GamePad`, `m_fStopSprint_Threshold`), the lean button with
+  the stick leans (`m_bLeanWithAnalogStick`), either stick points at the quick-access wheel's
+  items. In the menus the pad steers as the arrows do (repeating while held), A acts, B and Start
+  go back, the shoulders change tabs and the triggers sub tabs, X and Y are the help bar's extra
+  buttons. Whichever was used last, pad or keyboard and mouse, the help bars' button icons
+  follow (the libraries' `_Multi` icons' pad frame or their `PC` frame: `m_bUsingGamepad`).
 - **The menus' sounds as the movies ask for them** (`SoundHandler.PlaySound` through the
   `Default` sound theme, `UISoundTheme_Common` and the movies' own, to `Snd_UI_Ingame`): a
   move along a list (`UI_Move`; at its end `UI_Stop`, the lists going no further, as

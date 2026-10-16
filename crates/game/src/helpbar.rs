@@ -18,7 +18,7 @@ pub struct HelpBarPlugin;
 
 impl Plugin for HelpBarPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Taps>().add_systems(PreUpdate, taps.after(bevy::input::InputSystems)).add_systems(Update, hover);
+        app.init_resource::<Taps>().add_systems(PreUpdate, taps.after(bevy::input::InputSystems)).add_systems(Update, (hover, switch_icons));
     }
 }
 
@@ -65,7 +65,7 @@ pub struct Taps {
 
 const TAP_KEYS: [[KeyCode; 2]; 2] = [[KeyCode::ShiftLeft, KeyCode::ShiftRight], [KeyCode::AltLeft, KeyCode::AltRight]];
 
-fn taps(keys: Res<ButtonInput<KeyCode>>, mut t: ResMut<Taps>) {
+pub(crate) fn taps(keys: Res<ButtonInput<KeyCode>>, mut t: ResMut<Taps>) {
     for (i, ks) in TAP_KEYS.iter().enumerate() {
         let down = keys.any_pressed(*ks);
         t.tapped[i] = false;
@@ -83,6 +83,7 @@ fn taps(keys: Res<ButtonInput<KeyCode>>, mut t: ResMut<Taps>) {
 }
 
 /// An entry of the bar: its button, words, and whether it is locked (`lockState`).
+#[derive(Clone)]
 pub struct Entry {
     pub btn: Btn,
     pub words: String,
@@ -108,6 +109,34 @@ pub struct HelpButton {
     x: f32,
     icon_w: f32,
     words_w: f32,
+}
+
+/// A bar as it was spawned (to draw it again with the other icons when the pad or the keyboard
+/// takes over: `bUsingGamepad`'s `UpdateIcons`), and the icons it shows (the pad's or not).
+#[derive(Component)]
+struct HelpBarSpec {
+    parent: Entity,
+    tl: Arc<Timelines>,
+    s: f32,
+    at: Vec2,
+    entries: Vec<Entry>,
+    pad: bool,
+}
+
+/// The bars drawn again with the pad's icons, or the keyboard's, as the one or the other is used.
+fn switch_icons(mut commands: Commands, pad: Res<crate::pad::Pad>, bars: Query<(Entity, &HelpBarSpec)>, buttons: Query<(Entity, &HelpButton)>, (mut ui, mut images): (ResMut<UiImages>, ResMut<Assets<Image>>)) {
+    for (e, spec) in &bars {
+        if spec.pad == pad.using {
+            continue;
+        }
+        for (b, h) in &buttons {
+            if h.bar == e {
+                commands.entity(b).despawn();
+            }
+        }
+        commands.entity(e).despawn();
+        spawn(&mut commands, spec.parent, spec.tl.clone(), spec.s, spec.at, &spec.entries, &mut ui, &mut images, true);
+    }
 }
 
 /// The button of an entry clicked this frame, if any.
@@ -136,7 +165,8 @@ pub fn spawn(commands: &mut Commands, parent: Entity, tl: Arc<Timelines>, s: f32
         fc.create_empty("_helpContent_mc", n, I);
         fc.attach(&path, &format!("lib_{n}_Multi"), n, [0.9, 0.0, 0.0, 0.9, 0.0, 0.0]);
         let icon = format!("{path}.{n}");
-        fc.goto(&icon, "PC", false);
+        // (the pad's buttons while a pad is used: `SetPCIcon`'s first frame)
+        fc.goto(&icon, if crate::pad::using() { "default" } else { "PC" }, false);
         let icon_w = fc.size(&icon).map(|v| v.x).unwrap_or(36.0);
         fc.set(&icon, PropsTo::default().x(icon_w * 0.5));
         fc.attach(&path, "help_txt", "txt", [1.0, 0.0, 0.0, 1.0, icon_w, 0.0]);
@@ -177,7 +207,8 @@ pub fn spawn(commands: &mut Commands, parent: Entity, tl: Arc<Timelines>, s: f32
         fc.set("", PropsTo::default().x(20.0).alpha(0.0));
         fc.tween("", PropsTo::default().x(0.0).alpha(1.0), 0.3, Ease::StrongOut);
     }
-    let bar = commands.spawn((fc, Node { position_type: PositionType::Absolute, left: Val::Px(at.x), top: Val::Px(at.y), ..default() }, Pickable::IGNORE, ChildOf(parent))).id();
+    let spec = HelpBarSpec { parent, tl: tl.clone(), s, at, entries: entries.to_vec(), pad: crate::pad::using() };
+    let bar = commands.spawn((fc, spec, Node { position_type: PositionType::Absolute, left: Val::Px(at.x), top: Val::Px(at.y), ..default() }, Pickable::IGNORE, ChildOf(parent))).id();
     for (i, (_, icon_w, words_w)) in laid.iter().enumerate() {
         let w = icon_w + words_w + 5.0;
         commands.spawn((

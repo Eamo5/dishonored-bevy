@@ -84,6 +84,14 @@ pub struct Settings {
     /// `PSI_Gameplay_KillCamMode`: the finishers' slow motion: 0 off, 1 normal (the last foe,
     /// else one in three), 2 frequent (every one)
     pub kill_cam: u8,
+    /// the pad's (`PSI_Gamepad_*`): its control scheme (`BindingSet`, 0-3), its look's
+    /// sensitivities across and up (`LookXSensitivity`, `LookYSensitivity`: 0.25-3), its look
+    /// up inverted, its vibration
+    pub pad_binding_set: u8,
+    pub pad_look_x: f32,
+    pub pad_look_y: f32,
+    pub pad_invert_y: bool,
+    pub pad_vibration: bool,
 }
 
 /// The display's sizes to choose from (its video modes, smallest first), as the window system
@@ -158,6 +166,11 @@ impl Default for Settings {
             auto_mana_elixir: true,
             mouse_smoothing: false,
             kill_cam: 1,
+            pad_binding_set: 0,
+            pad_look_x: 1.0,
+            pad_look_y: 1.0,
+            pad_invert_y: false,
+            pad_vibration: true,
         }
     }
 }

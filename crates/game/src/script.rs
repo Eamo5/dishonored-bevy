@@ -342,11 +342,12 @@ fn run_script(
     // drop real input so whoever is at the machine can't disturb the run
     let held_keys: Vec<KeyCode> = script.held.iter().filter_map(|(i, _)| if let Input::Key(k) = i { Some(*k) } else { None }).collect();
     let held_mouse: Vec<MouseButton> = script.held.iter().filter_map(|(i, _)| if let Input::Mouse(m) = i { Some(*m) } else { None }).collect();
-    let real_keys: Vec<KeyCode> = keys.get_pressed().chain(keys.get_just_released()).copied().filter(|k| !held_keys.contains(k)).collect();
+    // (the scripts' pad's presses are theirs too: `pad`)
+    let real_keys: Vec<KeyCode> = keys.get_pressed().chain(keys.get_just_released()).copied().filter(|k| !held_keys.contains(k) && !crate::pad::holds_key(*k)).collect();
     for k in real_keys {
         keys.reset(k);
     }
-    let real_mouse: Vec<MouseButton> = mouse.get_pressed().chain(mouse.get_just_released()).copied().filter(|m| !held_mouse.contains(m)).collect();
+    let real_mouse: Vec<MouseButton> = mouse.get_pressed().chain(mouse.get_just_released()).copied().filter(|m| !held_mouse.contains(m) && !crate::pad::holds_mouse(*m)).collect();
     for m in real_mouse {
         mouse.reset(m);
     }
@@ -1341,6 +1342,49 @@ fn run_script(
                     w.write_message(crate::mission::ShowMissionStats { tweak, op: 0 });
                 });
             }
+        }
+        "pad" | "stick" => {
+            // (tests) pad <a|b|x|y|lb|rb|lt|rt|ls|rs|back|start|up|down|left|right> [secs]: a
+            // pad's button held; stick <left|right> X Y [secs]: a stick pushed (`pad`)
+            use bevy::input::gamepad::GamepadButton as B;
+            let secs = |i: usize| cmd.get(i).and_then(|v| v.parse::<f32>().ok());
+            let (button, left, right) = if cmd[0] == "pad" {
+                let b = match cmd.get(1).map(|s| s.as_str()).unwrap_or("") {
+                    "a" => Some(B::South),
+                    "b" => Some(B::East),
+                    "x" => Some(B::West),
+                    "y" => Some(B::North),
+                    "lb" => Some(B::LeftTrigger),
+                    "rb" => Some(B::RightTrigger),
+                    "lt" => Some(B::LeftTrigger2),
+                    "rt" => Some(B::RightTrigger2),
+                    "ls" => Some(B::LeftThumb),
+                    "rs" => Some(B::RightThumb),
+                    "back" => Some(B::Select),
+                    "start" => Some(B::Start),
+                    "up" => Some(B::DPadUp),
+                    "down" => Some(B::DPadDown),
+                    "left" => Some(B::DPadLeft),
+                    "right" => Some(B::DPadRight),
+                    _ => None,
+                };
+                (b.map(|b| (b, secs(2).unwrap_or(0.1))), None, None)
+            } else {
+                let v = (Vec2::new(f(2), f(3)), secs(4).unwrap_or(0.5));
+                if cmd.get(1).is_some_and(|s| s == "right") { (None, None, Some(v)) } else { (None, Some(v), None) }
+            };
+            commands.queue(move |w: &mut World| {
+                let mut vp = w.resource_mut::<crate::pad::VirtualPad>();
+                if let Some(b) = button {
+                    vp.buttons.push(b);
+                }
+                if left.is_some() {
+                    vp.left = left;
+                }
+                if right.is_some() {
+                    vp.right = right;
+                }
+            });
         }
         "travel" => {
             // leave for another map as the level scripts would (start 0)
