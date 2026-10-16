@@ -256,7 +256,7 @@ fn pad_input(
     motion: Res<bevy::input::mouse::AccumulatedMouseMotion>,
     (bind, settings, time): (Res<Bindings>, Res<crate::settings::Settings>, Res<Time<Real>>),
     (menu, journal, store, note, end): (Res<crate::menu::Menu>, Res<crate::journal::Journal>, Res<crate::store::Store>, Res<crate::notescreen::NoteScreen>, Option<Res<crate::mission::MissionEnd>>),
-    wheel: Res<crate::wheel::Wheel>,
+    (wheel, choice): (Res<crate::wheel::Wheel>, Res<crate::choice::Choice>),
 ) {
     let dt = time.delta_secs();
     // the scripts' pad (tests) over the real one
@@ -292,7 +292,10 @@ fn pad_input(
         pad.using = false;
     }
     USING.store(pad.using, std::sync::atomic::Ordering::Relaxed);
-    let ui = menu.open.is_some() || journal.open || store.open.is_some() || note.open.is_some() || end.is_some();
+    let screens = menu.open.is_some() || journal.open || store.open.is_some() || note.open.is_some() || end.is_some();
+    // (a scripted choice's menu takes the pad as the menus do: A answers, the D-pad and the
+    // stick move; the chooser stands still)
+    let ui = screens || choice.pending.is_some();
     let mut want: Vec<Emu> = Vec::new();
     let mut pulse: Option<KeyCode> = None;
     pad.walk = Vec2::ZERO;
@@ -308,7 +311,7 @@ fn pad_input(
         if pressed(B::South) {
             want.push(Emu::Key(KeyCode::Enter));
         }
-        if pressed(B::East) || pressed(B::Start) {
+        if (screens && pressed(B::East)) || pressed(B::Start) {
             want.push(Emu::Key(KeyCode::Escape));
         }
         if journal.open && pressed(B::Select) {

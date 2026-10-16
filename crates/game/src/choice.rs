@@ -1,9 +1,12 @@
 //! The level scripts' choices (`DisSeqAct_DialogScriptedChoice`): going on to the next area
 //! or staying, and the story's decisions ("[I'll go to sleep now.]", "[Infect Bootleg
-//! Elixir]"). The options are listed on screen; the number keys (or Up / Down and [Use]) pick
-//! one, and the script carries on down that output. Walking away leaves it unanswered.
+//! Elixir]"). The options are listed on screen; as the HUD movie's menu takes them on PC
+//! (`InputsManager`, `SelectionHandler`, as roshan's r614/blink research decoded them), Up and
+//! Down move a line at a time (`Move`; `Stop` at the ends, no wrap), Enter (the pad's A)
+//! answers (`Validation`, the answer 150 ms on, the inputs off meanwhile; the number keys are
+//! the movie's dock bar, not the menu's), and the script carries on down that output. Walking
+//! away leaves it unanswered.
 
-use crate::bindings::{Act, Bindings};
 use crate::player::Player;
 use crate::GameState;
 use bevy::prelude::*;
@@ -29,6 +32,27 @@ pub struct Choice {
     pub pending: Option<(u32, Vec<(usize, String)>)>,
     sel: usize,
     at: Option<Vec3>,
+    /// answered: the option, and the time before the answer goes to the script
+    confirmed: Option<(usize, f32)>,
+}
+
+/// From the answer to the script (`OnPlayerChoiceConfirm` 150 ms after `Validation`).
+const CONFIRM_DELAY: f32 = 0.15;
+
+/// A line down or up among `n` (`SelectionHandler`: it stays at the ends).
+fn step(sel: usize, n: usize, down: bool) -> usize {
+    if down { (sel + 1).min(n.saturating_sub(1)) } else { sel.saturating_sub(1) }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_selection_stops_at_the_ends() {
+        assert_eq!(super::step(0, 3, false), 0);
+        assert_eq!(super::step(0, 3, true), 1);
+        assert_eq!(super::step(2, 3, true), 2);
+        assert_eq!(super::step(2, 3, false), 1);
+    }
 }
 
 impl Choice {
@@ -36,6 +60,7 @@ impl Choice {
         self.pending = Some((op, options));
         self.sel = 0;
         self.at = None;
+        self.confirmed = None;
     }
 
     /// The option highlighted.
@@ -46,11 +71,12 @@ impl Choice {
 
 #[allow(clippy::too_many_arguments)]
 fn choose(
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<Bindings>),
+    (keys, time): (Res<ButtonInput<KeyCode>>, Res<Time>),
     mut choice: ResMut<Choice>,
     vm: Option<ResMut<crate::kismet::Vm>>,
     player: Query<&Transform, With<Player>>,
     paused: Res<crate::hud::Paused>,
+    mut sfx: MessageWriter<crate::audio::PostEvent>,
 ) {
     let pos = player.single().map(|t| t.translation).ok();
     if choice.pending.is_some() && !paused.0 {
@@ -58,27 +84,40 @@ fn choose(
             choice.at = pos;
         }
         let n = choice.pending.as_ref().map(|p| p.1.len()).unwrap_or(0);
-        let digits = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5];
-        let mut pick = digits.iter().take(n).position(|k| keys.just_pressed(*k));
-        if keys.just_pressed(KeyCode::ArrowDown) {
-            choice.sel = (choice.sel + 1) % n.max(1);
-        }
-        if keys.just_pressed(KeyCode::ArrowUp) {
-            choice.sel = (choice.sel + n.max(1) - 1) % n.max(1);
-        }
-        if pick.is_none() && keys.just_pressed(bind.key(Act::Use)) {
-            pick = Some(choice.sel);
-        }
-        // test runs answer at once (`DH_CHOICE`: which, 1-based; default the first)
-        if std::env::var("DH_SCRIPT").is_ok() && std::env::var("DH_CHOICE").as_deref() != Ok("show") {
-            pick = Some(std::env::var("DH_CHOICE").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).saturating_sub(1).min(n.saturating_sub(1)));
-        }
-        if let (Some(i), Some(mut vm)) = (pick, vm) {
-            if let Some((op, opts)) = choice.pending.take() {
+        // answered: to the script once the delay is out
+        if let Some((i, left)) = choice.confirmed {
+            let left = left - time.delta_secs();
+            if left > 0.0 {
+                choice.confirmed = Some((i, left));
+                return;
+            }
+            choice.confirmed = None;
+            if let (Some(mut vm), Some((op, opts))) = (vm, choice.pending.take()) {
                 if let Some((out, _)) = opts.get(i) {
                     vm.choose(op, *out);
                 }
             }
+            return;
+        }
+        let ui = |sfx: &mut MessageWriter<crate::audio::PostEvent>, event: &str| {
+            sfx.write(crate::audio::PostEvent::named(event, None));
+        };
+        for (key, down) in [(KeyCode::ArrowDown, true), (KeyCode::ArrowUp, false)] {
+            if keys.just_pressed(key) {
+                let to = step(choice.sel, n, down);
+                ui(&mut sfx, if to != choice.sel { "UI_Move" } else { "UI_Stop" });
+                choice.sel = to;
+            }
+        }
+        let mut pick = (keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::NumpadEnter)).then_some(choice.sel);
+        // test runs answer at once (`DH_CHOICE`: which, 1-based; default the first)
+        if std::env::var("DH_SCRIPT").is_ok() && std::env::var("DH_CHOICE").as_deref() != Ok("show") {
+            pick = Some(std::env::var("DH_CHOICE").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).saturating_sub(1).min(n.saturating_sub(1)));
+        }
+        if let (Some(i), true) = (pick, vm.is_some()) {
+            choice.sel = i;
+            choice.confirmed = Some((i, CONFIRM_DELAY));
+            ui(&mut sfx, "UI_Validation");
         } else if let (Some(a), Some(p)) = (choice.at, pos) {
             // walked away: no answer
             if a.distance(p) > 6.0 {
@@ -247,6 +286,12 @@ mod ui {
                     fc.goto("", "out", true);
                 }
             }
+            // (the A glyph, `lib_A_Multi` forced to its Xenon frame on PC, on the one chosen
+            // only while a pad is in use: `bUsingGamepad`)
+            if fc.clip.child("_a_mc").is_some_and(|a| a.frame == 0) {
+                fc.goto("_a_mc", "Xenon", false);
+            }
+            fc.set_visible("_a_mc", b.0 == sel && crate::pad::using());
         }
         if ui.sel != Some(sel) {
             if let Ok((mut m, _)) = menus.single_mut() {

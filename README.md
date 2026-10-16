@@ -1379,9 +1379,13 @@ are in the settings file, `pad_binding_set` 0-3):
   player as the HUD movie's `PlayerChoice` menu draws them (`hud_playerChoice`: the options
   stacked up from the bottom left of the middle, each a `hud_plC_button` with its circle, the
   arc beside them; the highlighted one plays `over`), the screen letterboxed meanwhile (the
-  choice state's `m_bUseLetterboxing`: `hud_blackStripes`): the number keys, or Up / Down and
-  [Use], answer; walking away leaves them unanswered. Script: `choice A|B|C` (with
-  `DH_CHOICE=show` to leave it up).
+  choice state's `m_bUseLetterboxing`: `hud_blackStripes`). As the movie's menu takes them on
+  PC (`InputsManager`, `SelectionHandler`, as roshan's r614/blink research decoded them), Up
+  and Down move a line (`Move`; `Stop` at the ends, no wrap) and Enter answers (`Validation`,
+  the answer reaching the script 150 ms on); the pad's D-pad or stick and A do the same, and
+  the A glyph shows on the highlighted option only while a pad is in use (`bUsingGamepad`).
+  The number keys are the movie's dock bar, not the menu's. Walking away leaves them
+  unanswered. Script: `choice A|B|C` (with `DH_CHOICE=show` to leave it up).
 - **Event messages**: the HUD tweak's game messages for runes and bone charms found
   ("2/3 Runes found", the first time "New Rune added / Press [J] to acquire Powers", "New
   Bone Charm added / Press [J] to equip") and mission clues ("Mission Clues updated / Press

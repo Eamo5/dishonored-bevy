@@ -8364,8 +8364,8 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
 /// A movie's imports (`ImportAssets`) made its own: each imported symbol's tree (sprites,
 /// shapes, their bitmaps) copied from the other movie's cooked timeline under fresh ids, the
 /// import's id its root (the menus' `lib_titleMc`, the options and load screens). Fonts are
-/// left out (their text is drawn by the game).
-fn inline_imports(movie: &swf::Movie, tl: &mut crate::format::Timelines, root: &Path, dir: &Path, index: &mut serde_json::Map<String, serde_json::Value>) -> Result<()> {
+/// left out (their text is drawn by the game). `only`: just these symbols.
+fn inline_imports(movie: &swf::Movie, tl: &mut crate::format::Timelines, root: &Path, dir: &Path, index: &mut serde_json::Map<String, serde_json::Value>, only: Option<&[&str]>) -> Result<()> {
     use crate::format::{ShapeBitmap, SpriteTimeline, TlOp};
     // the other movies by file name, as cooked from Startup
     let source = |url: &str| -> Option<&'static str> {
@@ -8383,6 +8383,9 @@ fn inline_imports(movie: &swf::Movie, tl: &mut crate::format::Timelines, root: &
     let mut next_bitmap: u16 = 60000;
     let mut n = 0;
     for (id, url, name) in movie.imports() {
+        if only.is_some_and(|o| !o.contains(&name.as_str())) {
+            continue;
+        }
         let Some(src) = source(&url) else { continue };
         if !cache.contains_key(src) {
             let Ok(bytes) = std::fs::read(root.join("ui").join(src).join("timeline.json")) else { continue };
@@ -8551,9 +8554,12 @@ fn ui_images(cooked: &Path, pkg: &upk::Package, movie_path: &str, root: &Path) -
     for (id, w, h, rgba) in &vectors {
         save(*id as u32, *w, *h, rgba)?;
     }
-    // the symbols it imports from the library and the other screens, copied in
+    // the symbols it imports from the library and the other screens, copied in (the HUD's
+    // choice buttons' pad glyph, `lib_A_Multi`; its item icons are the game's own)
     if raster {
-        inline_imports(&movie, &mut tl, root, &dir, &mut index)?;
+        inline_imports(&movie, &mut tl, root, &dir, &mut index, None)?;
+    } else if name == "HUD" {
+        inline_imports(&movie, &mut tl, root, &dir, &mut index, Some(&["lib_A_Multi"]))?;
     }
     std::fs::write(dir.join("index.json"), serde_json::to_vec_pretty(&index)?)?;
     std::fs::write(dir.join("timeline.json"), serde_json::to_vec(&tl)?)?;
