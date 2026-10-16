@@ -643,7 +643,10 @@ pub(crate) fn prop_focus(
         focus.0 = true;
         focus.1 = None;
         let throw = mouse.just_pressed(MouseButton::Left);
-        if keys.just_pressed(use_key) || throw || stats.dead || possession.host.is_some() {
+        // (damage taken drops it too: the original's hurt handler, as roshan's r614/blink
+        // research decoded it)
+        let hurt = stats.damage_flash > 0.9;
+        if keys.just_pressed(use_key) || throw || hurt || stats.dead || possession.host.is_some() {
             held.0 = None;
             held.1 = 0.3;
             prop.released = 0.35;
@@ -662,7 +665,9 @@ pub(crate) fn prop_focus(
                     // (a wall right ahead is struck at this speed)
                     prop.last_vel = v.linear;
                 } else {
-                    v.linear *= 0.3;
+                    // (a drop gives it no speed of its own)
+                    v.linear = Vec3::ZERO;
+                    v.angular = Vec3::ZERO;
                 }
             }
         }
@@ -692,8 +697,9 @@ pub(crate) fn prop_focus(
     let name = if m.name.is_empty() { "Object".to_string() } else { m.name.clone() };
     focus.0 = true;
     focus.1 = None;
-    // (`DUI_Crosshair_Carry`)
-    focus.2 = format!("Hold {} Carry", hint(Act::Use));
+    // (its interactable tweak's `m_InteractText`, "`GBA_Use` Carry": a press, not the bodies'
+    // hold)
+    focus.2 = format!("{} Carry", hint(Act::Use));
     focus.3 = name.to_string();
     if keys.just_pressed(use_key) {
         held.0 = Some(e);
@@ -710,7 +716,16 @@ pub(crate) fn prop_focus(
     }
 }
 
-/// The prop in hand floats before Corvo's eyes, kept off him.
+/// How far ahead the empty hands hold a prop (`Twk_EmptyHands.m_fMovableHoldDist`, -100 uu)
+/// and how much of it shows by its weight (`m_fShowMovableHeight_Tiny/Small/Medium/Large`, 75 /
+/// 90 / 90 / 90 uu, against the 70 the hands' formula adds), m.
+const HOLD_DIST: f32 = -1.0;
+const SHOW_HEIGHT: [f32; 4] = [0.75, 0.9, 0.9, 0.9];
+
+/// The prop in hand floats before Corvo's eyes, kept off him: as roshan's r614/blink research
+/// decoded the empty hands' tick, its origin `forward x (box.min.x + box.max.x - HoldDist)`
+/// ahead of the eye and `up x (box.min.z + box.max.z + 70 - ShowHeight)` below it, turned as
+/// the view is (its own X along the view).
 fn hold_prop(
     mut held: ResMut<Held>,
     mut props: Query<&mut Prop>,
@@ -739,10 +754,21 @@ fn hold_prop(
     let Ok(prop) = props.get(e) else { return };
     let Some(Ok((t, mut v, mut g))) = prop.body.map(|b| bodies.get_mut(b)) else { return };
     g.filters = LOOSE.difference(GROUP_PLAYER);
-    let target = c.translation() + c.forward().as_vec3() * 1.0 - Vec3::Y * 0.15;
+    // (its box about its origin: the body sits at the box's centre, `offset`; the box's
+    // forward is the mesh's X, its up the mesh's Y, UE's Z)
+    let m = &level.scene.movables[prop.index];
+    let (fwd, up) = (c.forward().as_vec3(), c.up().as_vec3());
+    let ahead = 2.0 * prop.offset.x - HOLD_DIST;
+    let below = 2.0 * prop.offset.y + 0.7 - SHOW_HEIGHT[m.weight.min(3) as usize];
+    let turn = c.rotation() * Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+    let target = c.translation() + fwd * ahead - up * below + turn * prop.offset;
     let to = target - t.translation;
     v.linear = (to * 14.0).clamp_length_max(12.0);
-    v.angular *= 0.8;
+    let (axis, mut angle) = (turn * t.rotation.inverse()).normalize().to_axis_angle();
+    if angle > std::f32::consts::PI {
+        angle -= std::f32::consts::TAU;
+    }
+    v.angular = (axis * angle * 14.0).clamp_length_max(20.0);
 }
 
 /// A knock: its sound, effect and noise (the contact system's), and a hard one breaks it.

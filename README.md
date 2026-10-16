@@ -991,8 +991,8 @@ are in the settings file, `pad_binding_set` 0-3):
   the 1 key), bracketed in the tutorials and messages as in the interaction texts.
 - **The interaction window** (`intwindow.rs`, the HUD movie's `hud_intWindow`): right of the
   crosshair, the name of what Corvo looks at over a faint rule and what he can do with it,
-  in the HUD tweak's `m_InteractionTexts` (`[F] Loot` to take, `Hold [F] Carry` a body or a
-  prop), on the window's brushed backing.
+  in the HUD tweak's `m_InteractionTexts` (`[F] Loot` to take, `Hold [F] Carry` a body; a
+  prop's own interactable text, `[F] Carry`), on the window's brushed backing.
 - **Move and context prompts** (`prompts.rs`): the HUD movie's `InteractionsIcons` at the
   bottom right — for each special move within reach, its `hud_interactionIc` icon and keys
   (assassinate `[Left Mouse Button]` and choke `[Left Control] [Hold]` behind someone
@@ -1479,7 +1479,7 @@ are in the settings file, `pad_binding_set` 0-3):
 - **Rats underfoot** (`DisBehaviorRatStomp`, `DisTweaks_NPCStomp` 2.5 m): people stamp on the rats that come near (their `..StompRat` clips and "rat" attack bark), killing those still under the heel. A rat killed (stamped on, cut down, blown up) dies with its clip (`Death1`, `Death2`) where it fell and lies there 20 s (our reading) before it is gone. A guard set upon by a swarm calls for help (a rat-swarm noise, `m_SwarmCallForHelpLoudness` 20 m, at most once a second, as roshan's r614/blink research decoded it): others of its side within earshot that fight rats (`DisBehaviorCombatRatSwarm`: guards, thugs, Overseers, whose brains commit at once) come to the rat on it and stamp, until the swarm leaves it be; a fight with Corvo outranks it.
 - **Making off from grenades** (`DisBehaviorEscapeExplosion`, `AI_BhvrTwk_EscapeExplosion`'s default tweak): a character that sees a live grenade within 3 m (`m_fEscapeThreatRadius` 300 uu) and 45 degrees of its facing (`m_fDiscoveryAngle`) is startled (`m_fSurpriseChance` 1: `Empty_Surprised_Front` or, sword drawn, `Sword_Surprised_Front`, on its upper body) and runs to 6 m clear of it (`m_fExplosionClearance` 600 uu), above any fight, following a grenade that rolls, for at most 5 s (`m_fEscapeEndTimer`) and 1 s after it goes off (`m_fEscapeThreatTimerAfterExplosion`), with its "grenade!" bark (`ESCAPE_IMPENDING_EXPLOSION`). Not its thrower, nor one it's stuck to.
 - **Wall of light eyes**: the eye above each wall (`DisDetectionEye`) shows what it sees in its detection cylinder with its tweak's materials: white with nobody about, red at someone the wall would burn (with its detection sound), blue at someone it lets pass, dark when unpowered. A device's receptacle is the nearest of its name (sublevels reuse actor names). Script: `wall [D]`.
-- **Tripwire traps**: the wires strung across passages (`DisTripwire`) snap when Corvo walks into them (jumping, Blinking or a small creature passes) and raise their `DisSeqEvent_Tripwire`; the level scripts fire the launchers (`DisSeqAct_ActivateProjectileLauncher`), which shoot at their target point on their sequence's fire notify: the whiskey launcher's explosive arrow bursts on what it strikes (`TrapArrowExplosion_twk`), the bolt launcher's bolt wounds. A launcher not yet fired can be disarmed for its ammunition (`m_HarvestedAmmo`: an incendiary bolt or a bolt). Sprung and disarmed traps, and broken or moved props, are kept in saves. A trap belongs to its sublevel: until a streamed sublevel loads (the trials' later rounds, say) its traps aren't there, hidden and inert, and they go when it streams out. Script: `trap [wire|launcher] [D]`, `stream NAME [out]`; `DH_TRAP_LOG`.
+- **Tripwire traps**: the wires strung across passages (`DisTripwire`) snap when Corvo walks into them (jumping, Blinking or a small creature passes) and raise their `DisSeqEvent_Tripwire`; the level scripts fire the launchers (`DisSeqAct_ActivateProjectileLauncher`), which shoot at their target point on their sequence's fire notify: the whiskey launcher's explosive arrow bursts on what it strikes (`TrapArrowExplosion_twk`), the bolt launcher's bolt wounds. A launcher not yet fired can be disarmed, and, fired or not, gives its ammunition once (`m_HarvestedAmmo`: an incendiary bolt or a bolt). Sprung and disarmed traps, and broken or moved props, are kept in saves. A trap belongs to its sublevel: until a streamed sublevel loads (the trials' later rounds, say) its traps aren't there, hidden and inert, and they go when it streams out. Script: `trap [wire|launcher] [D]`, `stream NAME [out]`; `DH_TRAP_LOG`.
 - **Music boxes**: a musical Overseer carries its music box on its `MusicBox` socket, held in
   both hands as it walks or stands (`Musicbox_Idle` on its upper body) and cranked while it plays
   (`MusicBox_PlayMusic_In`, `_Loop`, `_Out`), as roshan's r614/blink research read `DisWepMusicBox`;
@@ -2207,7 +2207,11 @@ against the install's own data where it carries them, then implemented independe
     (`m_ImmuneNPCDamage`; the characters' `m_NonNPCDamage` 5 comes with the cut). A blast sets it
     off 0.75 s later.
   - The blade reaches 2.1 m, growing to 2.835 m at a full sprint.
-  - Thrown props fly at `ThrowStrength` whatever their weight, without his own speed.
+  - Thrown props fly at `ThrowStrength` whatever their weight, without his own speed. A dropped
+    one is let go with no speed of its own, and damage taken drops it. Held, it sits where the
+    empty hands' tick puts it: its origin `box.min.x + box.max.x + 100` uu along the view and
+    `box.min.z + box.max.z + 70 - m_fShowMovableHeight` (75 tiny, 90 else) below the eye,
+    turned as the view is.
 - **Powers.**
   - Wind Blast sends the grenades in its cone back.
   - Possession takes 1.1 s (`m_IntroDuration`) before he has control. During Bend Time,
@@ -2246,8 +2250,12 @@ against the install's own data where it carries them, then implemented independe
     the arm follows Corvo: the nine aim offsets (`ADD_Sword_Gun_AimIdle_*`, additive clips) are
     blended by where he is off its facing, 90 degrees each way, and laid over the pose as UE3
     does (each delta after the pose's rotation). `DH_GUN_LOG` logs its steps.
-- **Tripwires** are snapped by anyone walking into them, guards too. Launchers fire at once,
-  straight at their target.
+- **Tripwires** are snapped by anyone walking into them, guards too, and by a blast reaching them
+  (every damage type's but Wind Blast's, `m_bDontTriggerTripWire`); a snapped wire's event fires
+  every output ("Tripped" and "Deactivated"). Launchers fire at once, straight at their target.
+  Their shot's direct hit wounds (10) before the explosive one bursts 10 uu back along its way.
+  A launcher's `Interact` disarms it if armed and gives its ammunition if still on it, fired or
+  not, as much as Corvo can carry, once anything was taken.
 - **The interface.** The health and mana gauges show for 8 s after a change; a keyhole needs Use
   held 0.3 s. The screen fades to black over 0.2 s and the keyhole's view comes up at 0.3 s;
   leaving fades back from black over 0.3 s.

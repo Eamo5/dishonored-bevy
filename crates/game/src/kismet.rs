@@ -1455,9 +1455,15 @@ impl Vm {
 
     /// Trigger an event op (respects enabling and its trigger count).
     fn event(&mut self, ev: u32, out: usize, instigator: Option<Val>) -> bool {
+        self.event_outs(ev, &[out], instigator)
+    }
+
+    /// An event activated once through these outputs.
+    fn event_outs(&mut self, ev: u32, outs: &[usize], instigator: Option<Val>) -> bool {
         if self.is_inert(ev) {
             return false;
         }
+        let out = outs.first().copied().unwrap_or(0);
         let max = self.pi(ev, "MaxTriggerCount").unwrap_or(1);
         // (one leaving a touch volume isn't held back by it)
         let leaving_touch = out == 1 && matches!(self.g.ops[ev as usize].class.as_str(), "SeqEvent_Touch" | "DisSeqEvent_Touch");
@@ -1481,7 +1487,9 @@ impl Vm {
         if let Some(v) = instigator {
             self.write(ev, "Instigator", v);
         }
-        self.fire(ev, out);
+        for &o in outs {
+            self.fire(ev, o);
+        }
         true
     }
 
@@ -1670,12 +1678,13 @@ impl Vm {
             if !classes.iter().any(|c| class == *c) {
                 continue;
             }
-            let idx = match out {
-                OutSel::Index(i) => Some(i),
-                OutSel::Desc(d) => self.output_index(ev, d),
+            let outs: Vec<usize> = match out {
+                OutSel::Index(i) => vec![i],
+                OutSel::Desc(d) => self.output_index(ev, d).into_iter().collect(),
+                OutSel::All => (0..self.g.ops[ev as usize].outputs.len()).collect(),
             };
-            if let Some(i) = idx {
-                self.event(ev, i, instigator.clone());
+            if !outs.is_empty() {
+                self.event_outs(ev, &outs, instigator.clone());
             }
         }
     }
@@ -5076,6 +5085,8 @@ const DOOR_SWING: f32 = 0.65;
 pub enum OutSel {
     Index(usize),
     Desc(&'static str),
+    /// every output at once (`FireGeneratedEvents` without an output list)
+    All,
 }
 
 fn initial_value(v: &dhcook::format::KVar) -> Val {
@@ -5975,7 +5986,9 @@ fn world_events(
             Interaction::Tripwire(t) => {
                 let actors: Vec<u32> = vm.g.actors.iter().enumerate().filter(|(_, a)| a.trap == Some(*t)).map(|(i, _)| i as u32).collect();
                 for a in actors {
-                    vm.actor_event(a, &["DisSeqEvent_Tripwire"], OutSel::Desc("Tripped"), Some(Val::Player));
+                    // (every output: "Tripped" and "Deactivated", the wire's `FireGeneratedEvents`
+                    // as roshan's r614/blink research decoded it)
+                    vm.actor_event(a, &["DisSeqEvent_Tripwire"], OutSel::All, Some(Val::Player));
                 }
             }
             Interaction::DoorLocked(instance) => {

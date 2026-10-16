@@ -4,9 +4,10 @@
 //! launchers (`DisSeqAct_ActivateProjectileLauncher`), which shoot their projectile
 //! (`m_pProjectileTweak`: the whiskey launcher's invisible explosive arrow, the bolt launcher's
 //! bolt) at their target point at the sequence's `DishonoredNotify_FireProjectile`. A launcher
-//! not yet fired can be disarmed ([Use] "Disarm"): its "TripodTrap_Defuse" sequence, and its
-//! ammunition (`m_HarvestedAmmo`) is Corvo's. Jumping or Blinking over the wire, or a creature
-//! small enough to pass under it, leaves it be.
+//! not yet fired can be disarmed ([Use] "Disarm"): its "TripodTrap_Defuse" sequence; and,
+//! armed or fired, its ammunition (`m_HarvestedAmmo`) is Corvo's once, as much as he can carry.
+//! Jumping or Blinking over the wire, or a creature small enough to pass under it, leaves it
+//! be; a blast reaching it snaps it.
 
 use crate::anim::Animator;
 use crate::audio::PostEvent;
@@ -58,6 +59,8 @@ pub struct TrapPart {
     /// a wire tripped, a launcher fired
     sprung: bool,
     disarmed: bool,
+    /// a launcher's ammunition taken (`m_bHarvested`)
+    harvested: bool,
     /// a launcher firing: seconds into its sequence, and whether it has shot yet
     firing: Option<(f32, bool)>,
     /// a wire: its ends
@@ -75,7 +78,15 @@ impl TrapPart {
         (!self.launcher).then_some(self.wire)
     }
     pub fn describe(&self) -> String {
-        format!("#{} {} sprung {} disarmed {}{}", self.index, if self.launcher { "launcher" } else { "wire" }, self.sprung, self.disarmed, if self.away { " (its sublevel out)" } else { "" })
+        format!("#{} {} sprung {} disarmed {} harvested {}{}", self.index, if self.launcher { "launcher" } else { "wire" }, self.sprung, self.disarmed, self.harvested, if self.away { " (its sublevel out)" } else { "" })
+    }
+    /// its place among the level's traps (`scene.traps`)
+    pub fn index(&self) -> u32 {
+        self.index
+    }
+    /// what the saves keep of it (`TrapLog::state`): sprung 1, disarmed 2, harvested 4
+    fn logged(&self) -> u8 {
+        self.sprung as u8 | (self.disarmed as u8) << 1 | (self.harvested as u8) << 2
     }
     fn socket(&self, name: &str, globals: &Query<&GlobalTransform>) -> Option<GlobalTransform> {
         let (_, j, at) = self.sockets.iter().find(|s| s.0.eq_ignore_ascii_case(name))?;
@@ -107,6 +118,8 @@ struct TrapSave {
     index: u32,
     sprung: bool,
     disarmed: bool,
+    #[serde(default)]
+    harvested: bool,
     firing: Option<(f32, bool)>,
     animation: Option<(String, f32, f32, bool, bool)>,
 }
@@ -123,7 +136,7 @@ struct DartSave {
 impl TrapsSave {
     pub(crate) fn capture<'a>(parts: impl IntoIterator<Item = (&'a TrapPart, Option<&'a Animator>)>, darts: impl IntoIterator<Item = (&'a Dart, &'a Transform)>) -> Self {
         Self {
-            parts: parts.into_iter().map(|(t, a)| TrapSave { index: t.index, sprung: t.sprung, disarmed: t.disarmed, firing: t.firing,
+            parts: parts.into_iter().map(|(t, a)| TrapSave { index: t.index, sprung: t.sprung, disarmed: t.disarmed, harvested: t.harvested, firing: t.firing,
                 animation: a.and_then(|a| a.current().map(|c| (a.lib.clip(c.clip).name.clone(), c.t, c.speed, c.looping, a.sounds))) }).collect(),
             darts: darts.into_iter().map(|(d, t)| DartSave { trap: d.trap, position: t.translation.to_array(),
                 velocity: d.vel.to_array(), gravity: d.gravity, life: d.life }).collect(),
@@ -148,6 +161,7 @@ fn restore_trap_state(mut commands: Commands, mut pending: ResMut<TrapRestore>, 
         let Some(s) = saved.get(&t.index) else { continue };
         t.sprung = s.sprung;
         t.disarmed = s.disarmed;
+        t.harvested = s.harvested;
         t.firing = s.firing;
         if let (Some(mut a), Some((name, time, speed, looping, sounds))) = (a, &s.animation) {
             if let Some(clip) = a.lib.find(name) {
@@ -231,7 +245,7 @@ fn spawn_trap(commands: &mut Commands, vis: &crate::level::NpcVisual, def: &Trap
         Some(c)
     } else { None };
     let mut ec = commands.entity(root);
-    ec.insert(TrapPart { index, launcher: def.launcher, sprung: false, disarmed: false, firing: None, wire, sockets, collider, away: false });
+    ec.insert(TrapPart { index, launcher: def.launcher, sprung: false, disarmed: false, harvested: false, firing: None, wire, sockets, collider, away: false });
     if let Some(lib) = vis.anims.clone() {
         ec.insert(Animator::new(lib, &vis.skeleton, joints));
     }
@@ -260,8 +274,9 @@ fn restore_traps(mut log: ResMut<TrapLog>, level: Option<Res<LevelInfo>>, mut tr
     for (mut t, a) in &mut traps {
         let Some(&s) = log.state.get(&t.index) else { continue };
         let Some(def) = level.scene.traps.get(t.index as usize) else { continue };
-        t.sprung = s == 1;
-        t.disarmed = s == 2;
+        t.sprung = s & 1 != 0;
+        t.disarmed = s & 2 != 0;
+        t.harvested = s & 4 != 0;
         if let Some(mut a) = a {
             play(&mut a, if t.disarmed { &def.disarm_anim } else { &def.fire_anim }, true);
         }
@@ -269,7 +284,8 @@ fn restore_traps(mut log: ResMut<TrapLog>, level: Option<Res<LevelInfo>>, mut tr
 }
 
 /// Someone walking into a wire snaps it: Corvo, or any living character (the original's any
-/// live actor but a rat, guards too, as roshan's r614/blink research found).
+/// live actor but a rat, guards too, as roshan's r614/blink research found); and so does damage
+/// reaching it, a blast's (every damage type's but Wind Blast's, `m_bDontTriggerTripWire`).
 #[allow(clippy::too_many_arguments)]
 fn trip_wires(
     level: Option<Res<LevelInfo>>,
@@ -279,7 +295,9 @@ fn trip_wires(
     mut log: ResMut<TrapLog>,
     mut used: MessageWriter<Interaction>,
     npcs: Query<(&Transform, &crate::npc::Npc), Without<crate::possession::Possessed>>,
+    mut blasts: MessageReader<crate::gadgets::Explosion>,
 ) {
+    let blasts: Vec<(Vec3, f32)> = blasts.read().filter(|b| b.damage > 0.0).map(|b| (b.at, b.radius)).collect();
     let Some(level) = level else { return };
     // the bodies about: (foot, head, radius)
     let mut bodies: Vec<(Vec3, Vec3, f32)> = npcs
@@ -300,10 +318,12 @@ fn trip_wires(
         if def.launcher || t.sprung || t.disarmed || t.away {
             continue;
         }
-        let Some(&(lo, _, _)) = bodies.iter().find(|(lo, hi, r)| crate::krust::segment_distance(t.wire.0, t.wire.1, *lo, *hi) <= *r) else { continue };
+        let touched = bodies.iter().find(|(lo, hi, r)| crate::krust::segment_distance(t.wire.0, t.wire.1, *lo, *hi) <= *r).map(|b| b.0);
+        let blasted = || blasts.iter().find(|(at, r)| crate::krust::segment_distance(t.wire.0, t.wire.1, *at, *at) <= *r).map(|b| b.0);
+        let Some(lo) = touched.or_else(blasted) else { continue };
         let pt = Transform::from_translation(lo);
         t.sprung = true;
-        log.state.insert(t.index, 1);
+        log.state.insert(t.index, t.logged());
         if std::env::var("DH_TRAP_LOG").is_ok() {
             info!("tripwire {} tripped at {:.2}", def.name, pt.translation);
         }
@@ -371,7 +391,7 @@ fn launch(
         if orders.contains(&t.index) && !t.sprung && !t.disarmed && !t.away && t.firing.is_none() {
             t.firing = Some((0.0, false));
             t.sprung = true;
-            log.state.insert(t.index, 1);
+            log.state.insert(t.index, t.logged());
             if let Some(mut a) = a {
                 play(&mut a, &def.fire_anim, false);
             }
@@ -491,24 +511,22 @@ fn fly_darts(
             t.translation = a + step;
             continue;
         };
+        // (as roshan's r614/blink research decoded the projectile's contact: the one struck takes
+        // its direct damage, `m_Damage`; an explosive one then bursts 10 uu back along its way)
+        let at = if npc.is_some() || on_player { at - direction * 0.1 } else { at };
         if std::env::var("DH_TRAP_LOG").is_ok() {
             info!("{} shot strikes at {at:.2}{}", def.name, if on_player { " (Corvo)" } else if npc.is_some() { " (someone)" } else { "" });
         }
-        match &def.blast {
-            Some(b) => {
-                let damage = b.damage[settings.difficulty.min(3) as usize];
-                blasts.write(crate::gadgets::Explosion { at, radius: b.radius, full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]), kind: crate::gameplay::HitKind::Explosion, silent: false });
-            }
-            None => {
-                // a bolt: the original's damage
-                if let Some(ne) = npc {
-                    hits.write(NpcHit { npc: ne, damage: def.damage, kind: HitKind::Bolt, from: a });
-                    sfx.write(PostEvent::named("Imp_Bullet_on_Body", Some(at)));
-                } else if on_player {
-                    stats.hit_from = Some(a);
-                    crate::gameplay::hurt_player(&mut stats, &mut msgs, &mut sfx, def.damage);
-                }
-            }
+        if let Some(ne) = npc {
+            hits.write(NpcHit { npc: ne, damage: def.damage, kind: HitKind::Bolt, from: a });
+            sfx.write(PostEvent::named("Imp_Bullet_on_Body", Some(at)));
+        } else if on_player {
+            stats.hit_from = Some(a);
+            crate::gameplay::hurt_player(&mut stats, &mut msgs, &mut sfx, def.damage);
+        }
+        if let Some(b) = &def.blast {
+            let damage = b.damage[settings.difficulty.min(3) as usize];
+            blasts.write(crate::gadgets::Explosion { at, radius: b.radius, full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]), kind: crate::gameplay::HitKind::Explosion, silent: false });
         }
         commands.entity(e).despawn();
     }
@@ -533,7 +551,7 @@ mod projectile_tests {
         let mut anim = Animator::new(lib.clone(), &skeleton, vec![]);
         anim.restart(lib.find("Fire").unwrap(), false, 0.75, 0.0);
         anim.seek(0.4);
-        let part = TrapPart { index: 0, launcher: true, sprung: true, disarmed: false,
+        let part = TrapPart { index: 0, launcher: true, sprung: true, disarmed: false, harvested: false,
             firing: Some((0.5, true)), wire: (Vec3::ZERO, Vec3::ZERO), sockets: vec![], collider: None, away: false };
         let dart = Dart { trap: 0, source: None, vel: Vec3::X * 8.0, gravity: 1.5, life: 2.0 };
         let position = Transform::from_xyz(4.0, 2.0, 1.0);
@@ -581,7 +599,7 @@ mod projectile_tests {
             }], ..default() } }).add_systems(Update, (trap_clocks, launch).chain());
         let skeleton = dhcook::format::SkeletonDef::default();
         let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![]));
-        let trap = app.world_mut().spawn((TrapPart { index: 0, launcher: true, sprung: true, disarmed: false,
+        let trap = app.world_mut().spawn((TrapPart { index: 0, launcher: true, sprung: true, disarmed: false, harvested: false,
             firing: Some((0.0, false)), wire: (Vec3::ZERO, Vec3::ZERO), sockets: vec![], collider: None, away: false },
             Transform::default(), Animator::new(lib, &skeleton, vec![]))).id();
         app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(100));
@@ -599,6 +617,37 @@ mod projectile_tests {
     }
 
     #[test]
+    fn a_fired_launcher_gives_its_ammunition_once() {
+        let mut app = App::new();
+        let mut attrs = crate::gamedata::Attrs::default();
+        attrs.ammo_capacity = [10; crate::gadgets::AMMO_TYPES];
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>().init_resource::<ButtonInput<KeyCode>>().init_resource::<Bindings>()
+            .insert_resource(crate::hud::Paused(false)).init_resource::<InteractFocus>()
+            .init_resource::<crate::carry::Carry>().init_resource::<crate::possession::Possession>()
+            .init_resource::<crate::props::Held>().init_resource::<PlayerStats>().init_resource::<HudMessages>()
+            .init_resource::<TrapLog>().insert_resource(attrs).add_message::<SpawnEffect>()
+            .insert_resource(LevelInfo { scene: dhcook::format::Scene { traps: vec![dhcook::format::Trap { launcher: true, harvest: vec![(2, 1)], ..default() }], ..default() } })
+            .add_systems(Last, disarm_focus);
+        app.world_mut().spawn((PlayerCamera, Transform::from_xyz(0.0, 0.4, 1.5)));
+        app.world_mut().resource_mut::<PlayerStats>().bolts = 0;
+        let trap = app.world_mut().spawn((TrapPart { index: 0, launcher: true, sprung: true, disarmed: false, harvested: false,
+            firing: None, wire: (Vec3::ZERO, Vec3::ZERO), sockets: vec![], collider: None, away: false }, Transform::default())).id();
+        let key = app.world().resource::<Bindings>().key(Act::Use);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        app.update();
+        app.update();
+        // (taken once: the second press finds nothing, and no prompt is left)
+        assert_eq!(app.world().resource::<PlayerStats>().bolts, 1);
+        let part = app.world().get::<TrapPart>(trap).unwrap();
+        assert!(part.harvested && !part.disarmed);
+        assert_eq!(app.world().resource::<TrapLog>().state.get(&0), Some(&5));
+        app.world_mut().resource_mut::<InteractFocus>().0 = false;
+        app.update();
+        assert!(!app.world().resource::<InteractFocus>().0);
+    }
+
+    #[test]
     fn disarming_requires_active_gameplay_and_clear_access_to_launcher() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
@@ -611,7 +660,7 @@ mod projectile_tests {
             .add_systems(Last, disarm_focus);
         app.world_mut().spawn((PlayerCamera, Transform::from_xyz(0.0, 0.4, 1.5)));
         let collider = app.world_mut().spawn((Collider::cuboid(0.3, 0.35, 0.3), Transform::from_xyz(0.0, 0.35, 0.0), CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
-        let trap = app.world_mut().spawn((TrapPart { index: 0, launcher: true, sprung: false, disarmed: false,
+        let trap = app.world_mut().spawn((TrapPart { index: 0, launcher: true, sprung: false, disarmed: false, harvested: false,
             firing: None, wire: (Vec3::ZERO, Vec3::ZERO), sockets: vec![], collider: Some(collider), away: false }, Transform::default())).id();
         let key = app.world().resource::<Bindings>().key(Act::Use);
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
@@ -688,7 +737,9 @@ mod projectile_tests {
     }
 }
 
-/// [Use] at a launcher not yet fired: disarm it for its ammunition.
+/// [Use] at a launcher: an armed one is disarmed, and one whose ammunition is still on it gives
+/// it, as much as Corvo can carry (fired or not: the launcher's `Interact`, as roshan's
+/// r614/blink research decoded it; taken once anything was).
 #[allow(clippy::too_many_arguments)]
 fn disarm_focus(
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<Bindings>),
@@ -717,7 +768,8 @@ fn disarm_focus(
             let launcher = level.scene.traps.get(t.index as usize).is_some_and(|d| d.launcher);
             let to = tf.translation + Vec3::Y * 0.4 - eye;
             let distance = to.length();
-            if !launcher || t.sprung || t.disarmed || t.away || distance >= REACH || to.normalize_or_zero().dot(fwd) <= 0.8 { return false; }
+            let armed = !t.sprung && !t.disarmed;
+            if !launcher || !(armed || !t.harvested) || t.away || distance >= REACH || to.normalize_or_zero().dot(fwd) <= 0.8 { return false; }
             let filter = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
             let filter = t.collider.map(|e| filter.exclude_collider(e)).unwrap_or(filter);
             ctx.cast_ray(eye, to / distance, distance, true, filter).is_none()
@@ -732,21 +784,31 @@ fn disarm_focus(
     if !keys.just_pressed(bind.key(Act::Use)) {
         return;
     }
-    t.disarmed = true;
-    log.state.insert(t.index, 2);
-    if let Some(mut a) = a {
-        play(&mut a, &def.disarm_anim, false);
-    }
-    if let Some((sock, ps)) = &def.disarm_fx {
-        if let Some(g) = t.socket(sock, &globals) {
-            fx.write(SpawnEffect { system: Some(*ps), secs: 2.0, ..SpawnEffect::at("", g.translation()) });
+    let armed = !t.sprung && !t.disarmed;
+    if armed {
+        t.disarmed = true;
+        if let Some(mut a) = a {
+            play(&mut a, &def.disarm_anim, false);
+        }
+        if let Some((sock, ps)) = &def.disarm_fx {
+            if let Some(g) = t.socket(sock, &globals) {
+                fx.write(SpawnEffect { system: Some(*ps), secs: 2.0, ..SpawnEffect::at("", g.translation()) });
+            }
         }
     }
-    if !def.used_message.is_empty() {
+    let mut taken = false;
+    if !t.harvested {
+        for &(ty, n) in &def.harvest {
+            let (name, n) = crate::gadgets::give_ammo(&mut stats, &attrs, ty, n);
+            if n > 0 {
+                msgs.push(format!("{name} +{n}"));
+                taken = true;
+            }
+        }
+        t.harvested = taken;
+    }
+    if (armed || taken) && !def.used_message.is_empty() {
         msgs.push(def.used_message.clone());
     }
-    for &(ty, n) in &def.harvest {
-        let (name, n) = crate::gadgets::give_ammo(&mut stats, &attrs, ty, n);
-        msgs.push(format!("{name} +{n}"));
-    }
+    log.state.insert(t.index, t.logged());
 }

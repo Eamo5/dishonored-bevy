@@ -1575,13 +1575,15 @@ fn run_script(
             }
         }
         "trap" => {
-            // trap [wire|launcher] [D]: stand on the floor D m (default 2.5) before the nearest
-            // tripwire, facing across it (or before the nearest launcher, looking at it)
+            // trap [wire|launcher] [D] [N]: stand on the floor D m (default 2.5) before the
+            // nearest tripwire (or trap N), facing across it (or before the nearest launcher,
+            // looking at it)
             let launcher = cmd.get(1).is_some_and(|s| *s == "launcher");
             let d = if cmd.len() > 2 { f(2) } else { 2.5 };
+            let only = cmd.get(3).and_then(|s| s.parse::<u32>().ok());
             let near = traps
                 .iter()
-                .filter(|(tp, _)| tp.wire().is_none() == launcher)
+                .filter(|(tp, _)| tp.wire().is_none() == launcher && only.is_none_or(|n| tp.index() == n))
                 .min_by(|a, b| a.1.translation.distance(t.translation).total_cmp(&b.1.translation.distance(t.translation)));
             if let Some((tp, tt)) = near {
                 let floor = tt.translation.y;
