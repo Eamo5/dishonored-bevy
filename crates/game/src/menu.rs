@@ -67,6 +67,8 @@ enum Page {
     /// the trials' leaderboards, normal and expert (`Leaderboards_Screen`'s tabs): local
     Leaderboards,
     ExpertLeaderboards,
+    /// the main menu's missions (`MissionsScreen`: `missionscreen`)
+    Missions,
     /// the pause menu's help (`t_Help`: the tutorial notes received, `helpscreen`)
     Help,
 }
@@ -139,6 +141,9 @@ enum Action {
     /// a piece of the trials' gallery, to see large; one locked
     GalleryView(usize),
     LockedGallery(usize),
+    /// a mission's start played again (its save, `OnMissionSelected`: not asked); one locked
+    Mission(usize),
+    LockedMission(usize),
     /// into Dunwall City Trials (its menu map), and out
     Trials,
     LeaveTrials,
@@ -243,6 +248,7 @@ impl Menu {
             (Some(MenuKind::Main), Page::ExpertLeaderboards) => Some((14, labels())),
             // (the help: `helpscreen`)
             (Some(_), Page::Help) => Some((crate::helpscreen::CODE, labels())),
+            (Some(MenuKind::Main), Page::Missions) => Some((crate::missionscreen::CODE, labels())),
             _ => None,
         }
     }
@@ -355,7 +361,7 @@ impl Menu {
     /// The save slot an item of the save or load screen stands for.
     pub fn item_slot(&self, i: usize) -> Option<usize> {
         match self.items.get(i)?.1 {
-            Action::Load(s) | Action::Save(s) => Some(s),
+            Action::Load(s) | Action::Save(s) | Action::Mission(s) => Some(s),
             _ => None,
         }
     }
@@ -775,6 +781,8 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
                 v.push(("Continue".into(), Action::Continue));
             }
             v.push(("New Game".into(), Action::Page(Page::Difficulty)));
+            // (`t_Missions`: always there, as the original's bar has it)
+            v.push(("Missions".into(), Action::Page(Page::Missions)));
             if has_saves {
                 v.push(("Load".into(), Action::Page(Page::Load)));
             }
@@ -942,6 +950,15 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
         }
         // the saves, newest first (`savescreen` draws them; Escape goes back)
         (_, Page::Load) => slots.list().into_iter().map(|(i, desc)| (desc, Action::Load(i))).collect(),
+        // the missions as the exe lists them (`OnMissionsClicked`): up to the furthest started,
+        // each by its start's save (`SGS_DisMission0..8`), locked without it
+        (_, Page::Missions) => {
+            let has = |i: usize| slots.info(crate::save::MISSION_SLOT + i).is_some();
+            match (0..crate::missionscreen::MISSIONS.len()).filter(|&i| has(i)).max() {
+                Some(last) => (0..=last).map(|i| (crate::missionscreen::mission_name(data, i), if has(i) { Action::Mission(crate::save::MISSION_SLOT + i) } else { Action::LockedMission(i) })).collect(),
+                None => Vec::new(),
+            }
+        }
         // a new save first (the first free slot), then the saves to overwrite
         (_, Page::Save) => {
             let mut v: Vec<(String, Action)> = Vec::new();
@@ -1213,7 +1230,8 @@ fn menu_input(
         0.0
     };
     // the front page's bar runs across the screen: left and right move along it
-    if left_right != 0.0 && menu.front_page().is_some_and(|f| f.0 == 1) {
+    // (and the missions' slide: `SlideMenu`'s left and right)
+    if left_right != 0.0 && menu.front_page().is_some_and(|f| f.0 == 1 || f.0 == crate::missionscreen::CODE) {
         menu.sel = if left_right > 0.0 { (menu.sel + 1) % n } else { (menu.sel + n - 1) % n };
         menu.dirty = true;
     }
@@ -1310,7 +1328,7 @@ fn menu_input(
                 next.set(GameState::Loading);
             }
         }
-        Action::Load(slot) => {
+        Action::Load(slot) | Action::Mission(slot) => {
             load.write(LoadRequest(slot));
             menu.open = None;
         }
@@ -1340,7 +1358,7 @@ fn menu_input(
                 next.set(GameState::Loading);
             }
         }
-        Action::LockedChallenge(_) | Action::LockedGallery(_) => {}
+        Action::LockedChallenge(_) | Action::LockedGallery(_) | Action::LockedMission(_) => {}
         Action::GalleryView(_) => {
             menu.gallery_view = Some(menu.sel);
             menu.dirty = true;

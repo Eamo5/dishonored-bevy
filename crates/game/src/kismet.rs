@@ -2833,8 +2833,9 @@ impl Vm {
                 if self.in_combat && !forced {
                     self.fire_desc(op, "Denied");
                 } else {
-                    // (a mission's start: its own slot, `4 + m_MissionNumber` in the original's)
-                    let mission = self.pb(op, "m_bMissionStart").unwrap_or(false).then(|| self.pi(op, "m_MissionNumber").unwrap_or(-1)).filter(|n| (0..9).contains(n));
+                    // (a mission's start: its own slot, `4 + m_MissionNumber` in the original's;
+                    // unset, as the Prison's, its default 0)
+                    let mission = self.pb(op, "m_bMissionStart").unwrap_or(false).then(|| self.pi(op, "m_MissionNumber").unwrap_or(0)).filter(|n| (0..9).contains(n));
                     self.effects.push(Effect::AutoSave(mission.map(|n| n as u8)));
                     self.fire(op, 1);
                 }

@@ -207,6 +207,16 @@ fullscreen display, vertical sync and the crosshair.
   its update badge looping (`icUpdate_mc`) until it is left. The rune's window ("New Rune
   added") comes up with each rune while the runes would buy something, and the charm's with
   each charm, as the HUD's pickup raises them.
+- **The main menu's missions as `UI_MainMenu` draws them** (`missionscreen.rs`): `MISSIONS`
+  on the front bar (always there, after `NEW GAME`, as the original's bar has it) opens
+  `m_missions`: "Choose mission to play from" on its brush, and the missions as the exe lists
+  them (`OnMissionsClicked`: up to the furthest mission started, each by its start's save,
+  `SGS_DisMission0..8`), as cards (`m_missions_item`) in the slide: its number (`01`...), its
+  picture (`MissionsScreen_<x>_Large`, whole and centred on its loader), its chapter's name
+  up its banner, a padlock on one whose start isn't saved (`stop_lock`). The chosen card is
+  whole and raised, the next ones at 80%, then 75%, the rest 70%, the row slid to it
+  (`SlideMenu.SetItemsSize`). Left / Right choose, Enter plays the mission's start again
+  (`OnMissionSelected`: not asked), Escape goes back.
 - **The save and load screens as `UI_LoadGame` draws them** (`savescreen.rs`): the list turned
   -2.5 degrees, each save on its brushed card with its mission's strip (`UI_Mission_Small`),
   its date in the original's `m_DateFormat` (local time) over its chapter (`AUTOSAVE - ` /
