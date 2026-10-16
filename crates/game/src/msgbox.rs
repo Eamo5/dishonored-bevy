@@ -61,7 +61,7 @@ fn draw(
     window: Query<&Window, With<PrimaryWindow>>,
     roots: Query<Entity, With<MsgRoot>>,
     mut shown: Local<Option<(String, usize, UVec2)>>,
-    (mut timers, mut count_shown): (Query<&mut FlashClip, With<MsgTimer>>, Local<Option<u32>>),
+    (mut timers, mut count_shown, mut sfx): (Query<&mut FlashClip, With<MsgTimer>>, Local<Option<u32>>, MessageWriter<crate::audio::PostEvent>),
 ) {
     let Ok(w) = window.single() else { return };
     // the countdown's seconds as they go (`UpdateCountdown`)
@@ -82,6 +82,10 @@ fn draw(
     };
     if want == *shown {
         return;
+    }
+    // (its opening sound: the global theme's `G_MsgBoxOpen`)
+    if shown.is_none() && want.is_some() {
+        sfx.write(crate::audio::PostEvent::named("UI_G_MsgBoxOpen", None));
     }
     *shown = want.clone();
     for e in &roots {

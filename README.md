@@ -429,6 +429,17 @@ fullscreen display, vertical sync and the crosshair.
   (keyboard mapping, user interface), the save and load list, the pause menu's tutorials, the
   video settings' resolutions, the journal's notes, bone charms and item cards, the shops'
   cards.
+- **The menus' sounds as the movies ask for them** (`SoundHandler.PlaySound` through the
+  `Default` sound theme, `UISoundTheme_Common` and the movies' own, to `Snd_UI_Ingame`): a
+  move along a list (`UI_Move`; at its end `UI_Stop`, the lists going no further, as
+  `SelectionHandler` leaves `_bSelectionLoop` unset), the pointer over a row, a setting changed
+  (`UI_Change`; at its end `UI_Stop`: steppers and sliders stop there too, Left being off and
+  Right on, a click or Enter still flipping and stepping round), an item chosen
+  (`UI_Validation`; a locked one `UI_Failure`), back (`UI_Back`), the options' tabs
+  (`UI_ChangeMainTab`, `UI_ChangeSubTab`), a restore (`UI_Reset`), a question's box opening
+  (`UI_G_MsgBoxOpen`) and answered (`UI_Confirmation` / `UI_Back`), the title's key and the
+  main menu coming up (`UI_M_PressStart`, `UI_M_OpenMainMenu`), the pause menu opening and
+  closing (`UI_OpenScreen`, `UI_CloseScreen`) and the game over menu (`UI_GO_OpenGameOverMenu`).
 - **Notes read as `UI_Note` shows them** (`notescreen.rs`): a note or book picked up opens over
   the blurred game on the dimmed, drifting backdrop — its title dark on the brush, its words in
   the scrolling field — and a location map in its frame; Escape (or its help bar's `CLOSE`)

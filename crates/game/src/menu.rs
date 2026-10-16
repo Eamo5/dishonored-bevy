@@ -28,7 +28,7 @@ impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Menu>().init_resource::<HudHidden>()
             .add_systems(OnEnter(GameState::InGame), enter_level.after(LevelSpawnSet))
-            .add_systems(Update, (open_pause, menu_input, menu_build, menu_world).chain().in_set(MenuSet).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (open_pause, menu_input, menu_build, menu_world, open_sounds).chain().in_set(MenuSet).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -213,6 +213,15 @@ pub enum OptView {
     Key(String, bool),
     /// a link to a screen of its own (the brightness's: `t_Modify_Gamma`)
     Link(String),
+}
+
+/// A menu sound as the movies ask for it (`SoundHandler.PlaySound`: the `Default` theme,
+/// `UISoundTheme_Common` and the movie's own, to `Snd_UI_Ingame`'s events: `Move`, `Stop`,
+/// `Change`, `validation`, `back`, `Failure`, `Confirmation`, `Reset`, `ChangeMainTab`,
+/// `ChangeSubTab`, `OpenScreen`, `CloseScreen`, the main menu's `M_PressStart` /
+/// `M_OpenMainMenu`, the pause menu's `GO_OpenGameOverMenu`).
+fn ui(sfx: &mut MessageWriter<crate::audio::PostEvent>, event: &str) {
+    sfx.write(crate::audio::PostEvent::named(event, None));
 }
 
 /// The display's settings on the video settings' lines (`FillVideoSettings`: Fullscreen,
@@ -744,20 +753,24 @@ fn on(b: bool) -> String {
     if b { "On" } else { "Off" }.into()
 }
 
-fn adjust(s: &mut Settings, o: Opt, dir: f32) {
+/// A setting stepped: Left / Right by `dir`, no further than its ends (`P_OptionsStepper`,
+/// `P_OptionsSlider`: `isLoop` false; a toggle's Left is off, its Right on); clicked or Entered
+/// (`flip`), a toggle flips and a slider steps round.
+fn adjust(s: &mut Settings, o: Opt, dir: f32, flip: bool) {
     let step = |v: &mut f32, d: f32, lo: f32, hi: f32| {
         *v = ((*v + d * dir) * 100.0).round() / 100.0;
         if *v > hi + 1e-3 {
-            *v = lo;
+            *v = if flip { lo } else { hi };
         } else if *v < lo - 1e-3 {
-            *v = hi;
+            *v = if flip { hi } else { lo };
         }
     };
+    let set = |b: &mut bool| *b = if flip { !*b } else { dir > 0.0 };
     match o {
         // (no wrapping round: `isLoop` false)
         Opt::Difficulty => s.difficulty = (s.difficulty as f32 + dir).clamp(0.0, 3.0) as u8,
         Opt::Sensitivity => step(&mut s.sensitivity, 0.25, 0.5, 6.0),
-        Opt::InvertY => s.invert_y = !s.invert_y,
+        Opt::InvertY => set(&mut s.invert_y),
         Opt::Fov => step(&mut s.fov, 5.0, 65.0, 110.0),
         Opt::Master => step(&mut s.master_volume, 0.1, 0.0, 1.0),
         Opt::Music => step(&mut s.music_volume, 0.1, 0.0, 1.0),
@@ -772,28 +785,28 @@ fn adjust(s: &mut Settings, o: Opt, dir: f32) {
         // (`PSI_HUD_CrosshairOpacity` 0-100 by 10, `PSI_Gameplay_HeadBobAmount` 0-1 by 0.1)
         Opt::CrosshairOpacity => s.crosshair_opacity = (s.crosshair_opacity + 10.0 * dir).clamp(0.0, 100.0),
         Opt::HeadBob => s.head_bob = ((s.head_bob + 0.1 * dir).clamp(0.0, 1.0) * 10.0).round() / 10.0,
-        Opt::ObjPopups => s.objective_popups = !s.objective_popups,
-        Opt::Tutorials => s.tutorials = !s.tutorials,
-        Opt::Interactions => s.interactions = !s.interactions,
-        Opt::Highlight => s.focus_highlight = !s.focus_highlight,
-        Opt::PickupLog => s.pickup_log = !s.pickup_log,
-        Opt::ContextIcons => s.contextual_icons = !s.contextual_icons,
-        Opt::Stance => s.player_stance = !s.player_stance,
-        Opt::GrenadeMarkers => s.grenade_markers = !s.grenade_markers,
-        Opt::AwarenessMarkers => s.awareness_markers = !s.awareness_markers,
-        Opt::HeartMarkers => s.heart_markers = !s.heart_markers,
-        Opt::CrosshairMove => s.crosshair_movement = !s.crosshair_movement,
-        Opt::AutoSave => s.auto_save_journal = !s.auto_save_journal,
-        Opt::ClimbRelative => s.camera_relative_climbing = !s.camera_relative_climbing,
-        Opt::LightShafts => s.light_shafts = !s.light_shafts,
-        Opt::RatShadows => s.rat_shadows = !s.rat_shadows,
-        Opt::Markers => s.markers = !s.markers,
+        Opt::ObjPopups => set(&mut s.objective_popups),
+        Opt::Tutorials => set(&mut s.tutorials),
+        Opt::Interactions => set(&mut s.interactions),
+        Opt::Highlight => set(&mut s.focus_highlight),
+        Opt::PickupLog => set(&mut s.pickup_log),
+        Opt::ContextIcons => set(&mut s.contextual_icons),
+        Opt::Stance => set(&mut s.player_stance),
+        Opt::GrenadeMarkers => set(&mut s.grenade_markers),
+        Opt::AwarenessMarkers => set(&mut s.awareness_markers),
+        Opt::HeartMarkers => set(&mut s.heart_markers),
+        Opt::CrosshairMove => set(&mut s.crosshair_movement),
+        Opt::AutoSave => set(&mut s.auto_save_journal),
+        Opt::ClimbRelative => set(&mut s.camera_relative_climbing),
+        Opt::LightShafts => set(&mut s.light_shafts),
+        Opt::RatShadows => set(&mut s.rat_shadows),
+        Opt::Markers => set(&mut s.markers),
         Opt::Brightness => step(&mut s.brightness, 0.05, 0.5, 1.6),
         Opt::TextureDetail => s.texture_detail = (s.texture_detail as f32 + dir).clamp(0.0, 2.0) as u8,
         Opt::AntiAliasing => s.anti_aliasing = (s.anti_aliasing as f32 + dir).clamp(0.0, 2.0) as u8,
-        Opt::AutoMana => s.auto_mana_elixir = !s.auto_mana_elixir,
+        Opt::AutoMana => set(&mut s.auto_mana_elixir),
         Opt::KillCam => s.kill_cam = (s.kill_cam as f32 + dir).clamp(0.0, 2.0) as u8,
-        Opt::Smoothing => s.mouse_smoothing = !s.mouse_smoothing,
+        Opt::Smoothing => set(&mut s.mouse_smoothing),
     }
 }
 
@@ -1050,7 +1063,8 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
 /// Left / Right choose, Enter answers, Escape says no; yes keeps them (saved), no or the
 /// countdown's end puts them back (`OnVideoSettingsConfirm`: `RestoreInitSettings`, which
 /// counts as a change again) and the screen stays.
-fn video_input(menu: &mut Menu, settings: &mut Settings, keys: &ButtonInput<KeyCode>, help: Option<crate::helpbar::Btn>, data: &crate::gamedata::Data, dt: f32, scripted: bool) {
+#[allow(clippy::too_many_arguments)]
+fn video_input(menu: &mut Menu, settings: &mut Settings, keys: &ButtonInput<KeyCode>, help: Option<crate::helpbar::Btn>, data: &crate::gamedata::Data, dt: f32, scripted: bool, sfx: &mut MessageWriter<crate::audio::PostEvent>) {
     use crate::helpbar::Btn;
     let Some(mut v) = menu.video.clone() else { return };
     let hit = menu.video_click.take().filter(|_| !scripted);
@@ -1078,6 +1092,9 @@ fn video_input(menu: &mut Menu, settings: &mut Settings, keys: &ButtonInput<KeyC
         if let Some(c) = click {
             choice = c;
         }
+        if choice != v.asked.as_ref().map_or(choice, |a| a.2) {
+            ui(sfx, "UI_Move");
+        }
         let kept = if t >= VIDEO_COUNTDOWN || escape {
             Some(false)
         } else if enter || click.is_some() {
@@ -1085,6 +1102,10 @@ fn video_input(menu: &mut Menu, settings: &mut Settings, keys: &ButtonInput<KeyC
         } else {
             None
         };
+        // (the box's answers: `Confirmation`, `Back`)
+        if kept.is_some() && t < VIDEO_COUNTDOWN {
+            ui(sfx, if escape { "UI_Back" } else { "UI_Confirmation" });
+        }
         match kept {
             Some(true) => {
                 settings.save();
@@ -1103,11 +1124,10 @@ fn video_input(menu: &mut Menu, settings: &mut Settings, keys: &ButtonInput<KeyC
     } else if let Some((at, top)) = v.drop {
         // the drop list: the one chosen kept in view
         let mut at = at;
-        if up {
-            at = at.saturating_sub(1);
-        }
-        if down {
-            at = (at + 1).min(list.len().saturating_sub(1));
+        if up || down {
+            let to = if up { at.saturating_sub(1) } else { (at + 1).min(list.len().saturating_sub(1)) };
+            ui(sfx, if to != at { "UI_Move" } else { "UI_Stop" });
+            at = to;
         }
         if let Some(VideoHit::DropItem(i)) = hit {
             at = i;
@@ -1118,24 +1138,29 @@ fn video_input(menu: &mut Menu, settings: &mut Settings, keys: &ButtonInput<KeyC
             v.lines.resolution = list.get(at).copied();
             v.modified = true;
             v.drop = None;
+            ui(sfx, "UI_Validation");
         } else if escape {
             v.drop = None;
+            ui(sfx, "UI_Back");
         }
     } else {
+        // (its lines no further than their ends: `Stop`)
         let n = VIDEO_LINES.len();
-        if up {
-            v.sel = (v.sel + n - 1) % n;
-        }
-        if down {
-            v.sel = (v.sel + 1) % n;
+        if up || down {
+            let to = if up { v.sel.saturating_sub(1) } else { (v.sel + 1).min(n - 1) };
+            ui(sfx, if to != v.sel { "UI_Move" } else { "UI_Stop" });
+            v.sel = to;
         }
         // a value stepped (`LeftPressed` / `RightPressed`: no further than off or on), clicked,
         // or the drop list opened
-        let set = |line: usize, on: bool, v: &mut VideoEdit| {
+        let mut set = |line: usize, on: bool, v: &mut VideoEdit| {
             let b = if line == 0 { &mut v.lines.fullscreen } else { &mut v.lines.vsync };
             if *b != on {
                 *b = on;
                 v.modified = true;
+                ui(sfx, "UI_Change");
+            } else {
+                ui(sfx, "UI_Stop");
             }
         };
         match hit {
@@ -1152,7 +1177,9 @@ fn video_input(menu: &mut Menu, settings: &mut Settings, keys: &ButtonInput<KeyC
         if v.sel == 2 && !list.is_empty() && (lr != 0 || hit == Some(VideoHit::Drop) || help == Some(Btn::X)) {
             let at = resolution_at(v.lines.resolution, &list);
             v.drop = Some((at, (at + 1).saturating_sub(DROP_LINES)));
+            ui(sfx, "UI_Change");
         } else if enter {
+            ui(sfx, "UI_Validation");
             if !v.modified {
                 menu.video = None;
                 menu.dirty = true;
@@ -1161,6 +1188,7 @@ fn video_input(menu: &mut Menu, settings: &mut Settings, keys: &ButtonInput<KeyC
             v.lines.apply(settings);
             v.asked = Some((data.text("DisGFxMoviePlayerMenuBase_Texts", "t_Q_VideoSettings"), 0.0, 0));
         } else if escape {
+            ui(sfx, "UI_Back");
             v.init.apply(settings);
             menu.video = None;
             menu.dirty = true;
@@ -1171,6 +1199,21 @@ fn video_input(menu: &mut Menu, settings: &mut Settings, keys: &ButtonInput<KeyC
         menu.dirty = true;
     }
     menu.video = Some(v);
+}
+
+/// The pause menu's opening and closing sounds (`Open`: `OpenScreen`, `Close`: `CloseScreen`;
+/// `ShowGameOverMenu`: `GO_OpenGameOverMenu`).
+fn open_sounds(menu: Res<Menu>, mut was: Local<Option<MenuKind>>, mut sfx: MessageWriter<crate::audio::PostEvent>) {
+    if menu.open == *was {
+        return;
+    }
+    match (*was, menu.open) {
+        (_, Some(MenuKind::GameOver)) => ui(&mut sfx, "UI_GO_OpenGameOverMenu"),
+        (None, Some(MenuKind::Pause)) => ui(&mut sfx, "UI_OpenScreen"),
+        (Some(MenuKind::Pause), None) => ui(&mut sfx, "UI_CloseScreen"),
+        _ => {}
+    }
+    *was = menu.open;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1187,7 +1230,7 @@ fn menu_input(
     (vm, mut campaign, scripted, mut intro): (Option<ResMut<Vm>>, ResMut<crate::gameplay::Campaign>, Option<Res<crate::script::Scripted>>, ResMut<crate::movie::IntroPending>),
     (data, mut launch, real): (Res<crate::gamedata::Data>, ResMut<crate::challenge::ChallengeLaunch>, Res<Time<Real>>),
     (mut profile, movies, mut play): (ResMut<crate::challenge::ChallengeProfile>, Res<crate::movie::Movies>, MessageWriter<crate::movie::PlayMovie>),
-    (note, mut read): (Res<crate::notescreen::NoteScreen>, MessageWriter<crate::journal::ReadNote>),
+    (note, mut read, mut sfx): (Res<crate::notescreen::NoteScreen>, MessageWriter<crate::journal::ReadNote>, MessageWriter<crate::audio::PostEvent>),
     (help, stats_up, taps, mut delete): (Query<(&Interaction, &crate::helpbar::HelpButton), Changed<Interaction>>, Option<Res<crate::mission::MissionEnd>>, Res<crate::helpbar::Taps>, MessageWriter<crate::save::DeleteSave>),
 ) {
     let Some(kind) = menu.open else { return };
@@ -1229,22 +1272,26 @@ fn menu_input(
             0.0
         };
         if lr != 0.0 {
-            adjust(&mut settings, Opt::Brightness, lr);
+            let was = settings.brightness;
+            adjust(&mut settings, Opt::Brightness, lr, false);
+            ui(&mut sfx, if settings.brightness != was { "UI_Change" } else { "UI_Stop" });
         }
         if keys.just_pressed(KeyCode::Enter) || help == Some(crate::helpbar::Btn::A) {
             settings.save();
             menu.gamma = None;
             menu.dirty = true;
+            ui(&mut sfx, "UI_Validation");
         } else if keys.just_pressed(KeyCode::Escape) || help == Some(crate::helpbar::Btn::B) {
             settings.brightness = start;
             menu.gamma = None;
             menu.dirty = true;
+            ui(&mut sfx, "UI_Back");
         }
         return;
     }
     // the video settings (`VideoSettings`)
     if menu.video.is_some() {
-        video_input(&mut menu, &mut settings, &keys, help, &data, real.delta_secs(), scripted.is_some());
+        video_input(&mut menu, &mut settings, &keys, help, &data, real.delta_secs(), scripted.is_some(), &mut sfx);
         return;
     }
     // a question asked: Left / Right choose, Enter answers, Escape says no
@@ -1253,19 +1300,23 @@ fn menu_input(
         let mut choice = choice;
         if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyA) || keys.just_pressed(KeyCode::KeyD) {
             choice = 1 - choice.min(1);
+            ui(&mut sfx, "UI_Move");
         }
         let click = menu.confirm_click.take();
         if let Some(c) = click {
             choice = c;
         }
+        // (the box's answers: `Confirmation`, `Back`)
         if keys.just_pressed(KeyCode::Escape) {
             menu.confirm = None;
             menu.dirty = true;
+            ui(&mut sfx, "UI_Back");
             return;
         }
         if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::KeyE) || click.is_some() {
             menu.confirm = None;
             menu.dirty = true;
+            ui(&mut sfx, "UI_Confirmation");
             if choice != 0 {
                 return;
             }
@@ -1288,6 +1339,8 @@ fn menu_input(
             menu.page = Page::Main;
             menu.sel = 0;
             menu.dirty = true;
+            ui(&mut sfx, "UI_M_PressStart");
+            ui(&mut sfx, "UI_M_OpenMainMenu");
         }
         return;
     }
@@ -1300,10 +1353,12 @@ fn menu_input(
         if keys.just_pressed(KeyCode::Tab) {
             let back = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
             menu.set_options_tab(if back { (cat + ncat - 1) % ncat } else { (cat + 1) % ncat }, 0);
+            ui(&mut sfx, "UI_ChangeMainTab");
             return;
         }
         if nsub > 1 && (keys.just_pressed(KeyCode::KeyQ) || keys.just_pressed(KeyCode::KeyE)) {
             menu.set_options_tab(cat, if keys.just_pressed(KeyCode::KeyE) { (sub + 1) % nsub } else { (sub + nsub - 1) % nsub });
+            ui(&mut sfx, "UI_ChangeSubTab");
             return;
         }
         if answered.is_none() && help == Some(crate::helpbar::Btn::X) {
@@ -1444,6 +1499,7 @@ fn menu_input(
                 if menu.sel != item.0 {
                     menu.sel = item.0;
                     menu.dirty = true;
+                    ui(&mut sfx, "UI_Move");
                 }
             }
             Interaction::Pressed => {
@@ -1454,13 +1510,21 @@ fn menu_input(
             Interaction::None => {}
         }
     }
-    if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS) {
-        menu.sel = (menu.sel + 1) % n;
-        menu.dirty = true;
-    }
-    if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) {
-        menu.sel = (menu.sel + n - 1) % n;
-        menu.dirty = true;
+    // (the lists go no further than their ends: `SelectionHandler`'s `_bSelectionLoop` unset)
+    let up_down = if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS) {
+        Some(true)
+    } else if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) {
+        Some(false)
+    } else {
+        None
+    };
+    if let Some(down) = up_down {
+        let to = if down { (menu.sel + 1).min(n - 1) } else { menu.sel.saturating_sub(1) };
+        ui(&mut sfx, if to != menu.sel { "UI_Move" } else { "UI_Stop" });
+        if to != menu.sel {
+            menu.sel = to;
+            menu.dirty = true;
+        }
     }
     if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::KeyE) || help == Some(crate::helpbar::Btn::A) {
         activate = Some(menu.sel);
@@ -1476,8 +1540,12 @@ fn menu_input(
     // the front page's bar runs across the screen: left and right move along it
     // (and the missions' slide: `SlideMenu`'s left and right)
     if left_right != 0.0 && menu.front_page().is_some_and(|f| f.0 == 1 || f.0 == crate::missionscreen::CODE) {
-        menu.sel = if left_right > 0.0 { (menu.sel + 1) % n } else { (menu.sel + n - 1) % n };
-        menu.dirty = true;
+        let to = if left_right > 0.0 { (menu.sel + 1).min(n - 1) } else { menu.sel.saturating_sub(1) };
+        ui(&mut sfx, if to != menu.sel { "UI_Move" } else { "UI_Stop" });
+        if to != menu.sel {
+            menu.sel = to;
+            menu.dirty = true;
+        }
     }
     if left_right != 0.0 {
         // (the brightness's link and the video settings' open their screens: not stepped)
@@ -1489,6 +1557,7 @@ fn menu_input(
         }
     }
     if (keys.just_pressed(KeyCode::Escape) || help == Some(crate::helpbar::Btn::B)) && activate.is_none() {
+        ui(&mut sfx, "UI_Back");
         if !menu.back() && (kind == MenuKind::Pause || menu.board_over_results) {
             menu.open = None;
             menu.board_over_results = false;
@@ -1517,6 +1586,13 @@ fn menu_input(
                 Action::ExitChallenge => Some(data.text("DisGFxMoviePlayerBase_Texts", "t_Q_BackToChallenges_IG")),
                 _ => None,
             };
+            match action {
+                Action::Adjust(Opt::Brightness | Opt::VideoSettings) => ui(&mut sfx, "UI_Validation"),
+                Action::Adjust(_) => {}
+                Action::LockedChallenge(_) | Action::LockedGallery(_) | Action::LockedMission(_) => ui(&mut sfx, "UI_Failure"),
+                Action::Back => ui(&mut sfx, "UI_Back"),
+                _ => ui(&mut sfx, "UI_Validation"),
+            }
             if let Some(q) = question.filter(|q| !q.is_empty()) {
                 menu.confirm = Some((q, action, 0));
                 menu.dirty = true;
@@ -1548,7 +1624,9 @@ fn menu_input(
             menu.dirty = true;
         }
         Action::Adjust(o) => {
-            adjust(&mut settings, o, dir);
+            let was = opt_value(&settings, o);
+            adjust(&mut settings, o, dir, answered.is_none() && left_right == 0.0);
+            ui(&mut sfx, if opt_value(&settings, o) != was { "UI_Change" } else { "UI_Stop" });
             settings.save();
             menu.dirty = true;
         }
@@ -1557,6 +1635,7 @@ fn menu_input(
             menu.dirty = true;
         }
         Action::ResetBindings => {
+            ui(&mut sfx, "UI_Reset");
             // (the options' restore: the category shown)
             if menu.page == Page::Options {
                 menu.restore_settings(&mut settings);
