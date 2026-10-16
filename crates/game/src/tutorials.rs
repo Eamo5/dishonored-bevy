@@ -89,7 +89,8 @@ pub fn title(data: &Data, name: &str) -> String {
 /// The words of its field `k` (`txt<k>`): `t_tuto_<name>_<k>`, the keyboard's where it has its
 /// own.
 pub fn words(data: &Data, name: &str, k: usize) -> String {
-    let own = data.text(NOTE, &format!("t_tuto_{name}_{k}_keyboard"));
+    // (the keyboard's own, or a pad in use the pad's: `_gamepad`)
+    let own = data.text(NOTE, &format!("t_tuto_{name}_{k}_{}", if crate::pad::using() { "gamepad" } else { "keyboard" }));
     let t = if own.is_empty() { data.text(NOTE, &format!("t_tuto_{name}_{k}")) } else { own };
     crate::gamedata::readable(&t)
 }

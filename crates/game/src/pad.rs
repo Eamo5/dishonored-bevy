@@ -88,6 +88,30 @@ fn cmd_button(cmd: Cmd) -> Option<&'static str> {
     })
 }
 
+/// The converter's pad tokens and their buttons (`EmbedImg.setImageSubstitutions`: `$A$` the
+/// `X360_A` bitmap, `$LShoulder$` `X360_LB`, `$LThumbstick$` `X360_LS_click`...).
+pub const TOKENS: [(&str, &str); 19] = [
+    ("$A$", "A"),
+    ("$B$", "B"),
+    ("$X$", "X"),
+    ("$Y$", "Y"),
+    ("$LShoulder$", "LB"),
+    ("$RShoulder$", "RB"),
+    ("$LTrigger$", "LT"),
+    ("$RTrigger$", "RT"),
+    ("$Start$", "Start"),
+    ("$Back$", "Back"),
+    ("$LStick$", "LS"),
+    ("$RStick$", "RS"),
+    ("$DPad$", "DPad"),
+    ("$DPad_L$", "DPadL"),
+    ("$DPad_R$", "DPadR"),
+    ("$DPad_U$", "DPadU"),
+    ("$DPad_D$", "DPadD"),
+    ("$LThumbstick$", "LSClick"),
+    ("$RThumbstick$", "RSClick"),
+];
+
 /// A pad button's icon among the library's bitmaps (`X360_A -nopack`...).
 pub fn icon_id(name: &str) -> Option<u32> {
     Some(match name {

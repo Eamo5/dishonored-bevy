@@ -30,6 +30,7 @@ impl Plugin for FlashPlugin {
             .init_resource::<MovieTimelines>()
             // (after the game has driven its clips, before the interface's layout)
             .add_systems(PostUpdate, play_clips.in_set(PlayClips).before(bevy::ui::UiSystems::Prepare))
+            .add_systems(PostUpdate, field_icons.after(bevy::ui::UiSystems::Layout))
             .add_systems(Update, drop_turned_texts);
     }
 }
@@ -951,10 +952,10 @@ impl FlashClip {
         self.masks.push((clip.to_string(), mask.to_string()));
     }
 
-    /// A text field's text (`txt.text = ...`; `htmlText` too).
+    /// A text field's text (`txt.text = ...`; `htmlText` too). A pad's button named in it
+    /// (`pad::MARK`) is drawn as its icon in the words (`field_icons`).
     pub fn set_text(&mut self, path: &str, text: impl Into<String>) {
-        // (a pad's button named in it: by its name, the fields drawing no icons in their words)
-        let text = text.into().replace(crate::pad::MARK, "");
+        let text = text.into();
         if self.texts.get(path) != Some(&text) {
             self.texts.insert(path.to_string(), text);
         }
@@ -1211,6 +1212,99 @@ struct TextNode {
     shown: String,
     /// its spans' colours (the HTML's `<font color>`; `None`: the field's)
     colors: Vec<Option<Color>>,
+    /// the pad's buttons in its words: the span each is the gap of, and its name
+    icons: Vec<(usize, String)>,
+}
+
+/// A field's words as spans with their colours, each pad button named in them its own gap
+/// (`keytext::pad_parts`), and those buttons.
+fn field_parts(p: Vec<(String, Option<Color>)>) -> (Vec<(String, Option<Color>)>, Vec<(usize, String)>) {
+    let mut out = Vec::new();
+    let mut icons = Vec::new();
+    for (t, c) in p {
+        if !t.contains(crate::pad::MARK) {
+            out.push((t, c));
+            continue;
+        }
+        for (s, b) in crate::keytext::pad_parts(&t) {
+            if let Some(b) = b {
+                icons.push((out.len(), b));
+            }
+            out.push((s, c));
+        }
+    }
+    (out, icons)
+}
+
+/// The pad buttons' icons in a field's words (`EmbedImg`'s image substitutions: the library's
+/// `X360_*` bitmap, at most 35 square against the words' 25), laid over their gaps where the
+/// field's layout put them: in the field itself, so turned and scaled with it.
+#[derive(Component)]
+struct FieldIcons(Vec<Entity>);
+
+#[derive(Component)]
+struct FieldIcon;
+
+#[allow(clippy::type_complexity)]
+fn field_icons(
+    mut commands: Commands,
+    fields: Query<(Entity, &TextNode, &TextFont, &TextColor, &bevy::text::TextLayoutInfo, &bevy::text::ComputedTextBlock, &ComputedNode, Option<&FieldIcons>)>,
+    mut icons: Query<(&mut Node, &mut ImageNode, &mut Visibility), (With<FieldIcon>, Without<TextNode>)>,
+    (mut ui, mut images): (ResMut<crate::ui_images::UiImages>, ResMut<Assets<Image>>),
+) {
+    for (e, tn, font, color, layout, block, computed, made) in &fields {
+        if tn.icons.is_empty() {
+            if let Some(m) = made {
+                for &i in &m.0 {
+                    commands.entity(i).try_despawn();
+                }
+                commands.entity(e).remove::<FieldIcons>();
+            }
+            continue;
+        }
+        let mut list = made.map(|m| m.0.clone()).unwrap_or_default();
+        if list.len() < tn.icons.len() {
+            for _ in list.len()..tn.icons.len() {
+                list.push(commands.spawn((FieldIcon, ImageNode::default(), Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden, Pickable::IGNORE, ChildOf(e))).id());
+            }
+            commands.entity(e).insert(FieldIcons(list.clone()));
+            continue;
+        }
+        let inv = computed.inverse_scale_factor();
+        let size = match font.font_size {
+            bevy::text::FontSize::Px(p) => p,
+            _ => 24.0,
+        } * 1.4;
+        for (k, (span, name)) in tn.icons.iter().enumerate() {
+            let Ok((mut n, mut img, mut v)) = icons.get_mut(list[k]) else { continue };
+            // (its span's runs: the sections are the field's own words, then its spans in turn)
+            let rect = (*span < block.entities().len()).then(|| layout.run_geometry.iter().filter(|g| g.section_index == *span).map(|g| g.bounds).reduce(|a, b| a.union(b))).flatten();
+            let (Some(rect), Some((handle, isz))) = (rect, crate::pad::icon_id(name).and_then(|id| ui.get(&mut images, "lib", id))) else {
+                *v = Visibility::Hidden;
+                continue;
+            };
+            // (its shape kept, at most `size` square, in the field's own space)
+            let s = (size / isz.x.max(1.0)).min(size / isz.y.max(1.0));
+            let (iw, ih) = (isz.x * s, isz.y * s);
+            let at = rect.center() * inv;
+            n.left = Val::Px(at.x - iw * 0.5);
+            n.top = Val::Px(at.y - ih * 0.5);
+            n.width = Val::Px(iw);
+            n.height = Val::Px(ih);
+            if img.image != handle {
+                img.image = handle;
+            }
+            img.color = Color::WHITE.with_alpha(color.0.alpha());
+            if *v != Visibility::Inherited {
+                *v = Visibility::Inherited;
+            }
+        }
+        for &i in list.iter().skip(tn.icons.len()) {
+            if let Ok((_, _, mut v)) = icons.get_mut(i) {
+                *v = Visibility::Hidden;
+            }
+        }
+    }
 }
 
 /// The parts of a field's HTML text with their colours (`<font color="#rrggbb">`; line
@@ -1346,6 +1440,8 @@ fn play_clips(
                     };
                     let layout = TextLayout::new(justify, if wrap { bevy::text::LineBreak::WordBoundary } else { bevy::text::LineBreak::NoWrap });
                     let field = Color::srgba(def.color[0], def.color[1], def.color[2], def.color[3]);
+                    // (no icons drawn in a turned field's picture: the buttons by name)
+                    let content = &content.replace(crate::pad::MARK, "");
                     let p = if def.html || content.contains("<font") || content.contains("<br") { html_spans(content) } else { vec![(content.replace('\r', "\n"), None)] };
                     let root = commands.spawn((Node { width: Val::Px(size.x as f32), height: Val::Px(size.y as f32), ..default() }, bevy::ui::UiTargetCamera(cam), TurnedTextOf(e))).id();
                     let k = commands
@@ -1548,12 +1644,12 @@ fn play_clips(
                 tf.scale = Vec2::new(sx / base, sy / base);
                 tf.rotation = Rot2::radians(turn);
             };
-            let parts = |s: &str| -> Vec<(String, Option<Color>)> {
-                if def.html || s.contains("<font") || s.contains("<br") {
+            let parts = |s: &str| -> (Vec<(String, Option<Color>)>, Vec<(usize, String)>) {
+                field_parts(if def.html || s.contains("<font") || s.contains("<br") {
                     html_spans(s)
                 } else {
                     vec![(s.replace('\r', "\n"), None)]
-                }
+                })
             };
             if let Some(&bx) = tkids.get(i) {
                 let Ok((mut bn, mut bv, bkids)) = boxes.get_mut(bx) else { continue };
@@ -1581,7 +1677,8 @@ fn play_clips(
                 }
                 if tn.shown != content {
                     // (spans anew)
-                    let p = parts(content);
+                    let (p, icons) = parts(content);
+                    tn.icons = icons;
                     if let Some(ks) = kids {
                         for s in ks.iter() {
                             commands.entity(s).try_despawn();
@@ -1609,7 +1706,7 @@ fn play_clips(
                     }
                 }
             } else {
-                let p = parts(content);
+                let (p, icons) = parts(content);
                 if std::env::var("DH_FLASH_TEXT_LOG").is_ok() {
                     info!("flash text {} {:?} at {mid} size {}x{} font {} scale {sx},{sy}", t.path, content, w * base, h * base, def.size * base);
                 }
@@ -1621,7 +1718,7 @@ fn play_clips(
                 place(&mut n, &mut tf);
                 let k = commands
                     .spawn((
-                        TextNode { shown: content.to_string(), colors: p.iter().map(|s| s.1).collect() },
+                        TextNode { shown: content.to_string(), colors: p.iter().map(|s| s.1).collect(), icons },
                         Text::new(p.first().map(|s| s.0.clone()).unwrap_or_default()),
                         font.clone(),
                         TextColor(tint(p.first().and_then(|s| s.1).unwrap_or(field))),

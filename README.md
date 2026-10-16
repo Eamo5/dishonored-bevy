@@ -520,9 +520,10 @@ are in the settings file, `pad_binding_set` 0-3):
   `UI_Note` shows it, its
   tutorial page (`n_Tutorial`): the note's content at its label (`DisGFxMoviePlayerNote`'s
   `m_TutorialNotes`: its name and pictures' package), its pictures from `UI_Tuto_*`
-  (`tuto_<note>_<n>`, the keyboard's where there is one) loaded into its `img<n>` in place of
-  their stand-ins, its words (`t_tuto_<note>_<n>`, the keyboard's own) in its fields with the
-  keys bound, its title (`t_tuto_<note>_title`) on the brush. Each is kept: the pause menu's
+  (`tuto_<note>_<n>`, the keyboard's where there is one, a pad in use the pad's) loaded into
+  its `img<n>` in place of their stand-ins, its words (`t_tuto_<note>_<n>`, the keyboard's own
+  or the pad's, `_gamepad`, with the converter's `$DPad$`, `$LShoulder$`... as their icons) in
+  its fields with the keys bound, its title (`t_tuto_<note>_title`) on the brush. Each is kept: the pause menu's
   TUTORIALS (`t_Help`) lists them as `UI_PauseMenu` draws its `p_tuto_screen` over the pause
   backdrop (a `p_tuto_list_item` each, the chosen one `over`), and choosing one reads it again;
   Escape goes back to the list. `tutnote DTN_NAME` hands one over in test scripts.
@@ -977,8 +978,10 @@ are in the settings file, `pad_binding_set` 0-3):
   substitution draws it (the library's `X360_*` icon, at most 35 square, in the line: the
   words leave it a gap, the icon laid over the gap where the text's layout put it), with the
   pad's own words where the HUD tweak has them (`m_InteractionTexts_Gamepad`,
-  `m_PressKeyToAdrenalineKill_Gamepad`); the Flash fields (the tutorial notes) name the button
-  instead (`[RT]`). The keys are
+  `m_PressKeyToAdrenalineKill_Gamepad`); in the Flash fields too (the tutorial notes: each
+  button its own span of the field, the icon laid over it where the field's layout put it,
+  scaled with the field), but for a field turned in a mask, which names the button (`[RT]`).
+  The keys are
   named as the original names them (`Settings.int` `[Keys]`: `[Space Bar]`,
   `[Left Control]`, `[Left Mouse Button]`; in the options' keyboard mapping too, `One` for
   the 1 key), bracketed in the tutorials and messages as in the interaction texts.

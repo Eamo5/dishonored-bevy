@@ -630,6 +630,12 @@ pub fn readable(s: &str) -> String {
     for b in ["A", "B", "X", "Y"] {
         out = out.replace(&format!("`KEY_{b}`"), &format!("[{}{b}]", crate::pad::MARK));
     }
+    // (and the converter's own pad tokens: `EmbedImg`'s substitutions, `$DPad$`...)
+    if out.contains('$') {
+        for (token, b) in crate::pad::TOKENS {
+            out = out.replace(token, &format!("[{}{b}]", crate::pad::MARK));
+        }
+    }
     out = out.replace("<br />", "
 ").replace("<br>", "
 ").replace("\r", "

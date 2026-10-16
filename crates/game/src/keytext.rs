@@ -65,6 +65,26 @@ fn pad_button(run: &str) -> Option<&str> {
 /// fields' 22-25 point words).
 const GAP: &str = "\u{2003}\u{2002}";
 
+/// A text cut round the pad's buttons it names (`[MARK name]`): each part, and the button
+/// one is (its words the gap its icon is laid over).
+pub fn pad_parts(s: &str) -> Vec<(String, Option<String>)> {
+    let open = format!("[{}", crate::pad::MARK);
+    let mut out = Vec::new();
+    let mut rest = s;
+    while let Some(i) = rest.find(&open) {
+        let Some(j) = rest[i..].find(']') else { break };
+        if i > 0 {
+            out.push((rest[..i].to_string(), None));
+        }
+        out.push((GAP.to_string(), Some(rest[i + open.len()..i + j].to_string())));
+        rest = &rest[i + j + 1..];
+    }
+    if !rest.is_empty() || out.is_empty() {
+        out.push((rest.to_string(), None));
+    }
+    out
+}
+
 /// The words as a Flash field's HTML with its keys in the key colour (`_blueColorTag`): for a
 /// movie's own field (the tutorial notes' `Note.SetTutorial`).
 pub fn html(s: &str) -> String {
@@ -119,12 +139,12 @@ struct KeyIcon(Entity);
 #[allow(clippy::type_complexity)]
 fn place_icons(
     mut commands: Commands,
-    texts: Query<(Entity, &KeyText, &Node, &TextFont, &TextColor, &Visibility, &bevy::text::TextLayoutInfo, &bevy::text::ComputedTextBlock, &ComputedNode, Option<&Children>, Option<&ChildOf>, Option<&KeyIcons>)>,
+    texts: Query<(Entity, &KeyText, &Node, &TextFont, &TextColor, &Visibility, &bevy::text::TextLayoutInfo, &bevy::text::ComputedTextBlock, &ComputedNode, Option<&Children>, Option<&ChildOf>, Option<&KeyIcons>, (Option<&UiTransform>, Option<&GlobalZIndex>))>,
     spans: Query<(), With<TextSpan>>,
     mut icons: Query<(Entity, &KeyIcon, &mut Node, &mut ImageNode, &mut Visibility), Without<KeyText>>,
     (mut ui, mut images): (ResMut<crate::ui_images::UiImages>, ResMut<Assets<Image>>),
 ) {
-    for (e, kt, node, font, color, vis, layout, block, computed, children, parent, made) in &texts {
+    for (e, kt, node, font, color, vis, layout, block, computed, children, parent, made, (tf, z)) in &texts {
         let buttons: Vec<String> = runs(&kt.0).iter().filter_map(|(t, key)| key.then(|| pad_button(t)).flatten().map(str::to_string)).collect();
         if buttons.is_empty() {
             if let Some(m) = made {
@@ -135,7 +155,6 @@ fn place_icons(
             }
             continue;
         }
-        let Some(parent) = parent else { continue };
         // the gaps' spans, in order, and where the layout put each (its run's bounds)
         let gaps: Vec<Entity> = {
             let kids: Vec<Entity> = children.into_iter().flatten().copied().filter(|c| spans.contains(*c)).collect();
@@ -148,7 +167,10 @@ fn place_icons(
             layout.run_geometry.iter().filter(|g| g.section_index == section).map(|g| g.bounds).reduce(|a, b| a.union(b))
         };
         let px = |v: Val| if let Val::Px(p) = v { p } else { 0.0 };
+        // (the text's box, and its scale about its middle: the tutorial line's pop)
         let (left, top) = (px(node.left), px(node.top));
+        let boxed = computed.size() * inv;
+        let scale = tf.map(|t| t.scale).unwrap_or(Vec2::ONE);
         // (the icon at most 35 against the field's 25: 1.4 of the words' size)
         let size = match font.font_size {
             bevy::text::FontSize::Px(p) => p,
@@ -159,7 +181,19 @@ fn place_icons(
             let icon = match list.get(k) {
                 Some(i) => *i,
                 None => {
-                    let i = commands.spawn((KeyIcon(e), ImageNode::default(), Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden, Pickable::IGNORE, ChildOf(parent.parent()))).id();
+                    // (beside the text: in its parent, or, a text of its own layer, on the
+                    // same layer)
+                    let mut c = commands.spawn((KeyIcon(e), ImageNode::default(), Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden, Pickable::IGNORE));
+                    match (parent, z) {
+                        (Some(p), _) => {
+                            c.insert(ChildOf(p.parent()));
+                        }
+                        (None, Some(z)) => {
+                            c.insert(*z);
+                        }
+                        _ => {}
+                    }
+                    let i = c.id();
                     list.push(i);
                     commands.entity(e).insert(KeyIcons(list.clone()));
                     continue;
@@ -172,10 +206,11 @@ fn place_icons(
             };
             // (at most `size` square, its shape kept)
             let s = (size / isz.x.max(1.0)).min(size / isz.y.max(1.0));
-            let (w, hgt) = (isz.x * s, isz.y * s);
+            let (w, hgt) = (isz.x * s * scale.x, isz.y * s * scale.y);
             let c = rect.center() * inv;
-            n.left = Val::Px(left + c.x - w * 0.5);
-            n.top = Val::Px(top + c.y - hgt * 0.5);
+            let at = Vec2::new(left, top) + boxed * 0.5 + (c - boxed * 0.5) * scale;
+            n.left = Val::Px(at.x - w * 0.5);
+            n.top = Val::Px(at.y - hgt * 0.5);
             n.width = Val::Px(w);
             n.height = Val::Px(hgt);
             if img.image != h {
@@ -215,5 +250,11 @@ mod tests {
         let b = format!("[{}X] Open", crate::pad::MARK);
         assert_eq!(runs(&b)[0].1, true);
         assert_eq!(pad_button(&runs(&b)[0].0), Some("X"));
+        // (a Flash field's words cut round it)
+        let p = pad_parts(&format!("Press {b} now"));
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[1], (GAP.to_string(), Some("X".to_string())));
+        assert_eq!(p[2].0, " Open now");
+        assert_eq!(pad_parts("plain"), vec![("plain".to_string(), None)]);
     }
 }

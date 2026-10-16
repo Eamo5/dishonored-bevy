@@ -208,7 +208,8 @@ fn draw(
                 let path = format!("{CONTENT}.img{k}");
                 if fc.size(&path).is_some() {
                     let stem = format!("tuto_{}_{k}", n.name);
-                    if let Some((image, size)) = ui.file(&mut images, "tutorials", &format!("{stem}_keyboard")).or_else(|| ui.file(&mut images, "tutorials", &stem)) {
+                    let own = if crate::pad::using() { "gamepad" } else { "keyboard" };
+                    if let Some((image, size)) = ui.file(&mut images, "tutorials", &format!("{stem}_{own}")).or_else(|| ui.file(&mut images, "tutorials", &stem)) {
                         fc.images.insert(path, crate::flash::LoadedImage { image, size, at: Vec2::ZERO, replace: true, tile: None });
                     }
                 }
