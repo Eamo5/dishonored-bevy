@@ -112,6 +112,7 @@ fn close(
     mut sfx: MessageWriter<PostEvent>,
     scripted: Option<Res<crate::script::Scripted>>,
     (menu, journal): (Res<crate::menu::Menu>, Res<crate::journal::Journal>),
+    help: Query<(&Interaction, &crate::helpbar::HelpButton), Changed<Interaction>>,
 ) {
     // (only when set: a write marks it changed, which holds the pause menu shut)
     if note.shut {
@@ -124,7 +125,8 @@ fn close(
         note.fresh = false;
         return;
     }
-    let clicked = scripted.is_none() && mouse.just_pressed(MouseButton::Right);
+    // (the right button, or its help bar's Close)
+    let clicked = scripted.is_none() && (mouse.just_pressed(MouseButton::Right) || crate::helpbar::clicked(&help) == Some(crate::helpbar::Btn::B));
     if !(keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::KeyE) || clicked) {
         return;
     }
@@ -292,10 +294,11 @@ fn draw(
             note.page = 470.0 * s;
         }
     }
-    // the help bar's: close
-    let help = format!("[Esc]  {}", data.text("DisGFxMoviePlayerBase_Texts", "t_Back").to_uppercase());
-    let p = off + Vec2::new(1184.0 - 300.0, 665.0 - 16.0) * s;
-    commands.spawn((Text::new(help), TextFont { font: fonts.title.clone().into(), font_size: FontSize::Px(22.0 * s), ..default() }, TextColor(PALE), TextLayout::new(Justify::Right, LineBreak::NoWrap), Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(300.0 * s), ..default() }, Pickable::IGNORE, ChildOf(root)));
+    // the help bar (`close`: B Close)
+    if let Some(lib) = timelines.get("lib") {
+        use crate::helpbar::{Btn, Entry};
+        crate::helpbar::spawn(&mut commands, root, lib, s, off + crate::helpbar::END * s, &[Entry::new(Btn::B, data.text("DisGFxMoviePlayerBase_Texts", "t_Close"))], &mut ui, &mut images, false);
+    }
 }
 
 /// The field's lines, once laid out; the window of them shown, moved by the wheel (three

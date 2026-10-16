@@ -81,11 +81,7 @@ struct StoreRoot;
 #[derive(Component)]
 struct ItemRow(usize);
 
-#[derive(Component)]
-struct BuyButton;
 
-#[derive(Component)]
-struct CloseButton;
 
 #[derive(Component)]
 struct TabButton(u8);
@@ -162,8 +158,7 @@ fn input(
     mut paused: ResMut<Paused>,
     mut cursor: Single<&mut CursorOptions>,
     (rows, tabs_q): (Query<(&Interaction, &ItemRow), Changed<Interaction>>, Query<(&Interaction, &TabButton), Changed<Interaction>>),
-    buy: Query<&Interaction, (With<BuyButton>, Changed<Interaction>)>,
-    close: Query<&Interaction, (With<CloseButton>, Changed<Interaction>)>,
+    help: Query<(&Interaction, &crate::helpbar::HelpButton), Changed<Interaction>>,
     roots: Query<Entity, With<StoreRoot>>,
     (mut sfx, mut msgs, attrs): (MessageWriter<PostEvent>, ResMut<HudMessages>, Res<crate::gamedata::Attrs>),
     scripted: Option<Res<crate::script::Scripted>>,
@@ -172,6 +167,8 @@ fn input(
     let def = &data.0.stores[si];
     let tabs = has_tabs(def);
     let pointer = scripted.is_none();
+    // the help bar's entries clicked: A purchases, B exits
+    let help = crate::helpbar::clicked(&help).filter(|_| pointer);
     // an upgrade's purchase asked first: Left / Right choose, Enter answers, Escape cancels
     if let Some((_, choice, item)) = store.confirm.clone() {
         let mut choice = choice;
@@ -246,7 +243,7 @@ fn input(
         store.dirty = true;
         sfx.write(PostEvent::named("UI_Move", None));
     }
-    let quit = keys.just_pressed(KeyCode::Escape) || close.iter().filter(|_| pointer).any(|i| *i == Interaction::Pressed);
+    let quit = keys.just_pressed(KeyCode::Escape) || help == Some(crate::helpbar::Btn::B);
     if quit {
         store.open = None;
         for e in &roots {
@@ -258,7 +255,7 @@ fn input(
         sfx.write(PostEvent::named("UI_S_CloseShop", None));
         return;
     }
-    if !(buy.iter().filter(|_| pointer).any(|i| *i == Interaction::Pressed) || keys.just_pressed(KeyCode::Enter) || clicked && step == 0 && rows.is_empty()) {
+    if !(help == Some(crate::helpbar::Btn::A) || keys.just_pressed(KeyCode::Enter) || clicked && step == 0 && rows.is_empty()) {
         return;
     }
     let Some(it) = def.items.get(store.selected).cloned() else { return };
@@ -356,10 +353,15 @@ fn refresh(
     (mut ui, mut images): (ResMut<UiImages>, ResMut<Assets<Image>>),
     roots: Query<Entity, With<StoreRoot>>,
     (mut timelines, window): (ResMut<crate::flash::MovieTimelines>, Query<&Window, With<bevy::window::PrimaryWindow>>),
-    mut last_size: Local<Vec2>,
+    (mut last_size, mut last_open): (Local<Vec2>, Local<Option<usize>>),
 ) {
     use crate::flash::{Clip, FlashClip, Mat};
     use bevy::text::LineBreak;
+    // (its help bar comes in as the shop opens, then stays)
+    let opening = *last_open != store.open;
+    if store.open.is_none() {
+        *last_open = None;
+    }
     let Some(si) = store.open else { return };
     let Ok(w) = window.single() else { return };
     let size = Vec2::new(w.width(), w.height());
@@ -371,6 +373,7 @@ fn refresh(
         return;
     }
     store.dirty = false;
+    *last_open = store.open;
     for e in &roots {
         commands.entity(e).despawn();
     }
@@ -630,6 +633,13 @@ fn refresh(
         clip(&mut commands, root, Vec2::ZERO, &tl, MOVIE, "sh_itemsList_empty", c, &mut |_| {});
         words(&mut commands, root, Vec2::ZERO, Rect::from_center_size(c, Vec2::new(360.0, 34.0)), -2.5, data.text("DisGFxMoviePlayerBase_Texts", "t_EmptyList"), normal(26.0), Color::srgb(168.0 / 255.0, 180.0 / 255.0, 158.0 / 255.0), Justify::Center, false, false);
     }
+    // the help bar (`purchase` / `upgrade`: A Purchase or Purchase Upgrade, B Exit; an empty
+    // list's `_lock`)
+    if let Some(lib) = lib.clone() {
+        use crate::helpbar::{Btn, Entry};
+        let entries = [Entry::new(Btn::A, data.text(S, if store.tab == 1 { "t_PurchaseUpgrade" } else { "t_Purchase" })).locked(list.is_empty()), Entry::new(Btn::B, data.text("DisGFxMoviePlayerBase_Texts", "t_Exit"))];
+        crate::helpbar::spawn(&mut commands, root, lib, s, off + crate::helpbar::END * s, &entries, &mut ui, &mut images, !opening);
+    }
     // the chosen item's details
     let d = Vec2::new(1005.95, 67.7);
     let it = def.items.get(sel).filter(|_| !list.is_empty());
@@ -698,10 +708,4 @@ fn refresh(
         .id();
     commands.spawn((Text::new(it.name.to_uppercase()), title(26.0), TextColor(PALE), TextLayout::new(Justify::Left, LineBreak::WordBoundary), UiTransform { scale: Vec2::new(1.0, 1.2), ..default() }, Node { width: Val::Px(320.9 * s), margin: UiRect::new(Val::Px(4.2 * s), Val::ZERO, Val::Px(4.0 * s), Val::ZERO), flex_shrink: 0.0, ..default() }, Pickable::IGNORE, ChildOf(col)));
     commands.spawn((Text::new(crate::gamedata::readable(&it.description)), normal(24.0), TextColor(PALE), TextLayout::new(Justify::Left, LineBreak::WordBoundary), Node { width: Val::Px(320.9 * s), margin: UiRect::new(Val::Px(4.2 * s), Val::ZERO, Val::Px(8.0 * s), Val::ZERO), flex_shrink: 0.0, ..default() }, Pickable::IGNORE, ChildOf(col)));
-    // the help bar's: A purchase, B exit
-    let p = off + Vec2::new(1184.0 - 520.0, 651.0 - 18.0) * s;
-    let bar = commands.spawn((Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(520.0 * s), justify_content: JustifyContent::FlexEnd, column_gap: Val::Px(20.0 * s), ..default() }, Pickable::IGNORE, ChildOf(root))).id();
-    let buy_words = data.text(S, if store.tab == 1 { "t_PurchaseUpgrade" } else { "t_Purchase" }).to_uppercase();
-    commands.spawn((BuyButton, Button, ChildOf(bar))).with_child((Text::new(format!("[Enter]  {buy_words}")), title(22.0), TextColor(if missing.is_none() && affordable && !owned(&stats, it) && !at_capacity(&stats, &attrs, &it.item) { PALE } else { PALE.with_alpha(0.4) })));
-    commands.spawn((CloseButton, Button, ChildOf(bar))).with_child((Text::new(format!("[Esc]  {}", data.text("DisGFxMoviePlayerBase_Texts", "t_Exit").to_uppercase())), title(22.0), TextColor(PALE)));
 }

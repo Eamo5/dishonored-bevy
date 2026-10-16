@@ -390,7 +390,8 @@ fullscreen display, vertical sync and the crosshair.
   missing), the chosen item's picture, `Owned:` count, cost and coins carried. An upgrade's
   purchase is asked first, as the shop's upgrades list marks its items `confirmationRequired`
   ("Do you want to buy Fast Reload for 400?", `PURCHASE` / `CANCEL` in the message box); the
-  purchases tab's ammunition and elixirs go straight through.
+  purchases tab's ammunition and elixirs go straight through. Its help bar (`purchase` /
+  `upgrade`): `PURCHASE` or `PURCHASE UPGRADE` (locked on an empty list), `EXIT`.
 - **The mission statistics as `UI_MissionStats` draws them** (`mission.rs`): the mission's
   illustration under Corvo and the shards, its name on the brush with its dark shadows, the
   statistics list (values, ticked boxes) turned with its section bands, and the things found
@@ -406,11 +407,12 @@ fullscreen display, vertical sync and the crosshair.
   right. Each entry is clickable; under the pointer its key whitens, it rises and a line is
   drawn under its words; an entry locked is dimmed. On the mission statistics, the main
   menu's missions, the new game's difficulties, the save and load lists, the options, the
-  pause menu's tutorials (`READ TUTORIAL`, `BACK`) and the journal's pages.
+  pause menu's tutorials (`READ TUTORIAL`, `BACK`), the journal's pages, the shops and the note
+  reader.
 - **Notes read as `UI_Note` shows them** (`notescreen.rs`): a note or book picked up opens over
   the blurred game on the dimmed, drifting backdrop — its title dark on the brush, its words in
-  the scrolling field — and a location map in its frame; Escape puts it away (it stays in the
-  journal). The field (`_common.AnalogScrollView`, turned a degree with its mask) scrolls with
+  the scrolling field — and a location map in its frame; Escape (or its help bar's `CLOSE`)
+  puts it away (it stays in the journal). The field (`_common.AnalogScrollView`, turned a degree with its mask) scrolls with
   the wheel (three lines a notch), the arrows / W S and Page Up / Down; the words are laid out
   once to learn their lines and shown a window of whole lines at a time, tilted as the
   original's (a turned node can't be clipped here: its overflow came out garbled), so the long
