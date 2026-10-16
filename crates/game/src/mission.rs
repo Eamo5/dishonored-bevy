@@ -2,6 +2,7 @@
 //! progress); leaving a mission shows its statistics first, on the original mission-stats art.
 
 use crate::gameplay::{Campaign, PlayerStats};
+use crate::helpbar::{Btn, Entry};
 use crate::hud::Paused;
 use crate::save::mission_name;
 use crate::ui_fonts::UiFonts;
@@ -15,6 +16,7 @@ pub struct MissionPlugin;
 impl Plugin for MissionPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<TravelRequest>()
+            .insert_resource(MissionRecords::load())
             .add_message::<ShowMissionStats>()
             .add_systems(Update, (travel, show_stats, stats_screen_input).chain().run_if(in_state(GameState::InGame)));
     }
@@ -47,6 +49,8 @@ pub struct MissionEnd {
     confirm: Option<usize>,
     /// a button of the question clicked (`msgbox`)
     pub confirm_click: Option<usize>,
+    /// shown from the main menu's missions (`bOpenedInMenu`): Back only, the menu under it
+    in_menu: bool,
 }
 
 impl MissionEnd {
@@ -72,13 +76,129 @@ fn replay_slot(stats: &PlayerStats, slots: &crate::save::SaveSlots) -> Option<us
 }
 
 #[derive(Component)]
-struct ReplayButton;
-
-#[derive(Component)]
 pub struct StatsScreen;
 
-#[derive(Component)]
-struct ContinueButton;
+/// A mission's statistics as last shown, kept by the profile for the main menu's missions: the
+/// exe keeps a record a mission (profile setting 136, by `m_MissionNumber`) with each row's
+/// value and the summary's story flags as bits, written as the statistics show (0x009FE090)
+/// and read back by the missions' list (`bStatsAvailable`) and `OpenMissionStats`.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default, Debug)]
+pub struct MissionRecord {
+    /// the statistics' tweak (`Twk_M1_Overseers`...) and the mission's name as shown
+    pub tweak: String,
+    pub title: String,
+    /// each row's value (the chaos row: 1 high)
+    pub values: Vec<f32>,
+    /// the summary's story flags as they were, a bit each
+    pub summary: u32,
+}
+
+/// The profile's mission records, by mission.
+#[derive(Resource, Default)]
+pub struct MissionRecords(pub std::collections::BTreeMap<u8, MissionRecord>);
+
+impl MissionRecords {
+    fn path() -> std::path::PathBuf {
+        crate::settings::user_dir().join("missions.json")
+    }
+    fn load() -> Self {
+        MissionRecords(std::fs::read(Self::path()).ok().and_then(|d| serde_json::from_slice(&d).ok()).unwrap_or_default())
+    }
+    /// A mission's record kept (written out, but not by a scripted run unless it saves).
+    fn keep(&mut self, mission: u8, rec: MissionRecord) {
+        self.0.insert(mission, rec);
+        if std::env::var("DH_SCRIPT").is_ok() && std::env::var("DH_AUTOSAVE").is_err() {
+            return;
+        }
+        if let Ok(d) = serde_json::to_vec_pretty(&self.0) {
+            let _ = std::fs::write(Self::path(), d);
+        }
+    }
+    /// Whether a mission's statistics can be seen (`bStatsAvailable`).
+    pub fn has(&self, mission: usize) -> bool {
+        u8::try_from(mission).is_ok_and(|m| self.0.contains_key(&m))
+    }
+}
+
+/// A statistics tweak's mission (`m_MissionNumber`, the prison's unset: UE3's 0).
+fn tweak_mission(def: &dhcook::format::MissionStatsDef) -> u8 {
+    def.mission.clamp(0, 255) as u8
+}
+
+/// The mission's own illustration behind its statistics (`UI_MissionStatsBg_*`).
+fn stats_art(tweak: &str) -> &'static str {
+    match tweak {
+        "Twk_M0_Prison" => "MissionStats_Prison",
+        "Twk_M1_Overseers" => "MissionStats_Overseer",
+        "Twk_M2_GoldenCat" => "MissionStats_Brothel",
+        "Twk_M3_Bridge" => "MissionStats_Bridge",
+        "Twk_M4_Boyle" => "MissionStats_Boyle",
+        "Twk_M5_TowerReturn" => "MissionStats_TowerReturn",
+        "Twk_M6_Flooded" => "MissionStats_FloodedDistrict",
+        "Twk_M7_PubAssault" => "MissionStats_Hub",
+        _ => "MissionStats_Lighthouse",
+    }
+}
+
+/// A mission's record as it ends: its rows' values and its story flags.
+fn record_of(def: &dhcook::format::MissionStatsDef, s: &PlayerStats, vm: Option<&crate::kismet::Vm>, title: String) -> MissionRecord {
+    let values = def
+        .stats
+        .iter()
+        .map(|row| if row.stat == "ePlayerStat_ChaosLevel" { if s.chaos_high { 1.0 } else { 0.0 } } else { (s.stat(&row.stat) + row.add.as_deref().map(|a| s.stat(a)).unwrap_or(0)) as f32 })
+        .collect();
+    let summary = def.summary.iter().take(32).enumerate().fold(0u32, |m, (j, (_, flag, _))| if !flag.is_empty() && vm.is_some_and(|v| v.flag(flag)) { m | 1 << j } else { m });
+    MissionRecord { tweak: def.name.clone(), title, values, summary }
+}
+
+/// The statistics screen of a record: the rows, the things found on their panel, the
+/// outcomes whose story flag was as they want.
+fn record_view(def: &dhcook::format::MissionStatsDef, rec: &MissionRecord) -> StatsView {
+    let mut rows = Vec::new();
+    let mut pickups = Vec::new();
+    for (k, row) in def.stats.iter().enumerate() {
+        let v = rec.values.get(k).copied().unwrap_or(0.0).round().max(0.0) as u32;
+        // the things found go to the pickups' panel (`_pickUps_mc`)
+        let kind = match row.stat.as_str() {
+            "ePlayerStat_BoneCharmFound" => Some("boneCharms"),
+            "ePlayerStat_RuneFound" => Some("runes"),
+            "ePlayerStat_GoldFound" => Some("coins"),
+            "ePlayerStat_SokolovPaintingFound" => Some("paintings"),
+            "ePlayerStat_OutsiderShrineFound" => Some("outsider"),
+            _ => None,
+        };
+        if let Some(k) = kind {
+            pickups.push((k, row.description.trim_end_matches(" Found").to_string(), v, row.max));
+            continue;
+        }
+        let shown = if row.stat == "ePlayerStat_ChaosLevel" {
+            Stat::Text(if v != 0 { "High" } else { "Low" }.to_string())
+        } else if row.checkbox {
+            Stat::Check(if row.nonzero { v != 0 } else { v == 0 })
+        } else {
+            Stat::Text(v.to_string())
+        };
+        rows.push((row.description.clone(), shown));
+    }
+    let summary = def.summary.iter().enumerate().filter(|(j, (_, flag, want))| !flag.is_empty() && *j < 32 && (rec.summary >> j & 1 == 1) == *want).map(|(_, (d, _, _))| d.clone()).collect();
+    StatsView { title: rec.title.clone(), art: Some(stats_art(&def.name)), rows, summary, pickups, replay: false, in_menu: false }
+}
+
+/// The main menu's missions: a mission's statistics as last shown (`OpenMissionStats`), over
+/// the menu with Back only (`bOpenedInMenu`). Whether it had any.
+#[allow(clippy::too_many_arguments)]
+pub fn show_record(commands: &mut Commands, mission: usize, records: &MissionRecords, data: &crate::gamedata::Data, fonts: &UiFonts, ui: &mut UiImages, images: &mut Assets<Image>, timelines: &mut crate::flash::MovieTimelines, w: &Window) -> bool {
+    let Some(rec) = u8::try_from(mission).ok().and_then(|m| records.0.get(&m)) else { return false };
+    let Some(def) = data.0.mission_stats.iter().find(|m| m.name.eq_ignore_ascii_case(&rec.tweak)) else { return false };
+    let mut view = record_view(def, rec);
+    view.in_menu = true;
+    commands.insert_resource(MissionEnd { map: None, op: None, replay: None, confirm: None, confirm_click: None, in_menu: true });
+    if let Some(tl) = timelines.get("MissionStats") {
+        let lib = timelines.get("lib");
+        spawn_stats(commands, tl, lib, w, data, fonts, ui, images, &view);
+    }
+    true
+}
 
 #[allow(clippy::too_many_arguments)]
 fn travel(
@@ -113,7 +233,7 @@ fn travel(
     // a mission is over: its statistics first
     paused.0 = true;
     let replay = replay_slot(&stats, &slots);
-    commands.insert_resource(MissionEnd { map: Some((r.map, r.start)), op: None, replay, confirm: None, confirm_click: None });
+    commands.insert_resource(MissionEnd { map: Some((r.map, r.start)), op: None, replay, confirm: None, confirm_click: None, in_menu: false });
     let s = &stats;
     let view = StatsView {
         title: done,
@@ -128,9 +248,11 @@ fn travel(
         summary: Vec::new(),
         pickups: vec![("boneCharms", "Bone Charms".into(), s.charms_found, 0), ("runes", "Runes".into(), s.runes_found, 0), ("coins", "Coins".into(), s.coins_found, 0)],
         replay: replay.is_some(),
+        in_menu: false,
     };
     if let (Ok(w), Some(tl)) = (window.single(), timelines.get("MissionStats")) {
-        spawn_stats(&mut commands, tl, w, &data, &fonts, &mut ui, &mut images, &view);
+        let lib = timelines.get("lib");
+        spawn_stats(&mut commands, tl, lib, w, &data, &fonts, &mut ui, &mut images, &view);
     }
 }
 
@@ -147,7 +269,7 @@ fn show_stats(
     fonts: Res<UiFonts>,
     (mut ui, mut images): (ResMut<UiImages>, ResMut<Assets<Image>>),
     mut paused: ResMut<Paused>,
-    (mut timelines, window, slots): (ResMut<crate::flash::MovieTimelines>, Query<&Window, With<bevy::window::PrimaryWindow>>, Res<crate::save::SaveSlots>),
+    (mut timelines, window, slots, mut records): (ResMut<crate::flash::MovieTimelines>, Query<&Window, With<bevy::window::PrimaryWindow>>, Res<crate::save::SaveSlots>, ResMut<MissionRecords>),
 ) {
     let Some(r) = requests.read().last().cloned() else { return };
     let Some(def) = data.0.mission_stats.iter().find(|m| m.name.eq_ignore_ascii_case(&r.tweak)) else {
@@ -157,58 +279,18 @@ fn show_stats(
         }
         return;
     };
-    let s = &*stats;
-    let mut rows = Vec::new();
-    let mut pickups = Vec::new();
-    for row in &def.stats {
-        let v = s.stat(&row.stat) + row.add.as_deref().map(|a| s.stat(a)).unwrap_or(0);
-        // the things found go to the pickups' panel (`_pickUps_mc`)
-        let kind = match row.stat.as_str() {
-            "ePlayerStat_BoneCharmFound" => Some("boneCharms"),
-            "ePlayerStat_RuneFound" => Some("runes"),
-            "ePlayerStat_GoldFound" => Some("coins"),
-            "ePlayerStat_SokolovPaintingFound" => Some("paintings"),
-            "ePlayerStat_OutsiderShrineFound" => Some("outsider"),
-            _ => None,
-        };
-        if let Some(k) = kind {
-            pickups.push((k, row.description.trim_end_matches(" Found").to_string(), v, row.max));
-            continue;
-        }
-        let shown = if row.stat == "ePlayerStat_ChaosLevel" {
-            Stat::Text(s.chaos().to_string())
-        } else if row.checkbox {
-            Stat::Check(if row.nonzero { v != 0 } else { v == 0 })
-        } else {
-            Stat::Text(v.to_string())
-        };
-        rows.push((row.description.clone(), shown));
-    }
-    let summary: Vec<String> = def
-        .summary
-        .iter()
-        .filter(|(_, flag, want)| !flag.is_empty() && vm.as_ref().is_some_and(|v| v.flag(flag) == *want))
-        .map(|(d, _, _)| d.clone())
-        .collect();
+    // the mission's record kept for the main menu; the screen drawn from it
     let map = level.as_ref().map(|l| l.scene.name.clone()).unwrap_or_default();
+    let rec = record_of(def, &stats, vm.as_deref(), mission_name(&map));
+    let mut view = record_view(def, &rec);
+    records.keep(tweak_mission(def), rec);
     paused.0 = true;
     let replay = replay_slot(&stats, &slots);
-    commands.insert_resource(MissionEnd { map: None, op: Some(r.op), replay, confirm: None, confirm_click: None });
-    // the mission's own illustration behind the statistics (`UI_MissionStatsBg_*`)
-    let art = match def.name.as_str() {
-        "Twk_M0_Prison" => "MissionStats_Prison",
-        "Twk_M1_Overseers" => "MissionStats_Overseer",
-        "Twk_M2_GoldenCat" => "MissionStats_Brothel",
-        "Twk_M3_Bridge" => "MissionStats_Bridge",
-        "Twk_M4_Boyle" => "MissionStats_Boyle",
-        "Twk_M5_TowerReturn" => "MissionStats_TowerReturn",
-        "Twk_M6_Flooded" => "MissionStats_FloodedDistrict",
-        "Twk_M7_PubAssault" => "MissionStats_Hub",
-        _ => "MissionStats_Lighthouse",
-    };
-    let view = StatsView { title: mission_name(&map), art: Some(art), rows, summary, pickups, replay: replay.is_some() };
+    commands.insert_resource(MissionEnd { map: None, op: Some(r.op), replay, confirm: None, confirm_click: None, in_menu: false });
+    view.replay = replay.is_some();
     if let (Ok(w), Some(tl)) = (window.single(), timelines.get("MissionStats")) {
-        spawn_stats(&mut commands, tl, w, &data, &fonts, &mut ui, &mut images, &view);
+        let lib = timelines.get("lib");
+        spawn_stats(&mut commands, tl, lib, w, &data, &fonts, &mut ui, &mut images, &view);
     }
 }
 
@@ -229,6 +311,8 @@ struct StatsView {
     pickups: Vec<(&'static str, String, u32, u32)>,
     /// the help bar's Replay Mission (`bReplayAvailable`: the mission's start saved)
     replay: bool,
+    /// shown from the main menu (`bOpenedInMenu`): the help bar's Back only
+    in_menu: bool,
 }
 
 /// The statistics screen as `UI_MissionStats` draws it (`ms_statsScreen`): the mission's
@@ -237,9 +321,11 @@ struct StatsView {
 /// shadows); the list turned -3 degrees at (138.7,177.25) (`ms_statsList`: section bands
 /// `ms_statList_section`, rows `ms_statList_item` 36.8 apart with the value on the right or its
 /// tick box, a section 25 below the last); the things found on the right (`_pickUps_mc`, +2
-/// degrees: "FOUND" and a line each with its icon); Continue where the help bar has it.
+/// degrees: "FOUND" and a line each with its icon); the help bar (`MissionsStats`: X Replay
+/// Mission, when the mission's start is saved, and A Continue; from the menu
+/// `MissionsStats_inMenu`: B Back).
 #[allow(clippy::too_many_arguments)]
-fn spawn_stats(commands: &mut Commands, tl: std::sync::Arc<dhcook::format::Timelines>, w: &Window, data: &crate::gamedata::Data, fonts: &UiFonts, ui: &mut UiImages, images: &mut Assets<Image>, view: &StatsView) {
+fn spawn_stats(commands: &mut Commands, tl: std::sync::Arc<dhcook::format::Timelines>, lib: Option<std::sync::Arc<dhcook::format::Timelines>>, w: &Window, data: &crate::gamedata::Data, fonts: &UiFonts, ui: &mut UiImages, images: &mut Assets<Image>, view: &StatsView) {
     use crate::flash::{concat, Clip, FlashClip, Mat};
     use bevy::text::{FontSize, LineBreak};
     const MOVIE: &str = "MissionStats";
@@ -397,19 +483,17 @@ fn spawn_stats(commands: &mut Commands, tl: std::sync::Arc<dhcook::format::Timel
             words(commands, &pick_m, Vec2::new(-44.9 - 300.0, ly - 12.8 + 2.0), Vec2::new(298.0, 29.7), format!("{name}  {count}"), normal_font(24.0), pale, Justify::Right, false);
         }
     }
-    // Continue: the help bar's A (Enter)
-    let words_c = data.text("DisGFxMoviePlayerBase_Texts", "t_ContinueGame").to_uppercase();
-    let p = off + Vec2::new(1184.0 - 260.0, 651.0 - 20.0) * s;
-    commands
-        .spawn((ContinueButton, Button, Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(260.0 * s), justify_content: JustifyContent::FlexEnd, ..default() }, ChildOf(root)))
-        .with_child((Text::new(format!("[Enter]  {words_c}")), title_font(24.0), TextColor(pale)));
-    // Replay Mission before it (`X`, `t_ReplayMission`), when the mission's start is saved
-    if view.replay {
-        let words_r = data.text("DisGFxMoviePlayerMissionStats_Texts", "t_ReplayMission").to_uppercase();
-        let p = off + Vec2::new(1184.0 - 260.0 - 300.0, 651.0 - 20.0) * s;
-        commands
-            .spawn((ReplayButton, Button, Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(290.0 * s), justify_content: JustifyContent::FlexEnd, ..default() }, ChildOf(root)))
-            .with_child((Text::new(words_r), title_font(24.0), TextColor(pale)));
+    // the help bar
+    let base = "DisGFxMoviePlayerBase_Texts";
+    let entries = if view.in_menu {
+        vec![Entry::new(Btn::B, data.text(base, "t_Back"))]
+    } else if view.replay {
+        vec![Entry::new(Btn::X, data.text("DisGFxMoviePlayerMissionStats_Texts", "t_ReplayMission")), Entry::new(Btn::A, data.text(base, "t_ContinueGame"))]
+    } else {
+        vec![Entry::new(Btn::A, data.text(base, "t_ContinueGame"))]
+    };
+    if let Some(lib) = lib {
+        crate::helpbar::spawn(commands, root, lib, s, off + crate::helpbar::END * s, &entries, ui, images);
     }
 }
 
@@ -417,8 +501,8 @@ fn spawn_stats(commands: &mut Commands, tl: std::sync::Arc<dhcook::format::Timel
 fn stats_screen_input(
     mut commands: Commands,
     end: Option<ResMut<MissionEnd>>,
-    keys: Res<ButtonInput<KeyCode>>,
-    (button, replay): (Query<&Interaction, (With<ContinueButton>, Changed<Interaction>)>, Query<&Interaction, (With<ReplayButton>, Changed<Interaction>)>),
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    (help, scripted, taps): (Query<(&Interaction, &crate::helpbar::HelpButton), Changed<Interaction>>, Option<Res<crate::script::Scripted>>, Res<crate::helpbar::Taps>),
     screens: Query<Entity, With<StatsScreen>>,
     mut load: MessageWriter<crate::save::LoadRequest>,
     mut config: ResMut<Config>,
@@ -428,10 +512,12 @@ fn stats_screen_input(
     mut vm: Option<ResMut<crate::kismet::Vm>>,
 ) {
     let Some(mut end) = end else { return };
-    paused.0 = true;
-    if cursor.grab_mode != CursorGrabMode::None {
-        cursor.visible = true;
-        cursor.grab_mode = CursorGrabMode::None;
+    if !end.in_menu {
+        paused.0 = true;
+        if cursor.grab_mode != CursorGrabMode::None {
+            cursor.visible = true;
+            cursor.grab_mode = CursorGrabMode::None;
+        }
     }
     // Replay Mission asked first (`OnReplayConfirm`): Left / Right choose, Enter answers,
     // Escape says no; yes plays the mission's start again (`OnReplayMissionClicked`)
@@ -461,12 +547,25 @@ fn stats_screen_input(
         }
         return;
     }
-    if replay.iter().any(|i| *i == Interaction::Pressed) {
+    // the help bar's entries: clicked (a scripted run ignores the real pointer), or their keys
+    let click = crate::helpbar::clicked(&help).filter(|_| scripted.is_none());
+    let pressed = |b: Btn| click == Some(b) || b.just_pressed(&keys, &taps);
+    // from the menu: Back only, the menu's own keys left alone
+    if end.in_menu {
+        if pressed(Btn::B) {
+            for e in &screens {
+                commands.entity(e).despawn();
+            }
+            commands.remove_resource::<MissionEnd>();
+            keys.clear_just_pressed(KeyCode::Escape);
+        }
+        return;
+    }
+    if pressed(Btn::X) {
         end.ask_replay();
         return;
     }
-    let clicked = button.iter().any(|i| *i == Interaction::Pressed);
-    if clicked || keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::KeyE) {
+    if pressed(Btn::A) || keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::KeyE) {
         for e in &screens {
             commands.entity(e).despawn();
         }

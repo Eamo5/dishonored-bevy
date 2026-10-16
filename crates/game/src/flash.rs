@@ -392,6 +392,8 @@ pub struct LoadedImage {
     pub at: Vec2,
     /// in place of what the clip has (`loadMovie`), not over it
     pub replace: bool,
+    /// tiled at its own size across the box (`beginBitmapFill`), not stretched
+    pub tile: Option<Vec2>,
 }
 
 impl Clip {
@@ -778,7 +780,8 @@ impl Clip {
                         (w.clip, w.mask, w.shadow) = was;
                         // (a picture loaded into it, over what it has)
                         if let Some(img) = w.images.get(&w.path).filter(|_| c.visible) {
-                            let l = Leaf { bitmap: 0, size: img.size, m: concat(&pm, &[1.0, 0.0, 0.0, 1.0, img.at.x, img.at.y]), cx: pc, uv: [0.0, 0.0, 1.0, 1.0], repeat: false, image: Some(img.image.clone()), mask: None };
+                            let uv = img.tile.map_or([0.0, 0.0, 1.0, 1.0], |t| [0.0, 0.0, img.size.x / t.x.max(1.0), img.size.y / t.y.max(1.0)]);
+                            let l = Leaf { bitmap: 0, size: img.size, m: concat(&pm, &[1.0, 0.0, 0.0, 1.0, img.at.x, img.at.y]), cx: pc, uv, repeat: img.tile.is_some(), image: Some(img.image.clone()), mask: None };
                             if let Some(l) = match mask {
                                 Some(mk) => clip_leaf(l, &mk),
                                 None => Some(l),
@@ -1126,7 +1129,7 @@ impl FlashClip {
         let max = Vec2::new(max.x / p.xscale.abs().max(1e-6), max.y / p.yscale.abs().max(1e-6));
         let k = if natural.x > max.x || natural.y > max.y { (max.x / natural.x).min(max.y / natural.y) } else { 1.0 };
         let size = natural * k;
-        self.images.insert(path.to_string(), LoadedImage { image, size, at: -size * 0.5, replace: false });
+        self.images.insert(path.to_string(), LoadedImage { image, size, at: -size * 0.5, replace: false, tile: None });
     }
 
     /// `attachMovie` of an exported symbol on a clip within (`""`: the clip itself).

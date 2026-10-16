@@ -5,9 +5,12 @@
 //! padlock on one without its start (`stop_lock`). The chosen card is whole and raised 35, the
 //! next ones 80% (alpha too), then 75%, the rest 70%, each set after the last at its scaled
 //! width, the row slid so the chosen one sits half a card in (`SetItemsSize`,
-//! `onSelectionUpdated`).
+//! `onSelectionUpdated`). Its help bar (`MissionsScreen`): A Accept (locked on a locked
+//! mission), X Mission stats (locked without them: `bStatsAvailable`), B Back; X shows the
+//! chosen mission's statistics as last shown (`OpenMissionStats`), or fails.
 
 use crate::flash::{Clip, FlashClip, Mat};
+use crate::helpbar::{Btn, Entry};
 use crate::menu::{Menu, MenuItem};
 use crate::save::SaveSlots;
 use crate::GameState;
@@ -19,7 +22,7 @@ pub struct MissionScreenPlugin;
 
 impl Plugin for MissionScreenPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, draw.after(crate::menu::MenuSet).run_if(in_state(GameState::InGame)));
+        app.add_systems(Update, (see_stats, draw).chain().after(crate::menu::MenuSet).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -106,6 +109,7 @@ fn draw(
     window: Query<&Window, With<PrimaryWindow>>,
     roots: Query<Entity, With<MissionRoot>>,
     mut shown: Local<Option<(usize, Vec<String>, UVec2, u64)>>,
+    records: Res<crate::mission::MissionRecords>,
 ) {
     let Ok(w) = window.single() else { return };
     let page = menu.front_page().filter(|p| p.0 == CODE);
@@ -216,4 +220,41 @@ fn draw(
     }
     let title = data.text("DisGFxMoviePlayerMainMenu_Texts", "t_MissionsScreenDesc").to_uppercase();
     text_box(&mut commands, root, s, off, Vec2::new(95.0 + 345.0, 77.7 + 24.7), Vec2::new(690.0, 49.4), -1.7, title, title_font(38.0), DARK, true);
+    // the help bar: the chosen mission's lock and statistics
+    if let Some(lib) = timelines.get("lib") {
+        let base = "DisGFxMoviePlayerBase_Texts";
+        let locked = menu.item_slot(sel).and_then(|slot| slots.info(slot)).is_none();
+        let entries = [
+            Entry::new(Btn::A, data.text(base, "t_Validate")).locked(locked),
+            Entry::new(Btn::X, data.text("DisGFxMoviePlayerMainMenu_Texts", "t_SeeMissionStats")).locked(!records.has(sel)),
+            Entry::new(Btn::B, data.text(base, "t_Back")),
+        ];
+        crate::helpbar::spawn(&mut commands, root, lib, s, off + crate::helpbar::END * s, &entries, &mut ui, &mut images);
+    }
+}
+
+/// X on the missions (`XPressed`): the chosen mission's statistics as last shown, over the
+/// menu (`OpenMissionStats`); none kept, it fails.
+#[allow(clippy::too_many_arguments)]
+fn see_stats(
+    mut commands: Commands,
+    menu: Res<Menu>,
+    keys: Res<ButtonInput<KeyCode>>,
+    (help, scripted, up, taps): (Query<(&Interaction, &crate::helpbar::HelpButton), Changed<Interaction>>, Option<Res<crate::script::Scripted>>, Option<Res<crate::mission::MissionEnd>>, Res<crate::helpbar::Taps>),
+    records: Res<crate::mission::MissionRecords>,
+    (data, fonts): (Res<crate::gamedata::Data>, Res<crate::ui_fonts::UiFonts>),
+    (mut ui, mut images, mut timelines): (ResMut<crate::ui_images::UiImages>, ResMut<Assets<Image>>, ResMut<crate::flash::MovieTimelines>),
+    window: Query<&Window, With<PrimaryWindow>>,
+    mut sfx: MessageWriter<crate::audio::PostEvent>,
+) {
+    if up.is_some() || menu.question().is_some() || menu.front_page().is_none_or(|p| p.0 != CODE) {
+        return;
+    }
+    let click = crate::helpbar::clicked(&help).filter(|_| scripted.is_none());
+    if click != Some(Btn::X) && !Btn::X.just_pressed(&keys, &taps) {
+        return;
+    }
+    let Ok(w) = window.single() else { return };
+    let shown = crate::mission::show_record(&mut commands, menu.selected(), &records, &data, &fonts, &mut ui, &mut images, &mut timelines, w);
+    sfx.write(crate::audio::PostEvent::named(if shown { "UI_Validation" } else { "UI_Failure" }, None));
 }

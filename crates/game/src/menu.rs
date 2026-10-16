@@ -988,8 +988,15 @@ fn menu_input(
     (data, mut launch): (Res<crate::gamedata::Data>, ResMut<crate::challenge::ChallengeLaunch>),
     (mut profile, movies, mut play): (ResMut<crate::challenge::ChallengeProfile>, Res<crate::movie::Movies>, MessageWriter<crate::movie::PlayMovie>),
     (note, mut read): (Res<crate::notescreen::NoteScreen>, MessageWriter<crate::journal::ReadNote>),
+    (help, stats_up): (Query<(&Interaction, &crate::helpbar::HelpButton), Changed<Interaction>>, Option<Res<crate::mission::MissionEnd>>),
 ) {
     let Some(kind) = menu.open else { return };
+    // (a mission's statistics over it: their keys are their own)
+    if stats_up.is_some() {
+        return;
+    }
+    // the help bar's entries clicked: A as Enter, B as Escape
+    let help = crate::helpbar::clicked(&help).filter(|_| scripted.is_none());
     // (a note read over it, or put away this frame: its keys are its own)
     if note.open.is_some() || note.shut {
         return;
@@ -1218,7 +1225,7 @@ fn menu_input(
         menu.sel = (menu.sel + n - 1) % n;
         menu.dirty = true;
     }
-    if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::KeyE) {
+    if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::KeyE) || help == Some(crate::helpbar::Btn::A) {
         activate = Some(menu.sel);
         dir = 1.0;
     }
@@ -1241,7 +1248,7 @@ fn menu_input(
             dir = left_right;
         }
     }
-    if keys.just_pressed(KeyCode::Escape) && activate.is_none() {
+    if (keys.just_pressed(KeyCode::Escape) || help == Some(crate::helpbar::Btn::B)) && activate.is_none() {
         if !menu.back() && (kind == MenuKind::Pause || menu.board_over_results) {
             menu.open = None;
             menu.board_over_results = false;

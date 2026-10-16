@@ -216,7 +216,11 @@ fullscreen display, vertical sync and the crosshair.
   up its banner, a padlock on one whose start isn't saved (`stop_lock`). The chosen card is
   whole and raised, the next ones at 80%, then 75%, the rest 70%, the row slid to it
   (`SlideMenu.SetItemsSize`). Left / Right choose, Enter plays the mission's start again
-  (`OnMissionSelected`: not asked), Escape goes back.
+  (`OnMissionSelected`: not asked), Escape goes back. Its help bar offers `ACCEPT`, `MISSION
+  STATS` and `BACK`: X (Shift) shows the chosen mission's statistics as they were last shown
+  (`OpenMissionStats`), with `BACK` only, from the record the profile keeps of each mission
+  (`missions.json`, as the exe keeps one a mission: each row's value, the summary's story
+  flags); a mission without one has the entry dimmed.
 - **The save and load screens as `UI_LoadGame` draws them** (`savescreen.rs`): the list turned
   -2.5 degrees, each save on its brushed card with its mission's strip (`UI_Mission_Small`),
   its date in the original's `m_DateFormat` (local time) over its chapter (`AUTOSAVE - ` /
@@ -390,6 +394,13 @@ fullscreen display, vertical sync and the crosshair.
   (`bReplayAvailable`), the help bar offers `REPLAY MISSION` beside `CONTINUE`: asked first
   (`t_Q_ReplayMission`, "Replaying a mission will overwrite previous autosaves. Continue?"),
   yes plays the mission's start again (`OnReplayMissionClicked`).
+- **The help bar as `lib_dynamicHelpBar` draws it** (`helpbar.rs`): the actions at hand at the
+  foot of the screen, each its key's icon as the PC shows it (`lib_A_Multi`... on their `PC`
+  frame: Enter, Esc, Shift, Alt for A, B, X, Y) and its words in capitals, set from the right
+  on the torn band (its ends and the middle tiled as wide as the entries), coming in from the
+  right. Each entry is clickable; under the pointer its key whitens, it rises and a line is
+  drawn under its words; an entry locked is dimmed. On the mission statistics and the main
+  menu's missions.
 - **Notes read as `UI_Note` shows them** (`notescreen.rs`): a note or book picked up opens over
   the blurred game on the dimmed, drifting backdrop — its title dark on the brush, its words in
   the scrolling field — and a location map in its frame; Escape puts it away (it stays in the

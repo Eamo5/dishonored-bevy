@@ -198,7 +198,7 @@ fn draw(
                 if fc.size(&path).is_some() {
                     let stem = format!("tuto_{}_{k}", n.name);
                     if let Some((image, size)) = ui.file(&mut images, "tutorials", &format!("{stem}_keyboard")).or_else(|| ui.file(&mut images, "tutorials", &stem)) {
-                        fc.images.insert(path, crate::flash::LoadedImage { image, size, at: Vec2::ZERO, replace: true });
+                        fc.images.insert(path, crate::flash::LoadedImage { image, size, at: Vec2::ZERO, replace: true, tile: None });
                     }
                 }
                 let words = crate::tutorials::words(&data, &n.name, k);
