@@ -229,7 +229,7 @@ fn draw(
             Entry::new(Btn::X, data.text("DisGFxMoviePlayerMainMenu_Texts", "t_SeeMissionStats")).locked(!records.has(sel)),
             Entry::new(Btn::B, data.text(base, "t_Back")),
         ];
-        crate::helpbar::spawn(&mut commands, root, lib, s, off + crate::helpbar::END * s, &entries, &mut ui, &mut images);
+        crate::helpbar::spawn(&mut commands, root, lib, s, off + crate::helpbar::END * s, &entries, &mut ui, &mut images, false);
     }
 }
 

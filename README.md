@@ -177,7 +177,8 @@ fullscreen display, vertical sync and the crosshair.
   `m_JournalDisplaySection` is the class's `DJIS_Mission`: Heretic's Brand, the rat viscera, Lady
   Boyle's invitation... as cards with their `m_JournalIconName` pictures; picking one up puts it
   in the pickup log rather than the note reader). Notes: written notes (and the location
-  maps, drawn in the details), books, audiographs (`PLAY AUDIOGRAPH` / `STOP`). Powers: the
+  maps, drawn in the details), books, audiographs (the help bar's `PLAY AUDIOGRAPH` / `STOP`, a
+  note's `READ` opening it in the note reader). Powers: the
   six powers and four enhancements on their discs (lit when owned, the buy arrow when the
   runes allow, the `ACQUIRE` / `UPGRADE` tooltip that buys once the original's question is
   answered yes: `t_Q_BuyPower`, "Do you want to buy this power (Blink) for 3 runes?", in the
@@ -186,11 +187,14 @@ fullscreen display, vertical sync and the crosshair.
   Low`... `None`), cost and runes in the details over its two levels — `LEVEL I` / `LEVEL II`
   with their badges, `(acquired)`, each level's words and the strategic tips (`RPG.int`'s
   `DisUISelectionType`), pale once acquired, the wheel scrolling them. Bone charms: the charms found, worn ones in their sockets, the slot bar
-  (`ACTIVATED BONE CHARMS: n/m`). Inventory: the original sub-tabs — `RESOURCES` (coins,
+  (`ACTIVATED BONE CHARMS: n/m`), the help bar's `ACTIVATE` / `REMOVE` wearing the chosen
+  one or taking it off. Inventory: the original sub-tabs — `RESOURCES` (coins,
   elixirs, runes), `KEY RING`, `GADGETS` (his blade, pistol, crossbow, the Heart; grenades,
   springrazors, rewire tools), `AMMO`, `UPGRADES` — as the 4 x 3 tilted cards with counts,
   the chosen one's picture, name and description beside them; an elixir chosen is drunk from
-  there (its help bar's `CONSUME ELIXIR`, `ConsumeElixir`). Shapes cut out of bitmaps (the
+  there (its help bar's `CONSUME ELIXIR`, `ConsumeElixir`). Each page has the help bar the
+  journal sets (`SetHelpBar`: the original's bar, its entries as the page's help ids list them,
+  `EXIT` last; Shift is X, Alt is Y). Shapes cut out of bitmaps (the
   targets' brush frames) are drawn at cook time with the bitmap as their pattern. It moves as
   the movie does: the page fades up as the journal opens (0.3 s), slides 250 in from the side
   it was moved towards when its page or sub tab changes (`SetContent`: 0.25 s, Strong.easeOut,
@@ -399,8 +403,8 @@ fullscreen display, vertical sync and the crosshair.
   frame: Enter, Esc, Shift, Alt for A, B, X, Y) and its words in capitals, set from the right
   on the torn band (its ends and the middle tiled as wide as the entries), coming in from the
   right. Each entry is clickable; under the pointer its key whitens, it rises and a line is
-  drawn under its words; an entry locked is dimmed. On the mission statistics and the main
-  menu's missions.
+  drawn under its words; an entry locked is dimmed. On the mission statistics, the main
+  menu's missions and the journal's pages.
 - **Notes read as `UI_Note` shows them** (`notescreen.rs`): a note or book picked up opens over
   the blurred game on the dimmed, drifting backdrop — its title dark on the brush, its words in
   the scrolling field — and a location map in its frame; Escape puts it away (it stays in the
@@ -2628,7 +2632,7 @@ furthest spot with a floor and a clear line to it), `ledge [LOW] [HIGH] [crouch]
 high; `crouch`, only one he'd arrive crouched on; `DH_MANTLE_LOG` logs what blocks a mantle's
 top), `pos` (his position, velocity, footing), `pistol [NAME]` (the nearest hostile character
 carries a pistol and turns on him; `bow [NAME]`, a tallboy's bow: `DH_GUN_LOG` logs why it holds), `npchere [D] [NAME]` (the nearest hostile character, or
-the nearest whose name holds NAME, moved D m before him), `stream NAME [out]` (a streamed sublevel loads, or goes), `rise D` (Corvo lifted D m and held there), `notarget [0]` (the characters stop seeing Corvo, as `DH_NOTARGET`; `0` they see him again), `hideout` (Corvo crouched in the nearest hideout volume), `keyhole [D]` (before the nearest keyhole, looking at it), `spotlit [D]` (a character stood under the nearest dominant spot light, Corvo looking on), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup [health|mana|ammo|rune|charm|N]`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `addobjective NAME` (the objective whose path holds NAME added, as `DisSeqAct_AddObjective`), `taskstate NAME done|failed|active` (the objective or task whose path holds NAME set so), `jhelp N` (the journal's help bar entry N pressed: 0 the history, 1 the objective marker), `replay` (the statistics' Replay Mission pressed), `runes N`,
+the nearest whose name holds NAME, moved D m before him), `stream NAME [out]` (a streamed sublevel loads, or goes), `rise D` (Corvo lifted D m and held there), `notarget [0]` (the characters stop seeing Corvo, as `DH_NOTARGET`; `0` they see him again), `hideout` (Corvo crouched in the nearest hideout volume), `keyhole [D]` (before the nearest keyhole, looking at it), `spotlit [D]` (a character stood under the nearest dominant spot light, Corvo looking on), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup [health|mana|ammo|rune|charm|N]`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `addobjective NAME` (the objective whose path holds NAME added, as `DisSeqAct_AddObjective`), `taskstate NAME done|failed|active` (the objective or task whose path holds NAME set so), `replay` (the statistics' Replay Mission pressed), `runes N`,
 `charms N`, `mana`, `ammo TYPE N` (0 bullets .. 6 grenades, 7 sticky), `fx EFFECT [DIST]`,
 `remote EVENT` (a level-script remote event, e.g. `ChangeLvl_fromStreets1_toHub`), `chaos N`,
 `ko [NAME]` (a sleep dart into the nearest, or the nearest whose name or pawn holds NAME),

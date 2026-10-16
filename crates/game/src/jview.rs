@@ -11,6 +11,7 @@
 use crate::flash::{concat, Clip, FlashClip, Mat};
 use crate::gamedata::Data;
 use crate::gameplay::PlayerStats;
+use crate::helpbar::{Btn, Entry};
 use crate::ui_images::UiImages;
 use bevy::prelude::*;
 use bevy::text::{FontSize, FontSource, LineBreak};
@@ -132,7 +133,7 @@ pub struct JSub(pub u8);
 /// A list's row, card or slot (pointed at: chosen).
 #[derive(Component)]
 pub struct JRow(pub usize);
-/// The page's action (buy the power, play the audiograph, wear the charm).
+/// The page's action (buy the power).
 #[derive(Component)]
 pub struct JAct;
 /// A list scrolled to keep the chosen row in view.
@@ -413,6 +414,7 @@ pub fn build(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats, vm: Op
     }
     cx.root = root;
     main_tabs(cx, js.page, js.flashing, data, stats);
+    page_help(cx, js, data, stats, vm);
     // the vignette over all (`vignette_mc`)
     cx.sym(root, Vec2::ZERO, false, "m_Vignette", Vec2::new(640.0, 360.0), |_| {});
 }
@@ -584,7 +586,6 @@ fn objectives(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats, vm: O
                 objective_list(cx, list, &rows, js.obj_sel, data);
             }
             chapter_details(cx, data, chapter);
-            objectives_help(cx, js, data, &rows);
         }
         1 => {
             // the mission's clues (`j_obj_chapterNotes`), the mission's picture beside them
@@ -925,13 +926,6 @@ fn logs(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
         let font = cx.font(&l);
         cx.c.spawn((Text::new(e.desc.clone()), font, TextColor(PALE), TextLayout::new(Justify::Left, LineBreak::WordBoundary), Node { width: Val::Px(321.0 * s), margin: UiRect::new(Val::Px(4.0 * s), Val::ZERO, Val::Px(8.0 * s), Val::ZERO), flex_shrink: 0.0, ..default() }, Pickable::IGNORE, ChildOf(col)));
     }
-    if let Some(k) = e.key.strip_prefix("ag:") {
-        let on = js.playing == Some(k);
-        let l = Look::title(24.0, PALE).flat();
-        let font = cx.font(&l);
-        let b = cx.c.spawn((JAct, Button, Node { margin: UiRect::new(Val::Px(4.0 * s), Val::ZERO, Val::Px(14.0 * s), Val::ZERO), padding: UiRect::axes(Val::Px(14.0 * s), Val::Px(6.0 * s)), align_self: AlignSelf::FlexStart, flex_shrink: 0.0, ..default() }, BackgroundColor(DARK.with_alpha(0.85)), ChildOf(col))).id();
-        cx.c.spawn((Text::new(data.text(J, if on { "t_stopLog" } else { "t_playLog" })), font, TextColor(PALE), Pickable::IGNORE, ChildOf(b)));
-    }
 }
 
 /// The Inventory page (`j_InventoryScreen`): its sub tabs over the cards (`sh_itemList_item`, 4
@@ -944,11 +938,6 @@ fn inventory(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
     cx.sym(root, Vec2::ZERO, false, "j_inv_inventoryList", pg(-512.0, -155.0), |fc| fc.set_visible("maskContent", false));
     let items = crate::journal::inventory(data, stats, js.inv_tab);
     item_cards(cx, data, &items, js.inv_sel);
-    // an elixir chosen: its help bar drinks it (`j_InventoryList`'s `list_elixir`: `A`,
-    // `t_ConsumeElixir`)
-    if items.get(js.inv_sel).is_some_and(|i| i.elixir.is_some()) {
-        help_bar(cx, vec![(data.text(J, "t_ConsumeElixir"), Some(HELP_CONSUME))]);
-    }
 }
 
 /// Item cards (`sh_itemList_item`, 4 across and 3 down, the chosen one's row in view) and the
@@ -1082,86 +1071,64 @@ fn charms(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
     let desc = owned.get(sel).and_then(|n| data.charm(n)).map(|(c, i)| c.levels[i].1.clone()).unwrap_or_default();
     let img = owned.get(sel).and_then(|_| cx.ui.file(cx.images, "items", "BoneCharms_Large"));
     item_details(cx, owned.get(sel).map(|n| (n.as_str(), desc.as_str(), img, None)));
-    if owned.get(sel).is_some() {
-        // the charm's action (A: wear it, or take it off)
-        let wearing = owned.get(sel).is_some_and(|n| stats.charms.contains(n));
-        let words = data.text(J, if wearing { "t_RemoveBoneCharm" } else { "t_ActivateBoneCharm" });
-        action_button(cx, pg(180.0, 265.0), words);
-    }
 }
 
-/// A help bar entry clicked (`HELP_HISTORY`, `HELP_MARKER`).
-#[derive(Component)]
-pub struct JHelp(pub u8);
-pub const HELP_HISTORY: u8 = 0;
-pub const HELP_MARKER: u8 = 1;
-pub const HELP_TUTORIAL: u8 = 2;
-pub const HELP_CONSUME: u8 = 3;
-
-/// The Objectives' help bar (`j_ObjectivesScreen.SetHelpBar`, `lib_dynamicHelpBar` ending at
-/// stage (1184,651)), its entries clickable: the history shown or hidden (`Y`:
-/// `t_ShowHistory` / `t_HideHistory`), the chosen objective's marker (`X`: `t_ShowHUDMarker` /
-/// `t_HideHUDMarker`; locked, dimmed, on a finished objective).
-fn objectives_help(cx: &mut Ctx, js: &JState, data: &Data, rows: &[ObjRow]) {
+/// The page's help bar as the journal sets it (`SetHelpBar`, `ChangeHelp`), Exit last
+/// (`B`, `t_Exit`):
+/// - the Objectives (`objList_*`): the history shown or hidden (`Y`, `t_ShowHistory` /
+///   `t_HideHistory`, locked without any objective), the chosen objective's marker (`X`,
+///   `t_ShowHUDMarker` / `t_HideHUDMarker`, locked on a finished one); none listed, Exit only;
+/// - the Powers (`powers`): the chosen power's tutorial (`X`, `t_SeeDetails`);
+/// - the Logs (`logsList_*`): the audiograph played or stopped (`A`, `t_playLog` / `t_stopLog`),
+///   a note read (`t_readNote`);
+/// - the Bone Charms (`charm_unequipped` / `_equipped`): the charm worn or taken off (`A`,
+///   `t_ActivateBoneCharm` / `t_RemoveBoneCharm`);
+/// - the Inventory (`list_elixir`): an elixir drunk (`A`, `t_ConsumeElixir`).
+fn page_help(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats, vm: Option<&crate::kismet::Vm>) {
+    use crate::journal::{PAGE_CHARMS, PAGE_INVENTORY, PAGE_MISSION, PAGE_NOTES, PAGE_POWERS};
     use crate::kismet::TaskState;
-    let mut entries = vec![(data.text(J, if js.history { "t_HideHistory" } else { "t_ShowHistory" }), Some(HELP_HISTORY))];
-    if let Some(r) = rows.get(js.obj_sel) {
-        let obj = rows.iter().find(|o| !o.task && o.objective == r.objective);
-        let active = obj.is_some_and(|o| o.state == TaskState::Active);
-        let shown = obj.is_some_and(|o| o.marker);
-        entries.push((data.text(J, if shown { "t_HideHUDMarker" } else { "t_ShowHUDMarker" }), active.then_some(HELP_MARKER)));
-    }
-    help_bar(cx, entries);
-}
-
-/// A page's help bar (`lib_dynamicHelpBar`, its entries right-aligned to end at stage
-/// (1184,651)).
-fn help_bar(cx: &mut Ctx, entries: Vec<(String, Option<u8>)>) {
-    let s = cx.st.s;
-    let end = cx.at(cx.root, Vec2::ZERO, Vec2::new(1184.0, 651.0));
-    let bar = cx
-        .c
-        .spawn((
-            Node { position_type: PositionType::Absolute, left: Val::Px(0.0), width: Val::Px(end.x), top: Val::Px(end.y - 18.0 * s), flex_direction: FlexDirection::Row, justify_content: JustifyContent::FlexEnd, column_gap: Val::Px(12.0 * s), ..default() },
-            Pickable::IGNORE,
-            ChildOf(cx.root),
-        ))
-        .id();
-    for (words, id) in entries {
-        help_entry(cx, bar, words, id);
-    }
-}
-
-/// A help bar entry: its words on the dark chip, clickable unless locked (dimmed).
-fn help_entry(cx: &mut Ctx, bar: Entity, words: String, id: Option<u8>) {
-    let s = cx.st.s;
-    let color = if id.is_some() { PALE } else { LOCKED };
-    let l = Look::title(20.0, color).flat();
-    let font = cx.font(&l);
-    let mut e = cx.c.spawn((Node { padding: UiRect::axes(Val::Px(12.0 * s), Val::Px(5.0 * s)), ..default() }, BackgroundColor(DARK.with_alpha(0.85)), ChildOf(bar)));
-    match id {
-        Some(id) => {
-            e.insert((JHelp(id), Button));
+    let mut entries = Vec::new();
+    match js.page {
+        PAGE_MISSION if js.obj_tab == 0 => {
+            let rows = objective_rows(vm, js.history);
+            if !rows.is_empty() || js.history {
+                let any = !objective_rows(vm, true).is_empty();
+                entries.push(Entry::new(Btn::Y, data.text(J, if js.history { "t_HideHistory" } else { "t_ShowHistory" })).locked(!any));
+            }
+            if let Some(r) = rows.get(js.obj_sel) {
+                let obj = rows.iter().find(|o| !o.task && o.objective == r.objective);
+                let active = obj.is_some_and(|o| o.state == TaskState::Active);
+                let shown = obj.is_some_and(|o| o.marker);
+                entries.push(Entry::new(Btn::X, data.text(J, if shown { "t_HideHUDMarker" } else { "t_ShowHUDMarker" })).locked(!active));
+            }
         }
-        None => {
-            e.insert(Pickable::IGNORE);
+        PAGE_POWERS => entries.push(Entry::new(Btn::X, data.text(J, "t_SeeDetails"))),
+        PAGE_NOTES => {
+            if let Some(e) = log_entries(data, stats, js.log_tab).get(js.log_sel) {
+                let words = match e.key.strip_prefix("ag:") {
+                    Some(k) => if js.playing == Some(k) { "t_stopLog" } else { "t_playLog" },
+                    None => "t_readNote",
+                };
+                entries.push(Entry::new(Btn::A, data.text(J, words)));
+            }
         }
+        PAGE_CHARMS => {
+            if let Some(n) = stats.charms_owned.get(js.charm_sel) {
+                entries.push(Entry::new(Btn::A, data.text(J, if stats.charms.contains(n) { "t_RemoveBoneCharm" } else { "t_ActivateBoneCharm" })));
+            }
+        }
+        PAGE_INVENTORY => {
+            if crate::journal::inventory(data, stats, js.inv_tab).get(js.inv_sel).is_some_and(|i| i.elixir.is_some()) {
+                entries.push(Entry::new(Btn::A, data.text(J, "t_ConsumeElixir")));
+            }
+        }
+        _ => {}
     }
-    let b = e.id();
-    cx.c.spawn((Text::new(words.to_uppercase()), font, TextColor(color), Pickable::IGNORE, ChildOf(b)));
-}
-
-/// An action shown as the help bar's would be (the original's `A` prompt), clickable.
-fn action_button(cx: &mut Ctx, at: Vec2, words: String) {
-    let s = cx.st.s;
-    let p = cx.at(cx.root, Vec2::ZERO, at);
-    let l = Look::title(22.0, PALE).flat();
-    let font = cx.font(&l);
-    let b = cx
-        .c
-        .spawn((JAct, Button, Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), padding: UiRect::axes(Val::Px(14.0 * s), Val::Px(6.0 * s)), ..default() }, BackgroundColor(DARK.with_alpha(0.85)), ChildOf(cx.root)))
-        .id();
-    cx.c.spawn((Text::new(words), font, TextColor(PALE), Pickable::IGNORE, ChildOf(b)));
+    entries.push(Entry::new(Btn::B, data.text(BASE, "t_Exit")));
+    if let Some(lib) = cx.lib.clone() {
+        let at = cx.st.off + crate::helpbar::END * cx.st.s;
+        crate::helpbar::spawn(cx.c, cx.root, lib, cx.st.s, at, &entries, cx.ui, cx.images, true);
+    }
 }
 
 /// The powers' slots in `j_pow_powersList` (slot0..9) by our power names, the movie's power id.
@@ -1296,8 +1263,6 @@ fn powers(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
         cx.hit(root, Vec2::ZERO, Rect::from_corners(Vec2::new(p.x - 50.0 - if right { 230.0 } else { 0.0 }, y - 25.0), Vec2::new(p.x + 230.0 - if right { 230.0 } else { 0.0 }, y + 27.0)), JAct);
     }
     power_details(cx, sel, data, stats);
-    // its help bar, over the details: the chosen power's tutorial (`X`: `t_SeeDetails`)
-    help_bar(cx, vec![(data.text(J, "t_SeeDetails"), Some(HELP_TUTORIAL))]);
 }
 
 /// The chosen power's details (`j_pow_powerDetails` at (420,-290)): its picture, name, mana,

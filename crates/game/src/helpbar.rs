@@ -119,9 +119,10 @@ pub fn clicked(q: &Query<(&Interaction, &HelpButton), Changed<Interaction>>) -> 
 const LINE_W: f32 = 25.4;
 
 /// The bar under `parent`, its end at `at` (the screen's pixels: the stage's [`END`]), drawn
-/// `s` pixels a stage unit; its entries' hit areas with it.
+/// `s` pixels a stage unit; its entries' hit areas with it. It comes in as it opens
+/// (`OpenHelp`), unless `still` (a screen fading in with it, or redrawn with the same help).
 #[allow(clippy::too_many_arguments)]
-pub fn spawn(commands: &mut Commands, parent: Entity, tl: Arc<Timelines>, s: f32, at: Vec2, entries: &[Entry], ui: &mut UiImages, images: &mut Assets<Image>) -> Option<Entity> {
+pub fn spawn(commands: &mut Commands, parent: Entity, tl: Arc<Timelines>, s: f32, at: Vec2, entries: &[Entry], ui: &mut UiImages, images: &mut Assets<Image>, still: bool) -> Option<Entity> {
     const I: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
     let c = Clip::export(&tl, "lib_dynamicHelpBar")?;
     let mut fc = FlashClip::new("lib", tl.clone(), c).real().with_texts();
@@ -172,8 +173,10 @@ pub fn spawn(commands: &mut Commands, parent: Entity, tl: Arc<Timelines>, s: f32
     }
     fc.attach("bkgd.bkgd_c", "lib_help_bkgdL", "L", [1.0, 0.0, 0.0, 1.0, left - 100.0, 0.0]);
     // (in from 20 to the right)
-    fc.set("", PropsTo::default().x(20.0).alpha(0.0));
-    fc.tween("", PropsTo::default().x(0.0).alpha(1.0), 0.3, Ease::StrongOut);
+    if !still {
+        fc.set("", PropsTo::default().x(20.0).alpha(0.0));
+        fc.tween("", PropsTo::default().x(0.0).alpha(1.0), 0.3, Ease::StrongOut);
+    }
     let bar = commands.spawn((fc, Node { position_type: PositionType::Absolute, left: Val::Px(at.x), top: Val::Px(at.y), ..default() }, Pickable::IGNORE, ChildOf(parent))).id();
     for (i, (_, icon_w, words_w)) in laid.iter().enumerate() {
         let w = icon_w + words_w + 5.0;

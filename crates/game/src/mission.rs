@@ -493,7 +493,7 @@ fn spawn_stats(commands: &mut Commands, tl: std::sync::Arc<dhcook::format::Timel
         vec![Entry::new(Btn::A, data.text(base, "t_ContinueGame"))]
     };
     if let Some(lib) = lib {
-        crate::helpbar::spawn(commands, root, lib, s, off + crate::helpbar::END * s, &entries, ui, images);
+        crate::helpbar::spawn(commands, root, lib, s, off + crate::helpbar::END * s, &entries, ui, images, false);
     }
 }
 

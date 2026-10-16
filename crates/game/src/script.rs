@@ -887,11 +887,6 @@ fn run_script(
                 vm.inventory_ops.push((cmd.get(1).is_some_and(|s| s == "stash"), true));
             }
         }
-        "jhelp" => {
-            // jhelp N: the journal's help bar entry N pressed (0 the history, 1 the marker)
-            let n = f(1) as u8;
-            commands.queue(move |w: &mut World| w.resource_mut::<crate::journal::HelpPress>().0 = Some(n));
-        }
         "addobjective" => {
             // addobjective NAME: the objective whose path holds NAME added, its tasks to do (as
             // `DisSeqAct_AddObjective`)

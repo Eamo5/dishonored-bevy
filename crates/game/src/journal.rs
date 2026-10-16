@@ -10,7 +10,8 @@ use crate::audio::PostEvent;
 use crate::gamedata::Data;
 use crate::gameplay::PlayerStats;
 use crate::hud::Paused;
-use crate::jview::{JAct, JHelp, JRow, JSub, JTab};
+use crate::helpbar::{Btn, HelpButton};
+use crate::jview::{JAct, JRow, JSub, JTab};
 use crate::ui_fonts::UiFonts;
 use crate::ui_images::UiImages;
 use crate::GameState;
@@ -22,17 +23,12 @@ pub struct JournalPlugin;
 impl Plugin for JournalPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Journal>()
-            .init_resource::<HelpPress>()
             .add_message::<ReadNote>()
             .add_plugins(crate::jview::JViewPlugin)
             .add_systems(OnEnter(GameState::InGame), |mut j: ResMut<Journal>| *j = Journal::default())
             .add_systems(Update, (toggle, interact, refresh).chain().run_if(in_state(GameState::InGame)));
     }
 }
-
-/// (tests) A help bar entry pressed by the script (`jhelp N`: `jview::HELP_*`).
-#[derive(Resource, Default)]
-pub struct HelpPress(pub Option<u8>);
 
 /// A note was picked up: it opens in the journal.
 #[derive(Message, Clone)]
@@ -350,6 +346,7 @@ fn toggle(
     note: Res<crate::notescreen::NoteScreen>,
     vm: Option<ResMut<crate::kismet::Vm>>,
     (settings, npcs, mut save): (Res<crate::settings::Settings>, Query<&crate::npc::Npc>, MessageWriter<crate::save::SaveRequest>),
+    (help, scripted): (Query<(&Interaction, &HelpButton), Changed<Interaction>>, Option<Res<crate::script::Scripted>>),
 ) {
     // (shut by the scripts: `DisSeqAct_ToggleJournal`, the Tower's opening)
     let shut = vm.as_ref().is_some_and(|v| v.switches.journal_off);
@@ -384,7 +381,9 @@ fn toggle(
         }
     }
     let want = if journal.open {
-        !(keys.just_pressed(bind.key(crate::bindings::Act::Journal)) || keys.just_pressed(KeyCode::Escape))
+        // (its help bar's Exit too: `B`)
+        let exit = crate::helpbar::clicked(&help).filter(|_| scripted.is_none()) == Some(Btn::B);
+        !(keys.just_pressed(bind.key(crate::bindings::Act::Journal)) || keys.just_pressed(KeyCode::Escape) || exit)
     } else {
         keys.just_pressed(bind.key(crate::bindings::Act::Journal)) && menu.open.is_none() && !stats.dead && mission_end.is_none() && !shut
     };
@@ -451,8 +450,8 @@ fn interact(
     keys: Res<ButtonInput<KeyCode>>,
     mut sfx: MessageWriter<PostEvent>,
     mut msgs: ResMut<crate::gameplay::HudMessages>,
-    (tabs, subs, rows, acts, helps): (Query<(&Interaction, &JTab), Changed<Interaction>>, Query<(&Interaction, &JSub), Changed<Interaction>>, Query<(&Interaction, &JRow), Changed<Interaction>>, Query<&Interaction, (With<JAct>, Changed<Interaction>)>, Query<(&Interaction, &JHelp), Changed<Interaction>>),
-    (playback, mut graphs, mut press, mut read, note, attrs): (Res<crate::audiograph::Playback>, MessageWriter<crate::audiograph::PlayAudiograph>, ResMut<HelpPress>, MessageWriter<ReadNote>, Res<crate::notescreen::NoteScreen>, Res<crate::gamedata::Attrs>),
+    (tabs, subs, rows, acts, helps): (Query<(&Interaction, &JTab), Changed<Interaction>>, Query<(&Interaction, &JSub), Changed<Interaction>>, Query<(&Interaction, &JRow), Changed<Interaction>>, Query<&Interaction, (With<JAct>, Changed<Interaction>)>, Query<(&Interaction, &HelpButton), Changed<Interaction>>),
+    (playback, mut graphs, taps, mut read, note, attrs): (Res<crate::audiograph::Playback>, MessageWriter<crate::audiograph::PlayAudiograph>, Res<crate::helpbar::Taps>, MessageWriter<ReadNote>, Res<crate::notescreen::NoteScreen>, Res<crate::gamedata::Attrs>),
     mut vm: Option<ResMut<crate::kismet::Vm>>,
     scripted: Option<Res<crate::script::Scripted>>,
 ) {
@@ -515,8 +514,8 @@ fn interact(
         let back = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         page = Some(tabs[if back { (k + tabs.len() - 1) % tabs.len() } else { (k + 1) % tabs.len() }]);
     }
-    // the Objectives' help bar: the history shown or hidden, the chosen objective's markers
-    let help = helps.iter().filter(|_| pointer).find(|(i, _)| **i == Interaction::Pressed).map(|(_, h)| h.0).or(press.0.take());
+    // the help bar's entries: clicked, or X and Y (Shift and Alt tapped; A is Enter, below)
+    let help = crate::helpbar::clicked(&helps).filter(|_| pointer).or_else(|| [Btn::X, Btn::Y].into_iter().find(|b| b.just_pressed(&keys, &taps)));
     // an elixir chosen in the Inventory drunk (its help bar's `ConsumeElixir`, or its action)
     let drink = |journal: &mut Journal, stats: &mut PlayerStats, sfx: &mut MessageWriter<PostEvent>| {
         let elixir = inventory(&data, stats, journal.inv_tab).get(journal.inv_sel).and_then(|i| i.elixir);
@@ -526,20 +525,20 @@ fn interact(
             }
         }
     };
-    if journal.page == PAGE_INVENTORY && help == Some(crate::jview::HELP_CONSUME) {
-        drink(&mut journal, &mut stats, &mut sfx);
-        return;
-    }
     // the Powers' help bar: the chosen power's tutorial (`OnPowerInfosRequest`: its note read)
-    if journal.page == PAGE_POWERS && help == Some(crate::jview::HELP_TUTORIAL) {
+    if journal.page == PAGE_POWERS && help == Some(Btn::X) {
         let (name, _) = crate::jview::POWER_SLOTS[journal.selected.min(9)];
         read.write(ReadNote(format!("{}{}", crate::tutorials::KEY, power_note(name))));
         return;
     }
-    if journal.page == PAGE_MISSION && journal.obj_tab == 0 {
+    if journal.page == PAGE_MISSION && journal.obj_tab == 0 && matches!(help, Some(Btn::X | Btn::Y)) {
         if let Some(h) = help {
             match h {
-                crate::jview::HELP_HISTORY => {
+                Btn::Y => {
+                    // (locked without any objective)
+                    if crate::jview::objective_rows(vm.as_deref(), true).is_empty() {
+                        return;
+                    }
                     journal.history = !journal.history;
                     journal.obj_sel = 0;
                     sfx.write(PostEvent::named("UI_J_ToggleHistory", None));
@@ -672,20 +671,23 @@ fn interact(
         }
         journal.dirty = true;
     }
-    // the page's action: its button, Enter, or a click on the chosen row
-    let act = acts.iter().filter(|_| pointer).any(|i| *i == Interaction::Pressed) || keys.just_pressed(KeyCode::Enter) || (clicked && chosen == Some(was));
+    // the page's action: its button, Enter (or its help entry, `A`), or a click on the chosen row
+    let act = acts.iter().filter(|_| pointer).any(|i| *i == Interaction::Pressed) || keys.just_pressed(KeyCode::Enter) || help == Some(Btn::A) || (clicked && chosen == Some(was));
     if !act {
         return;
     }
     match journal.page {
         PAGE_NOTES => {
-            // an audiograph: play it (or stop it)
+            // an audiograph: play it (or stop it); a note: read it (`logsList_note`'s `t_readNote`)
             let entries = crate::jview::log_entries(&data, &stats, journal.log_tab);
-            if let Some(k) = entries.get(journal.note).and_then(|e| e.key.strip_prefix("ag:")) {
+            let Some(e) = entries.get(journal.note) else { return };
+            if let Some(k) = e.key.strip_prefix("ag:") {
                 let stop = playback.playing() == Some(k);
                 graphs.write(crate::audiograph::PlayAudiograph { key: (!stop).then(|| k.to_string()), ..default() });
-                sfx.write(PostEvent::named("UI_Validation", None));
+            } else {
+                read.write(ReadNote(e.key.clone()));
             }
+            sfx.write(PostEvent::named("UI_Validation", None));
         }
         PAGE_CHARMS => {
             // wear the charm, or take it off
