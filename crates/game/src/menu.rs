@@ -114,6 +114,12 @@ enum Opt {
     LightShafts,
     RatShadows,
     Speakers,
+    /// the pad's: its control scheme (a link to its screen, `GamepadMapping`), its look's
+    /// sensitivities across and up, its look up inverted
+    PadScheme,
+    PadLookX,
+    PadLookY,
+    PadInvertY,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -173,6 +179,8 @@ pub struct Menu {
     dirty: bool,
     /// the options' brightness screen open (`GammaSetting`): the brightness it opened with
     pub gamma: Option<f32>,
+    /// the options' controls scheme screen open (`GamepadMapping`): the scheme it opened with
+    pub pad_map: Option<u8>,
     /// the options' video settings open (`VideoSettings`), and a part of it clicked
     pub video: Option<VideoEdit>,
     pub video_click: Option<VideoHit>,
@@ -211,8 +219,9 @@ pub enum OptView {
     Slider(f32, String),
     /// the key bound (or "press a key" while one is awaited)
     Key(String, bool),
-    /// a link to a screen of its own (the brightness's: `t_Modify_Gamma`)
-    Link(String),
+    /// a link to a screen of its own (`P_Link`): its words (the brightness's `t_Modify_Gamma`),
+    /// and the value it shows while not chosen (the controls scheme's; else none)
+    Link(String, String),
 }
 
 /// A menu sound as the movies ask for it (`SoundHandler.PlaySound`: the `Default` theme,
@@ -299,14 +308,14 @@ impl VideoEdit {
 /// list).
 pub const OPT_CATEGORIES: [(&str, &[&str]); 4] = [
     ("m_SettingsCategory_General", &["m_SettingsSubCategory_GameplaySettings", "m_SettingsSubCategory_HUDSettings"]),
-    ("m_SettingsCategory_Controls", &["m_SettingsSubCategory_KeyboardMapping", "m_SettingsSubCategory_MouseSettings"]),
+    ("m_SettingsCategory_Controls", &["m_SettingsSubCategory_KeyboardMapping", "m_SettingsSubCategory_MouseSettings", "m_SettingsSubCategory_GamepadSettings"]),
     ("m_SettingsCategory_Graphics", &[]),
     ("m_SettingsCategory_Audio", &[]),
 ];
 
 impl Default for Menu {
     fn default() -> Self {
-        Menu { open: None, page: Page::Main, stack: Vec::new(), sel: 0, dirty: true, gamma: None, video: None, video_click: None, items: Vec::new(), started: false, capture: None, opt_cat: 0, opt_sub: 0, confirm: None, confirm_click: None, pending_challenge: None, gallery_view: None, board_row: None, board_over_results: false, tutorials: Vec::new() }
+        Menu { open: None, page: Page::Main, stack: Vec::new(), sel: 0, dirty: true, gamma: None, pad_map: None, video: None, video_click: None, items: Vec::new(), started: false, capture: None, opt_cat: 0, opt_sub: 0, confirm: None, confirm_click: None, pending_challenge: None, gallery_view: None, board_row: None, board_over_results: false, tutorials: Vec::new() }
     }
 }
 
@@ -495,8 +504,13 @@ impl Menu {
         Some(match self.items.get(i)?.1 {
             Action::Adjust(o) => match o {
                 // (its own screen: `GammaMenu`'s link; the video settings', `VideoSettings`)
-                Opt::Brightness => OptView::Link(data.text("DisGFxMoviePlayerMenuBase_Texts", "t_Modify_Gamma")),
-                Opt::VideoSettings => OptView::Link(data.text("DisGFxMoviePlayerMenuBase_Texts", "t_Modify_VideoSettings")),
+                Opt::Brightness => OptView::Link(data.text("DisGFxMoviePlayerMenuBase_Texts", "t_Modify_Gamma"), String::new()),
+                Opt::VideoSettings => OptView::Link(data.text("DisGFxMoviePlayerMenuBase_Texts", "t_Modify_VideoSettings"), String::new()),
+                // (the controls scheme's link shows its scheme: `Mapping_Names[Setting_Value]`)
+                Opt::PadScheme => OptView::Link(data.text("DisGFxMoviePlayerMenuBase_Texts", "t_Modify_ControlsScheme"), pad_scheme_name(data, s.pad_binding_set)),
+                Opt::PadLookX => slider(s.pad_look_x, 0.0, 100.0, format!("{:.0}", s.pad_look_x)),
+                Opt::PadLookY => slider(s.pad_look_y, 0.0, 100.0, format!("{:.0}", s.pad_look_y)),
+                Opt::PadInvertY => OptView::Toggle(s.pad_invert_y),
                 Opt::Difficulty => OptView::Stepper(words(&["EDifficulty_Easy", "EDifficulty_Normal", "EDifficulty_Hard", "EDifficulty_VeryHard"]), s.difficulty as usize),
                 Opt::Crosshair => OptView::Stepper(words(&["CS_Off", "CS_Simple", "CS_Normal"]), s.crosshair_style.min(2) as usize),
                 Opt::HudGauges => OptView::Stepper(words(&["HV_Off", "HV_Contextual", "HV_Always"]), s.hud_gauges.min(2) as usize),
@@ -571,10 +585,16 @@ impl Menu {
                 s.heart_markers = d.heart_markers;
             }
             (1, 0) => s.bindings.clear(),
-            (1, _) => {
+            (1, 1) => {
                 s.sensitivity = d.sensitivity;
                 s.invert_y = d.invert_y;
                 s.mouse_smoothing = d.mouse_smoothing;
+            }
+            (1, _) => {
+                s.pad_binding_set = d.pad_binding_set;
+                s.pad_look_x = d.pad_look_x;
+                s.pad_look_y = d.pad_look_y;
+                s.pad_invert_y = d.pad_invert_y;
             }
             (2, _) => {
                 s.brightness = d.brightness;
@@ -741,7 +761,16 @@ fn opt_value(s: &Settings, o: Opt) -> String {
         Opt::AutoMana => if s.auto_mana_elixir { "On" } else { "Off" }.into(),
         Opt::KillCam => ["Off", "Normal", "Frequent"][s.kill_cam.min(2) as usize].into(),
         Opt::Smoothing => if s.mouse_smoothing { "On" } else { "Off" }.into(),
+        Opt::PadScheme => format!("{}", s.pad_binding_set),
+        Opt::PadLookX => format!("{:.0}", s.pad_look_x),
+        Opt::PadLookY => format!("{:.0}", s.pad_look_y),
+        Opt::PadInvertY => on(s.pad_invert_y),
     }
+}
+
+/// A control scheme's name (`PBS_1`..`4`: Type A to D).
+pub fn pad_scheme_name(data: &crate::gamedata::Data, set: u8) -> String {
+    data.text("Settings.ProfileSettingValues", &format!("PBS_{}", set.min(3) + 1))
 }
 
 /// The resolution chosen among those offered (the desktop's: the largest).
@@ -807,6 +836,12 @@ fn adjust(s: &mut Settings, o: Opt, dir: f32, flip: bool) {
         Opt::AutoMana => set(&mut s.auto_mana_elixir),
         Opt::KillCam => s.kill_cam = (s.kill_cam as f32 + dir).clamp(0.0, 2.0) as u8,
         Opt::Smoothing => set(&mut s.mouse_smoothing),
+        // (the schemes stepped on their screen, no further than Type D; the look's
+        // sensitivities 0-100 by 10, `PSI_Gamepad_LookXSensitivity`)
+        Opt::PadScheme => s.pad_binding_set = (s.pad_binding_set as f32 + dir).clamp(0.0, 3.0) as u8,
+        Opt::PadLookX => step(&mut s.pad_look_x, 10.0, 0.0, 100.0),
+        Opt::PadLookY => step(&mut s.pad_look_y, 10.0, 0.0, 100.0),
+        Opt::PadInvertY => set(&mut s.pad_invert_y),
     }
 }
 
@@ -993,7 +1028,15 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
                     }
                     return v;
                 }
-                (1, _) => vec![("PSI_Mouse_Sensitivity", Opt::Sensitivity), ("PSI_Mouse_bInvertY", Opt::InvertY), ("PSI_Mouse_bSmooting", Opt::Smoothing)],
+                // (each sub-category's settings in the profile's order: `PSI_Mouse_Start` to
+                // `_End`, `PSI_Gamepad_Start` to `_End`)
+                (1, 1) => vec![("PSI_Mouse_Sensitivity", Opt::Sensitivity), ("PSI_Mouse_bSmooting", Opt::Smoothing), ("PSI_Mouse_bInvertY", Opt::InvertY)],
+                (1, _) => vec![
+                    ("PSI_Gamepad_BindingSet", Opt::PadScheme),
+                    ("PSI_Gamepad_LookXSensitivity", Opt::PadLookX),
+                    ("PSI_Gamepad_LookYSensitivity", Opt::PadLookY),
+                    ("PSI_Gamepad_bInvertY", Opt::PadInvertY),
+                ],
                 (2, _) => vec![
                     ("PSI_Graphics_Gamma", Opt::Brightness),
                     // (the display's resolution, fullscreen and vertical sync: on a screen of
@@ -1289,6 +1332,36 @@ fn menu_input(
         }
         return;
     }
+    // the controls scheme's screen (`GamepadMapping`): Left / Right step the schemes as it shows
+    // them (`OnWidgetChange`: `req_GamepadMappingScreen`), Enter keeps the one shown (`A`),
+    // Escape puts back the one it opened with (`B`)
+    if let Some(start) = menu.pad_map {
+        let lr = if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) {
+            1.0
+        } else if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) {
+            -1.0
+        } else {
+            0.0
+        };
+        if lr != 0.0 {
+            let was = settings.pad_binding_set;
+            adjust(&mut settings, Opt::PadScheme, lr, false);
+            ui(&mut sfx, if settings.pad_binding_set != was { "UI_Change" } else { "UI_Stop" });
+            menu.dirty = true;
+        }
+        if keys.just_pressed(KeyCode::Enter) || help == Some(crate::helpbar::Btn::A) {
+            settings.save();
+            menu.pad_map = None;
+            menu.dirty = true;
+            ui(&mut sfx, "UI_Validation");
+        } else if keys.just_pressed(KeyCode::Escape) || help == Some(crate::helpbar::Btn::B) {
+            settings.pad_binding_set = start;
+            menu.pad_map = None;
+            menu.dirty = true;
+            ui(&mut sfx, "UI_Back");
+        }
+        return;
+    }
     // the video settings (`VideoSettings`)
     if menu.video.is_some() {
         video_input(&mut menu, &mut settings, &keys, help, &data, real.delta_secs(), scripted.is_some(), &mut sfx);
@@ -1550,7 +1623,7 @@ fn menu_input(
     if left_right != 0.0 {
         // (the brightness's link and the video settings' open their screens: not stepped)
         if let Some((_, Action::Adjust(o))) = menu.items.get(menu.sel) {
-            if !matches!(o, Opt::Brightness | Opt::VideoSettings) {
+            if !matches!(o, Opt::Brightness | Opt::VideoSettings | Opt::PadScheme) {
                 activate = Some(menu.sel);
                 dir = left_right;
             }
@@ -1587,7 +1660,7 @@ fn menu_input(
                 _ => None,
             };
             match action {
-                Action::Adjust(Opt::Brightness | Opt::VideoSettings) => ui(&mut sfx, "UI_Validation"),
+                Action::Adjust(Opt::Brightness | Opt::VideoSettings | Opt::PadScheme) => ui(&mut sfx, "UI_Validation"),
                 Action::Adjust(_) => {}
                 Action::LockedChallenge(_) | Action::LockedGallery(_) | Action::LockedMission(_) => ui(&mut sfx, "UI_Failure"),
                 Action::Back => ui(&mut sfx, "UI_Back"),
@@ -1614,6 +1687,11 @@ fn menu_input(
         // the brightness's link: its screen (`DisplayGammaSetting`)
         Action::Adjust(Opt::Brightness) => {
             menu.gamma = Some(settings.brightness);
+            menu.dirty = true;
+        }
+        // the controls scheme's link: its screen (`DisplayGamepadMapping`)
+        Action::Adjust(Opt::PadScheme) => {
+            menu.pad_map = Some(settings.pad_binding_set);
             menu.dirty = true;
         }
         // the video settings' link: its screen (`DisplayVideoSettings`), on its first line

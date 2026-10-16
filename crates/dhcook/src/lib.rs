@@ -8246,6 +8246,8 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         // the mask's lens frame
         ("Startup", "effects", "AltScreen_Effects.SpyGlass"),
         ("UI_portraits_objectives", "portraits", ""),
+        // the options' controls scheme pictures (`m_GamepadXenonImagePath`, `_PS3ImagePath`)
+        ("UI_GamepadMapping", "pad", ""),
     ]
     .iter()
     .map(|(p, d, x)| (p.to_string(), *d, *x))

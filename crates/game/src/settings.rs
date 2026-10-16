@@ -85,8 +85,8 @@ pub struct Settings {
     /// else one in three), 2 frequent (every one)
     pub kill_cam: u8,
     /// the pad's (`PSI_Gamepad_*`): its control scheme (`BindingSet`, 0-3), its look's
-    /// sensitivities across and up (`LookXSensitivity`, `LookYSensitivity`: 0.25-3), its look
-    /// up inverted, its vibration
+    /// sensitivities across and up (`LookXSensitivity`, `LookYSensitivity`: 0-100 by 10, the
+    /// profile's -1 "unset" taken as the middle), its look up inverted, its vibration
     pub pad_binding_set: u8,
     pub pad_look_x: f32,
     pub pad_look_y: f32,
@@ -167,8 +167,8 @@ impl Default for Settings {
             mouse_smoothing: false,
             kill_cam: 1,
             pad_binding_set: 0,
-            pad_look_x: 1.0,
-            pad_look_y: 1.0,
+            pad_look_x: 50.0,
+            pad_look_y: 50.0,
             pad_invert_y: false,
             pad_vibration: true,
         }

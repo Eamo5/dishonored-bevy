@@ -86,7 +86,7 @@ fn draw(
     roots: Query<Entity, With<OptRoot>>,
     mut shown: Local<Option<String>>,
     (mut ui, mut images): (ResMut<crate::ui_images::UiImages>, ResMut<Assets<Image>>),
-    (mut gamma_shown, mut video_shown): (Local<bool>, Local<Option<(bool, bool)>>),
+    (mut gamma_shown, mut video_shown, mut pad_shown): (Local<bool>, Local<Option<(bool, bool)>>, Local<bool>),
 ) {
     let Ok(w) = window.single() else { return };
     let page = menu.front_page().filter(|p| p.0 == 7);
@@ -98,7 +98,7 @@ fn draw(
                 Some(OptView::Stepper(_, i)) => format!("s{i}"),
                 Some(OptView::Slider(_, v)) => format!("v{v}"),
                 Some(OptView::Key(k, c)) => format!("k{k}{c}"),
-                Some(OptView::Link(_)) => "l".to_string(),
+                Some(OptView::Link(_, v)) => format!("l{v}"),
                 None => String::new(),
             })
             .collect();
@@ -106,6 +106,8 @@ fn draw(
         let views = format!("{}|{:?}", views.join(","), menu.gamma.map(|_| (settings.brightness * 100.0).round() as i32));
         // (the video settings open: their lines, the one chosen, the drop list, the question)
         let views = format!("{views}|{:?}", menu.video.as_ref().map(|v| (v.sel, v.lines, v.drop, v.asked.is_some())));
+        // (the controls scheme's screen open: the scheme shown, and who drives: its icons)
+        let views = format!("{views}|{:?}", menu.pad_map.map(|_| (settings.pad_binding_set, crate::pad::using())));
         format!("{:?}|{}|{:?}|{}|{}x{}|{}", menu.options_tab(), menu.selected(), p.1, views, w.width(), w.height(), menu.in_main())
     });
     if key == *shown {
@@ -346,9 +348,24 @@ fn draw(
                 let word = if waiting { "Press a key...".to_string() } else { k };
                 words(&mut commands, wc, Vec2::new(350.0, 30.0), word, normal_font(25.0), if on { DARK } else { PALE }, Justify::Center, false);
             }
-            // a link to its screen (`SetLink`: the brightness's "Modify brightness")
-            Some(OptView::Link(word)) => {
-                words(&mut commands, wc, Vec2::new(350.0, 30.0), word, normal_font(25.0), if on { DARK } else { PALE }, Justify::Center, false);
+            // a link to its screen (`P_Link`): chosen, its words after the A button, centred
+            // (`_txt_mc`: `SetWidget`), its stroke glowing (`over`); else its value
+            // (`_txtValue_mc`: the controls scheme's; the brightness's and the video's none)
+            Some(OptView::Link(word, value)) => {
+                let tw = crate::ui_fonts::measure(false, 28.0, &word);
+                let left = -0.5 * (43.8 + tw);
+                place(&mut commands, &tl, MOVIE, "Link_widget", wc, TURN, &mut |fc| {
+                    if on {
+                        fc.goto("", "over", true);
+                    }
+                    fc.set("_txt_mc", crate::flash::PropsTo::default().x(left).alpha(if on { 1.0 } else { 0.0 }));
+                    fc.goto("_txt_mc.a_mc", if crate::pad::using() { "default" } else { "PC" }, false);
+                });
+                if on {
+                    words(&mut commands, turned(wc, Vec2::new(left + 41.8 + tw * 0.5, 0.0)), Vec2::new(tw + 12.0, 34.0), word, normal_font(28.0), DARK, Justify::Center, false);
+                } else if !value.is_empty() {
+                    words(&mut commands, wc, Vec2::new(222.0, 30.0), value, normal_font(25.0), Color::WHITE, Justify::Center, false);
+                }
             }
             None => {}
         }
@@ -367,6 +384,14 @@ fn draw(
             crate::scrollbar::spawn(&mut commands, root, lib, s, off, origin, TURN, &bar);
         }
     }
+    // the controls scheme's screen over it (`DisplayGamepadMapping`)
+    if menu.pad_map.is_some() {
+        let opening = !*pad_shown;
+        *pad_shown = true;
+        pad_screen(&mut commands, root, &tl, lib.clone(), s, off, settings.pad_binding_set, &data, &mut ui, &mut images, opening);
+        return;
+    }
+    *pad_shown = false;
     // the video settings over it (`DisplayVideoSettings`: the help bar shut, `CloseHelp`)
     if let Some(v) = menu.video.as_ref() {
         let (asked, dropped) = (v.asked.is_some(), v.drop.is_some());
@@ -470,6 +495,121 @@ fn gamma_screen(commands: &mut Commands, root: Entity, tl: &std::sync::Arc<dhcoo
             commands.spawn((ImageNode::new(h).with_color(Color::WHITE.with_alpha(0.125)), Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(130.0 * s), height: Val::Px(139.0 * s), ..default() }, Pickable::IGNORE, ChildOf(root)));
         }
     }
+    if let Some(lib) = lib {
+        use crate::helpbar::{Btn, Entry};
+        let base = "DisGFxMoviePlayerBase_Texts";
+        crate::helpbar::spawn(commands, root, lib, s, off + crate::helpbar::END * s, &[Entry::new(Btn::A, data.text(base, "t_Validate")), Entry::new(Btn::B, data.text(base, "t_Back"))], ui, images, !opening);
+    }
+}
+
+/// The controls scheme screen's labels (`o_Options_padMapping`'s `_txt_mc`, its `Xenon` / `PC`
+/// frame): each field's place and width, its alignment (0 left, 1 right, 2 centre), the
+/// scheme's line it shows (`GamepadMappingEnum`), its button (the library's `X360_*` bitmap) and
+/// whether the button comes first (`SetMapping`: `'$A$' + label`, `label + ' $Back$'`; the
+/// D-pad's words alone).
+const PAD_LABELS: [(f32, f32, f32, u8, usize, Option<u32>, bool); 18] = [
+    (260.0, -31.55, 331.0, 0, 0, Some(19), true),
+    (260.0, -68.45, 333.0, 0, 1, Some(18), true),
+    (260.0, -105.25, 333.0, 0, 2, Some(2), true),
+    (260.0, -142.05, 336.0, 0, 3, Some(1), true),
+    (28.0, -235.05, 190.0, 0, 4, Some(3), true),
+    (-194.0, -236.0, 166.0, 1, 5, Some(17), false),
+    (-600.95, -202.0, 332.0, 1, 6, Some(11), false),
+    (285.05, -206.0, 332.0, 0, 7, Some(7), true),
+    (-571.95, -251.0, 332.0, 1, 8, Some(8), false),
+    (244.05, -255.0, 332.0, 0, 9, Some(4), true),
+    (-604.95, -93.0, 332.0, 1, 10, Some(10), false),
+    (-421.95, -54.0, 149.0, 1, 11, Some(9), false),
+    (294.05, 79.0, 332.0, 0, 12, Some(6), true),
+    (294.05, 118.0, 332.0, 0, 13, Some(5), true),
+    (-478.0, 162.95, 345.0, 2, 14, None, false),
+    (-479.0, 248.95, 346.0, 2, 15, None, false),
+    (-628.95, 206.75, 292.4, 1, 16, None, false),
+    (-274.0, 206.75, 193.95, 0, 17, None, false),
+];
+
+/// The controls scheme screen as `GamepadMapping` draws it (`o_Options_padMapping` at the
+/// stage's middle): the veil darkening to 90% as it opens (`OptionsSecondaryScreen.Open`), the
+/// pad's picture (`m_GamepadXenonImagePath`, `UI_GamepadMapping`) centred on `_img_mc` as
+/// `ImgLoader` puts it (not fitted), each button's line of the scheme
+/// (`Twk_GFxMoviePlayerMenuBase.m_GamepadMapping1`..`4`) by its button (`EmbedImg`: the buttons
+/// at most 35 square), the scheme's line (`_widget_mc`: `Control Scheme`, its stepper focused,
+/// Type A to D, no further than either end), the help bar (`SecondaryScreen`: A Accept, B Back).
+#[allow(clippy::too_many_arguments)]
+fn pad_screen(commands: &mut Commands, root: Entity, tl: &std::sync::Arc<dhcook::format::Timelines>, lib: Option<std::sync::Arc<dhcook::format::Timelines>>, s: f32, off: Vec2, set: u8, data: &crate::gamedata::Data, ui: &mut crate::ui_images::UiImages, images: &mut Assets<Image>, opening: bool) {
+    let node = |p: Vec2| Node { position_type: PositionType::Absolute, left: Val::Px(off.x + p.x * s), top: Val::Px(off.y + p.y * s), ..default() };
+    let o = Vec2::new(640.0, 360.0);
+    if let Some(c) = Clip::export(tl, "o_Options_padMapping") {
+        let mut fc = FlashClip::new(MOVIE, tl.clone(), c).real().with_texts();
+        fc.scale = s;
+        fc.goto("", "PC", false);
+        fc.goto("_txt_mc", "PC", false);
+        // (its own labels drawn below, with their buttons)
+        let names = fc.clip.child("_txt_mc").map(|c| c.names()).unwrap_or_default();
+        for n in names {
+            fc.set_text(&format!("_txt_mc.{n}"), "");
+        }
+        fc.set_text("_widget_mc._txt_mc.txt", data.text("Settings.ProfileSettingIDs", "PSI_Gamepad_BindingSet"));
+        if opening {
+            fc.set("_black_mc", crate::flash::PropsTo::default().alpha(0.0));
+            fc.tween("_black_mc", crate::flash::PropsTo::default().alpha(0.9), 0.25, crate::flash::Ease::StrongOut);
+        } else {
+            fc.set("_black_mc", crate::flash::PropsTo::default().alpha(0.9));
+        }
+        commands.spawn((fc, node(o), Pickable::IGNORE, ChildOf(root)));
+    }
+    // the picture, centred on `_img_mc`
+    if let Some((h, size)) = ui.file(images, "pad", "Options_GamepadMapping_Xenon") {
+        let c = o + Vec2::new(97.1, -62.6);
+        let p = off + (c - size * 0.5) * s;
+        commands.spawn((ImageNode::new(h), Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(size.x * s), height: Val::Px(size.y * s), ..default() }, Pickable::IGNORE, ChildOf(root)));
+    }
+    // the scheme's lines by their buttons
+    let lines: Vec<String> = (0..18).map(|i| data.text("Twk_GFxMoviePlayerMenuBase", &format!("m_GamepadMapping{}[{i}]", set.min(3) + 1))).collect();
+    for (x, y, w, align, line, icon, first) in PAD_LABELS {
+        let p = off + (o + Vec2::new(x - 2.0, y - 2.0)) * s;
+        let justify = match align {
+            1 => JustifyContent::FlexEnd,
+            2 => JustifyContent::Center,
+            _ => JustifyContent::FlexStart,
+        };
+        let row = commands
+            .spawn((Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(w * s), height: Val::Px(36.0 * s), justify_content: justify, align_items: AlignItems::Center, column_gap: Val::Px(6.0 * s), ..default() }, Pickable::IGNORE, ChildOf(root)))
+            .id();
+        let text = |commands: &mut Commands| {
+            commands.spawn((Text::new(lines[line].clone()), TextFont { font_size: FontSize::Px(25.0 * s), ..default() }, TextColor(PALE), TextLayout::new(Justify::Left, LineBreak::NoWrap), Pickable::IGNORE, ChildOf(row)));
+        };
+        let button = |commands: &mut Commands, ui: &mut crate::ui_images::UiImages, images: &mut Assets<Image>| {
+            let Some(id) = icon else { return };
+            let Some((h, size)) = ui.get(images, "lib", id) else { return };
+            let k = (35.0 / size.x).min(35.0 / size.y).min(1.0);
+            commands.spawn((ImageNode::new(h), Node { width: Val::Px(size.x * k * s), height: Val::Px(size.y * k * s), flex_shrink: 0.0, ..default() }, Pickable::IGNORE, ChildOf(row)));
+        };
+        if first {
+            button(commands, ui, images);
+            text(commands);
+        } else {
+            text(commands);
+            button(commands, ui, images);
+        }
+    }
+    // the scheme's stepper on its line (`_widget_mc` at (342.3, 244), the widget at its origin)
+    let wc = o + Vec2::new(342.3, 244.0);
+    if let Some(c) = Clip::export(tl, "OptionsStepper_widget") {
+        let mut fc = FlashClip::new(MOVIE, tl.clone(), c).real();
+        fc.scale = s;
+        fc.goto("", "over", true);
+        if set == 0 {
+            fc.goto("_leftArrow_mc", "locked", false);
+        }
+        if set >= 3 {
+            fc.goto("_rightArrow_mc", "locked", false);
+        }
+        commands.spawn((fc, node(wc), Pickable::IGNORE, ChildOf(root)));
+    }
+    let p = off + (wc - Vec2::new(111.0, 15.0)) * s;
+    let bx = commands.spawn((Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(222.0 * s), height: Val::Px(30.0 * s), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, Pickable::IGNORE, ChildOf(root))).id();
+    commands.spawn((Text::new(crate::menu::pad_scheme_name(data, set)), TextFont { font_size: FontSize::Px(25.0 * s), ..default() }, TextColor(Color::WHITE), Pickable::IGNORE, ChildOf(bx)));
     if let Some(lib) = lib {
         use crate::helpbar::{Btn, Entry};
         let base = "DisGFxMoviePlayerBase_Texts";

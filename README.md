@@ -258,7 +258,13 @@ are in the settings file, `pad_binding_set` 0-3):
   (the stealth shroud), objective, grenade, awareness and Heart markers, `Crosshair Style`
   Off / Simple (the dot alone) / Normal, `Crosshair Movement` (the reticles open with the
   weapon's dispersion), `Crosshair Opacity`; `Controls`: Keyboard Mapping, Mouse Settings
-  (sensitivity, invert, `Smoothing`); `Graphics`: brightness (its row the original's link,
+  (sensitivity, `Smoothing`, invert), Gamepad Settings (`Control Scheme`, the original's link,
+  "Modify controls scheme", showing the scheme while not chosen, to its own screen as
+  `GamepadMapping` draws it: over a dark veil, the pad's picture (`UI_GamepadMapping`) and each
+  button's line of the scheme (`m_GamepadMapping1`..`4`) by its button's icon, the scheme's
+  stepper Type A to D on its line; Left / Right show the others, Enter keeps the one shown,
+  Escape puts it back; `Look X Sensitivity`, `Look Y Sensitivity` (0-100, 50 the tweaks' own
+  rates, halved at 0 and doubled at 100), `Invert Y`); `Graphics`: brightness (its row the original's link,
   "Modify brightness", to its own screen as `GammaSetting` draws it: the setting's name over
   "Adjust brightness until you can barely see the darkest symbol", its slider, and
   `UI_Gamma.GammaImage`'s five Outsider's marks taken down to `m_BrightnessValues` (0.2% to

@@ -142,6 +142,9 @@ struct Placed {
     attached: bool,
     /// its drop shadow (or glow) filter: over what it holds
     shadow: Option<dhcook::format::FlashShadow>,
+    /// its properties set by code: kept as the timeline goes back over it (Flash leaves a
+    /// script-touched instance's transform to the script)
+    scripted: bool,
 }
 
 /// A placed instance's Flash properties: `_x`, `_y`, `_xscale` / `_yscale` (1 for 100),
@@ -446,6 +449,7 @@ impl Clip {
                             child: tl.sprites.contains_key(id).then(|| Box::new(Clip::new(tl, *id))),
                             attached: false,
                             shadow: None,
+                            scripted: false,
                         },
                         (None, None) => continue,
                     };
@@ -492,8 +496,16 @@ impl Clip {
             }
             for (d, p) in self.list.iter_mut() {
                 if let Some(o) = old.remove(d) {
-                    if o.id == p.id && o.child.is_some() {
-                        p.child = o.child;
+                    if o.id == p.id {
+                        // (what code set stays set)
+                        if o.scripted {
+                            p.m = o.m;
+                            p.cx = o.cx;
+                            p.scripted = true;
+                        }
+                        if o.child.is_some() {
+                            p.child = o.child;
+                        }
                     }
                 }
             }
@@ -580,7 +592,10 @@ impl Clip {
     /// A placed instance's matrix and colour (to move or tint it from code, as the original's
     /// scripts set `_x`, `_alpha`...).
     pub fn placed_mut(&mut self, name: &str) -> Option<(&mut Mat, &mut Cx)> {
-        self.list.values_mut().find(|p| p.name.as_deref() == Some(name)).map(|p| (&mut p.m, &mut p.cx))
+        self.list.values_mut().find(|p| p.name.as_deref() == Some(name)).map(|p| {
+            p.scripted = true;
+            (&mut p.m, &mut p.cx)
+        })
     }
 
     /// What stands at each depth: its depth, matrix and colour.
@@ -602,14 +617,14 @@ impl Clip {
     pub fn attach(&mut self, tl: &Timelines, sprite: u16, name: &str, m: Mat) {
         let depth = self.list.keys().next_back().map_or(0, |d| d + 1).max(16384);
         let child = tl.sprites.contains_key(&sprite).then(|| Box::new(Clip::new(tl, sprite)));
-        self.list.insert(depth, Placed { id: sprite, name: Some(name.to_string()), m, cx: NO_CX, mask: None, child, attached: true, shadow: None });
+        self.list.insert(depth, Placed { id: sprite, name: Some(name.to_string()), m, cx: NO_CX, mask: None, child, attached: true, shadow: None, scripted: false });
     }
 
     /// `createEmptyMovieClip`: a new clip with nothing in it, to attach to.
     pub fn attach_empty(&mut self, name: &str, m: Mat) {
         let depth = self.list.keys().next_back().map_or(0, |d| d + 1).max(16384);
         let child = Clip { sprite: u16::MAX, frame: 0, playing: false, visible: true, list: BTreeMap::new() };
-        self.list.insert(depth, Placed { id: u16::MAX, name: Some(name.to_string()), m, cx: NO_CX, mask: None, child: Some(Box::new(child)), attached: true, shadow: None });
+        self.list.insert(depth, Placed { id: u16::MAX, name: Some(name.to_string()), m, cx: NO_CX, mask: None, child: Some(Box::new(child)), attached: true, shadow: None, scripted: false });
     }
 
     /// The character an instance here shows.

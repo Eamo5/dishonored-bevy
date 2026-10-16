@@ -116,6 +116,12 @@ const STEER_EVERY: f32 = 0.12;
 /// UE3's rotation units a radian (65536 a turn), and its axis scale (`TimeScale`: 100 a second).
 const UNITS: f32 = 65536.0 / std::f32::consts::TAU;
 
+/// A look sensitivity's scale (0-100, 50 the tweaks' own rates): halved at 0, doubled at 100
+/// (our reading: the original's mapping is native and unread).
+fn look_scale(v: f32) -> f32 {
+    2f32.powf((v.clamp(0.0, 100.0) - 50.0) / 50.0)
+}
+
 fn dead(v: Vec2) -> Vec2 {
     let m = v.length();
     if m < DEAD {
@@ -285,8 +291,8 @@ fn pad_input(
         // the look: the turn's scale rising while the stick is held full
         let full = right.x.abs() > 0.95;
         pad.turn_scale = if full { (pad.turn_scale.max(230.0) + 500.0 * dt).min(700.0) } else { 230.0 };
-        let sens_x = settings.pad_look_x.clamp(0.25, 3.0);
-        let sens_y = settings.pad_look_y.clamp(0.25, 3.0);
+        let sens_x = look_scale(settings.pad_look_x);
+        let sens_y = look_scale(settings.pad_look_y);
         let invert = if settings.pad_invert_y { -1.0 } else { 1.0 };
         if !wheel.open {
             pad.look = Vec2::new(-right.x * pad.turn_scale * 100.0 * sens_x, right.y * invert * 150.0 * 100.0 * sens_y) * dt / UNITS;
