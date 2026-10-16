@@ -41,7 +41,38 @@ pub struct ShowMissionStats {
 pub struct MissionEnd {
     map: Option<(String, usize)>,
     op: Option<u32>,
+    /// the mission's start saved (`bReplayAvailable`): its slot
+    replay: Option<usize>,
+    /// Replay Mission asked first (`t_Q_ReplayMission`): the button chosen (0: yes)
+    confirm: Option<usize>,
+    /// a button of the question clicked (`msgbox`)
+    pub confirm_click: Option<usize>,
 }
+
+impl MissionEnd {
+    /// The question asked over the statistics (its words, the button chosen), if any.
+    pub fn question(&self, data: &crate::gamedata::Data) -> Option<(String, usize)> {
+        self.confirm.map(|c| (data.text("DisGFxMoviePlayerBase_Texts", "t_Q_ReplayMission"), c))
+    }
+    /// Whether a question is asked.
+    pub fn asked(&self) -> bool {
+        self.confirm.is_some()
+    }
+    /// Replay Mission pressed: asked first, when the mission's start is saved.
+    pub fn ask_replay(&mut self) {
+        if self.replay.is_some() {
+            self.confirm = Some(0);
+        }
+    }
+}
+
+/// The mission just played's start, if saved (`bReplayAvailable`): its slot.
+fn replay_slot(stats: &PlayerStats, slots: &crate::save::SaveSlots) -> Option<usize> {
+    stats.mission_start.map(|n| crate::save::MISSION_SLOT + n as usize).filter(|slot| slots.info(*slot).is_some())
+}
+
+#[derive(Component)]
+struct ReplayButton;
 
 #[derive(Component)]
 pub struct StatsScreen;
@@ -62,7 +93,7 @@ fn travel(
     (mut ui, mut images): (ResMut<UiImages>, ResMut<Assets<Image>>),
     mut paused: ResMut<Paused>,
     vm: Option<Res<crate::kismet::Vm>>,
-    (mut timelines, window, data): (ResMut<crate::flash::MovieTimelines>, Query<&Window, With<bevy::window::PrimaryWindow>>, Res<crate::gamedata::Data>),
+    (mut timelines, window, data, slots): (ResMut<crate::flash::MovieTimelines>, Query<&Window, With<bevy::window::PrimaryWindow>>, Res<crate::gamedata::Data>, Res<crate::save::SaveSlots>),
 ) {
     let Some(r) = requests.read().last().cloned() else { return };
     campaign.carry = Some(stats.clone());
@@ -81,7 +112,8 @@ fn travel(
     }
     // a mission is over: its statistics first
     paused.0 = true;
-    commands.insert_resource(MissionEnd { map: Some((r.map, r.start)), op: None });
+    let replay = replay_slot(&stats, &slots);
+    commands.insert_resource(MissionEnd { map: Some((r.map, r.start)), op: None, replay, confirm: None, confirm_click: None });
     let s = &stats;
     let view = StatsView {
         title: done,
@@ -95,6 +127,7 @@ fn travel(
         ],
         summary: Vec::new(),
         pickups: vec![("boneCharms", "Bone Charms".into(), s.charms_found, 0), ("runes", "Runes".into(), s.runes_found, 0), ("coins", "Coins".into(), s.coins_found, 0)],
+        replay: replay.is_some(),
     };
     if let (Ok(w), Some(tl)) = (window.single(), timelines.get("MissionStats")) {
         spawn_stats(&mut commands, tl, w, &data, &fonts, &mut ui, &mut images, &view);
@@ -114,7 +147,7 @@ fn show_stats(
     fonts: Res<UiFonts>,
     (mut ui, mut images): (ResMut<UiImages>, ResMut<Assets<Image>>),
     mut paused: ResMut<Paused>,
-    (mut timelines, window): (ResMut<crate::flash::MovieTimelines>, Query<&Window, With<bevy::window::PrimaryWindow>>),
+    (mut timelines, window, slots): (ResMut<crate::flash::MovieTimelines>, Query<&Window, With<bevy::window::PrimaryWindow>>, Res<crate::save::SaveSlots>),
 ) {
     let Some(r) = requests.read().last().cloned() else { return };
     let Some(def) = data.0.mission_stats.iter().find(|m| m.name.eq_ignore_ascii_case(&r.tweak)) else {
@@ -159,7 +192,8 @@ fn show_stats(
         .collect();
     let map = level.as_ref().map(|l| l.scene.name.clone()).unwrap_or_default();
     paused.0 = true;
-    commands.insert_resource(MissionEnd { map: None, op: Some(r.op) });
+    let replay = replay_slot(&stats, &slots);
+    commands.insert_resource(MissionEnd { map: None, op: Some(r.op), replay, confirm: None, confirm_click: None });
     // the mission's own illustration behind the statistics (`UI_MissionStatsBg_*`)
     let art = match def.name.as_str() {
         "Twk_M0_Prison" => "MissionStats_Prison",
@@ -172,7 +206,7 @@ fn show_stats(
         "Twk_M7_PubAssault" => "MissionStats_Hub",
         _ => "MissionStats_Lighthouse",
     };
-    let view = StatsView { title: mission_name(&map), art: Some(art), rows, summary, pickups };
+    let view = StatsView { title: mission_name(&map), art: Some(art), rows, summary, pickups, replay: replay.is_some() };
     if let (Ok(w), Some(tl)) = (window.single(), timelines.get("MissionStats")) {
         spawn_stats(&mut commands, tl, w, &data, &fonts, &mut ui, &mut images, &view);
     }
@@ -193,6 +227,8 @@ struct StatsView {
     summary: Vec<String>,
     /// (icon frame, name, found, how many there were: 0 unknown)
     pickups: Vec<(&'static str, String, u32, u32)>,
+    /// the help bar's Replay Mission (`bReplayAvailable`: the mission's start saved)
+    replay: bool,
 }
 
 /// The statistics screen as `UI_MissionStats` draws it (`ms_statsScreen`): the mission's
@@ -367,26 +403,67 @@ fn spawn_stats(commands: &mut Commands, tl: std::sync::Arc<dhcook::format::Timel
     commands
         .spawn((ContinueButton, Button, Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(260.0 * s), justify_content: JustifyContent::FlexEnd, ..default() }, ChildOf(root)))
         .with_child((Text::new(format!("[Enter]  {words_c}")), title_font(24.0), TextColor(pale)));
+    // Replay Mission before it (`X`, `t_ReplayMission`), when the mission's start is saved
+    if view.replay {
+        let words_r = data.text("DisGFxMoviePlayerMissionStats_Texts", "t_ReplayMission").to_uppercase();
+        let p = off + Vec2::new(1184.0 - 260.0 - 300.0, 651.0 - 20.0) * s;
+        commands
+            .spawn((ReplayButton, Button, Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(290.0 * s), justify_content: JustifyContent::FlexEnd, ..default() }, ChildOf(root)))
+            .with_child((Text::new(words_r), title_font(24.0), TextColor(pale)));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn stats_screen_input(
     mut commands: Commands,
-    end: Option<Res<MissionEnd>>,
+    end: Option<ResMut<MissionEnd>>,
     keys: Res<ButtonInput<KeyCode>>,
-    button: Query<&Interaction, (With<ContinueButton>, Changed<Interaction>)>,
+    (button, replay): (Query<&Interaction, (With<ContinueButton>, Changed<Interaction>)>, Query<&Interaction, (With<ReplayButton>, Changed<Interaction>)>),
     screens: Query<Entity, With<StatsScreen>>,
+    mut load: MessageWriter<crate::save::LoadRequest>,
     mut config: ResMut<Config>,
     mut next: ResMut<NextState<GameState>>,
     mut paused: ResMut<Paused>,
     mut cursor: Single<&mut CursorOptions>,
     mut vm: Option<ResMut<crate::kismet::Vm>>,
 ) {
-    let Some(end) = end else { return };
+    let Some(mut end) = end else { return };
     paused.0 = true;
     if cursor.grab_mode != CursorGrabMode::None {
         cursor.visible = true;
         cursor.grab_mode = CursorGrabMode::None;
+    }
+    // Replay Mission asked first (`OnReplayConfirm`): Left / Right choose, Enter answers,
+    // Escape says no; yes plays the mission's start again (`OnReplayMissionClicked`)
+    if let Some(choice) = end.confirm {
+        let mut choice = choice;
+        if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyA) || keys.just_pressed(KeyCode::KeyD) {
+            choice = 1 - choice.min(1);
+        }
+        let click = end.confirm_click.take();
+        if let Some(c) = click {
+            choice = c;
+        }
+        if keys.just_pressed(KeyCode::Escape) {
+            end.confirm = None;
+        } else if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || click.is_some() {
+            end.confirm = None;
+            if let (0, Some(slot)) = (choice, end.replay) {
+                for e in &screens {
+                    commands.entity(e).despawn();
+                }
+                commands.remove_resource::<MissionEnd>();
+                paused.0 = false;
+                load.write(crate::save::LoadRequest(slot));
+            }
+        } else if end.confirm != Some(choice) {
+            end.confirm = Some(choice);
+        }
+        return;
+    }
+    if replay.iter().any(|i| *i == Interaction::Pressed) {
+        end.ask_replay();
+        return;
     }
     let clicked = button.iter().any(|i| *i == Interaction::Pressed);
     if clicked || keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::KeyE) {

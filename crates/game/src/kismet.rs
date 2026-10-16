@@ -6410,6 +6410,9 @@ pub fn apply_effects(
                 }
             }
             Effect::AutoSave(mission) => {
+                if mission.is_some() {
+                    stats.mission_start = mission;
+                }
                 // (test runs leave the player's saves alone)
                 if std::env::var("DH_SCRIPT").is_err() || std::env::var("DH_AUTOSAVE").is_ok() {
                     autosave.write(crate::save::SaveRequest(mission.map(|n| crate::save::MISSION_SLOT + n as usize).unwrap_or(crate::save::AUTOSAVE_SLOT)));

@@ -1331,6 +1331,14 @@ fn run_script(
                 });
             }
         }
+        "replay" => {
+            // replay: the statistics' Replay Mission pressed (asked first)
+            commands.queue(|w: &mut World| {
+                if let Some(mut e) = w.get_resource_mut::<crate::mission::MissionEnd>() {
+                    e.ask_replay();
+                }
+            });
+        }
         "stats" => {
             // stats TWEAK: the campaign's statistics screen (`Twk_M1_Overseers`...)
             if let Some(tweak) = cmd.get(1).cloned() {

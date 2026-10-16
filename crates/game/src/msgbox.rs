@@ -27,7 +27,7 @@ const MOVIE: &str = "Global";
 const PALE: Color = Color::srgb(227.0 / 255.0, 242.0 / 255.0, 214.0 / 255.0);
 const DARK: Color = Color::srgb(23.0 / 255.0, 25.0 / 255.0, 28.0 / 255.0);
 
-fn click(mut menu: ResMut<Menu>, (mut journal, mut store): (ResMut<crate::journal::Journal>, ResMut<crate::store::Store>), buttons: Query<(&Interaction, &MsgButton), Changed<Interaction>>, scripted: Option<Res<crate::script::Scripted>>) {
+fn click(mut menu: ResMut<Menu>, (mut journal, mut store, mut end): (ResMut<crate::journal::Journal>, ResMut<crate::store::Store>, Option<ResMut<crate::mission::MissionEnd>>), buttons: Query<(&Interaction, &MsgButton), Changed<Interaction>>, scripted: Option<Res<crate::script::Scripted>>) {
     if scripted.is_some() {
         return;
     }
@@ -38,6 +38,8 @@ fn click(mut menu: ResMut<Menu>, (mut journal, mut store): (ResMut<crate::journa
                 journal.confirm_click = Some(b.0);
             } else if store.question().is_some() {
                 store.confirm_click = Some(b.0);
+            } else if let Some(e) = end.as_mut().filter(|e| e.asked()) {
+                e.confirm_click = Some(b.0);
             } else {
                 menu.confirm_click = Some(b.0);
             }
@@ -48,7 +50,7 @@ fn click(mut menu: ResMut<Menu>, (mut journal, mut store): (ResMut<crate::journa
 #[allow(clippy::too_many_arguments)]
 fn draw(
     mut commands: Commands,
-    (menu, journal, store): (Res<Menu>, Res<crate::journal::Journal>, Res<crate::store::Store>),
+    (menu, journal, store, end): (Res<Menu>, Res<crate::journal::Journal>, Res<crate::store::Store>, Option<Res<crate::mission::MissionEnd>>),
     data: Res<crate::gamedata::Data>,
     mut timelines: ResMut<crate::flash::MovieTimelines>,
     fonts: Res<crate::ui_fonts::UiFonts>,
@@ -57,7 +59,8 @@ fn draw(
     mut shown: Local<Option<(String, usize, UVec2)>>,
 ) {
     let Ok(w) = window.single() else { return };
-    let want = menu.question().or_else(|| journal.question()).or_else(|| store.question()).map(|(q, c)| (q.to_string(), c, UVec2::new(w.width() as u32, w.height() as u32)));
+    let size = UVec2::new(w.width() as u32, w.height() as u32);
+    let want = menu.question().or_else(|| journal.question()).or_else(|| store.question()).map(|(q, c)| (q.to_string(), c, size)).or_else(|| end.as_ref().and_then(|e| e.question(&data)).map(|(q, c)| (q, c, size)));
     // (the store's buttons: PURCHASE / CANCEL; the others' YES / NO)
     let buttons = if store.question().is_some() && menu.question().is_none() && journal.question().is_none() {
         [("DisGFxMoviePlayerStore_Texts", "t_Purchase"), ("DisGFxMoviePlayerBase_Texts", "t_Cancel")]
