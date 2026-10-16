@@ -37,6 +37,13 @@ pub fn ratio(n: usize, first: usize, pitch: f32, mask_h: f32) -> f32 {
     }
 }
 
+/// A bar's lifter moved as far along its track as the list has scrolled (`Scroll`).
+pub fn lift(fc: &mut FlashClip, mask_h: f32, ratio: f32) {
+    let track_h = mask_h - ARROW_H;
+    let (lo, hi) = (ARROW_Y + 20.0, ARROW_Y + track_h - 20.0);
+    fc.set("_lifter_mc", PropsTo::default().y(lo + ratio.clamp(0.0, 1.0) * (hi - lo)));
+}
+
 /// The bar under `parent`: the list's origin at `origin` (stage), its turn `m` (the list's
 /// matrix, no offset), the stage drawn `s` pixels a unit from `off`.
 #[allow(clippy::too_many_arguments)]

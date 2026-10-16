@@ -377,6 +377,13 @@ fn draw(
                 commands.entity(b).insert(GalleryArrow(dir));
             }
             commands.spawn((Part::Gallery, fc, at(Vec2::new(640.0, 360.0)), Pickable::IGNORE, ChildOf(root)));
+            // its scroll bar, the rows overrunning the list's mask (`CM_Gallery_List`: 1053.8 by
+            // 562.5, at its left)
+            let rows = labels.len().div_ceil(GALLERY_COLS);
+            if let (true, Some(lib)) = (rows > GALLERY_ROWS, timelines.get("lib")) {
+                let bar = crate::scrollbar::Bar { mask_w: 1053.8, mask_h: 562.5, left: true, ratio: crate::scrollbar::ratio(rows, scroll, ih + GALLERY_OVERLAP, 562.5) };
+                crate::scrollbar::spawn(&mut commands, root, lib, s, off, Vec2::new(640.0, 360.0) + list, crate::flash::IDENTITY, &bar);
+            }
             return;
         }
         // the challenges: the screen, its list

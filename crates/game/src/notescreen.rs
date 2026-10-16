@@ -7,7 +7,9 @@
 //!
 //! The field (`_common.AnalogScrollView`: the words under a mask, both turned) scrolls with the
 //! wheel and the arrows. A turned node can't be clipped here, so the words are laid out once
-//! (a span a word, to learn each one's line) and shown a window of whole lines at a time.
+//! (a span a word, to learn each one's line) and shown a window of whole lines at a time. Its
+//! words overrunning the mask (689 by 474.95), the library's scroll bar stands right of it, its
+//! lifter as far down as the words have scrolled (`AnalogScrollView`: `lib_scrollBar`).
 
 use crate::audio::PostEvent;
 use crate::flash::{Clip, FlashClip};
@@ -57,6 +59,13 @@ struct NoteMeasure;
 /// The lines shown.
 #[derive(Component)]
 struct NoteWords;
+
+/// The field's scroll bar (shown once the words overrun it).
+#[derive(Component)]
+struct NoteBar;
+
+/// The field's mask (`_maskContent_mc`: 1051.95 x 0.655 by 474.95).
+const NOTE_MASK: Vec2 = Vec2::new(689.0, 474.95);
 
 /// A note's words as spans: each word with the space after it, each line's end a span.
 fn tokens(words: &str) -> Vec<String> {
@@ -288,6 +297,16 @@ fn draw(
                 ))
                 .id();
             commands.spawn((NoteWords, Text::new(""), font, TextColor(PALE), TextLayout::new(Justify::Left, LineBreak::NoWrap), Pickable::IGNORE, ChildOf(field)));
+            // its scroll bar (`_scrollView_mc` at (-547.45,-234.5) in `_note_mc` at (100,22),
+            // turned a degree: the mask's width and 5 along), hidden until the words overrun it
+            if let Some(lib) = timelines.get("lib") {
+                let m: crate::flash::Mat = [1.0, -0.017, 0.017, 1.0, 0.0, 0.0];
+                let origin = Vec2::new(640.0 + 100.0, 360.0 + 22.0) + Vec2::new(m[0] * -547.45 + m[2] * -234.5, m[1] * -547.45 + m[3] * -234.5);
+                let bar = crate::scrollbar::Bar { mask_w: NOTE_MASK.x, mask_h: NOTE_MASK.y, left: false, ratio: 0.0 };
+                if let Some(e) = crate::scrollbar::spawn(&mut commands, root, lib, s, off, origin, m, &bar) {
+                    commands.entity(e).insert((NoteBar, Visibility::Hidden));
+                }
+            }
             note.lines.clear();
             note.first = 0;
             note.shown = None;
@@ -310,6 +329,7 @@ fn scroll(
     measure: Query<(Entity, &bevy::text::TextLayoutInfo, &Children), With<NoteMeasure>>,
     spans: Query<&TextSpan>,
     mut words: Query<&mut Text, With<NoteWords>>,
+    mut bars: Query<(&mut FlashClip, &mut Visibility), With<NoteBar>>,
     keys: Res<ButtonInput<KeyCode>>,
     mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
 ) {
@@ -372,6 +392,11 @@ fn scroll(
         let shown = note.lines[note.first..end].join("\n");
         if let Ok(mut t) = words.single_mut() {
             t.0 = shown;
+        }
+        // the bar: shown as the words overrun the field, its lifter as far as they have scrolled
+        if let Ok((mut fc, mut vis)) = bars.single_mut() {
+            *vis = if last > 0 { Visibility::Inherited } else { Visibility::Hidden };
+            crate::scrollbar::lift(&mut fc, NOTE_MASK.y, if last > 0 { note.first as f32 / last as f32 } else { 0.0 });
         }
     }
 }

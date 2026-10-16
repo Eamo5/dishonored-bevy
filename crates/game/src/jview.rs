@@ -22,7 +22,7 @@ pub struct JViewPlugin;
 
 impl Plugin for JViewPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostUpdate, (sel_corners, keep_selected_in_view, wheel_scroll, animate).before(crate::flash::PlayClips).run_if(in_state(crate::GameState::InGame)));
+        app.add_systems(PostUpdate, (sel_corners, keep_selected_in_view, wheel_scroll, scroll_bars, animate).chain().before(crate::flash::PlayClips).run_if(in_state(crate::GameState::InGame)));
     }
 }
 
@@ -508,6 +508,48 @@ fn list_box(cx: &mut Ctx, rect: Rect) -> Entity {
     cx.clip_box(rect, true)
 }
 
+/// A scrolled box's scroll bar (`ScrollBarList` left of a list, `AnalogScrollView` right of a
+/// text): shown while its contents overrun it, its lifter as far as it has scrolled.
+#[derive(Component)]
+struct JBar {
+    of: Entity,
+    mask_h: f32,
+}
+
+/// A scrolled box with its bar (hidden until its contents overrun it): the list's (or text's)
+/// origin, its mask, the side it stands.
+fn list_box_bar(cx: &mut Ctx, rect: Rect, origin: Vec2, mask: Vec2, left: bool) -> Entity {
+    let b = list_box(cx, rect);
+    if let Some(lib) = cx.lib.clone() {
+        let bar = crate::scrollbar::Bar { mask_w: mask.x, mask_h: mask.y, left, ratio: 0.0 };
+        if let Some(e) = crate::scrollbar::spawn(cx.c, cx.root, lib, cx.st.s, cx.st.off, origin, crate::flash::IDENTITY, &bar) {
+            cx.c.entity(e).insert((JBar { of: b, mask_h: mask.y }, Visibility::Hidden));
+        }
+    }
+    b
+}
+
+/// The scrolled boxes' bars follow them.
+fn scroll_bars(mut bars: Query<(&JBar, &mut FlashClip, &mut Visibility)>, boxes: Query<(&ComputedNode, &ScrollPosition)>) {
+    for (bar, mut fc, mut vis) in &mut bars {
+        let Ok((n, sp)) = boxes.get(bar.of) else { continue };
+        let max = (n.content_size().y - n.size().y).max(0.0) * n.inverse_scale_factor();
+        let want = if max > 1.0 { Visibility::Inherited } else { Visibility::Hidden };
+        if *vis != want {
+            *vis = want;
+        }
+        if max > 1.0 {
+            let r = (sp.y / max).clamp(0.0, 1.0);
+            let lo = 19.35 + 20.0;
+            let hi = 19.35 + bar.mask_h - 45.05 - 20.0;
+            let y = lo + r * (hi - lo);
+            if fc.props("_lifter_mc").is_some_and(|p| (p.y - y).abs() > 0.01) {
+                crate::scrollbar::lift(&mut fc, bar.mask_h, r);
+            }
+        }
+    }
+}
+
 /// The empty list's card (`j_itemsList_empty`, turned -2.5 degrees) at a stage point.
 fn empty_list(cx: &mut Ctx, centre: Vec2, words: String) {
     let root = cx.root;
@@ -582,7 +624,7 @@ fn objectives(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats, vm: O
             if rows.is_empty() {
                 empty_list(cx, pg(-512.0 + 314.0, -155.0 + 207.0), data.text(J, "t_EmptyObjectivesList"));
             } else {
-                let list = list_box(cx, mask);
+                let list = list_box_bar(cx, mask, pg(-512.0, -155.0), Vec2::new(628.12, 414.34), true);
                 objective_list(cx, list, &rows, js.obj_sel, data);
             }
             chapter_details(cx, data, chapter);
@@ -1336,7 +1378,8 @@ fn power_details(cx: &mut Ctx, sel: usize, data: &Data, stats: &PlayerStats) {
     // `<power>_<level>_Description`), pale once acquired, else grey; the wheel scrolls them in
     // the movie's zone (`_scrollViewZone_mc`: 281 x 295.4 from (-200,270.8)), above the help bar
     let rect = Rect::from_corners(Vec2::new(at.x - 200.0 + 1.65, y), Vec2::new(at.x - 200.0 + 281.0, at.y + 270.8 + 295.4));
-    let col = list_box(cx, rect);
+    // (its bar right of the zone: `AnalogScrollView`)
+    let col = list_box_bar(cx, rect, Vec2::new(at.x - 200.0, at.y + 270.8), Vec2::new(281.0, 295.4), false);
     let s = cx.st.s;
     let level_word = data.text(J, "t_Level").to_uppercase();
     for i in 1..=2u8 {

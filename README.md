@@ -439,7 +439,9 @@ fullscreen display, vertical sync and the crosshair.
   (`lib_LS_scroll_Multi`) as far along the track as the list has scrolled: the options' rows
   (keyboard mapping, user interface), the save and load list, the pause menu's tutorials, the
   video settings' resolutions, the journal's notes, bone charms and item cards, the shops'
-  cards.
+  cards, the trials' gallery; and, following them as they scroll, the journal's objectives
+  (left of the list) and a power's levels (right of their zone, `AnalogScrollView`) and a
+  note's words (right of its mask, shown once they overrun it).
 - **The menus' sounds as the movies ask for them** (`SoundHandler.PlaySound` through the
   `Default` sound theme, `UISoundTheme_Common` and the movies' own, to `Snd_UI_Ingame`): a
   move along a list (`UI_Move`; at its end `UI_Stop`, the lists going no further, as
