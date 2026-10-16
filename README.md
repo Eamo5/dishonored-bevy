@@ -284,8 +284,8 @@ are in the settings file, `pad_binding_set` 0-3):
   1024 or their full 2048), `Model Details` Normal / High (the characters' lesser LODs at a
   distance, or never), `Light Shafts`, `Anti-Aliasing Mode` Off / MLAA (SMAA) / FXAA (over 4x
   multisampling), `Rat Shadows` (the swarms' rats cast shadows; off as the original's
-  `bAllowRatsShadow`); `Audio`: the volumes, `Subtitles Mode` Off / Main Dialogue (no barks) /
-  All Speeches, `Speaker Configuration` Auto / Stereo / 5.1 (see Sound below)) as tabs along the
+  `bAllowRatsShadow`); `Audio`: the volumes, `Subtitles Mode` Off / Main Dialogue (only the lines
+  authored main subtitles: no barks) / All Speeches, `Speaker Configuration` Auto / Stereo / 5.1 (see Sound below)) as tabs along the
   screen's -4 degree slant, their sub-categories on the
   dark band, the settings' rows with the original widgets — two choices side by side, a value
   between arrows, a slider's thumb with its number, a key binding's box — labelled with the
@@ -1044,9 +1044,20 @@ are in the settings file, `pad_binding_set` 0-3):
   class): the crystal gauge swings in at the bottom right over its swirling backing, its fill
   masked to the breath left with the pointer at its top (tweened 0.45 s), a glow pulsing
   behind; it fades once he has his breath back. Script: `breath N`.
+- **Which subtitle shows** (`kismet.rs`), as roshan's r614/blink research read the
+  conversation manager's tick: every line said (conversations, barks, cutscenes) is listed
+  until its voice stops or its speaker falls, as a main subtitle or a secondary one
+  (`m_bMainSubtitle`: the barks are authored secondary) with its voice radius
+  (`m_fVoiceRadius`: 30 m by default, the barks mostly 45 m), both cooked per line; each list
+  offers the line whose speaker is nearest for its radius (`1 - distance / radius`, none past
+  it), and the HUD shows the main list's, else the secondary's (Main Dialogue: never). An
+  audiograph's words come first. A line without words still plays its voice (a grunt). Not
+  done: the dominant hook's weight of 99 and the other voices' ducking.
 - **Subtitles, game messages and tutorials** (`hudtext.rs`): placed, sized and coloured as
   the HUD movie's fields are, scaled with its stage — the subtitles (the body font at 24,
-  `#e8f7db`, centred in a box from 582 units down), the game messages above them (from 522
+  `#e8f7db`, centred in a box from 582 units down; no speaker's name, as the shipped HUD's
+  `subtitles_mc` places only `_txt`, not the `_NPC_Name_txt` its `SetSubtitles` fills; opened
+  and closed over 0.25 s, `Strong.easeOut`), the game messages above them (from 522
   down, `#e3f2d6`) and the level scripts' tutorial above those (`TutorialMessage`: one at a
   time, fading in 0.35 s as it settles from 110%, out in 0.15 s). Their fields' dark Flash
   drop shadows (the subtitles' blurred 8 at strength 1.9, the messages' 5 at 1.5, the
@@ -1546,7 +1557,7 @@ are in the settings file, `pad_binding_set` 0-3):
   character's, through its voice): Kismet inputs, the player approaching, lingering or
   talking to a character ([F] Talk to Piero Joplin) enter through the trees' hooks, whose
   story-flag, conversation-already-had, time-limit and branch nodes pick what is said; lines
-  are voiced from the speaker and subtitled with the character's name, and conversations set
+  are voiced from the speaker and subtitled, and conversations set
   their story flags and raise their Kismet outputs. The player's answers in conversations
   (`DisConv_PlayerChoice`, 63 across the game: leaving the Hound Pits with Samuel, Piero's
   workshop, Slackjaw and Granny Rags, the Boyle sisters, the mask at the end) are offered like
@@ -1585,7 +1596,7 @@ are in the settings file, `pad_binding_set` 0-3):
   The trees' story-flag and conversation-had nodes give their negative output first (a flag
   unset, a conversation not yet had). A one-shot dialogue actor's lines are said by the
   character its speaker is attached to (`m_MeSpeaker.m_pAttachedActor`, a spawner: Havelock,
-  Lydia, Wallace), voiced from them and subtitled with their name, and its hooks measure the
+  Lydia, Wallace), voiced from them and subtitled, and its hooks measure the
   player's distance to its characters (`m_OtherSpeakers` too). One-shot dialogue actors are
   also spoken for by the characters the scripts name with them (`DisSeqAct_DialogInputs`
   Target): talking to the

@@ -212,8 +212,9 @@ fn whisper(
     if !n.event.is_empty() {
         sfx.write(PostEvent::named(&n.event, None));
     }
-    let secs = (2.0 + n.text.len() as f32 * 0.06).min(9.0);
-    subs.write(crate::barks::Subtitle { text: n.text.clone(), secs, priority: false, ambient: false });
+    // (its words as long as its voice, as a line's)
+    let secs = crate::audio::event_length(&n.event).map(|l| l + 0.25).unwrap_or((2.0 + n.text.len() as f32 * 0.06).min(9.0));
+    subs.write(crate::barks::Subtitle::heard(n.text.clone(), secs));
     heart.cooldown = secs.min(4.0);
     heart.pulse = 1.0;
 }

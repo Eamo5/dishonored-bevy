@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 152;
+pub const SCENE_VERSION: u32 = 153;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -637,6 +637,9 @@ pub enum KDialogStep {
     /// a branch within the conversation: the step each output's way starts at (none: the
     /// conversation ends)
     Branch(KBranch, Vec<Option<u32>>),
+    /// the next line's voice radius (m, `m_fVoiceRadius`) and whether its subtitle is a main
+    /// one (`m_bMainSubtitle`), when not the class's 30 m and main
+    Reach(f32, bool),
 }
 
 /// What a branch within a conversation goes by.
@@ -1580,6 +1583,10 @@ pub struct BarkHook {
     pub hook: String,
     /// the lines it may say: (Wwise event, subtitle)
     pub lines: Vec<(String, String)>,
+    /// each line's voice radius (m, `m_fVoiceRadius`) and whether its subtitle is a main one
+    /// (`m_bMainSubtitle`: the barks are mostly authored 45 m and secondary)
+    #[serde(default)]
+    pub reach: Vec<(f32, bool)>,
     /// the hook node's class (`DisConv_Hook_<class>`: "SuspicionLevel", "Notice",
     /// "DeathMode"...; empty for a plain `DisConv_DialogHook`), whose outputs pick by what
     /// the speaker knows

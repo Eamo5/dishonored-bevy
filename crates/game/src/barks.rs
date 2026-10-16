@@ -22,15 +22,26 @@ impl Plugin for BarksPlugin {
     }
 }
 
-/// A line to show at the bottom of the screen (barks don't replace script dialogue).
+/// A line said with its subtitle (`DisSubtitle`), the HUD's to choose among.
 #[derive(Message, Clone, Debug)]
 pub struct Subtitle {
     pub text: String,
     pub secs: f32,
-    /// it replaces what's on screen (an audiograph's words)
+    /// it comes before what's said around (an audiograph's words); empty, its words stop
     pub priority: bool,
-    /// a bark (not main dialogue: `SubtitlesMode_Dialogs` leaves it out)
-    pub ambient: bool,
+    /// who says it (none: heard everywhere), its voice radius (m, `m_fVoiceRadius`) and
+    /// whether a main subtitle (`m_bMainSubtitle`: the barks are mostly not, and
+    /// `SubtitlesMode_Dialogs` leaves those out)
+    pub by: Option<Entity>,
+    pub radius: f32,
+    pub main: bool,
+}
+
+impl Subtitle {
+    /// words heard everywhere (the Heart's, a recording's)
+    pub fn heard(text: String, secs: f32) -> Self {
+        Subtitle { text, secs, priority: false, by: None, radius: 0.0, main: true }
+    }
 }
 
 /// Per-NPC bark bookkeeping.
@@ -148,9 +159,6 @@ fn hook_output(class: &str, npc: &Npc) -> Option<usize> {
         _ => None,
     }
 }
-
-/// A bark nearer than this (m) is subtitled.
-const SUBTITLE_REACH: f32 = 15.0;
 
 /// Others of its side within this (m) hear a character's call for help (`COMBAT_HELP`: a cry
 /// for help carries 15 m).
@@ -632,7 +640,7 @@ fn npc_barks(
                 } else {
                     walk_bark(bark, (npc.voice.unwrap_or(0), r.hook), out_k.unwrap_or(0), (e, npc.alert != Alert::Unaware, &npc.story_group), vm.as_deref(), &mut memory, now)
                 };
-                let Some((event, text)) = line.and_then(|i| bark.lines.get(i)) else {
+                let Some((i, (event, text))) = line.and_then(|i| bark.lines.get(i).map(|l| (i, l))) else {
                     if log {
                         info!("bark {} {}: says nothing (output {out_k:?})", npc.name, bark.hook);
                     }
@@ -643,12 +651,11 @@ fn npc_barks(
                     info!("bark {} {}: {event} \"{text}\" ({} {}, {d:.0} m)", npc.name, bark.hook, rules.groups.get(r.group as usize).map(|g| g.name.as_str()).unwrap_or("?"), if r.quiet { "quiet" } else { "loud" });
                 }
                 out.write(PostEvent::named(event, Some(t.translation + Vec3::Y * 0.7)).spoken_by(e));
-                // sounds like *cough* are not subtitled
-                if !text.is_empty() && !text.starts_with('*') && d < SUBTITLE_REACH {
-                    // the character's own name ("Anton Sokolov"), else its kind ("City Watch Guard")
-                    let (package, object) = npc.pawn.split_once('.').unwrap_or((&npc.pawn, &npc.pawn));
-                    let speaker = data.0.pawn_names.get(object).or(data.0.pawn_names.get(package)).unwrap_or(&npc.name);
-                    subs.write(Subtitle { text: format!("{speaker}: {text}"), secs: len + 0.3, priority: false, ambient: true });
+                // sounds like *cough* are not subtitled; the rest as far as the line's voice
+                // radius carries (the HUD's choice)
+                if !text.is_empty() && !text.starts_with('*') {
+                    let (radius, main) = bark.reach.get(i).copied().unwrap_or((30.0, true));
+                    subs.write(Subtitle { text: text.clone(), secs: len, priority: false, by: Some(e), radius, main });
                 }
                 // (an interrupted line of its own gives way)
                 man.firing.retain(|f| f.who != e);
@@ -689,6 +696,7 @@ mod walk_tests {
         BarkHook {
             hook: "TEST".into(),
             lines: (0..4).map(|i| (format!("Play_{i}"), format!("line {i}"))).collect(),
+            reach: Vec::new(),
             class: String::new(),
             by_output: Vec::new(),
             nodes: nodes.into_iter().map(|(step, outs)| BarkNode { step, outs }).collect(),

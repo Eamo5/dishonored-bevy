@@ -981,6 +981,7 @@ pub fn bark_voice(pkg: &Package, voice: i32) -> Option<crate::format::BarkVoice>
         };
         // breadth-first to the blurbs from each output
         let mut lines: Vec<(String, String)> = Vec::new();
+        let mut reach: Vec<(f32, bool)> = Vec::new();
         let mut by_output: Vec<Vec<u16>> = Vec::new();
         for link in struct_array(pkg, &hp, "m_OutputLinks").iter().map(|l| l.object("m_pLink").filter(|o| *o > 0)) {
             let mut mine: Vec<u16> = Vec::new();
@@ -1001,6 +1002,7 @@ pub fn bark_voice(pkg: &Package, voice: i32) -> Option<crate::format::BarkVoice>
                             let line = (e.clone(), text);
                             let at = lines.iter().position(|l| *l == line).unwrap_or_else(|| {
                                 lines.push(line);
+                                reach.push(reach_of(&np));
                                 lines.len() - 1
                             });
                             if !mine.contains(&(at as u16)) {
@@ -1057,6 +1059,7 @@ pub fn bark_voice(pkg: &Package, voice: i32) -> Option<crate::format::BarkVoice>
                             let line = (e.clone(), text);
                             let at = lines.iter().position(|l| *l == line).unwrap_or_else(|| {
                                 lines.push(line);
+                                reach.push(reach_of(&np));
                                 lines.len() - 1
                             });
                             BarkStep::Line(at as u16)
@@ -1099,6 +1102,7 @@ pub fn bark_voice(pkg: &Package, voice: i32) -> Option<crate::format::BarkVoice>
                     // (a second node of the same hook: its lines after the first's)
                     let base = x.lines.len() as u16;
                     x.lines.extend(lines);
+                    x.reach.extend(reach);
                     for (k, mine) in by_output.into_iter().enumerate() {
                         if x.by_output.len() <= k {
                             x.by_output.push(Vec::new());
@@ -1106,7 +1110,7 @@ pub fn bark_voice(pkg: &Package, voice: i32) -> Option<crate::format::BarkVoice>
                         x.by_output[k].extend(mine.into_iter().map(|i| i + base));
                     }
                 }
-                None => out.hooks.push(BarkHook { hook, lines, class, by_output, nodes, roots }),
+                None => out.hooks.push(BarkHook { hook, lines, reach, class, by_output, nodes, roots }),
             }
         }
     }
@@ -1443,6 +1447,13 @@ fn branch_of(pkg: &Package, cls: &str, p: &Props) -> Option<crate::format::KBran
 
 /// What a chain of dialogue nodes says and does, from `start` along first links; a player
 /// choice branches (each option's steps follow, ended by `End`).
+/// A blurb's voice radius (m: `m_fVoiceRadius`, the class's 3000 uu) and whether its subtitle is
+/// a main one (`m_bMainSubtitle`, the class's true), as roshan's r614/blink research read the
+/// class defaults.
+fn reach_of(p: &Props) -> (f32, bool) {
+    (p.float("m_fVoiceRadius").unwrap_or(3000.0) / 100.0, !matches!(p.get("m_bMainSubtitle"), Some(Value::Bool(false))))
+}
+
 fn steps_from(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<String>>) -> Vec<crate::format::KDialogStep> {
     let mut steps = Vec::new();
     walk_steps(pkg, start, voices, &mut steps, &mut HashSet::new());
@@ -1463,18 +1474,29 @@ fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<
             _ => None,
         };
         match cls.as_str() {
+            // (a line without words still says its voice, unsubtitled: a grunt)
             "DisConv_Blurb" | "DisConv_NonWord" => {
-                if let Some(Value::Str(t)) = p.get("m_Text") {
+                let text = match p.get("m_Text") {
+                    Some(Value::Str(t)) => Some(t.clone()),
+                    _ => None,
+                };
+                let event = match p.get("m_iBlurbGUID") {
+                    Some(Value::Guid(g)) => voices.get(g).and_then(|v| v.first()),
+                    _ => None,
+                };
+                if text.is_some() || event.is_some() {
                     let speaker = match p.get("m_iSpeaker") {
                         Some(Value::Int(i)) => *i,
                         _ => 0,
                     };
-                    if let Some(Value::Guid(g)) = p.get("m_iBlurbGUID") {
-                        if let Some(e) = voices.get(g).and_then(|v| v.first()) {
-                            steps.push(KDialogStep::Voice(e.clone()));
-                        }
+                    let (radius, main) = reach_of(&p);
+                    if (radius, main) != (30.0, true) {
+                        steps.push(KDialogStep::Reach(radius, main));
                     }
-                    steps.push(KDialogStep::Line(t.clone(), speaker));
+                    if let Some(e) = event {
+                        steps.push(KDialogStep::Voice(e.clone()));
+                    }
+                    steps.push(KDialogStep::Line(text.unwrap_or_default(), speaker));
                 }
             }
             "DisConv_Soiree" => {

@@ -143,7 +143,7 @@ fn play(
         if let Some(cur) = pb.current.take() {
             stop(cur, &mut sfx, &mut stops, &mut pb.ended);
             // (its words go with it)
-            subs.write(Subtitle { text: String::new(), secs: 0.0, priority: true, ambient: false });
+            subs.write(Subtitle { priority: true, ..Subtitle::heard(String::new(), 0.0) });
         }
         let Some(key) = &ask.key else { continue };
         let Some(ag) = data.as_ref().and_then(|d| d.0.audiographs.get(key)) else {
@@ -193,7 +193,7 @@ fn play(
         if *at > cur.t {
             break;
         }
-        subs.write(Subtitle { text: text.clone(), secs: *secs, priority: true, ambient: false });
+        subs.write(Subtitle { priority: true, ..Subtitle::heard(text.clone(), *secs) });
         cur.next_sub += 1;
     }
     if cur.t >= cur.end {

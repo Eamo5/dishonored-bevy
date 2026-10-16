@@ -6947,7 +6947,8 @@ impl<'a> Cooker<'a> {
         for (name, path) in props.iter() {
             let (name, path) = (name.as_str(), path.as_str());
             let Some(obj) = self.assets.find(path) else {
-                if name == "musicbox" {
+                // (the music box and the thugs' bottle are only on the maps that have them)
+                if name == "musicbox" || name == "thug_bottle" {
                     log::debug!("prop {path} not on this map");
                 } else {
                     log::warn!("prop {path} not found");

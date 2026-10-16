@@ -197,8 +197,9 @@ pub enum Effect {
     Subtitle(String, f32),
     /// a streamed sublevel came in (true) or went out
     Stream(String, bool),
-    /// a conversation's line: text, seconds, the speaking actor (named when a character)
-    Line(String, f32, Option<u32>),
+    /// a conversation's line: text, seconds, the speaking actor, its voice radius (m) and
+    /// whether a main subtitle
+    Line(String, f32, Option<u32>, (f32, bool)),
     /// back from black (a skipped matinee's director fade)
     FadeIn(f32),
     /// post a Wwise event (at an actor)
@@ -347,6 +348,34 @@ mod conversation_tests {
 
     fn said(vm: &mut Vm) -> Vec<String> {
         vm.effects.drain(..).filter_map(|e| if let Effect::Line(t, ..) = e { Some(t) } else { None }).collect()
+    }
+
+    #[test]
+    fn a_line_carries_its_voice_radius_and_list() {
+        let mut vm = speaker(None);
+        let tree = Arc::get_mut(&mut vm.g).unwrap().dialog_trees.get_mut(0).unwrap();
+        tree.conversations[0].steps = vec![S::Reach(45.0, false), S::Line("bark".into(), 0), S::Line("main".into(), 0), S::End];
+        vm.start_conversation(0, 0, 0);
+        vm.tick_conversations(0.1);
+        vm.tick_conversations(60.0);
+        let reach: Vec<(f32, bool)> = vm.effects.drain(..).filter_map(|e| if let Effect::Line(_, _, _, r) = e { Some(r) } else { None }).collect();
+        assert_eq!(reach, [(45.0, false), (30.0, true)]);
+    }
+
+    #[test]
+    fn subtitles_go_by_voice_radius_main_first() {
+        let line = |text: &str, d: f32, radius: f32, main: bool| Said { text: text.into(), left: 1.0, by: Some((None, Vec3::new(d, 0.0, 0.0))), radius, main, priority: false };
+        let weight = |s: &Said| 1.0 - s.by.unwrap().1.x / s.radius;
+        // the nearer for its radius; none beyond it
+        let said = [line("far", 20.0, 30.0, true), line("near", 10.0, 45.0, true)];
+        assert_eq!(choose_subtitle(&said, 2, weight).as_deref(), Some("near"));
+        assert_eq!(choose_subtitle(&[line("out", 31.0, 30.0, true)], 2, weight), None);
+        // a main line before a nearer secondary one; the secondary alone, all speeches only
+        let said = [line("bark", 1.0, 45.0, false), line("talk", 25.0, 30.0, true)];
+        assert_eq!(choose_subtitle(&said, 2, weight).as_deref(), Some("talk"));
+        assert_eq!(choose_subtitle(&said[..1], 2, weight).as_deref(), Some("bark"));
+        assert_eq!(choose_subtitle(&said[..1], 1, weight), None);
+        assert_eq!(choose_subtitle(&said, 0, weight), None);
     }
 
     #[test]
@@ -4230,8 +4259,10 @@ impl Vm {
             let ending = self.conv_ending.contains(&c.0);
             let mute = |speaker: i32| ending && speaker == 0 && busy == Some(Busy::Down);
             let mut voice_len = None;
+            let mut reach = None;
             while c.4 <= 0.0 && c.3 < steps.len() {
                 match &steps[c.3] {
+                    dhcook::format::KDialogStep::Reach(radius, main) => reach = Some((*radius, *main)),
                     dhcook::format::KDialogStep::Voice(event) => {
                         // the speaker's voice; its length times the line
                         if !matches!(steps.get(c.3 + 1), Some(dhcook::format::KDialogStep::Line(_, s)) if mute(*s)) {
@@ -4243,8 +4274,9 @@ impl Vm {
                     dhcook::format::KDialogStep::Line(_, speaker) if mute(*speaker) => {}
                     dhcook::format::KDialogStep::Line(text, speaker) => {
                         let dur = voice_len.take().map(|l| l + 0.25).unwrap_or(1.2 + text.chars().count() as f32 / 15.0);
-                        // slot 0 is the tree's own speaker
-                        self.effects.push(Effect::Line(text.clone(), dur, (*speaker == 0).then(|| self.voice_of(c.0))));
+                        // slot 0 is the tree's own speaker (the voice's)
+                        let by = if *speaker == 0 { self.voice_of(c.0) } else { c.0 };
+                        self.effects.push(Effect::Line(text.clone(), dur, Some(by), reach.take().unwrap_or((30.0, true))));
                         c.4 = dur;
                         if ending {
                             c.3 = steps.len();
@@ -5119,6 +5151,31 @@ struct FadeOverlay;
 #[derive(Component)]
 pub(crate) struct SubtitleText;
 
+/// A line said with its subtitle (`DisSubtitle`): its words, how long its voice goes on, who
+/// says it (the character, else where it was said; none: heard everywhere), its voice radius
+/// (m), whether a main subtitle, and whether it comes before all (an audiograph's).
+struct Said {
+    text: String,
+    left: f32,
+    by: Option<(Option<Entity>, Vec3)>,
+    radius: f32,
+    main: bool,
+    priority: bool,
+}
+
+impl ScriptUi {
+    /// A line begins; one voice to a speaker (its line before gives way).
+    fn say(&mut self, s: Said) {
+        let who = s.by.and_then(|b| b.0);
+        self.said.retain(|o| if who.is_some() { o.by.and_then(|b| b.0) != who } else { o.by.is_some() || o.priority != s.priority });
+        self.said.push(s);
+    }
+}
+
+/// The subtitle field's open and close (`Subtitles.Open` / `Close`: `_alpha` in 0.25 s,
+/// `Strong.easeOut`).
+const SUB_FADE: f32 = 0.25;
+
 /// `ScriptUi::hud_hidden`'s entry for the whole HUD (`SeqAct_ToggleHUD`).
 pub const HUD_ALL: &str = "ALL";
 
@@ -5132,7 +5189,10 @@ pub struct ScriptUi {
     alpha: f32,
     /// a location to announce (`location` shows it)
     pub location: Option<String>,
-    subtitle: Option<(String, f32)>,
+    /// the lines being said with their subtitles (`m_MainSubtitles`, `m_SecondarySubtitles`)
+    said: Vec<Said>,
+    /// the subtitle field (`Subtitles`): its text, and its alpha tween (from, to, elapsed)
+    sub_field: (String, f32, f32, f32),
     /// time spent fully black
     black: f32,
     /// seconds since the objectives last changed
@@ -5285,7 +5345,7 @@ fn setup(
         SubtitleText,
         Text::new(""),
         TextFont { font_size: bevy::text::FontSize::Px(28.0), ..default() },
-        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.95)),
+        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.0)),
         TextLayout::justify(Justify::Center),
         TextShadow::default(),
         Node { position_type: PositionType::Absolute, width: percent(70), left: percent(15), bottom: percent(14), ..default() },
@@ -6268,7 +6328,6 @@ pub fn apply_effects(
     pickups: Query<(Entity, &Pickup)>,
     (mut sounds, mut ambients, mut travel, mut store): (MessageWriter<crate::audio::PostEvent>, ResMut<crate::audio::Ambients>, MessageWriter<crate::mission::TravelRequest>, MessageWriter<crate::store::OpenStore>),
     level: Option<Res<LevelInfo>>,
-    data: Option<Res<crate::gamedata::Data>>,
     (stream_cols, mut fog, mut autosave, mut choice, mut emitters): (
         Query<(&LevelInstance, &crate::level::InstanceCollider)>,
         ResMut<crate::fog::FogState>,
@@ -6571,7 +6630,7 @@ pub fn apply_effects(
                 }
             }),
             Effect::Location(l) => ui.location = Some(l),
-            Effect::Subtitle(t, d) => ui.subtitle = Some((t, d)),
+            Effect::Subtitle(t, d) => ui.say(Said { text: t, left: d, by: None, radius: 0.0, main: true, priority: false }),
             Effect::Stream(name, load) => {
                 // the sublevel's characters come or go
                 let Some(l) = level.as_ref().and_then(|l| l.scene.levels.iter().find(|r| r.name.eq_ignore_ascii_case(&name)).cloned()) else { continue };
@@ -6604,15 +6663,15 @@ pub fn apply_effects(
                     }
                 }
             }
-            Effect::Line(t, d, speaker) => {
-                // "Admiral Havelock: ..." when a character speaks
-                let name = speaker.and_then(|a| g.actors.get(a as usize)).and_then(|ka| ka.spawner).and_then(|s| {
-                    let (_, npc, _, _) = npcs.iter().find(|(_, _, f, _)| f.0 == s)?;
-                    let (package, object) = npc.pawn.split_once('.').unwrap_or((&npc.pawn, &npc.pawn));
-                    let names = &data.as_ref()?.0.pawn_names;
-                    names.get(object).or(names.get(package)).cloned()
+            Effect::Line(t, _, _, _) if t.trim().is_empty() => {}
+            Effect::Line(t, d, speaker, (radius, main)) => {
+                // (no speaker's name: the shipped HUD's `subtitles_mc` places only `_txt`, not
+                // the `_NPC_Name_txt` its `SetSubtitles` fills)
+                let by = speaker.and_then(|a| g.actors.get(a as usize)).map(|a| {
+                    let npc = a.spawner.and_then(|s| npcs.iter().find(|(_, _, f, _)| f.0 == s));
+                    (npc.as_ref().map(|n| n.0), npc.map(|n| n.3.translation).unwrap_or(Vec3::from(a.position)))
                 });
-                ui.subtitle = Some((name.map(|n| format!("{n}: {t}")).unwrap_or(t), d));
+                ui.say(Said { text: t, left: d, by, radius, main, priority: false });
             }
             Effect::FadeIn(time) => {
                 if ui.alpha > 0.01 && ui.fade.map(|f| f.1 > 0.5).unwrap_or(true) {
@@ -6836,6 +6895,32 @@ pub fn find_start(tag: &str) -> Option<(String, usize)> {
 }
 
 
+/// The subtitle shown: each list's line of the greatest weight above 0 (the first of equals),
+/// the main list's before the secondary's; the options' `SubtitlesMode` (0 off, 1 main
+/// dialogue, 2 all).
+fn choose_subtitle(said: &[Said], mode: u8, weight: impl Fn(&Said) -> f32) -> Option<String> {
+    let pick = |main: bool| {
+        let mut best: Option<(f32, &Said)> = None;
+        for s in said.iter().filter(|s| s.main == main) {
+            let w = weight(s);
+            if w > 0.0 && best.is_none_or(|b| w > b.0) {
+                best = Some((w, s));
+            }
+        }
+        best.map(|b| b.1.text.clone())
+    };
+    match mode {
+        0 => None,
+        1 => pick(true),
+        _ => pick(true).or_else(|| pick(false)),
+    }
+}
+
+/// `Strong.easeOut` over 0..1.
+fn ease_out5(x: f32) -> f32 {
+    1.0 - (1.0 - x.clamp(0.0, 1.0)).powi(5)
+}
+
 fn update_ui(
     time: Res<Time>,
     vm: Res<Vm>,
@@ -6845,33 +6930,65 @@ fn update_ui(
     settings: Res<crate::settings::Settings>,
     mut objectives: Query<(&mut Text, &mut TextColor), With<ObjectivesText>>,
     mut fade: Query<&mut BackgroundColor, With<FadeOverlay>>,
-    mut subtitle: Query<&mut Text, (With<SubtitleText>, Without<ObjectivesText>)>,
+    mut subtitle: Query<(&mut Text, &mut TextColor), (With<SubtitleText>, Without<ObjectivesText>)>,
+    (npcs, player): (Query<(&Npc, &Transform), Without<Player>>, Query<&Transform, With<Player>>),
 ) {
     let dt = time.delta_secs();
-    // AI barks show when no dialogue is on screen
     for b in barks.read() {
-        // (`SubtitlesMode_Dialogs`: the barks unsubtitled)
-        if settings.subtitle_mode == 1 && b.ambient {
+        if b.priority && b.text.is_empty() {
+            ui.said.retain(|s| !s.priority);
             continue;
         }
-        if ui.subtitle.is_none() || b.priority {
-            ui.subtitle = Some((b.text.clone(), b.secs));
-        }
+        ui.say(Said { text: b.text.clone(), left: b.secs, by: b.by.map(|e| (Some(e), Vec3::ZERO)), radius: b.radius, main: b.main, priority: b.priority });
     }
-    let line = match &mut ui.subtitle {
-        Some((t, left)) => {
-            *left -= dt;
-            if *left <= 0.0 { String::new() } else { t.clone() }
+    // (as roshan's r614/blink research read the conversation manager's tick) a line goes
+    // when its voice stops or its speaker falls; of those left, each list shows the one whose
+    // speaker is nearest for its voice radius (`1 - distance / radius`, none beyond it), the
+    // main list's before the secondary's (the barks', left out by `SubtitlesMode_Dialogs`)
+    ui.said.retain_mut(|s| {
+        s.left -= dt;
+        s.left > 0.0 && s.by.and_then(|b| b.0).is_none_or(|e| npcs.get(e).is_ok_and(|(n, _)| !n.is_down()))
+    });
+    let ear = player.single().ok().map(|t| t.translation);
+    let weight = |s: &Said| -> f32 {
+        if s.priority {
+            return 99.0;
         }
-        None => String::new(),
+        match (s.by, ear) {
+            (Some((e, at)), Some(ear)) => {
+                let at = e.and_then(|e| npcs.get(e).ok()).map_or(at, |(_, t)| t.translation);
+                1.0 - at.distance(ear) / s.radius.max(0.01)
+            }
+            _ => 1.0,
+        }
     };
-    if line.is_empty() {
-        ui.subtitle = None;
+    let line = choose_subtitle(&ui.said, settings.subtitle_mode, weight);
+    // the field: a line set opens it, none closes it and clears it once faded
+    let field = &mut ui.sub_field;
+    match line {
+        Some(l) => {
+            if field.0 != l || field.2 < 1.0 {
+                let at = field.1 + (field.2 - field.1) * ease_out5(field.3 / SUB_FADE);
+                *field = (l, at, 1.0, 0.0);
+            }
+        }
+        None if field.2 > 0.0 => {
+            let at = field.1 + (field.2 - field.1) * ease_out5(field.3 / SUB_FADE);
+            *field = (field.0.clone(), at, 0.0, 0.0);
+        }
+        None => {}
     }
-    let line = if settings.subtitle_mode > 0 { line } else { String::new() };
-    if let Ok(mut t) = subtitle.single_mut() {
-        if t.0 != line {
-            t.0 = line;
+    field.3 += dt;
+    let alpha = field.1 + (field.2 - field.1) * ease_out5(field.3 / SUB_FADE);
+    if field.2 <= 0.0 && field.3 >= SUB_FADE {
+        field.0.clear();
+    }
+    if let Ok((mut t, mut c)) = subtitle.single_mut() {
+        if t.0 != field.0 {
+            t.0 = field.0.clone();
+        }
+        if (c.0.alpha() - alpha).abs() > 1e-3 {
+            c.0.set_alpha(alpha);
         }
     }
     if vm.is_changed() {
