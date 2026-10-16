@@ -953,7 +953,8 @@ impl FlashClip {
 
     /// A text field's text (`txt.text = ...`; `htmlText` too).
     pub fn set_text(&mut self, path: &str, text: impl Into<String>) {
-        let text = text.into();
+        // (a pad's button named in it: by its name, the fields drawing no icons in their words)
+        let text = text.into().replace(crate::pad::MARK, "");
         if self.texts.get(path) != Some(&text) {
             self.texts.insert(path.to_string(), text);
         }

@@ -31,6 +31,88 @@ pub fn using() -> bool {
     USING.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The control scheme in force (`PSI_Gamepad_BindingSet`), for the texts naming its buttons.
+static SCHEME: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// A pad button's name in a text (`ConvertButtonTags`' `$A$`...: the library's `X360_*`
+/// bitmaps), marked so the key texts draw its icon (`keytext`).
+pub const MARK: char = '\u{E000}';
+
+/// The pad button an action is on under the scheme in force (the movement's the left stick,
+/// the journal's Back, the elixirs' the D-pad's right: `m_GamepadMapping`'s "Favorite
+/// 4/Potion"); none for the keyboard's own (quicksave, quickload).
+pub fn button_for(a: Act) -> Option<&'static str> {
+    let cmd = match a {
+        Act::Jump => Cmd::Jump,
+        Act::Crouch => Cmd::Sneak,
+        Act::Use => Cmd::Use,
+        Act::Block => Cmd::Block,
+        Act::Zoom => Cmd::Zoom,
+        Act::Sprint => Cmd::Sprint,
+        Act::LeanLeft | Act::LeanRight => Cmd::Lean,
+        Act::Journal => return Some("Back"),
+        Act::Forward | Act::Back | Act::Left | Act::Right => return Some("LS"),
+        Act::HealthElixir | Act::ManaElixir => return Some("DPadR"),
+        Act::QuickSave | Act::QuickLoad => return None,
+    };
+    cmd_button(cmd)
+}
+
+/// The pad button a mouse button's command is on (the sword, the left hand, the wheel).
+pub fn mouse_button_for(m: MouseButton) -> Option<&'static str> {
+    cmd_button(match m {
+        MouseButton::Left => Cmd::Primary,
+        MouseButton::Right => Cmd::Secondary,
+        MouseButton::Middle => Cmd::Wheel,
+        _ => return None,
+    })
+}
+
+fn cmd_button(cmd: Cmd) -> Option<&'static str> {
+    use GamepadButton as B;
+    let set = SCHEME.load(std::sync::atomic::Ordering::Relaxed);
+    let (b, _) = scheme(set).into_iter().find(|(_, c)| *c == cmd)?;
+    Some(match b {
+        B::South => "A",
+        B::East => "B",
+        B::West => "X",
+        B::North => "Y",
+        B::LeftTrigger => "LB",
+        B::RightTrigger => "RB",
+        B::LeftTrigger2 => "LT",
+        B::RightTrigger2 => "RT",
+        B::LeftThumb => "LSClick",
+        B::RightThumb => "RSClick",
+        _ => return None,
+    })
+}
+
+/// A pad button's icon among the library's bitmaps (`X360_A -nopack`...).
+pub fn icon_id(name: &str) -> Option<u32> {
+    Some(match name {
+        "A" => 19,
+        "B" => 18,
+        "X" => 2,
+        "Y" => 1,
+        "LB" => 11,
+        "RB" => 7,
+        "LT" => 8,
+        "RT" => 4,
+        "Start" => 3,
+        "Back" => 17,
+        "LS" => 10,
+        "RS" => 6,
+        "LSClick" => 9,
+        "RSClick" => 5,
+        "DPad" => 13,
+        "DPadL" => 15,
+        "DPadR" => 14,
+        "DPadU" => 12,
+        "DPadD" => 16,
+        _ => return None,
+    })
+}
+
 /// What the pad holds down (the scripts' runs leave it be when they drop real input).
 static HELD: std::sync::Mutex<(Vec<KeyCode>, Vec<MouseButton>)> = std::sync::Mutex::new((Vec::new(), Vec::new()));
 
@@ -239,6 +321,7 @@ fn pad_input(
         pad.steer = None;
         // the game: the scheme's commands
         let set = settings.pad_binding_set.min(3);
+        SCHEME.store(set, std::sync::atomic::Ordering::Relaxed);
         let mut lean = false;
         for (b, c) in scheme(set) {
             if !pressed(b) {

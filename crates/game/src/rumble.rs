@@ -4,7 +4,8 @@
 //! and half, noise), several at once at the strongest of them. What plays them: Corvo's clips
 //! (`AnimNotify_Rumble`: the pistol's and crossbow's shots, the powers' casts, the choke, the
 //! blades locked), the powers as they are used (`m_RumbleAndShake` by level), the Heart's beats,
-//! a power refused (`m_pDisabledPowerForceFeedback`), and the contact system
+//! a power refused (`m_pDisabledPowerForceFeedback`), the wheel's each item pointed at
+//! (`m_pSelectionForceFeedback`), and the contact system
 //! (`DisContactSub_Rumble`): a blade or a missile striking him, his sword striking a body or a
 //! wall, the blades meeting, a rat's bite, and, within their reach, a tallboy's step and an
 //! explosion. Only with the pad's `Vibration` on.

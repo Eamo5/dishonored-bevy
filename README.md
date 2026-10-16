@@ -483,7 +483,8 @@ are in the settings file, `pad_binding_set` 0-3):
   `AnimNotify_Rumble`s come (the pistol's and crossbow's shots, the powers' casts, a big
   landing, the choke, the blades locked and parried); the powers theirs by level as they are
   used (`m_RumbleAndShake`); the Heart's each beat (`m_Heartbeats`); a power refused for want
-  of mana (`m_pDisabledPowerForceFeedback`); and the contact system's (`DisContactSub_Rumble`)
+  of mana (`m_pDisabledPowerForceFeedback`); the quick-access wheel's each item pointed at
+  (`m_pSelectionForceFeedback`); and the contact system's (`DisContactSub_Rumble`)
   for him struck by a blade or a thing thrown, his sword striking a body or a wall, the blades
   meeting, a rat's bite, and, within 20 m and 10 m, a tallboy's step and an explosion. Paused,
   the rumble stops.
@@ -956,7 +957,13 @@ are in the settings file, `pad_binding_set` 0-3):
   `ConvertButtonTags`, on PC, sets each bracketed key in `#B1C0D7` within the words around it
   (`[F] Open`, `Press [J] to read`): in the interaction window's actions, the special moves'
   words, the context line, the game messages, the tutorial line and window, and the tutorial
-  notes; the rest of each text keeps its own colour, the keys fading with it. The keys are
+  notes; the rest of each text keeps its own colour, the keys fading with it. A pad in use,
+  each action's key is its pad button under the scheme in force, drawn as the converter's image
+  substitution draws it (the library's `X360_*` icon, at most 35 square, in the line: the
+  words leave it a gap, the icon laid over the gap where the text's layout put it), with the
+  pad's own words where the HUD tweak has them (`m_InteractionTexts_Gamepad`,
+  `m_PressKeyToAdrenalineKill_Gamepad`); the Flash fields (the tutorial notes) name the button
+  instead (`[RT]`). The keys are
   named as the original names them (`Settings.int` `[Keys]`: `[Space Bar]`,
   `[Left Control]`, `[Left Mouse Button]`; in the options' keyboard mapping too, `One` for
   the 1 key), bracketed in the tutorials and messages as in the interaction texts.

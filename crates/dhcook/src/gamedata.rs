@@ -1364,6 +1364,10 @@ fn rumbles(game: &Package, startup: &Package, d: &mut GameData) {
     if let Some(p) = startup.find_export("Twk_Pawn_DefaultPlayer.Twk_Pawn_DefaultPlayer").and_then(|i| props(startup, i)) {
         put("player.disabled_power".into(), startup, p.object("m_pDisabledPowerForceFeedback"));
     }
+    // (the wheel's each item pointed at)
+    if let Some(p) = game.find_export("Twk_InGameUI.Twk_GFxMoviePlayerPowerWheel").and_then(|i| props(game, i)) {
+        put("wheel.select".into(), game, p.object("m_pSelectionForceFeedback"));
+    }
     // the contact system's intersections with a rumble
     if let Some(p) = game.find_export("Phy_ContactSystem.ContactSystem.Dis_ContactSystem").and_then(|i| props(game, i)) {
         let kind = |o: Option<i32>| o.filter(|o| *o != 0).map(|o| game.obj_name(o).trim_start_matches("DisContactType_").to_string());

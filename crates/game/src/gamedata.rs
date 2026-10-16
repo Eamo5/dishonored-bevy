@@ -134,6 +134,16 @@ impl Data {
     }
     /// A HUD tweak string (`m_PressKeyToBuyPowers`...) made readable, else `fallback`.
     pub fn hud_text(&self, key: &str, fallback: &str) -> String {
+        // (a pad in use: the pad's own words where the tweak has them, `..._Gamepad`)
+        if crate::pad::using() {
+            let pad_key = match key.split_once('[') {
+                Some((name, index)) => format!("HUD.{name}_Gamepad[{index}"),
+                None => format!("HUD.{key}_Gamepad"),
+            };
+            if let Some(t) = self.0.texts.get(&pad_key).filter(|t| !t.trim().is_empty()) {
+                return readable(t);
+            }
+        }
         readable(self.0.texts.get(&format!("HUD.{key}")).map(|s| s.as_str()).unwrap_or(fallback))
     }
     /// One of Corvo's pawn tweak's strings (`m_HeartTargetTutorialMessage`), else `fallback`.
@@ -582,11 +592,7 @@ mod tests {
 /// Resolve the original strings' `GBA_*` binding tokens (the key bound, bracketed as the PC's
 /// texts name keys: `[F]`, `[Right Mouse Button]`) and markup.
 pub fn readable(s: &str) -> String {
-    const KEYS: [(&str, &str); 3] = [
-        ("`GBA_Secondary`", crate::bindings::RIGHT_MOUSE),
-        ("`GBA_Primary`", crate::bindings::LEFT_MOUSE),
-        ("`GBA_Wheel`", crate::bindings::MIDDLE_MOUSE),
-    ];
+    let keys = [("`GBA_Secondary`", crate::bindings::right_mouse()), ("`GBA_Primary`", crate::bindings::left_mouse()), ("`GBA_Wheel`", crate::bindings::middle_mouse())];
     let mut out = s.to_string();
     // keyboard actions name the key bound now
     use crate::bindings::Act;
@@ -609,9 +615,11 @@ pub fn readable(s: &str) -> String {
             out = out.replace(k, &crate::bindings::hint(a));
         }
     }
-    for (k, v) in KEYS {
-        out = out.replace(k, v);
+    for (k, v) in keys {
+        out = out.replace(k, &v);
     }
+    // (the pad's own words: its lean button)
+    out = out.replace("`GBA_Lean_Gamepad`", &crate::bindings::hint(Act::LeanLeft));
     out = out.replace("<br />", "
 ").replace("<br>", "
 ").replace("\r", "

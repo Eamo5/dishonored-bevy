@@ -3192,7 +3192,8 @@ pub struct GameData {
     pub mission_stats: Vec<MissionStatsDef>,
     /// the pad's rumbles (`ForceFeedbackWaveform`), by what plays them: `power.<name>.<level>`
     /// (`m_RumbleAndShake`), `heart.beat.<n>` (`m_Heartbeats`), `heart.unequipped`,
-    /// `player.disabled_power` (`m_pDisabledPowerForceFeedback`), `contact.<striker>.<struck>`
+    /// `player.disabled_power` (`m_pDisabledPowerForceFeedback`), `wheel.select` (the power
+    /// wheel's `m_pSelectionForceFeedback`), `contact.<striker>.<struck>`
     /// with `.striker`, `.struck` or `.radius` (`DisContactSub_Rumble`; its radius in
     /// `rumble_radius`)
     #[serde(default)]

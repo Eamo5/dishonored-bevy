@@ -240,6 +240,8 @@ fn wheel(
         if k.is_some() && w.hover != k {
             w.hover = k;
             sfx.write(PostEvent::named("Snd_UI_Ingame_Wheel_Select", None));
+            // (and its rumble: `m_pSelectionForceFeedback`)
+            crate::rumble::play("wheel.select");
         }
     }
     if !held {

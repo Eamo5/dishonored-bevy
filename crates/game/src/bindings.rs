@@ -254,10 +254,24 @@ fn original_name(k: KeyCode) -> Option<&'static str> {
     })
 }
 
-/// The mouse's buttons as the original names them (`Settings.int` `[Keys]`).
-pub const LEFT_MOUSE: &str = "[Left Mouse Button]";
-pub const RIGHT_MOUSE: &str = "[Right Mouse Button]";
-pub const MIDDLE_MOUSE: &str = "[Middle Mouse Button]";
+/// The mouse's buttons as the original names them (`Settings.int` `[Keys]`), or, a pad in use,
+/// the pad's buttons for their commands (`pad::MARK`: drawn as the button's icon).
+pub fn left_mouse() -> String {
+    mouse_hint(MouseButton::Left, "Left Mouse Button")
+}
+pub fn right_mouse() -> String {
+    mouse_hint(MouseButton::Right, "Right Mouse Button")
+}
+pub fn middle_mouse() -> String {
+    mouse_hint(MouseButton::Middle, "Middle Mouse Button")
+}
+
+fn mouse_hint(m: MouseButton, name: &str) -> String {
+    match crate::pad::mouse_button_for(m).filter(|_| crate::pad::using()) {
+        Some(b) => format!("[{}{b}]", crate::pad::MARK),
+        None => format!("[{name}]"),
+    }
+}
 
 /// How a key reads on screen, as the original names it ("W", "Left Shift", "Space Bar", "F5").
 pub fn display(k: KeyCode) -> String {
@@ -285,6 +299,10 @@ pub fn set_current(b: &Bindings) {
 
 /// "[F]": the key bound to an action, as prompts and tutorials show it.
 pub fn hint(a: Act) -> String {
+    // (a pad in use: its button, drawn as its icon: `keytext`)
+    if let Some(b) = crate::pad::button_for(a).filter(|_| crate::pad::using()) {
+        return format!("[{}{b}]", crate::pad::MARK);
+    }
     let k = CURRENT.read().ok().and_then(|c| c.as_ref().map(|b| b.key(a))).unwrap_or(a.default_key());
     format!("[{}]", display(k))
 }

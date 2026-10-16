@@ -75,7 +75,15 @@ fn fallback(i: usize) -> &'static str {
 fn words(data: &crate::gamedata::Data, i: usize) -> String {
     use crate::bindings::{hint, Act};
     let raw = data.ui_text(&format!("HUD.m_InteractionTexts[{i}]")).map(|s| s.as_str()).unwrap_or(fallback(i));
-    let mut out = raw.replace("`GBA_Primary`", crate::bindings::LEFT_MOUSE).replace("`GBA_Secondary`", crate::bindings::RIGHT_MOUSE);
+    // (a pad in use: the pad's own words where the tweak has them, `m_InteractionTexts_Gamepad`:
+    // the adrenaline kill's lean button, the keyhole's B)
+    let raw = if crate::pad::using() { data.ui_text(&format!("HUD.m_InteractionTexts_Gamepad[{i}]")).map(|s| s.as_str()).filter(|s| !s.trim().is_empty()).unwrap_or(raw) } else { raw };
+    let pad = |b: &str| format!("[{}{b}]", crate::pad::MARK);
+    let mut out = raw.replace("`GBA_Primary`", &crate::bindings::left_mouse()).replace("`GBA_Secondary`", &crate::bindings::right_mouse());
+    out = out.replace("`GBA_Lean_Gamepad`", &hint(Act::LeanLeft));
+    for b in ["A", "B", "X", "Y"] {
+        out = out.replace(&format!("`KEY_{b}`"), &pad(b));
+    }
     for (k, a) in [("`GBA_Use`", Act::Use), ("`GBA_Block`", Act::Block), ("`GBA_Jump`", Act::Jump), ("`GBA_Zoom`", Act::Zoom)] {
         if out.contains(k) {
             out = out.replace(k, &hint(a));
