@@ -51,7 +51,7 @@ fn update_window(
     mut timelines: ResMut<MovieTimelines>,
     window: Query<&Window, With<PrimaryWindow>>,
     hud: Query<Entity, With<crate::hud::HudRoot>>,
-    focus: Res<crate::interact::InteractFocus>,
+    (focus, quick): (Res<crate::interact::InteractFocus>, Option<Res<crate::quickpotion::QuickPotion>>),
     settings: Res<crate::settings::Settings>,
     mut roots: Query<(&mut Node, &mut Visibility), (With<WindowRoot>, Without<Title>, Without<Lines>)>,
     mut clip: Query<&mut FlashClip, With<WindowClip>>,
@@ -80,7 +80,8 @@ fn update_window(
             return;
         }
     };
-    let open = focus.0 && !focus.2.is_empty() && settings.interactions;
+    // (held back while the quick elixir prompt is up: `m_bBlockInteractionWindow`)
+    let open = focus.0 && !focus.2.is_empty() && settings.interactions && !quick.as_ref().is_some_and(|q| q.shown());
     if let Ok((mut n, mut v)) = roots.get_mut(root) {
         let p = off + AT * s;
         n.left = Val::Px(p.x);

@@ -2,9 +2,9 @@
 //! `PlayerGauges`): the left hand's power or weapon in its ring over ink splashes, with the
 //! health and mana shards beside it (tilted 15 and 30 degrees). Each shard fills from its
 //! base to the amount (`mask_mc` scaled, tweened 0.45 s), a pointer marks the level, and a
-//! glow pulses behind it (15-40% over 2.25 s; 35-75% over 0.55 s once low: under the HUD
-//! tweak's `m_LowHealthThreshold` 30%, `m_LowManaThreshold` 19%). Weapons and gadgets show
-//! their ammunition beside the icon.
+//! glow pulses behind it (15-40% over 2.25 s; 35-75% over 0.55 s once low: at most the HUD
+//! tweak's `m_LowHealthThreshold` 30 and `m_LowManaThreshold` 19, points of health and mana as
+//! the HUD compares them, 0x00B97D40). Weapons and gadgets show their ammunition beside the icon.
 //!
 //! As roshan's r614/blink research read the movie's `PlayerGauges` and its native caller: what
 //! will come back by itself shows beyond the amount at half brightness (`maskRegen_mc`: health to
@@ -58,8 +58,11 @@ impl UiMaterial for BarFill {
 /// `masterHUD_mc` on the 1280x720 stage, as the movie places it.
 const MASTER: Vec2 = crate::hud::MASTER_AT;
 const FILL_TIME: f32 = 0.45;
-pub(crate) const LOW_HEALTH: f32 = 0.30;
-pub(crate) const LOW_MANA: f32 = 0.19;
+/// Corvo low on health and on mana, as the HUD has it (`m_bPlayerLowOnHealth`: his health at most
+/// `m_LowHealthThreshold` points; his mana at most `m_LowManaThreshold`).
+pub(crate) fn low(data: &crate::gamedata::Data, stats: &PlayerStats) -> (bool, bool) {
+    (stats.health <= data.pawn("hud.m_LowHealthThreshold", 30.0), stats.mana <= data.pawn("hud.m_LowManaThreshold", 19.0))
+}
 
 /// A meter: where it stands (from `masterHUD_mc`), its turn, its bitmaps (glow, back, fill,
 /// outline, pointer) with their places (top-left and size, the meter's own frame, up is -y),
@@ -404,8 +407,9 @@ fn update_gauges(
         }
     }
     // the glows: back and forth between their alphas (faster and brighter once low)
-    let glow_alpha = |k: usize, t: f32, level: f32| {
-        let low = level < if k == 0 { LOW_HEALTH } else { LOW_MANA };
+    let lows = low(&data, &stats);
+    let glow_alpha = |k: usize, t: f32, _level: f32| {
+        let low = if k == 0 { lows.0 } else { lows.1 };
         let (secs, lo, hi) = if low { (0.55, 0.35, 0.75) } else { (2.25, 0.15, 0.40) };
         let phase = (t / secs) % 2.0;
         let x = if phase < 1.0 { phase } else { 2.0 - phase };

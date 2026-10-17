@@ -8470,6 +8470,10 @@ fn inline_imports(movie: &swf::Movie, tl: &mut crate::format::Timelines, root: &
             if let Some(b) = st.bounds.get(&c) {
                 tl.bounds.insert(new, *b);
             }
+            // its text fields too (the power wheel's D-pad key label, `_keyPC_mc.txt`)
+            if let Some(t) = st.texts.get(&c) {
+                tl.texts.insert(new, t.clone());
+            }
         }
         n += 1;
     }

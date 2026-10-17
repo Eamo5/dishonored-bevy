@@ -1612,6 +1612,18 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
     if let Some(v) = game.find_export("Twk_InGameUI.Twk_GFxMoviePlayerHUD").and_then(|i| props(&game, i)).and_then(|p| p.float("m_fCrosshairInterpolationSpeed")) {
         d.pawn.insert("hud.m_fCrosshairInterpolationSpeed".into(), v);
     }
+    // the HUD's low health and mana (`m_LowHealthThreshold`, `m_LowManaThreshold`: health and
+    // mana points, as the HUD compares them) and whether the gauges then stay
+    // (`m_bAlwaysShowPlayerInfoWhenLowOn*`), the tweak's over the class default's
+    let hud: Vec<Props> = ["Twk_InGameUI.Twk_GFxMoviePlayerHUD", "Default__DisTweaks_GFxMoviePlayerHUD"].iter().filter_map(|p| game.find_export(p).and_then(|i| props(&game, i))).collect();
+    for n in ["m_LowHealthThreshold", "m_LowManaThreshold"] {
+        if let Some(v) = hud.iter().find_map(|p| p.int(n)) {
+            d.pawn.insert(format!("hud.{n}"), v as f32);
+        }
+    }
+    for n in ["m_bAlwaysShowPlayerInfoWhenLowOnHealth", "m_bAlwaysShowPlayerInfoWhenLowOnMana"] {
+        d.pawn.insert(format!("hud.{n}"), hud.iter().find_map(|p| p.bool(n)).unwrap_or(false) as u8 as f32);
+    }
     let input: Vec<Props> = ["Twk_Pawn_DefaultPlayer.Twk_Pawn_PlayerInput", "Default__DisTweaks_PlayerInput"].iter().filter_map(|p| game.find_export(p).and_then(|i| props(&game, i))).collect();
     for n in ["m_fFrictionMult_Horiz", "m_fFrictionMult_Vert"] {
         if let Some(v) = input.iter().find_map(|p| p.float(n)) {

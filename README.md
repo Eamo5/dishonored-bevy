@@ -1001,6 +1001,18 @@ are in the settings file, `pad_binding_set` 0-3):
   side, health right with B and mana left with X, the buttons that drink them in the wheel; the
   elixir tutorials say so (the console's `m_AcquiredElixirTutorialMessage`,
   `m_UseElixirTutorialMessage`, not the PC's `_PC` ones).
+- **The quick elixir prompt** (`quickpotion.rs`, the power wheel movie's `quickPotion_mc` and
+  its `QuickPotionMenu`): low on health with a health elixir to hand (not as another body, with
+  the wheel shut and the HUD up), the HUD's tick opens it (decoded from the executable,
+  0x00B9F6E0: the wheel's mode 4) where the shortcuts stand: the D-pad with the elixir on its
+  right slot and that arrow red, or on PC the health elixir's key in a box
+  (`QuickPotion_DPAD.SetIcon`). It fades in, the elixir comes out (Back.easeOut 0.25 s) and
+  pulses (its circle to 75 % and 20 %, its glow to 20 %, every 0.75 s). The pad's D-pad right
+  or the key drinks: the elixir's `consume` flash, its circle swelling as it fades, the whole
+  fading 0.35 s on; healed, or out of elixirs, it fades. While it is up the interaction window
+  waits (`m_bBlockInteractionWindow`). Its sound, `UI_H_quickPotion`, is an empty event in the
+  original's bank, so it opens silently there too. (Imported library symbols now bring their
+  text fields with them, which this key box needs.)
 - **The crosshair** (`crosshair.rs`, the HUD movie's crosshair symbols): the original dot,
   and over something to use the HUD tweak's `m_InteractionCrosshairSettings` symbol by
   `eCrossHairStatus` (a hand to take, a note with an eye to read, a hand to carry, a padlock
@@ -1147,8 +1159,10 @@ are in the settings file, `pad_binding_set` 0-3):
   `PlayerGauges` class): the top left as the original draws it — the health and mana shards
   (tilted 15 and 30 degrees) over their ink splashes, each filling from its base to the
   amount (tweened 0.45 s) with a pointer at the level and a glow that pulses (15-40% over
-  2.25 s, 35-75% over 0.55 s once under the HUD tweak's `m_LowHealthThreshold` 30% /
-  `m_LowManaThreshold` 19%), and the left hand's power or weapon (`itemIcons`) beside them
+  2.25 s, 35-75% over 0.55 s once low: at most the HUD tweak's `m_LowHealthThreshold` 30 /
+  `m_LowManaThreshold` 19, points of health and mana as the HUD's tick compares them, decoded
+  from the executable, 0x00B97D40; the gauges then stay on screen,
+  `m_bAlwaysShowPlayerInfoWhenLowOnHealth` / `_Mana`), and the left hand's power or weapon (`itemIcons`) beside them
   with its ammunition (a small UI material stands in for the shards' `mask_mc`). As roshan's
   r614/blink research read the movie and its native caller, what will come back by itself
   shows beyond the amount at half brightness (`maskRegen_mc`: health up to its regeneration's

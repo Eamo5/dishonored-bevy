@@ -881,6 +881,7 @@ fn select_power(
     (possession, choice, paused): (Res<crate::possession::Possession>, Res<crate::choice::Choice>, Res<crate::hud::Paused>),
     data: Res<Data>,
     (mut slots, wheel, time, pad): (ResMut<Shortcuts>, Res<crate::wheel::Wheel>, Res<Time>, Option<Res<crate::pad::Pad>>),
+    quick: Option<Res<crate::quickpotion::QuickPotion>>,
 ) {
     // the number keys answer a choice on screen
     if paused.0 || possession.host.is_some() || choice.pending.is_some() {
@@ -929,6 +930,10 @@ fn select_power(
     // it); else the slot shown on the D-pad's display while held, taken as it's let go
     if let Some(pad) = pad.as_deref() {
         for i in 0..4 {
+            // (the right is the quick elixir prompt's while it is up)
+            if i == 3 && quick.as_ref().is_some_and(|q| q.takes_dpad_right()) {
+                continue;
+            }
             if pad.dpad_pressed[i] {
                 if let Some(p) = wheel.hovered() {
                     let on = slots.assign_pad(i, p);

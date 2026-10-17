@@ -106,12 +106,12 @@ pub(crate) struct HudPart(pub(crate) &'static str);
 fn hud_parts(
     ui: Option<Res<crate::kismet::ScriptUi>>,
     settings: Res<crate::settings::Settings>,
-    (time, stats): (Res<Time<Real>>, Res<crate::gameplay::PlayerStats>),
+    (time, stats, data): (Res<Time<Real>>, Res<crate::gameplay::PlayerStats>, Res<crate::gamedata::Data>),
     mut seen: Local<(f32, f32, f32)>,
     mut parts: Query<(&HudPart, &mut Visibility)>,
 ) {
-    // (contextual: 4 s after health or mana last changed, and while under the HUD tweak's
-    // low thresholds)
+    // (contextual: 4 s after health or mana last changed, and while low if the HUD tweak keeps
+    // them then: `m_bAlwaysShowPlayerInfoWhenLowOnHealth`, `_Mana`, 0x00B8CD40)
     let (h, m) = (stats.health / stats.max_health.max(1.0), stats.mana / stats.max_mana.max(1.0));
     if (h - seen.0).abs() > 1e-4 || (m - seen.1).abs() > 1e-4 {
         *seen = (h, m, 0.0);
@@ -119,7 +119,10 @@ fn hud_parts(
     seen.2 += time.delta_secs();
     let gauges = match settings.hud_gauges {
         0 => false,
-        1 => seen.2 < 8.0 || h < crate::gauges::LOW_HEALTH || m < crate::gauges::LOW_MANA,
+        1 => {
+            let (lh, lm) = crate::gauges::low(&data, &stats);
+            seen.2 < 8.0 || (lh && data.pawn("hud.m_bAlwaysShowPlayerInfoWhenLowOnHealth", 1.0) > 0.0) || (lm && data.pawn("hud.m_bAlwaysShowPlayerInfoWhenLowOnMana", 1.0) > 0.0)
+        }
         _ => true,
     };
     for (p, mut v) in &mut parts {
