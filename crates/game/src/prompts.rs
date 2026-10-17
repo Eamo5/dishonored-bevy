@@ -44,8 +44,10 @@ const SPYGLASS_EXIT: usize = 17;
 const SPYGLASS_ZOOM: usize = 18;
 const CANCEL_COOKING: usize = 20;
 const END_BEND_TIME: usize = 21;
+const CANCEL_BLINK: usize = 22;
 const END_DARK_VISION: usize = 23;
 const END_POSSESS: usize = 25;
+const CANCEL_SUMMON: usize = 38;
 
 /// The words when the tweak's are missing (`Twk_InGameUI.int`).
 fn fallback(i: usize) -> &'static str {
@@ -64,6 +66,8 @@ fn fallback(i: usize) -> &'static str {
         SPYGLASS_EXIT => "`GBA_Zoom` Exit Spyglass",
         SPYGLASS_ZOOM => "`GBA_Use` Change zoom level",
         CANCEL_COOKING => "`GBA_Use` Cancel Cooking",
+        CANCEL_BLINK => "`GBA_Use` Cancel Blink",
+        CANCEL_SUMMON => "`GBA_Use` Cancel Summon",
         END_BEND_TIME => "`GBA_Secondary` End Bend Time",
         END_DARK_VISION => "`GBA_Secondary` End Dark Vision",
         END_POSSESS => "`GBA_Secondary` End Possess",
@@ -357,6 +361,14 @@ fn wanted_context(
     }
     if powers.cooking.is_some() {
         out.push(CANCEL_COOKING);
+    }
+    // a Blink or a summoning aimed: Use gives it up
+    if powers.aiming && powers.blink.is_none() {
+        match powers.selected {
+            Power::Blink => out.push(CANCEL_BLINK),
+            Power::SummonAssassin => out.push(CANCEL_SUMMON),
+            _ => {}
+        }
     }
     if possessing {
         out.push(END_POSSESS);

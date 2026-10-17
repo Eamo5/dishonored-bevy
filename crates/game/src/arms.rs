@@ -238,8 +238,11 @@ struct ArmClips {
     /// the crossbow's shot reloading as it goes, with its reload upgrade
     /// (`m_FireReloadFastCrossbow`: `Crossbow_Fire_FastReload`, at 1.5)
     crossbow_fire_fast: Option<ClipId>,
-    /// Daud's: summoning, Void Gaze opening, his wristbow raised
+    /// Daud's: summoning (aimed: `Powers_Cast_SummonAssassin_In`, `_Loop`; let go `_Out`, given
+    /// up `_Cancel`), Void Gaze opening, his wristbow raised
     summon: Option<ClipId>,
+    summon_aim: [Option<ClipId>; 2],
+    summon_cancel: Option<ClipId>,
     dark_vision: Option<ClipId>,
     wristbow_idle: Option<ClipId>,
     pistol_fire: Option<ClipId>,
@@ -372,6 +375,8 @@ impl ArmClips {
             crossbow_fire: lib.find("Crossbow_Fire").or_else(|| lib.find("Wristbow_Fire")),
             crossbow_fire_fast: lib.find("Crossbow_Fire_FastReload"),
             summon: lib.find("Powers_Cast_SummonAssassin_Out"),
+            summon_aim: [lib.find("Powers_Cast_SummonAssassin_In"), lib.find("Powers_Cast_SummonAssassin_Loop")],
+            summon_cancel: lib.find("Powers_Cast_SummonAssassin_Cancel"),
             dark_vision: lib.find("Powers_Cast_DarkVision_In"),
             wristbow_idle: lib.find("Wristbow_Idle"),
             pistol_fire: lib.find("Pistol_Fire"),
@@ -412,8 +417,9 @@ struct ArmsAnim {
     slash: Option<u8>,
     bounce_seen: u32,
     blocking: bool,
-    /// aiming Blink (as last seen)
+    /// aiming Blink or a summoning (as last seen); the summoning's cancels seen
     blink_aiming: bool,
+    summon_cancels: u32,
     /// a grenade cooking (as last seen)
     cooking: bool,
     choking: bool,
@@ -736,6 +742,7 @@ fn spawn_arms(
                 bounce_seen: 0,
                 blocking: false,
                 blink_aiming: false,
+                summon_cancels: 0,
                 cooking: false,
                 choking: false,
                 choke_phase: 0,
@@ -836,6 +843,7 @@ fn animate_arms(
     (swim, mut carry, peek, cine, scene_arms): (Res<crate::swim::Swim>, ResMut<crate::carry::Carry>, Res<crate::keyhole::Peek>, Res<crate::script_world::Cinematic>, Res<crate::matinee::SceneArms>),
     (versus, slide, edge, zoom): (Res<crate::combat::Versus>, Res<crate::player::Slide>, Res<crate::player::MantleEdge>, Res<crate::zoom::Zoom>),
     mut death_fall: ResMut<DeathFall>,
+    summon_aim: Option<Res<crate::summon::SummonAim>>,
 ) {
     let (Ok((p, sword, choking, grabbed)), Ok((mut anim, mut st, mut vis))) = (player.single(), arms.single_mut()) else { return };
     let st = &mut *st;
@@ -1499,10 +1507,17 @@ fn animate_arms(
         }
     }
     let leaping = left_jump.iter().flatten().any(|j| anim.overlay_is(Some(*j))) && !anim.overlay_finished();
-    // aiming Blink: the hand comes up (`Powers_Cast_Blink_In`) and holds (`_Loop`) until it's
-    // let go and the cast plays
-    let [aim_in, aim_loop] = c.blink_aim;
-    let aiming = powers.aiming && powers.selected == Power::Blink && aim_loop.is_some();
+    // aiming Blink (or Daud's summoning): the hand comes up (`Powers_Cast_Blink_In`) and holds
+    // (`_Loop`) until it's let go and the cast plays; a summoning given up plays its `_Cancel`
+    let summoning = powers.selected == Power::SummonAssassin;
+    let [aim_in, aim_loop] = if summoning { c.summon_aim } else { c.blink_aim };
+    let aiming = powers.aiming && (summoning || powers.selected == Power::Blink) && aim_loop.is_some();
+    if let Some(a) = summon_aim.as_ref().filter(|a| a.cancel_seq != st.summon_cancels) {
+        st.summon_cancels = a.cancel_seq;
+        if let Some(cl) = c.summon_cancel {
+            anim.restart_overlay(cl, false, 1.0, 0.1);
+        }
+    }
     if aiming {
         if !st.blink_aiming {
             if let Some(cl) = aim_in.or(aim_loop) {
@@ -1563,7 +1578,7 @@ fn animate_arms(
     }
     let aiming = aiming || cooking || raised;
     let spyglass_busy = c.spyglass.iter().flatten().any(|cl| anim.overlay_is(*cl)) || anim.overlay_is(c.pistol_fire_accurate);
-    if !aiming && !leaping && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || c.left_equip.iter().flatten().any(|e| anim.overlay_is(*e)) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.crossbow_fire_fast) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.grenade_reload) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.dark_vision) || anim.overlay_is(c.out_of_mana) || c.left_slash.iter().flatten().any(|s| anim.overlay_is(*s)) || spyglass_busy)) {
+    if !aiming && !leaping && !(reloading && in_reload) && (anim.overlay_finished() || !(in_reload || anim.overlay_is(c.blink) || anim.overlay_is(c.windblast) || anim.overlay_is(c.bend_time) || anim.overlay_is(c.switch) || c.left_equip.iter().flatten().any(|e| anim.overlay_is(*e)) || anim.overlay_is(c.crossbow_fire) || anim.overlay_is(c.crossbow_fire_fast) || anim.overlay_is(c.pistol_fire) || anim.overlay_is(c.possess) || anim.overlay_is(c.swarm) || anim.overlay_is(c.grenade_throw) || anim.overlay_is(c.grenade_reload) || anim.overlay_is(c.razor_place) || anim.overlay_is(c.summon) || anim.overlay_is(c.summon_cancel) || anim.overlay_is(c.dark_vision) || anim.overlay_is(c.out_of_mana) || c.left_slash.iter().flatten().any(|s| anim.overlay_is(*s)) || spyglass_busy)) {
         match idle {
             Some(cl) if !st.choking && !st.blocking => {
                 let leap = loco.is_some() && loco == c.left_loco[set][2];

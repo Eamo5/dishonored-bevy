@@ -1116,12 +1116,12 @@ fn use_power(
         MessageWriter<crate::killcam::StartKillCam>,
         MessageWriter<crate::decals::SpawnDecal>,
     ),
-    (mut aim, held, paused, mut summon, nav, mut fx, muzzles, mut tagged): (
+    (mut aim, held, paused, keys, bind, mut fx, muzzles, mut tagged): (
         ResMut<crate::aim::Aim>,
         Res<crate::props::Held>,
         Res<crate::hud::Paused>,
-        MessageWriter<crate::summon::Summon>,
-        Option<Res<crate::navmesh::NavGrid>>,
+        Res<ButtonInput<KeyCode>>,
+        Res<crate::bindings::Bindings>,
         MessageWriter<crate::particles::SpawnEffect>,
         Query<(Entity, &GlobalTransform, &crate::arms::Muzzle)>,
         Query<(&crate::particles::EffectTag, &mut crate::particles::ParticleEmitter)>,
@@ -1193,6 +1193,16 @@ fn use_power(
     } else if sel == Power::Blink && can_act && mouse.just_pressed(MouseButton::Right) && stats.mana < Power::Blink.mana(&data) {
         out_of_mana(&mut powers, &mut sfx, &mut msgs);
     }
+    // Use while it is aimed: "Cancel Blink" (`m_InteractionTexts[22]`): the aim ends with its
+    // fizzle (`m_pFizzleSoundEvent`, Daud's `Snd_Pwr_Transversal_Cancel`) and Blink waits its
+    // cooldown as after a move; the hand held on does nothing more
+    if powers.aiming && sel == Power::Blink && keys.just_pressed(bind.key(crate::bindings::Act::Use)) {
+        powers.aiming = false;
+        powers.blink_target = None;
+        powers.swallow = true;
+        powers.blink_lock = data.active("Blink").and_then(|a| a.params.get("m_fCooldownTime")).copied().unwrap_or(1.0) + 0.27;
+        sfx.write(PostEvent::named(data.power_sound("Blink", level, "m_pFizzleSoundEvent").unwrap_or("Snd_Power_Empty"), None));
+    }
     if let Ok((me, mut mt, mut mv)) = marker.single_mut() {
         // the marker's effect for the landing (the ground, a ledge, the air), carried by it
         let want = match (powers.aiming && sel == Power::Blink, powers.blink_target) {
@@ -1257,7 +1267,7 @@ fn use_power(
         return;
     }
     // the Heart's whispers are its own (heart.rs)
-    if !can_act || !mouse.just_pressed(MouseButton::Right) || powers.cooldown > 0.0 || matches!(sel, Power::Empty | Power::Blink | Power::Heart) {
+    if !can_act || !mouse.just_pressed(MouseButton::Right) || powers.cooldown > 0.0 || matches!(sel, Power::Empty | Power::Blink | Power::Heart | Power::SummonAssassin) {
         return;
     }
     // toggles end for free
@@ -1290,72 +1300,8 @@ fn use_power(
     }
     let mut cast = true;
     match sel {
-        Power::Empty | Power::Blink | Power::Heart => {}
-        Power::SummonAssassin => {
-            // where (`m_fTargetingRange`): an enemy aimed at (within `m_fMaxAngleToTargetNPC_Deg`,
-            // in sight) is gone for from `m_fDistFromTarget` before it; else the ground aimed at
-            // (`m_fTargetingPullback` short of it), or the floor below where a wall stops the aim
-            let param = |k: &str, d: f32| data.active("SummonAssassin").and_then(|a| a.params.get(k)).copied().unwrap_or(d);
-            let range = param("m_fTargetingRange", 2000.0) * UU;
-            let cone = param("m_fMaxAngleToTargetNPC_Deg", 10.0).to_radians();
-            let walls = QueryFilter::default().exclude_collider(pe).exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
-            let ground = |q: Vec3| ctx.cast_ray(q + Vec3::Y * 1.0, Vec3::NEG_Y, 30.0, true, walls).map(|(_, toi)| q + Vec3::Y * (1.0 - toi));
-            let target = npcs
-                .iter()
-                .filter(|(_, _, n)| !n.is_down() && n.hostile())
-                .filter_map(|(e, nt, _)| {
-                    // (aimed at anywhere from its feet to its head)
-                    let base = nt.translation - Vec3::Y * crate::npc::NPC_CENTER;
-                    let along = (base - eye).dot(dir).max(0.0);
-                    let near = (eye + dir * along).y.clamp(base.y, base.y + 1.8);
-                    let to = base.with_y(near) - eye;
-                    let d = to.length();
-                    (d < range && to.normalize_or_zero().angle_between(dir) < cone && ctx.cast_ray(eye, to / d.max(1e-3), (d - 0.4).max(0.0), true, walls).is_none()).then_some((e, nt.translation, d))
-                })
-                .min_by(|a, b| a.2.total_cmp(&b.2));
-            // (only where one can walk: `m_TargetOffNavMeshMessage`)
-            let walkable = |p: &Vec3| nav.as_ref().is_none_or(|g| g.on_mesh(*p));
-            let at = match target {
-                // (before the enemy, Daud's side of it; nearer it where that is no floor)
-                Some((_, tpos, _)) => {
-                    let back = (pt.translation - tpos).with_y(0.0).normalize_or(Vec3::Z);
-                    let far = param("m_fDistFromTarget", 350.0) * UU;
-                    [1.0, 0.75, 0.5, 0.3].iter().find_map(|k| ground(tpos.with_y(tpos.y - crate::npc::NPC_CENTER + 0.5) + back * far * k).filter(walkable))
-                }
-                // (the ground aimed at; a wall's foot; aimed at nothing in reach, the ground
-                // below the end of it: `m_fTargetingGroundCheckDistance`)
-                None => match ctx.cast_ray_and_get_normal(eye, dir, range, true, walls) {
-                    Some((_, h)) => {
-                        let q = h.point - dir * param("m_fTargetingPullback", 80.0) * UU;
-                        if h.normal.y > 0.5 { Some(q) } else { ground(q) }
-                    }
-                    None => {
-                        let q = eye + dir * range;
-                        let down = (param("m_fTargetingGroundCheckDistance", 50000.0) * UU).min(80.0);
-                        ctx.cast_ray(q, Vec3::NEG_Y, down, true, walls).map(|(_, toi)| q - Vec3::Y * toi)
-                    }
-                }
-                .filter(walkable),
-            };
-            if std::env::var_os("DH_SUMMON_LOG").is_some() {
-                let feet = pt.translation - Vec3::Y * crate::npc::NPC_CENTER;
-                let hit = ctx.cast_ray_and_get_normal(eye, dir, range, true, walls).map(|(_, h)| (h.point, h.normal));
-                info!("summon: aimed {:?}, at {:?}; Daud's feet {feet:.1} on the mesh {}, the aim hits {hit:?} (ground {:?}); {} enemies about", target.map(|t| t.1), at, walkable(&feet), hit.and_then(|h| ground(h.0 - dir * 0.8)).map(|g| (g, walkable(&g))), npcs.iter().filter(|(_, _, n)| !n.is_down() && n.hostile()).count());
-            }
-            match at {
-                Some(at) => {
-                    stats.spend_mana(cost, &attrs);
-                    summon.write(crate::summon::Summon { at, target: target.map(|t| t.0), level });
-                    sfx.write(PostEvent::named(data.power_sound("SummonAssassin", level, "m_pTargetingSuccessSoundEvent").unwrap_or("Snd_Pwr_Summon_Out"), None));
-                    powers.cooldown = 1.0;
-                }
-                None => {
-                    msgs.push("You cannot summon there.");
-                    sfx.write(PostEvent::named(data.power_sound("SummonAssassin", level, "m_pTargetingFailSoundEvent").unwrap_or("Snd_Pwr_Summon_Fail"), None));
-                    cast = false;
-                }
-            }
-        }
+        // (Summon Assassin is aimed and let go: summon.rs)
+        Power::Empty | Power::Blink | Power::Heart | Power::SummonAssassin => {}
         Power::DarkVision => {
             stats.spend_mana(cost, &attrs);
             powers.dark_vision = true;
@@ -1788,7 +1734,7 @@ fn windblast_gusts(
     powers.gusts.retain(|g| (g.targets.as_ref().is_none_or(|t| !t.is_empty()) || !g.impacts.is_empty()) && g.t < 3.0);
 }
 
-fn out_of_mana(powers: &mut Powers, sfx: &mut MessageWriter<PostEvent>, msgs: &mut HudMessages) {
+pub(crate) fn out_of_mana(powers: &mut Powers, sfx: &mut MessageWriter<PostEvent>, msgs: &mut HudMessages) {
     msgs.push("Not enough mana");
     sfx.write(PostEvent::named("Snd_Power_Empty", None));
     powers.cooldown = 0.4;

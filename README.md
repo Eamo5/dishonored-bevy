@@ -1052,7 +1052,10 @@ are in the settings file, `pad_binding_set` 0-3):
   holds or is in the middle of (`[F] Drop` a body, `[F] Drop` / `[Left Mouse Button] Throw` a prop,
   `[F] Drop` / `[Space Bar] Jump off` a chain, `[F] Exit Keyhole`, `Mash [Left Mouse Button] !`
   in a weeper's grip, `[Left Alt] Exit Spyglass`, `[Right Mouse Button] End Bend Time`,
-  `End Dark Vision`, `End Possess`) sliding in under its rule. The words are the HUD
+  `End Dark Vision`, `End Possess`, and with a Blink or Daud's summoning aimed
+  `[F] Cancel Blink`, `[F] Cancel Summon`) sliding in under its rule. Use gives the aim up as
+  the words say: Blink fizzles (`m_pFizzleSoundEvent`, Daud's `Snd_Pwr_Transversal_Cancel`;
+  the component's cancel ends its targeting in state 3, 0x00BFAB80) and waits its cooldown. The words are the HUD
   tweak's `m_InteractionTexts` by `EDisUIInteraction`, cooked from `Twk_InGameUI.int`.
 - **The tutorial window** (`tutwindow.rs`, the HUD movie's `TutorialWindow` at the bottom
   left): the first new rune, bone charm and mission clue bring up the HUD tweak's hint
@@ -1953,12 +1956,24 @@ are in the settings file, `pad_binding_set` 0-3):
     Void Gaze is Dark Vision: level 1 shows only the runes and bone charms, level 2 the beings
     through walls, their sight, the items, the security and the sounds made. Bend Time is his
     own. Summon Assassin (`DLC06_Pwr_Assassummon`) sends one of his assassins (the level's
-    `m_pAssassinTweaks`: novice, then master), cooked as spawners of the DLC's maps. Aimed at an
-    enemy in sight, the assassin appears 3.5 m before it on Daud's side and fights it.
-    Otherwise he appears on the floor aimed at, or below a wall, or at the end of the reach.
-    Only walkable places are allowed ("You cannot summon there."). He makes a threatening noise
-    and goes after 5 s out of a fight; one at a time; with Arcane Bond II he moves through bent
-    time. His passives (Shadow Kill, Celerity, Vitality, Blood Thirsty, Arcane Bond), his
+    `m_pAssassinTweaks`: novice, then master), cooked as spawners of the DLC's maps. It is held
+    to aim and let go to summon, as its component does it (decoded from the executable,
+    `UDisDLC06ActivePowerComponent_SummonAssassin`: the spot 0x00CFA380, the markers 0x00CF3FA0
+    and 0x00CF4070, the release 0x00CFA1E0). The aim goes 20 m; stopped within 3 m it looks
+    again from the eye moved 30 units up, down, left and right for a reach of 6 m. An enemy it
+    meets, or one within 10 degrees in sight, is the target: the assassin goes 3.5 m behind it
+    by its own facing, to the navmesh there, and goes for it. Otherwise the aim is drawn back
+    0.8 m, and he stands on the ground below it if that is navmesh, he fits there, and it is
+    not within 2 m of Daud. The markers show it: the enemy's, or the air's at the aim and the
+    ground's under it (`m_pTargetingEffect_Air_Template`, `_Ground_`, `_NPC_`), or the refused
+    one with "You cannot summon there." held while it stays so. The aim starts with
+    `Snd_Pwr_Summon_Start` and the arms' `Powers_Cast_SummonAssassin_In` / `_Loop`; let go on a
+    spot, `_Out` and `Snd_Pwr_Summon_Out`; let go nowhere, put away, or given up with Use
+    (`[F] Cancel Summon`), `_Cancel` and `Snd_Pwr_Summon_Fail`. The first assassin about starts
+    `Snd_Pwr_Summon_Active`, the last gone stops it. The sounds are the DLC's own banks for
+    Daud's kit (his powers, gadgets, wristbow and hand, his assassins' blades, its interface),
+    cooked ahead of the rest of the DLC. He makes a threatening noise and goes after 5 s out
+    of a fight; one at a time; with Arcane Bond II he moves through bent time. His passives (Shadow Kill, Celerity, Vitality, Blood Thirsty, Arcane Bond), his
     attributes and his pawn's numbers are his own.
   - *Arms*: his own first-person mesh (`DLC06_Skm_Player_Daud`) with his clips over Corvo's
     (summoning, Void Gaze, the wristbow raised and fired), his sword, and the wristbow on his

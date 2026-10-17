@@ -495,10 +495,16 @@ impl Wwise {
             f.sort();
             f
         };
-        // the game's banks, then the installed DLC's that are played (Dunwall City Trials)
+        // the game's banks, then the installed DLC's that are played (Dunwall City Trials), and
+        // of The Knife of Dunwall those of Daud's own kit
         let mut files = bank_files(cooked);
-        for dir in crate::resolver::dlc_dirs(cooked).into_iter().filter(|d| d.file_name().is_some_and(|n| AUDIO_DLC.iter().any(|a| n.eq_ignore_ascii_case(a)))) {
-            files.extend(bank_files(&dir));
+        for dir in crate::resolver::dlc_dirs(cooked) {
+            let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            if AUDIO_DLC.iter().any(|a| name.eq_ignore_ascii_case(a)) {
+                files.extend(bank_files(&dir));
+            } else if name.eq_ignore_ascii_case("DLC06") {
+                files.extend(bank_files(&dir).into_iter().filter(|p| p.file_stem().is_some_and(|s| DAUD_BANKS.iter().any(|b| s.to_string_lossy().eq_ignore_ascii_case(b)))));
+            }
         }
         let mut w = Wwise { files: Vec::new(), media: HashMap::new(), nodes: HashMap::new(), banks: HashMap::new() };
         for path in files {
@@ -948,6 +954,17 @@ pub fn convert_wem(wem: &[u8]) -> Result<(Vec<u8>, &'static str)> {
 /// Cook every event and its media into `root/audio`.
 /// The DLC whose banks the audio cook takes (those whose maps are cooked).
 const AUDIO_DLC: &[&str] = &["DLC05"];
+/// The Knife of Dunwall's banks for Daud's kit (his powers, gadgets, wristbow, hand and his
+/// assassins' blades, the DLC's interface): the rest of the DLC waits for its maps' cook.
+const DAUD_BANKS: &[&str] = &[
+    "Bank_DLC06_Powers",
+    "Bank_DLC06_Weapons_Chokedust",
+    "Bank_DLC06_Weapons_ArcMine",
+    "Bank_DLC06_Weapons_Wristbow",
+    "Bank_DLC06_UI",
+    "Bank_DLC06_Player_Hand_Cut",
+    "Bank_DLC06_AI_Assassin_Sword",
+];
 
 pub fn cook(cooked: &Path, root: &Path, progress: &(dyn Fn(f32, &str) + Sync)) -> Result<AudioIndex> {
     let w = Wwise::load(cooked)?;

@@ -2617,7 +2617,15 @@ impl<'a> Cooker<'a> {
             self.spawner_keys.push((String::new(), 0));
             self.stealable_keys.push(None);
         }
-        for (name, field) in [("summon_trigger", "m_pAppearanceEffect_Template"), ("summon_target", "m_pTargetingEffect_Ground_Template")] {
+        // (the summoning's markers: where he appears, the ground's, the aim's over it, on an
+        // enemy, and refused)
+        for (name, field) in [
+            ("summon_trigger", "m_pAppearanceEffect_Template"),
+            ("summon_target", "m_pTargetingEffect_Ground_Template"),
+            ("summon_target_air", "m_pTargetingEffect_Air_Template"),
+            ("summon_target_npc", "m_pTargetingEffect_NPC_Template"),
+            ("summon_target_null", "m_pTargetingEffect_Disallowed_Template"),
+        ] {
             if let Some(id) = ch.obj(self.assets, field).and_then(|o| self.particle_system(&o)) {
                 self.scene.effects.push((name.to_string(), id));
             }
