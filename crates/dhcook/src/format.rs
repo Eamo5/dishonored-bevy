@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 154;
+pub const SCENE_VERSION: u32 = 156;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -73,6 +73,10 @@ pub struct Scene {
     /// each NPC faction's enemies (`DisTweaks_Faction.m_EnemyFactions`)
     #[serde(default)]
     pub factions: std::collections::BTreeMap<String, Vec<String>>,
+    /// and its allies (`m_AlliedFactions`): those allied to Corvo's are his friends, the rest
+    /// that aren't his enemies neutral (the aim assist passes over his friends)
+    #[serde(default)]
+    pub allies: std::collections::BTreeMap<String, Vec<String>>,
     /// loadouts the level's scripts apply (`DisSeqAct_ApplyPlayerLoadout`)
     #[serde(default)]
     pub loadouts: Vec<LoadoutDef>,
@@ -579,6 +583,10 @@ pub enum KHookPoll {
     /// the player staying within `radius` (m, on the ground plane) for `min`..`max` seconds
     /// (`DisConv_Hook_PlayerLoiter`)
     Loiter { radius: f32, min: f32, max: f32 },
+    /// the player within `radius` (m, `m_fLookAtRadius`) of one of `targets` and looking at it
+    /// for a while (`DisConv_Hook_PlayerLookAt` `m_LookAtTargets`: the actor's name, the angle
+    /// off the view in degrees, seconds): that target's output
+    LookAt { radius: f32, targets: Vec<(String, f32, f32)> },
 }
 
 /// A conversation flattened along its first links.
@@ -1351,6 +1359,10 @@ pub struct NpcAttachment {
     pub absorb_head: bool,
     #[serde(default)]
     pub absorb_side: u8,
+    /// its tweak and those it falls back on, as object paths (a tallboy's tank is the aim
+    /// assist's `Twk_Attachment_Battery_Center_empty`)
+    #[serde(default)]
+    pub tweaks: Vec<String>,
 }
 
 fn one() -> f32 {
@@ -2527,6 +2539,10 @@ pub struct Movable {
     /// until made, put back when burst or missed
     #[serde(default)]
     pub pool: Option<u32>,
+    /// its tweak and those it falls back on (`m_FallbackChainCooked`), as object paths: which
+    /// of the aim assist's objects of interest it is (`movable_twk.Base.MoveableBase`...)
+    #[serde(default)]
+    pub tweaks: Vec<String>,
 }
 
 /// The whale oil tanks the scripts' actor factories make (Dunwall City Trials' Oil Drop:
@@ -3171,6 +3187,9 @@ pub struct GameData {
     pub attributes: std::collections::BTreeMap<String, [f32; 4]>,
     /// the player pawn's numeric tweaks (elixir values, jump impulse...)
     pub pawn: std::collections::BTreeMap<String, f32>,
+    /// the pistol's and crossbow's aim assist (`DisTweaks_ProjectileAttack`)
+    #[serde(default)]
+    pub aim_assist: Vec<AimAssist>,
     /// the grading the menus that pause the game put over it (`DisGlobalUIManager`'s
     /// `m_pBlurTweaks`, `UI_Blur`: its `m_Parameters` flattened, `m_fFadeInTime`...)
     #[serde(default)]
@@ -3745,6 +3764,66 @@ pub struct ShapeBitmap {
 /// no tweak object of it ships), and each hook's group, refire and flags (the native hook
 /// table, as roshan's r614/blink research read it from the executable, with the tweak's
 /// `m_DialogHookOverrides`).
+/// A weapon's aim assist (`DisTweaks_ProjectileAttack`), as the original's
+/// `DisItemContext_AimAssistAttack` chooses with it (0x00C12B00 and on in the executable): of the
+/// hit regions and things whose windows hold the crosshair, the one scoring least.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AimAssist {
+    /// "pistol", "crossbow"
+    pub weapon: String,
+    /// used with the mouse, with the pad (`m_bUseAimAssist` and `_Mouse`, `_Gamepad`)
+    pub mouse: bool,
+    pub pad: bool,
+    /// the choice (`m_AimAssistChoiceInfo`): the angle (degrees) and distance (metres) the score
+    /// measures against, and their weights; the distance also the reach
+    pub max_angle: f32,
+    pub max_dist: f32,
+    pub angle_weight: f32,
+    pub dist_weight: f32,
+    /// the windows' scale beyond a distance (metres; `m_AimAssistDistReduceSettings`, the first
+    /// passed taken)
+    pub reduce: Vec<[f32; 2]>,
+    /// the crosshair's time to slide onto the target (`m_fAimAssistBlendTime`)
+    pub blend: f32,
+    /// the mouse's groups, normal and zoomed, then the pad's (`m_AimAssistSettings_Mouse`...)
+    pub groups: [AssistGroup; 4],
+}
+
+/// One of a weapon's aim assist groups (`DisAimAssistGroup`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AssistGroup {
+    /// its own reach (metres; `m_bUseGroupMaxDistance`)
+    pub max_dist: Option<f32>,
+    /// a character's hit regions (`m_Pawns.m_HitRegions`, by `eDisHitRegion`: none, head,
+    /// torso, left leg, right leg, left arm, right arm)
+    pub regions: [AssistInfo; 7],
+    /// characters passed over: neutral, Corvo's friends
+    pub skip_neutral: bool,
+    pub skip_friendly: bool,
+    /// the things it may choose besides (`m_ObjectsOfInterest`), the first matching taken: by
+    /// their tweak (a path, matched along fallbacks) or else their class
+    pub objects: Vec<AssistObject>,
+}
+
+/// A window of the aim assist (`DisAimAssistInfo`): whether used, its score's scale, the part
+/// of the thing's own extent where the crosshair needs no help, and how far past its extent
+/// the window reaches (pixels of a 1280 x 720 screen).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
+pub struct AssistInfo {
+    pub on: bool,
+    pub priority: f32,
+    pub safe: [f32; 2],
+    pub max: [f32; 2],
+}
+
+/// One of the aim assist's objects of interest (`DisAimAssistOther`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AssistObject {
+    pub tweak: String,
+    pub class: String,
+    pub info: AssistInfo,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct BarkRules {
     /// most lines playing at once: loud, quiet (`m_MaxDialogHooksAtOnce`, `_Quiet`)

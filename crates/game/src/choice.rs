@@ -4,8 +4,10 @@
 //! (`InputsManager`, `SelectionHandler`, as roshan's r614/blink research decoded them), Up and
 //! Down move a line at a time (`Move`; `Stop` at the ends, no wrap), Enter (the pad's A)
 //! answers (`Validation`, the answer 150 ms on, the inputs off meanwhile; the number keys are
-//! the movie's dock bar, not the menu's), and the script carries on down that output. Walking
-//! away leaves it unanswered.
+//! the movie's dock bar, not the menu's), and the script carries on down that output. The mouse
+//! is the menu's too: the cursor comes free while a choice is up, entering an option's
+//! `btn` selects it (`Move`), letting go over it answers (`onRelease`). Walking away leaves it
+//! unanswered.
 
 use crate::player::Player;
 use crate::GameState;
@@ -17,11 +19,14 @@ impl Plugin for ChoicePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Choice>()
             .init_resource::<ui::ChoiceUi>()
+            .init_resource::<ChoicePointer>()
             .add_systems(OnExit(GameState::InGame), |mut c: ResMut<Choice>, mut u: ResMut<ui::ChoiceUi>| {
                 *c = Choice::default();
                 *u = ui::ChoiceUi::default();
             })
-            .add_systems(Update, (choose, ui::draw_choice).chain().run_if(in_state(GameState::InGame)));
+            // (before the game reads its input: a click on an option is the menu's alone)
+            .add_systems(PreUpdate, choose.after(bevy::input::InputSystems).after(crate::pad::pad_input).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, ui::draw_choice.run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -34,7 +39,15 @@ pub struct Choice {
     at: Option<Vec3>,
     /// answered: the option, and the time before the answer goes to the script
     confirmed: Option<(usize, f32)>,
+    /// the option under the pointer, and whether the cursor was freed for the choice
+    hover: Option<usize>,
+    freed: bool,
 }
+
+/// Test runs' pointer over the window (logical pixels; script `pointer X Y`): the real cursor
+/// isn't moved on the desktop.
+#[derive(Resource, Default)]
+pub struct ChoicePointer(pub Option<Vec2>);
 
 /// From the answer to the script (`OnPlayerChoiceConfirm` 150 ms after `Validation`).
 const CONFIRM_DELAY: f32 = 0.15;
@@ -61,6 +74,7 @@ impl Choice {
         self.sel = 0;
         self.at = None;
         self.confirmed = None;
+        self.hover = None;
     }
 
     /// The option highlighted.
@@ -71,21 +85,50 @@ impl Choice {
 
 #[allow(clippy::too_many_arguments)]
 fn choose(
-    (keys, time): (Res<ButtonInput<KeyCode>>, Res<Time>),
+    (keys, mut mouse, time): (Res<ButtonInput<KeyCode>>, ResMut<ButtonInput<MouseButton>>, Res<Time>),
     mut choice: ResMut<Choice>,
     vm: Option<ResMut<crate::kismet::Vm>>,
     player: Query<&Transform, With<Player>>,
-    paused: Res<crate::hud::Paused>,
+    (paused, stats): (Res<crate::hud::Paused>, Res<crate::gameplay::PlayerStats>),
     mut sfx: MessageWriter<crate::audio::PostEvent>,
+    (window, mut cursor, pointer, layout, scripted): (
+        Query<&Window, With<bevy::window::PrimaryWindow>>,
+        Query<&mut bevy::window::CursorOptions>,
+        Res<ChoicePointer>,
+        Res<ui::ChoiceUi>,
+        Option<Res<crate::script::Scripted>>,
+    ),
 ) {
     let pos = player.single().map(|t| t.translation).ok();
+    // (the cursor free while a choice is up, back to the view's once it is answered; test runs
+    // leave the desktop's cursor alone)
+    if choice.pending.is_none() && choice.freed {
+        choice.freed = false;
+        if !paused.0 && !stats.dead && scripted.is_none() {
+            for mut c in &mut cursor {
+                c.visible = false;
+                c.grab_mode = bevy::window::CursorGrabMode::Locked;
+            }
+        }
+    }
     if choice.pending.is_some() && !paused.0 {
+        if scripted.is_none() {
+            for mut c in &mut cursor {
+                if c.grab_mode != bevy::window::CursorGrabMode::None || !c.visible {
+                    c.visible = true;
+                    c.grab_mode = bevy::window::CursorGrabMode::None;
+                }
+            }
+            choice.freed = true;
+        }
         if choice.at.is_none() {
             choice.at = pos;
         }
         let n = choice.pending.as_ref().map(|p| p.1.len()).unwrap_or(0);
         // answered: to the script once the delay is out
         if let Some((i, left)) = choice.confirmed {
+            mouse.clear_just_pressed(MouseButton::Left);
+            mouse.clear_just_released(MouseButton::Left);
             let left = left - time.delta_secs();
             if left > 0.0 {
                 choice.confirmed = Some((i, left));
@@ -110,6 +153,22 @@ fn choose(
             }
         }
         let mut pick = (keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::NumpadEnter)).then_some(choice.sel);
+        // the pointer: entering an option selects it, letting go over it answers
+        let at = pointer.0.or_else(|| window.single().ok().and_then(|w| w.cursor_position()));
+        let over = at.and_then(|p| layout.rects.iter().position(|r| r.contains(p)));
+        if over != choice.hover {
+            choice.hover = over;
+            if let Some(i) = over.filter(|i| *i != choice.sel) {
+                choice.sel = i;
+                ui(&mut sfx, "UI_Move");
+            }
+        }
+        if pick.is_none() && mouse.just_released(MouseButton::Left) {
+            pick = over;
+        }
+        // (the menu's clicks go no further: no swing, no throw)
+        mouse.clear_just_pressed(MouseButton::Left);
+        mouse.clear_just_released(MouseButton::Left);
         // test runs answer at once (`DH_CHOICE`: which, 1-based; default the first)
         if std::env::var("DH_SCRIPT").is_ok() && std::env::var("DH_CHOICE").as_deref() != Ok("show") {
             pick = Some(std::env::var("DH_CHOICE").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).saturating_sub(1).min(n.saturating_sub(1)));
@@ -155,6 +214,8 @@ mod ui {
 
     #[derive(Resource, Default)]
     pub struct ChoiceUi {
+        /// each option's `btn` on the window (logical pixels), for the pointer
+        pub rects: Vec<Rect>,
         root: Option<Entity>,
         shown: Vec<String>,
         sel: Option<usize>,
@@ -197,6 +258,7 @@ mod ui {
             }
             ui.shown = options.clone();
             ui.sel = None;
+            ui.rects.clear();
             if options.is_empty() {
                 return;
             }
@@ -274,6 +336,14 @@ mod ui {
             mn.top = Val::Px((ty + 102.55) * s);
         }
         let sel = choice.selected();
+        // (each option's hit area, `btn`: the 62-unit square scaled 5.533 x 0.647 from
+        // (-40.9, -17.85) in the button)
+        ui.rects = (0..options.len())
+            .map(|i| {
+                let o = p + Vec2::new(BTN_X, top + i as f32 * (BTN_H + GAP) + BTN_H * 0.5) * s;
+                Rect::new(o.x - 40.9 * s, o.y - 17.85 * s, o.x + (-40.9 + 62.05 * 5.533) * s, o.y + (-17.85 + 62.05 * 0.647) * s)
+            })
+            .collect();
         for (b, mut fc, mut bn) in &mut buttons {
             fc.scale = s;
             bn.left = Val::Px(BTN_X * s);

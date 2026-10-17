@@ -119,6 +119,14 @@ pub struct Krust {
 }
 
 impl Krust {
+    /// Not yet killed.
+    pub fn alive(&self) -> bool {
+        self.hp > 0.0
+    }
+    /// The collider shots strike.
+    pub fn collider(&self) -> Entity {
+        self.collider
+    }
     fn protected(&self) -> bool {
         PROTECTED.contains(&self.state)
     }

@@ -18,7 +18,8 @@ pub struct CrosshairPlugin;
 
 impl Plugin for CrosshairPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Shown>()
+        app.init_resource::<OverEnemy>()
+            .init_resource::<Shown>()
             .add_systems(OnEnter(GameState::InGame), |mut s: ResMut<Shown>| *s = Shown::default())
             .add_systems(Update, (update_crosshair, info_line).run_if(in_state(GameState::InGame)));
     }
@@ -31,6 +32,11 @@ const EMPTY: usize = 1;
 const OVER: usize = 2;
 /// how far an enemy under the crosshair counts
 const ENEMY_RANGE: f32 = 40.0;
+
+/// A hostile character under the crosshair (the reticle's "over an enemy" state), for the aim's
+/// friction.
+#[derive(Resource, Default)]
+pub struct OverEnemy(pub bool);
 
 /// The crosshair's parts: the dot, the interaction symbol, the reticle (entity, symbol).
 #[derive(Resource, Default)]
@@ -243,7 +249,7 @@ fn update_crosshair(
     cam: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
     npcs: Query<(&crate::npc::Npc, &GlobalTransform)>,
     rapier: bevy_rapier3d::prelude::ReadRapierContext,
-    aim_state: Res<crate::aim::Aim>,
+    (aim_state, mut over): (Res<crate::aim::Aim>, ResMut<OverEnemy>),
 ) {
     let Ok(w) = window.single() else { return };
     let Some(tl) = timelines.get(MOVIE) else { return };
@@ -315,9 +321,11 @@ fn update_crosshair(
             ctx.as_ref().is_none_or(|ctx| ctx.cast_ray(eye, to.normalize(), to.length() - 0.5, true, world).is_none())
         })
     };
+    // (also what the aim's friction slows the look over: `player`)
+    over.0 = over_enemy();
     let state = match aim {
         Some(_) if powers.selected.ammo(&stats) == Some(0) || powers.selected.mana(&data) > stats.mana => EMPTY,
-        Some(_) if over_enemy() => OVER,
+        Some(_) if over.0 => OVER,
         _ => DEFAULT,
     };
     let want: [Option<&'static str>; 3] = [dot.then_some("crosshair_dot"), interaction.map(|i| i.0), aim];
@@ -337,7 +345,8 @@ fn update_crosshair(
         }
         let Some((e, _)) = shown.parts[k] else { continue };
         let Ok((mut fc, mut node, mut vis)) = clips.get_mut(e) else { continue };
-        let p = Vec2::new(w.width(), w.height()) * 0.5;
+        // (in the middle, or slid onto what the aim assist holds: `aim`)
+        let p = Vec2::new(w.width(), w.height()) * 0.5 * (Vec2::ONE + aim_state.crosshair * Vec2::new(1.0, -1.0));
         node.left = Val::Px(p.x);
         node.top = Val::Px(p.y);
         fc.scale = s;

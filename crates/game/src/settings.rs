@@ -92,6 +92,17 @@ pub struct Settings {
     pub pad_look_y: f32,
     pub pad_invert_y: bool,
     pub pad_vibration: bool,
+    /// the aim assist (`PSI_Mouse_bAutoAim`, `AutoAimStrength` 0-100 by 10: off, 100; the pad's
+    /// `PSI_Gamepad_bAutoAim` on, 100) and the aim's friction (`PSI_Mouse_bFriction`,
+    /// `FrictionStrength`: off, 100; the pad's on, 100), the menu's "Auto Aim" and "Aim Assist"
+    pub mouse_auto_aim: bool,
+    pub mouse_auto_aim_strength: f32,
+    pub mouse_friction: bool,
+    pub mouse_friction_strength: f32,
+    pub pad_auto_aim: bool,
+    pub pad_auto_aim_strength: f32,
+    pub pad_friction: bool,
+    pub pad_friction_strength: f32,
 }
 
 /// The display's sizes to choose from (its video modes, smallest first), as the window system
@@ -171,6 +182,14 @@ impl Default for Settings {
             pad_look_y: 50.0,
             pad_invert_y: false,
             pad_vibration: true,
+            mouse_auto_aim: false,
+            mouse_auto_aim_strength: 100.0,
+            mouse_friction: false,
+            mouse_friction_strength: 100.0,
+            pad_auto_aim: true,
+            pad_auto_aim_strength: 100.0,
+            pad_friction: true,
+            pad_friction_strength: 100.0,
         }
     }
 }

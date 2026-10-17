@@ -7292,7 +7292,7 @@ mod wear_tests {
     use dhcook::format::NpcAttachment;
 
     fn att(group: u8, chance: f32, weight: f32) -> NpcAttachment {
-        NpcAttachment { socket: "Helmet".into(), prop: String::new(), health: 0.0, instant: vec![], immune: vec![], breaks: None, chance, group, weight, knock_off: vec![], absorb: vec![], absorb_head: false, absorb_side: 0 }
+        NpcAttachment { socket: "Helmet".into(), prop: String::new(), health: 0.0, instant: vec![], immune: vec![], breaks: None, chance, group, weight, knock_off: vec![], absorb: vec![], absorb_head: false, absorb_side: 0, tweaks: vec![] }
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Campaign-wide game data from the original tweak objects: Corvo's powers (active and
 //! passive), his attributes per difficulty, bone charms, upgrades and the stores.
 
-use crate::format::{AchievementDef, ActivePowerDef, AnimRumble, RumbleSample, BarkGroup, BarkHookRule, BarkRules, ChallengeDef, AttrMod, CharmDef, GalleryItemDef, GameData, PassiveLevel, PassivePowerDef, StatInfoDef, StoreDef, StoreItem, UpgradeDef};
+use crate::format::{AimAssist, AssistGroup, AssistInfo, AssistObject, AchievementDef, ActivePowerDef, AnimRumble, RumbleSample, BarkGroup, BarkHookRule, BarkRules, ChallengeDef, AttrMod, CharmDef, GalleryItemDef, GameData, PassiveLevel, PassivePowerDef, StatInfoDef, StoreDef, StoreItem, UpgradeDef};
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -784,6 +784,105 @@ fn attributes(game: &Package, startup: &Package) -> BTreeMap<String, [f32; 4]> {
     out
 }
 
+/// The pistol's and crossbow's aim assist (`DisTweaks_ProjectileAttack`): each field the fire
+/// tweak's own, else as the class default holds it (a struct's fields its struct's defaults:
+/// the crossbow's reach is `DisAimAssistChoiceInfo`'s 2000 uu).
+fn aim_assist(game: &Package, startup: &Package) -> Vec<AimAssist> {
+    let Some(def) = game.find_export("Default__DisTweaks_ProjectileAttack").and_then(|i| props(game, i)) else { return Vec::new() };
+    // (a layer: the tweak's props and package, over the default's)
+    #[derive(Clone)]
+    struct L<'a> {
+        own: Props,
+        def: Props,
+        pkgs: (&'a Package, &'a Package),
+    }
+    impl<'a> L<'a> {
+        fn sub(&self, n: &str, i: i32) -> L<'a> {
+            let s = |p: &Props| match p.get_idx(n, i) {
+                Some(Value::Struct(_, s)) => Props(s.clone()),
+                _ => Props::default(),
+            };
+            L { own: s(&self.own), def: s(&self.def), pkgs: self.pkgs }
+        }
+        fn f(&self, n: &str) -> f32 {
+            self.own.float(n).or(self.def.float(n)).unwrap_or(0.0)
+        }
+        fn b(&self, n: &str) -> bool {
+            self.own.bool(n).or(self.def.bool(n)).unwrap_or(false)
+        }
+        fn object(&self, n: &str) -> String {
+            let path = |pkg: &Package, p: &Props| p.object(n).filter(|o| *o != 0).map(|o| pkg.obj_path(o));
+            path(self.pkgs.0, &self.own).or_else(|| path(self.pkgs.1, &self.def)).unwrap_or_default()
+        }
+        /// an array of structs: the tweak's own, else the default's (each its own layer)
+        fn array(&self, n: &str) -> Vec<L<'a>> {
+            let parse = |pkg: &Package, p: &Props| p.array(n).map(|(c, off, sz)| upk::props::parse_struct_array(pkg, off, sz, c).unwrap_or_default());
+            if let Some(v) = parse(self.pkgs.0, &self.own) {
+                return v.into_iter().map(|own| L { own, def: Props::default(), pkgs: (self.pkgs.0, self.pkgs.0) }).collect();
+            }
+            parse(self.pkgs.1, &self.def).unwrap_or_default().into_iter().map(|def| L { own: Props::default(), def, pkgs: (self.pkgs.1, self.pkgs.1) }).collect()
+        }
+        fn info(&self) -> AssistInfo {
+            // (`m_fPriorityWeightScale`'s own default is 1)
+            let priority = self.own.float("m_fPriorityWeightScale").or(self.def.float("m_fPriorityWeightScale")).unwrap_or(1.0);
+            AssistInfo {
+                on: self.b("m_bUseAimAssist"),
+                priority,
+                safe: [self.f("m_fAimAssist_SafePercent_X"), self.f("m_fAimAssist_SafePercent_Y")],
+                max: [self.f("m_fAimAssist_MaxSize_Horiz"), self.f("m_fAimAssist_MaxSize_Vert")],
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (weapon, fire) in [
+        ("pistol", "Twk_Inv_PlayerSpecific.Twk_Inv_PistolCorvo.DisTweaks_InventoryItem_PlayerSpecific_0.DisTweaks_FirePistol_1"),
+        ("crossbow", "Twk_Inv_PlayerSpecific.Twk_Inv_CrossbowCorvo.DisTweaks_InventoryItem_PlayerSpecific_1.DisTweaks_FireCrossbow_0"),
+    ] {
+        let Some(own) = startup.find_export(fire).and_then(|i| props(startup, i)) else { continue };
+        let top = L { own, def: def.clone(), pkgs: (startup, game) };
+        let choice = top.sub("m_AimAssistChoiceInfo", 0);
+        let mut groups: [AssistGroup; 4] = Default::default();
+        for (k, (platform, group)) in [("m_AimAssistSettings_Mouse", "m_NormalAssist"), ("m_AimAssistSettings_Mouse", "m_ZoomedAssist"), ("m_AimAssistSettings_Gamepad", "m_NormalAssist"), ("m_AimAssistSettings_Gamepad", "m_ZoomedAssist")].into_iter().enumerate() {
+            let g = top.sub(platform, 0).sub(group, 0);
+            let pawns = g.sub("m_Pawns", 0);
+            let mut regions = [AssistInfo { priority: 1.0, ..Default::default() }; 7];
+            for (i, r) in regions.iter_mut().enumerate() {
+                *r = pawns.sub("m_HitRegions", i as i32).info();
+            }
+            let objects = g
+                .array("m_ObjectsOfInterest")
+                .iter()
+                .map(|o| AssistObject {
+                    tweak: o.object("m_pTweaksType"),
+                    class: o.object("m_pActorType").rsplit('.').next().unwrap_or("").to_string(),
+                    info: o.sub("m_AimAssistInfo", 0).info(),
+                })
+                .collect();
+            groups[k] = AssistGroup {
+                max_dist: g.b("m_bUseGroupMaxDistance").then(|| g.f("m_fMaxAimAssistDistance") * 0.01),
+                regions,
+                skip_neutral: pawns.b("m_bDisableAssistForNeutralPawns"),
+                skip_friendly: pawns.b("m_bDisableAssistForFriendlyPawns"),
+                objects,
+            };
+        }
+        let on = top.b("m_bUseAimAssist");
+        out.push(AimAssist {
+            weapon: weapon.into(),
+            mouse: on && top.b("m_bUseAimAssist_Mouse"),
+            pad: on && top.b("m_bUseAimAssist_Gamepad"),
+            max_angle: choice.f("m_fMaxAimAssistAngle"),
+            max_dist: choice.f("m_fMaxAimAssistDistance") * 0.01,
+            angle_weight: choice.f("m_fAimAssistAngleWeight"),
+            dist_weight: choice.f("m_fAimAssistDistWeight"),
+            reduce: choice.array("m_AimAssistDistReduceSettings").iter().map(|r| [r.f("m_fDistanceToReduce") * 0.01, r.f("m_fAimAssistWindowScale")]).collect(),
+            blend: top.f("m_fAimAssistBlendTime"),
+            groups,
+        });
+    }
+    out
+}
+
 /// Corvo's arms (`Twk_Inv_PlayerSpecific`): each weapon's damage by difficulty, from its item
 /// attribute tweak (the Normal slot, `m_pAttributeTweak[1]`), as attributes `Sword_MeleeDamage`,
 /// `Pistol_RangedDamage`, `Crossbow_RangedDamage`...; and the numbers of the projectiles they
@@ -1506,6 +1605,22 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
     }
     d.noise_loudness = noise_loudness(cooked, &game);
     arms(&game, &startup, &mut d);
+    d.aim_assist = aim_assist(&game, &startup);
+    // the crosshair's slide onto the aim assist's target (`Twk_GFxMoviePlayerHUD`'s
+    // `m_fCrosshairInterpolationSpeed`) and the aim's friction (`Twk_Pawn_PlayerInput`: the look's
+    // slowing across and up, and whether zoomed or not; the class default's under Corvo's)
+    if let Some(v) = game.find_export("Twk_InGameUI.Twk_GFxMoviePlayerHUD").and_then(|i| props(&game, i)).and_then(|p| p.float("m_fCrosshairInterpolationSpeed")) {
+        d.pawn.insert("hud.m_fCrosshairInterpolationSpeed".into(), v);
+    }
+    let input: Vec<Props> = ["Twk_Pawn_DefaultPlayer.Twk_Pawn_PlayerInput", "Default__DisTweaks_PlayerInput"].iter().filter_map(|p| game.find_export(p).and_then(|i| props(&game, i))).collect();
+    for n in ["m_fFrictionMult_Horiz", "m_fFrictionMult_Vert"] {
+        if let Some(v) = input.iter().find_map(|p| p.float(n)) {
+            d.pawn.insert(format!("input.{n}"), v);
+        }
+    }
+    for n in ["m_bUseAimFriction_Zoomed", "m_bUseAimFriction_NonZoomed"] {
+        d.pawn.insert(format!("input.{n}"), input.iter().find_map(|p| p.bool(n)).unwrap_or(false) as u8 as f32);
+    }
     audiographs(cooked, &startup, &mut d);
     player_stats(&game, &startup, &mut d);
     challenges(&game, &mut d);

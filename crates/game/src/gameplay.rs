@@ -798,11 +798,21 @@ pub struct TimeControl {
     pub bend_on: bool,
     pub ramp_in: f32,
     pub ramp_out: f32,
+    /// Blink's own layer of the world's dilation (1: none) and how fast it moves (per second):
+    /// down toward `BLINK_FLOOR` over `m_fBendTimeDownTime` as Corvo lets go, back up over
+    /// `m_fBendTimeUpTime` from wherever it is once he arrives (as roshan's r614/blink research
+    /// decoded Blink's release and end)
+    pub blink_layer: f32,
+    pub blink_rate: f32,
 }
+
+/// How far Blink's layer would slow the world (`0.05`, reached only by a Blink lasting
+/// `m_fBendTimeDownTime`; a short hop leaves it near 0.94).
+pub const BLINK_FLOOR: f32 = 0.05;
 
 impl Default for TimeControl {
     fn default() -> Self {
-        Self { bend_remaining: 0.0, world_dilation: 0.0, wheel: 1.0, scripted: None, finisher: 1.0, aim_freeze: 1.0, player_dilation: 1.0, bend_lag: 0.0, bend_on: false, ramp_in: 0.15, ramp_out: 0.25 }
+        Self { bend_remaining: 0.0, world_dilation: 0.0, wheel: 1.0, scripted: None, finisher: 1.0, aim_freeze: 1.0, player_dilation: 1.0, bend_lag: 0.0, bend_on: false, ramp_in: 0.15, ramp_out: 0.25, blink_layer: 1.0, blink_rate: 0.0 }
     }
 }
 
@@ -828,7 +838,7 @@ impl TimeControl {
         // (bent time comes in and goes out over its warm-up and cool-down)
         let bent = 1.0 + (self.world_dilation - 1.0) * self.bend_ramp();
         let scripted = self.scripted.map(|s| s.0).unwrap_or(1.0);
-        bent.min(scripted).min(self.finisher).min(self.aim_freeze) * self.wheel
+        bent.min(scripted).min(self.finisher).min(self.aim_freeze).min(self.blink_layer) * self.wheel
     }
     /// Corvo's pace through his bent time (`m_PlayerDilation`, as it comes in).
     pub fn player_rate(&self) -> f32 {

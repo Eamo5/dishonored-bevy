@@ -223,8 +223,10 @@ fn cursor_grab(
     keys: Res<ButtonInput<KeyCode>>,
     paused: Res<Paused>,
     stats: Res<PlayerStats>,
+    choice: Option<Res<crate::choice::Choice>>,
 ) {
-    if paused.0 || stats.dead {
+    // (a choice up keeps the cursor for its options)
+    if paused.0 || stats.dead || choice.is_some_and(|c| c.pending.is_some()) {
         return;
     }
     if mouse.just_pressed(MouseButton::Left) && cursor.grab_mode == CursorGrabMode::None {
@@ -330,6 +332,8 @@ fn player_look(
     mut last: Local<Vec2>,
     pad: Option<Res<crate::pad::Pad>>,
     (peek, game_settings): (Option<Res<crate::keyhole::Peek>>, Option<Res<crate::settings::Settings>>),
+    (data, over): (Option<Res<crate::gamedata::Data>>, Option<Res<crate::crosshair::OverEnemy>>),
+    mut slowed: Local<bool>,
 ) {
     let Ok((mut p, mut t)) = q.single_mut() else { *last = Vec2::ZERO; return };
     if p.is_added() { *last = Vec2::ZERO; }
@@ -344,15 +348,30 @@ fn player_look(
         let user = game_settings.as_ref().map_or(1.0, |s| crate::pad::look_scale(s.pad_look_x));
         (j / user.max(1e-3)).min(1.0)
     });
+    // the aim's friction (`DisTweaks_PlayerInput`): over an enemy the look slows by
+    // `m_fFrictionMult_Horiz` and `_Vert` (Corvo's only zoomed, `m_bUseAimFriction_Zoomed`), as the
+    // option for the device has it (the menu's "Aim Assist", `PSI_Mouse_bFriction` off by default,
+    // the pad's on); the strength taking it from none to the whole is this rewrite's reading
+    let friction = |pad: bool| -> Vec2 {
+        let (Some(s), Some(data), Some(over)) = (game_settings.as_ref(), data.as_ref(), over.as_ref()) else { return Vec2::ONE };
+        let (on, strength) = if pad { (s.pad_friction, s.pad_friction_strength) } else { (s.mouse_friction, s.mouse_friction_strength) };
+        let used = data.pawn(if zoom.level > 0 { "input.m_bUseAimFriction_Zoomed" } else { "input.m_bUseAimFriction_NonZoomed" }, 0.0) > 0.0;
+        if !on || !used || !over.0 {
+            return Vec2::ONE;
+        }
+        let k = (strength / 100.0).clamp(0.0, 1.0);
+        Vec2::ONE - (Vec2::ONE - Vec2::new(data.pawn("input.m_fFrictionMult_Horiz", 0.5), data.pawn("input.m_fFrictionMult_Vert", 0.5))) * k
+    };
     // the wheel takes the mouse while it's open; the lens slows the aim
     if !paused.0 && cursor.grab_mode != CursorGrabMode::None && scripted.is_none() && !wheel.open {
         let raw = motion.delta;
         let d = if settings.smoothing { (raw + *last) * 0.5 } else { raw };
         *last = if settings.smoothing { raw } else { Vec2::ZERO };
         let sens = settings.sensitivity / zoom.factor.max(1.0) * mouse_cap;
-        p.yaw -= d.x * sens;
+        let f = friction(false);
+        p.yaw -= d.x * sens * f.x;
         let dy = if settings.invert_y { -d.y } else { d.y };
-        p.pitch = (p.pitch - dy * sens).clamp(-1.5, 1.5);
+        p.pitch = (p.pitch - dy * sens * f.y).clamp(-1.5, 1.5);
     } else {
         // Menu/wheel motion belongs to the UI. Do not replay the last gameplay
         // delta through the smoothing filter when mouse-look resumes.
@@ -362,8 +381,13 @@ fn player_look(
     let pad_look = pad.as_ref().map_or(Vec2::ZERO, |p| p.look);
     if !paused.0 && !wheel.open && pad_look != Vec2::ZERO {
         let k = pad_cap / zoom.factor.max(1.0);
-        p.yaw += pad_look.x * k;
-        p.pitch = (p.pitch + pad_look.y * k).clamp(-1.5, 1.5);
+        let f = friction(true);
+        if std::env::var("DH_AIM_LOG").is_ok() && (f != Vec2::ONE) != *slowed {
+            *slowed = f != Vec2::ONE;
+            info!("aim friction: the pad's look x{f:.2}");
+        }
+        p.yaw += pad_look.x * k * f.x;
+        p.pitch = (p.pitch + pad_look.y * k * f.y).clamp(-1.5, 1.5);
     }
     t.rotation = Quat::from_rotation_y(p.yaw);
     if let Ok(mut ct) = cam.single_mut() {

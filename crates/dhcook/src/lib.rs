@@ -3209,6 +3209,7 @@ impl<'a> Cooker<'a> {
                     .map(|(p, props)| upk::props::object_array(p, props, name).into_iter().filter(|&o| o != 0).map(|o| p.obj_path(o).rsplit('.').next().unwrap_or("").to_string()).collect())
                     .unwrap_or_default()
             };
+            let tweaks = self.tweak_lineage(&tw);
             out.push(NpcAttachment {
                 socket,
                 prop,
@@ -3223,6 +3224,7 @@ impl<'a> Cooker<'a> {
                 absorb: Vec::new(),
                 absorb_head: false,
                 absorb_side: 0,
+                tweaks,
             });
         }
         out
@@ -3269,6 +3271,7 @@ impl<'a> Cooker<'a> {
                     absorb: Vec::new(),
                     absorb_head: false,
                     absorb_side: 0,
+                    tweaks: Vec::new(),
                 });
             }
         }
@@ -3330,6 +3333,7 @@ impl<'a> Cooker<'a> {
                     absorb,
                     absorb_head,
                     absorb_side,
+                    tweaks: Vec::new(),
                 });
             }
         }
@@ -4244,6 +4248,15 @@ impl<'a> Cooker<'a> {
         // (hostile to the player: Corvo's faction among its enemies, or Daud's)
         let hostile = enemies.iter().any(|e| is_player_faction(e));
         self.scene.factions.insert(name.clone(), enemies);
+        let allies: Vec<String> = upk::props::object_array(&f.pkg, &fp, "m_AlliedFactions")
+            .into_iter()
+            .filter(|o| *o != 0)
+            .map(|o| {
+                let p = f.pkg.obj_path(o);
+                p.rsplit('.').next().unwrap_or(&p).to_string()
+            })
+            .collect();
+        self.scene.allies.insert(name.clone(), allies);
         (name, hostile)
     }
 
@@ -6174,7 +6187,9 @@ impl<'a> Cooker<'a> {
         let breaks = self.last_break_step(&tc, "m_Steps");
         let striker = tc.obj_path("m_pContactTypeOverride").map(|p| p.rsplit('.').next().unwrap_or(&p).to_string()).unwrap_or_else(|| "DisContactType_Env_Wood".into());
         let impacts = self.impacts(&striker);
+        let tweaks = self.tweak_lineage(tweak);
         Movable {
+            tweaks,
             impacts,
             instance,
             tank,

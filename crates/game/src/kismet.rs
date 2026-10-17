@@ -519,9 +519,39 @@ mod conversation_tests {
     }
 }
 
+/// A look-at hook's watch: the target looked at (none: the look broke, starting it over), since
+/// when and whether it fired; the target whose look has lasted its time, once.
+fn look_watch(w: &mut Option<(usize, f32, bool)>, looked: Option<usize>, now: f32, need: impl Fn(usize) -> f32) -> Option<usize> {
+    let Some(i) = looked else {
+        *w = None;
+        return None;
+    };
+    let st = w.get_or_insert((i, now, false));
+    if st.0 != i {
+        *st = (i, now, false);
+    }
+    (!st.2 && now - st.1 >= need(i)).then(|| {
+        st.2 = true;
+        i
+    })
+}
+
 #[cfg(test)]
 mod proximity_tests {
     use super::*;
+
+    #[test]
+    fn a_look_held_long_enough_fires_once_until_it_breaks() {
+        let mut w = None;
+        let need = |_| 2.0;
+        let mut fired = Vec::new();
+        for (t, looked) in [(0.0, Some(0)), (1.0, Some(0)), (2.1, Some(0)), (3.0, Some(0)), (3.5, None), (4.0, Some(0)), (6.5, Some(0))] {
+            if let Some(i) = look_watch(&mut w, looked, t, need) {
+                fired.push((t, i));
+            }
+        }
+        assert_eq!(fired, [(2.1, 0), (6.5, 0)]);
+    }
 
     #[test]
     fn an_approach_fires_once_as_the_player_comes_within_each_distance() {
@@ -776,6 +806,10 @@ pub struct Vm {
     speaker_tree: HashMap<u32, usize>,
     pub speaker_pos: HashMap<u32, Vec3>,
     pub player_pos: Option<Vec3>,
+    /// the player's eye and the way he looks (for the look-at hooks)
+    pub player_view: Option<(Vec3, Vec3)>,
+    /// a look-at hook's watch (by speaker and node): the target looked at, since when, fired
+    hook_look: HashMap<(u32, u32), (usize, f32, bool)>,
     hook_dist: HashMap<(u32, u32), f32>,
     hook_loiter: HashMap<(u32, u32), Loiter>,
     /// NPC states last frame (for death / alert events)
@@ -1082,6 +1116,8 @@ impl Vm {
             player_pos: None,
             hook_dist: HashMap::new(),
             hook_loiter: HashMap::new(),
+            player_view: None,
+            hook_look: HashMap::new(),
             npc_seen: HashMap::new(),
             npc_heard: HashMap::new(),
             being_assassinated: HashMap::new(),
@@ -4651,6 +4687,32 @@ impl Vm {
                         let now = self.time;
                         self.hook_loiter.entry(key).or_default().update(now, flat, *radius, *min, *max).then_some(0)
                     }
+                    // looked at long enough from near enough: that target's output, once until
+                    // the look breaks
+                    KHookPoll::LookAt { radius, targets } if hook.starts_with("DDH_PLAYER_LOOKAT") => {
+                        // (Corvo within its reach of the speaker, across the ground; of the targets
+                        // within their angles of his view, the nearest its line: as roshan's
+                        // r614/blink research decoded `DisConv_Hook_PlayerLookAt`)
+                        let looked = self.player_view.filter(|_| flat < *radius).and_then(|(eye, fwd)| {
+                            targets
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(i, (name, angle, _))| {
+                                    let a = g.actors.iter().find(|a| a.name == *name)?;
+                                    let at = a.spawner.and_then(|s| self.npc_pos.get(&s).copied()).unwrap_or(Vec3::from(a.position));
+                                    let off = (at - eye).normalize_or_zero().dot(fwd).clamp(-1.0, 1.0).acos().to_degrees();
+                                    (off < *angle).then_some((i, off))
+                                })
+                                .min_by(|a, b| a.1.total_cmp(&b.1))
+                                .map(|(i, _)| i)
+                        });
+                        let mut w = self.hook_look.remove(&key);
+                        let fired = look_watch(&mut w, looked, self.time, |i| targets.get(i).map(|t| t.2).unwrap_or(2.0));
+                        if let Some(w) = w {
+                            self.hook_look.insert(key, w);
+                        }
+                        fired
+                    }
                     _ => None,
                 };
                 let Some(k) = out.filter(|_| !talking) else { continue };
@@ -5671,6 +5733,7 @@ fn world_events(
     // screen's centre, on a 1280-wide view)
     if let Ok(c) = cam.single() {
         let (eye, fwd) = (c.translation(), c.forward().as_vec3());
+        vm.player_view = Some((eye, fwd));
         let ctx = rapier.single().ok();
         let walls = bevy_rapier3d::prelude::QueryFilter::default().groups(bevy_rapier3d::prelude::CollisionGroups::new(bevy_rapier3d::prelude::Group::ALL, crate::level::GROUP_WORLD));
         let g = vm.g.clone();

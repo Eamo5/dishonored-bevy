@@ -121,6 +121,15 @@ enum Opt {
     PadLookX,
     PadLookY,
     PadInvertY,
+    /// the aim assist and the aim's friction, with their strengths: the mouse's, the pad's
+    MouseAutoAim,
+    MouseAutoAimStrength,
+    MouseFriction,
+    MouseFrictionStrength,
+    PadAutoAim,
+    PadAutoAimStrength,
+    PadFriction,
+    PadFrictionStrength,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -513,6 +522,14 @@ impl Menu {
                 Opt::PadLookY => slider(s.pad_look_y, 0.0, 100.0, format!("{:.0}", s.pad_look_y)),
                 Opt::PadInvertY => OptView::Toggle(s.pad_invert_y),
                 Opt::PadVibration => OptView::Toggle(s.pad_vibration),
+                Opt::MouseAutoAim => OptView::Toggle(s.mouse_auto_aim),
+                Opt::MouseFriction => OptView::Toggle(s.mouse_friction),
+                Opt::PadAutoAim => OptView::Toggle(s.pad_auto_aim),
+                Opt::PadFriction => OptView::Toggle(s.pad_friction),
+                Opt::MouseAutoAimStrength => slider(s.mouse_auto_aim_strength, 0.0, 100.0, format!("{:.0}", s.mouse_auto_aim_strength)),
+                Opt::MouseFrictionStrength => slider(s.mouse_friction_strength, 0.0, 100.0, format!("{:.0}", s.mouse_friction_strength)),
+                Opt::PadAutoAimStrength => slider(s.pad_auto_aim_strength, 0.0, 100.0, format!("{:.0}", s.pad_auto_aim_strength)),
+                Opt::PadFrictionStrength => slider(s.pad_friction_strength, 0.0, 100.0, format!("{:.0}", s.pad_friction_strength)),
                 Opt::Difficulty => OptView::Stepper(words(&["EDifficulty_Easy", "EDifficulty_Normal", "EDifficulty_Hard", "EDifficulty_VeryHard"]), s.difficulty as usize),
                 Opt::Crosshair => OptView::Stepper(words(&["CS_Off", "CS_Simple", "CS_Normal"]), s.crosshair_style.min(2) as usize),
                 Opt::HudGauges => OptView::Stepper(words(&["HV_Off", "HV_Contextual", "HV_Always"]), s.hud_gauges.min(2) as usize),
@@ -591,6 +608,10 @@ impl Menu {
                 s.sensitivity = d.sensitivity;
                 s.invert_y = d.invert_y;
                 s.mouse_smoothing = d.mouse_smoothing;
+                s.mouse_auto_aim = d.mouse_auto_aim;
+                s.mouse_auto_aim_strength = d.mouse_auto_aim_strength;
+                s.mouse_friction = d.mouse_friction;
+                s.mouse_friction_strength = d.mouse_friction_strength;
             }
             (1, _) => {
                 s.pad_binding_set = d.pad_binding_set;
@@ -598,6 +619,10 @@ impl Menu {
                 s.pad_look_y = d.pad_look_y;
                 s.pad_invert_y = d.pad_invert_y;
                 s.pad_vibration = d.pad_vibration;
+                s.pad_auto_aim = d.pad_auto_aim;
+                s.pad_auto_aim_strength = d.pad_auto_aim_strength;
+                s.pad_friction = d.pad_friction;
+                s.pad_friction_strength = d.pad_friction_strength;
             }
             (2, _) => {
                 s.brightness = d.brightness;
@@ -769,6 +794,14 @@ fn opt_value(s: &Settings, o: Opt) -> String {
         Opt::PadLookY => format!("{:.0}", s.pad_look_y),
         Opt::PadInvertY => on(s.pad_invert_y),
         Opt::PadVibration => on(s.pad_vibration),
+        Opt::MouseAutoAim => on(s.mouse_auto_aim),
+        Opt::MouseFriction => on(s.mouse_friction),
+        Opt::PadAutoAim => on(s.pad_auto_aim),
+        Opt::PadFriction => on(s.pad_friction),
+        Opt::MouseAutoAimStrength => format!("{:.0}", s.mouse_auto_aim_strength),
+        Opt::MouseFrictionStrength => format!("{:.0}", s.mouse_friction_strength),
+        Opt::PadAutoAimStrength => format!("{:.0}", s.pad_auto_aim_strength),
+        Opt::PadFrictionStrength => format!("{:.0}", s.pad_friction_strength),
     }
 }
 
@@ -847,6 +880,15 @@ fn adjust(s: &mut Settings, o: Opt, dir: f32, flip: bool) {
         Opt::PadLookY => step(&mut s.pad_look_y, 10.0, 0.0, 100.0),
         Opt::PadInvertY => set(&mut s.pad_invert_y),
         Opt::PadVibration => set(&mut s.pad_vibration),
+        // (the aim's assists, their strengths 0-100 by 10)
+        Opt::MouseAutoAim => set(&mut s.mouse_auto_aim),
+        Opt::MouseFriction => set(&mut s.mouse_friction),
+        Opt::PadAutoAim => set(&mut s.pad_auto_aim),
+        Opt::PadFriction => set(&mut s.pad_friction),
+        Opt::MouseAutoAimStrength => step(&mut s.mouse_auto_aim_strength, 10.0, 0.0, 100.0),
+        Opt::MouseFrictionStrength => step(&mut s.mouse_friction_strength, 10.0, 0.0, 100.0),
+        Opt::PadAutoAimStrength => step(&mut s.pad_auto_aim_strength, 10.0, 0.0, 100.0),
+        Opt::PadFrictionStrength => step(&mut s.pad_friction_strength, 10.0, 0.0, 100.0),
     }
 }
 
@@ -1035,13 +1077,25 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
                 }
                 // (each sub-category's settings in the profile's order: `PSI_Mouse_Start` to
                 // `_End`, `PSI_Gamepad_Start` to `_End`)
-                (1, 1) => vec![("PSI_Mouse_Sensitivity", Opt::Sensitivity), ("PSI_Mouse_bSmooting", Opt::Smoothing), ("PSI_Mouse_bInvertY", Opt::InvertY)],
+                (1, 1) => vec![
+                    ("PSI_Mouse_Sensitivity", Opt::Sensitivity),
+                    ("PSI_Mouse_bSmooting", Opt::Smoothing),
+                    ("PSI_Mouse_bInvertY", Opt::InvertY),
+                    ("PSI_Mouse_bAutoAim", Opt::MouseAutoAim),
+                    ("PSI_Mouse_AutoAimStrength", Opt::MouseAutoAimStrength),
+                    ("PSI_Mouse_bFriction", Opt::MouseFriction),
+                    ("PSI_Mouse_FrictionStrength", Opt::MouseFrictionStrength),
+                ],
                 (1, _) => vec![
                     ("PSI_Gamepad_BindingSet", Opt::PadScheme),
                     ("PSI_Gamepad_bVibration", Opt::PadVibration),
                     ("PSI_Gamepad_LookXSensitivity", Opt::PadLookX),
                     ("PSI_Gamepad_LookYSensitivity", Opt::PadLookY),
                     ("PSI_Gamepad_bInvertY", Opt::PadInvertY),
+                    ("PSI_Gamepad_bAutoAim", Opt::PadAutoAim),
+                    ("PSI_Gamepad_AutoAimStrength", Opt::PadAutoAimStrength),
+                    ("PSI_Gamepad_bFriction", Opt::PadFriction),
+                    ("PSI_Gamepad_FrictionStrength", Opt::PadFrictionStrength),
                 ],
                 (2, _) => vec![
                     ("PSI_Graphics_Gamma", Opt::Brightness),

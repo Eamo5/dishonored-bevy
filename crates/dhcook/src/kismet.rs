@@ -855,6 +855,17 @@ fn dialog_tree(pkg: &Package, t: i32, voices: &HashMap<[u32; 4], Vec<String>>) -
                             min: f("m_fLoiterTime_Min", 5.0),
                             max: f("m_fLoiterTime_Max", 7.0),
                         }),
+                        // (the class's reach 300 uu, as roshan's r614/blink research read it)
+                        "DisConv_Hook_PlayerLookAt" => Some(crate::format::KHookPoll::LookAt {
+                            radius: f("m_fLookAtRadius", 300.0) * crate::xform::UNIT,
+                            targets: struct_array(pkg, &p, "m_LookAtTargets")
+                                .iter()
+                                .filter_map(|t| {
+                                    let a = t.object("m_pLookAtActor").filter(|o| *o != 0)?;
+                                    Some((pkg.obj_name(a).to_string(), t.float("m_fLookAngle").unwrap_or(20.0), t.float("m_fLookAtTime").unwrap_or(2.0)))
+                                })
+                                .collect(),
+                        }),
                         _ => None,
                     };
                     KDialogNodeKind::Hook { hook, inputs, poll }

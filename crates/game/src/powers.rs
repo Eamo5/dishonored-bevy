@@ -1233,6 +1233,10 @@ fn use_power(
             } else if stats.mana >= cost {
                 stats.spend_mana(cost, &attrs);
                 powers.blink = Some((pt.translation, target, 0.0));
+                // (the world slows as he goes: Blink's dilation layer, down over
+                // `m_fBendTimeDownTime`)
+                let down = data.active("Blink").and_then(|a| a.levels.get(level.saturating_sub(1) as usize)).and_then(|l| l.get("m_fBendTimeDownTime")).copied().unwrap_or(0.9);
+                tc.blink_rate = -(1.0 - crate::gameplay::BLINK_FLOOR) / down.max(0.01);
                 sfx.write(PostEvent::named(data.power_sound("Blink", level, "m_pBlinkWarmupSoundEvent").unwrap_or("Snd_Power_P_Blink_Start"), None));
                 powers.cast_seq += 1;
                 powers.cast_power = Power::Blink;
@@ -1472,8 +1476,9 @@ fn use_power(
             if let Some((m, _, _)) = muzzles.iter().find(|(_, _, m)| m.0 == Power::Crossbow) {
                 fx.write(crate::particles::SpawnEffect { follow: Some(m), turn: true, view: true, secs: 0.5, ..crate::particles::SpawnEffect::at("crossbow_muzzle", Vec3::ZERO) });
             }
-            // (the bolt strays within the aim's cone; the view kicks)
-            let dir = aim.scatter(dir);
+            // (the bolt goes for what the aim assist holds, straying within the aim's cone; the
+            // view kicks)
+            let dir = aim.scatter(aim.aimed(eye, dir));
             aim.fire(&data, &stats, sel);
             // (a regular bolt that will kill: the kill cam follows it, as the option has it)
             let lethal = (kind == HitKind::Bolt && data.pawn("arrow.m_bKillCamEnabled", 0.0) > 0.0)
@@ -1521,7 +1526,7 @@ fn use_power(
             stats.shots_fired += 1;
             powers.cooldown = FIRE_ACTION;
             spend_round(&mut powers, &data, &stats, sel, held);
-            let dir = aim.scatter(dir);
+            let dir = aim.scatter(aim.aimed(eye, dir));
             aim.fire(&data, &stats, sel);
             // its flash at the pistol's muzzle (drawn with the hands), its tracer off from there
             // (`Ps_PlayerPistol_StdMuzzle_01`, `Ps_Pistol_StdTracer_01`)
@@ -1820,7 +1825,16 @@ fn blink_travel(
     mut powers: ResMut<Powers>,
     mut player: Query<(&mut Transform, &mut Player, &mut Collider)>,
     mut sfx: MessageWriter<PostEvent>,
+    mut tc: ResMut<TimeControl>,
 ) {
+    // Blink's layer of the world's dilation, moving as it was set
+    if tc.blink_rate != 0.0 {
+        let to = (tc.blink_layer + tc.blink_rate * time.delta_secs()).clamp(crate::gameplay::BLINK_FLOOR, 1.0);
+        tc.blink_layer = to;
+        if to >= 1.0 && tc.blink_rate > 0.0 {
+            tc.blink_rate = 0.0;
+        }
+    }
     let Some((from, to, t)) = powers.blink else { return };
     let Ok((mut pt, mut p, mut col)) = player.single_mut() else { return };
     // 100 uu a tick (60 m/s), his velocity his again at the end: a falling Blink keeps its fall
@@ -1832,6 +1846,12 @@ fn blink_travel(
         let level = stats.power("Blink");
         sfx.write(PostEvent::named(data.power_sound("Blink", level, "m_pBlinkSoundEvent").unwrap_or("Snd_Power_P_Blink_Stop"), None));
         powers.blink = None;
+        // (and comes back up from where it got to, over `m_fBendTimeUpTime`)
+        let up = data.active("Blink").and_then(|a| a.levels.get(level.saturating_sub(1) as usize)).and_then(|l| l.get("m_fBendTimeUpTime")).copied().unwrap_or(2.5);
+        tc.blink_rate = (1.0 - tc.blink_layer) / up.max(0.01);
+        if std::env::var("DH_BLINK_LOG").is_ok() {
+            info!("blink: arrived, the world at {:.3} of its pace, back over {up:.2} s", tc.blink_layer);
+        }
         p.locked = false;
         p.velocity = powers.blink_vel;
         p.grounded = false;

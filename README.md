@@ -108,7 +108,11 @@ are in the settings file, `pad_binding_set` 0-3):
 
 - **Powers** (levels, ranges, durations from the original tweaks): Blink (its target marked as
   `Twk_Blink` marks it: `Blink_Ground_01` on the ground, `Blink_Mantle_01` on a ledge it will
-  climb, `Blink_Fall_01` in the air it will fall from), Dark Vision, Bend
+  climb, `Blink_Fall_01` in the air it will fall from; the world slows as he goes, its own layer
+  of time falling toward 0.05 over `m_fBendTimeDownTime` from the release and rising back over
+  `m_fBendTimeUpTime` from wherever it got to once he arrives, as roshan's r614/blink research
+  decoded the power, taken as the least of the world's slowings: a short hop leaves it near 0.94;
+  `DH_BLINK_LOG`), Dark Vision, Bend
   Time, Wind Blast (its gust from his left hand by its level, its own under water
   (`m_EffectTemplate`, `m_UnderwaterEffectTemplate`), the ground under him kicked up, dirt or
   water with its burst (`Windblast_Ground`), and a puff where its front meets the world in its
@@ -259,7 +263,9 @@ are in the settings file, `pad_binding_set` 0-3):
   (the stealth shroud), objective, grenade, awareness and Heart markers, `Crosshair Style`
   Off / Simple (the dot alone) / Normal, `Crosshair Movement` (the reticles open with the
   weapon's dispersion), `Crosshair Opacity`; `Controls`: Keyboard Mapping, Mouse Settings
-  (sensitivity, `Smoothing`, invert), Gamepad Settings (`Control Scheme`, the original's link,
+  (sensitivity, `Smoothing`, invert, `Auto Aim` and its strength, `Aim Assist` (the aim's
+  friction) and its strength: both off for the mouse by default), Gamepad Settings (the same
+  four, on by default; `Control Scheme`, the original's link,
   "Modify controls scheme", showing the scheme while not chosen, to its own screen as
   `GamepadMapping` draws it: over a dark veil, the pad's picture (`UI_GamepadMapping`) and each
   button's line of the scheme (`m_GamepadMapping1`..`4`) by its button's icon, the scheme's
@@ -300,6 +306,30 @@ are in the settings file, `pad_binding_set` 0-3):
   as it opens), so the shot lands within them; each shot kicks the view up
   (`m_fCamRecoilOnFire` less `Attribute_RecoilReduction`) and it settles. The reticles' brackets
   also take the crosshair state (empty, over an enemy) as `SetCrosshairState` sets them.
+- **Auto aim** (`aim.rs`), as the executable's `DisItemContext_AimAssistAttack` does it
+  (0x00C14290 and the functions it calls, decoded for this rewrite from the user's own
+  `Dishonored.exe`; roshan's r614/blink research had found its entry points): with `Auto Aim`
+  on for the device in use (the mouse's off by default, the pad's on) and the weapon's
+  `m_bUseAimAssist_Mouse` / `_Gamepad`, every hit region of every character not down (his
+  friends passed over: `m_bDisableAssistForFriendlyPawns`, a faction allied to his) and every
+  object of interest (`m_ObjectsOfInterest`, matched by tweak along its fallbacks, else by class:
+  a tallboy's tank, whale oil tanks, river krusts, thrown whiskey bottles, rats, small props) is
+  weighed: its box put on the screen, the crosshair must fall within its half extent plus its
+  window (`m_fAimAssist_MaxSize_Horiz` / `_Vert`, pixels of 1280 x 720, times the strength and,
+  past `m_fDistanceToReduce`, `m_fAimAssistWindowScale`), within the reach across the ground
+  (`m_fMaxAimAssistDistance`, the struct's 2000 uu for the crossbow, times `Attribute_Range`) and
+  in sight. The least score ((`m_fAimAssistAngleWeight` x angle / `m_fMaxAimAssistAngle` +
+  `m_fAimAssistDistWeight` x distance / reach) x `m_fPriorityWeightScale`) wins: shots go for its
+  point before they stray, and the HUD's crosshair slides onto it at the HUD tweak's
+  `m_fCrosshairInterpolationSpeed` (back to the middle without one). Zoomed, the zoomed groups
+  are used, which Corvo's weapons leave empty. The characters' region boxes are this rewrite's
+  (cut as its shots tell head, body and legs apart; the original's are its physics bodies).
+  The aim's friction (the menu's `Aim Assist`): over an enemy, zoomed (Corvo's
+  `m_bUseAimFriction_Zoomed`; not unzoomed), the look slows to `m_fFrictionMult_Horiz` 0.4 across
+  and `_Vert` 0.5 up; where the original applies it in the executable was not found, so the
+  strength taking it from none to the whole is this rewrite's reading. `DH_AIM_LOG=1` logs the
+  choices, the shots' turn and the friction (`=2`: what is weighed). Script: `face NAME DY YAW`
+  turns the view YAW degrees off a character.
 - **What the guns and blades show** (`impacts.rs`): the pistol's flash at its muzzle (the gun's
   `Spitfire` socket, `DisTweaks_FirePistol.m_MuzzleSocketName`; `Ps_PlayerPistol_StdMuzzle_01`
   drawn with the hands) and its tracer off from there (`Ps_Pistol_StdTracer_01`); the crossbow's
@@ -1387,8 +1417,11 @@ are in the settings file, `pad_binding_set` 0-3):
   and Down move a line (`Move`; `Stop` at the ends, no wrap) and Enter answers (`Validation`,
   the answer reaching the script 150 ms on); the pad's D-pad or stick and A do the same, and
   the A glyph shows on the highlighted option only while a pad is in use (`bUsingGamepad`).
-  The number keys are the movie's dock bar, not the menu's. Walking away leaves them
-  unanswered. Script: `choice A|B|C` (with `DH_CHOICE=show` to leave it up).
+  The mouse is the menu's too: the cursor comes free while a choice is up (back to the view
+  once answered), entering an option's `btn` selects it (`Move`), letting go over it answers
+  (`onRelease`). The number keys are the movie's dock bar, not the menu's. Walking away leaves
+  them unanswered. Script: `choice A|B|C` (with `DH_CHOICE=show` to leave it up), `pointer X Y`
+  (logical pixels; `pointer off`) and `click`.
 - **Event messages**: the HUD tweak's game messages for runes and bone charms found
   ("2/3 Runes found", the first time "New Rune added / Press [J] to acquire Powers", "New
   Bone Charm added / Press [J] to equip") and mission clues ("Mission Clues updated / Press
@@ -1602,7 +1635,11 @@ are in the settings file, `pad_binding_set` 0-3):
   which used to go unheard) fire their close, medium or far way as the player comes within
   its distance of the speaker (2, 5 and 10 m by the class; the Hound Pits' 4 m), once until
   they draw back; the loiter hooks (`DisConv_Hook_PlayerLoiter`) fire once the player has
-  stayed within 6 m for 5-7 s, rolled anew each time, as roshan's r614/blink research decoded
+  stayed within 6 m for 5-7 s, rolled anew each time, and the look-at hooks
+  (`DisConv_Hook_PlayerLookAt`, `DDH_PLAYER_LOOKAT` and `_RADIAL`: Granny Rags' in the sewers,
+  the Flooded District's gate) once the player, within the hook's `m_fLookAtRadius` of a
+  speaker across the ground, has kept one of its `m_LookAtTargets` within its angle of the view
+  (the nearest the view's line counting) for its time, as roshan's r614/blink research decoded
   them.
   The trees' story-flag and conversation-had nodes give their negative output first (a flag
   unset, a conversation not yet had). A one-shot dialogue actor's lines are said by the

@@ -999,6 +999,20 @@ fn run_script(
                 }
             });
         }
+        "pointer" => {
+            // (tests) pointer X Y: the pointer over the window at X, Y (logical pixels) for a
+            // choice's options; pointer off: none
+            let at = (cmd.get(1).map(String::as_str) != Some("off")).then(|| Vec2::new(f(1), f(2)));
+            commands.queue(move |w: &mut World| {
+                if let Some(mut p) = w.get_resource_mut::<crate::choice::ChoicePointer>() {
+                    p.0 = at;
+                }
+            });
+        }
+        "click" => {
+            // (tests) click: the left button pressed and let go
+            script.held.push((Input::Mouse(MouseButton::Left), 0.05));
+        }
         "choice" => {
             // choice A|B|C: a choice put to Corvo (tests; `_` for spaces; `DH_CHOICE=show`
             // leaves it up)
@@ -1722,8 +1736,9 @@ fn run_script(
             p.pitch = (to.y / to.length().max(1e-3)).asin();
         }
         "face" => {
-            // face [NAME [DY]]: aim the view at the nearest standing character (whose name or
-            // pawn holds NAME), DY above its middle (0.6: its head; -0.6 its legs)
+            // face [NAME [DY [YAW]]]: aim the view at the nearest standing character (whose name
+            // or pawn holds NAME), DY above its middle (0.6: its head; -0.6 its legs), YAW
+            // degrees to the left of it
             let named = cmd.get(1).cloned().unwrap_or_default();
             let dy = cmd.get(2).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.6);
             let eye = t.translation + Vec3::Y * 0.6;
@@ -1734,7 +1749,7 @@ fn run_script(
                 .min_by(|a, b| a.0.total_cmp(&b.0))
             {
                 let to = at - eye;
-                p.yaw = (-to.x).atan2(-to.z);
+                p.yaw = (-to.x).atan2(-to.z) + cmd.get(3).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0).to_radians();
                 p.pitch = (to.y / to.length().max(1e-3)).asin();
             }
         }

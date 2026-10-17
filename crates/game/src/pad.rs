@@ -248,7 +248,7 @@ fn dead(v: Vec2) -> Vec2 {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn pad_input(
+pub(crate) fn pad_input(
     mut pad: ResMut<Pad>,
     mut vpad: ResMut<VirtualPad>,
     pads: Query<&Gamepad>,
