@@ -4707,6 +4707,9 @@ impl Vm {
                                 .map(|(i, _)| i)
                         });
                         let mut w = self.hook_look.remove(&key);
+                        if self.trace && w.map(|w| w.0) != looked {
+                            info!("kismet: {hook} ({}) looked at {looked:?} from {flat:.1} m (reach {radius:.1})", t.path);
+                        }
                         let fired = look_watch(&mut w, looked, self.time, |i| targets.get(i).map(|t| t.2).unwrap_or(2.0));
                         if let Some(w) = w {
                             self.hook_look.insert(key, w);

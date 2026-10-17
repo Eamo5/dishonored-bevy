@@ -241,6 +241,15 @@ mod look_tests {
     use super::*;
 
     #[test]
+    fn friction_divides_by_the_strength_and_never_quickens() {
+        let m = Vec2::new(0.4, 0.5);
+        assert_eq!(friction_scale(m, 100.0), m);
+        assert!((friction_scale(m, 50.0) - Vec2::new(0.8, 1.0)).length() < 1e-6);
+        assert_eq!(friction_scale(m, 20.0), Vec2::ONE);
+        assert_eq!(friction_scale(m, 0.0), Vec2::ONE);
+    }
+
+    #[test]
     fn a_jolt_shakes_the_view_and_settles() {
         let mut s = CameraShake::default();
         s.jolt(200.0);
@@ -321,6 +330,16 @@ const LIMIT_MOUSE_SPRINT: f32 = 10.0;
 const LIMIT_PAD_KEYHOLE: f32 = 0.5;
 const LIMIT_PAD_SPRINT: f32 = 0.85;
 
+/// The aim friction's slowing of the turn and the look up: its multipliers over the strength
+/// (the option / 100), never quicker than none.
+fn friction_scale(mult: Vec2, strength: f32) -> Vec2 {
+    let k = strength / 100.0;
+    if k <= 0.0 {
+        return Vec2::ONE;
+    }
+    (mult / k).min(Vec2::ONE)
+}
+
 fn player_look(
     motion: Res<AccumulatedMouseMotion>,
     cursor: Single<&CursorOptions>,
@@ -348,19 +367,22 @@ fn player_look(
         let user = game_settings.as_ref().map_or(1.0, |s| crate::pad::look_scale(s.pad_look_x));
         (j / user.max(1e-3)).min(1.0)
     });
-    // the aim's friction (`DisTweaks_PlayerInput`): over an enemy the look slows by
-    // `m_fFrictionMult_Horiz` and `_Vert` (Corvo's only zoomed, `m_bUseAimFriction_Zoomed`), as the
-    // option for the device has it (the menu's "Aim Assist", `PSI_Mouse_bFriction` off by default,
-    // the pad's on); the strength taking it from none to the whole is this rewrite's reading
+    // the aim's friction, as `DishonoredPlayerInput`'s tick does it (0x00ABDD90, decoded for this
+    // rewrite): with the option on for the device (the menu's "Aim Assist", `PSI_Mouse_bFriction`
+    // off by default, the pad's on), zoomed if `m_bUseAimFriction_Zoomed`, else if
+    // `m_bUseAimFriction_NonZoomed` or the device's auto aim is off, over a hostile character the
+    // turn and the look up are multiplied by `m_fFrictionMult_Horiz` and `_Vert` over the strength
+    // (stored as the option / 100 by its settings listener, 0x00ABD610). The original's division
+    // would quicken the look under 40 and divide by zero at 0; it stops here at no slowing.
     let friction = |pad: bool| -> Vec2 {
         let (Some(s), Some(data), Some(over)) = (game_settings.as_ref(), data.as_ref(), over.as_ref()) else { return Vec2::ONE };
-        let (on, strength) = if pad { (s.pad_friction, s.pad_friction_strength) } else { (s.mouse_friction, s.mouse_friction_strength) };
-        let used = data.pawn(if zoom.level > 0 { "input.m_bUseAimFriction_Zoomed" } else { "input.m_bUseAimFriction_NonZoomed" }, 0.0) > 0.0;
+        let (on, strength, auto_aim) = if pad { (s.pad_friction, s.pad_friction_strength, s.pad_auto_aim) } else { (s.mouse_friction, s.mouse_friction_strength, s.mouse_auto_aim) };
+        let flag = |k: &str| data.pawn(k, 0.0) > 0.0;
+        let used = if zoom.level > 0 { flag("input.m_bUseAimFriction_Zoomed") } else { flag("input.m_bUseAimFriction_NonZoomed") || !auto_aim };
         if !on || !used || !over.0 {
             return Vec2::ONE;
         }
-        let k = (strength / 100.0).clamp(0.0, 1.0);
-        Vec2::ONE - (Vec2::ONE - Vec2::new(data.pawn("input.m_fFrictionMult_Horiz", 0.5), data.pawn("input.m_fFrictionMult_Vert", 0.5))) * k
+        friction_scale(Vec2::new(data.pawn("input.m_fFrictionMult_Horiz", 0.5), data.pawn("input.m_fFrictionMult_Vert", 0.5)), strength)
     };
     // the wheel takes the mouse while it's open; the lens slows the aim
     if !paused.0 && cursor.grab_mode != CursorGrabMode::None && scripted.is_none() && !wheel.open {

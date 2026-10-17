@@ -111,8 +111,10 @@ are in the settings file, `pad_binding_set` 0-3):
   climb, `Blink_Fall_01` in the air it will fall from; the world slows as he goes, its own layer
   of time falling toward 0.05 over `m_fBendTimeDownTime` from the release and rising back over
   `m_fBendTimeUpTime` from wherever it got to once he arrives, as roshan's r614/blink research
-  decoded the power, taken as the least of the world's slowings: a short hop leaves it near 0.94;
-  `DH_BLINK_LOG`), Dark Vision, Bend
+  decoded the power; Corvo's own pace stays (the release asks the engine's time-dilation helper
+  for world 0.01, kept at 0.05, player 1: 0x00BFCA7D), and the world's slowings multiply, as the
+  helper folds its layers each tick (0x009FCBC0, decoded for this rewrite): a short hop leaves
+  the world near 0.94; `DH_BLINK_LOG`), Dark Vision, Bend
   Time, Wind Blast (its gust from his left hand by its level, its own under water
   (`m_EffectTemplate`, `m_UnderwaterEffectTemplate`), the ground under him kicked up, dirt or
   water with its burst (`Windblast_Ground`), and a puff where its front meets the world in its
@@ -324,10 +326,14 @@ are in the settings file, `pad_binding_set` 0-3):
   `m_fCrosshairInterpolationSpeed` (back to the middle without one). Zoomed, the zoomed groups
   are used, which Corvo's weapons leave empty. The characters' region boxes are this rewrite's
   (cut as its shots tell head, body and legs apart; the original's are its physics bodies).
-  The aim's friction (the menu's `Aim Assist`): over an enemy, zoomed (Corvo's
-  `m_bUseAimFriction_Zoomed`; not unzoomed), the look slows to `m_fFrictionMult_Horiz` 0.4 across
-  and `_Vert` 0.5 up; where the original applies it in the executable was not found, so the
-  strength taking it from none to the whole is this rewrite's reading. `DH_AIM_LOG=1` logs the
+  The aim's friction (the menu's `Aim Assist`), as `DishonoredPlayerInput`'s tick does it
+  (0x00ABDD90): with the option on for the device, zoomed (Corvo's `m_bUseAimFriction_Zoomed`),
+  or unzoomed when `m_bUseAimFriction_NonZoomed` is set or the device's auto aim is off (so with
+  the mouse's defaults, friction on and auto aim off, it also works unzoomed), over a hostile
+  character the turn and the look up are multiplied by `m_fFrictionMult_Horiz` 0.4 and `_Vert`
+  0.5 over the strength (the option / 100, as its settings listener stores it, 0x00ABD610): at
+  100, 0.4 and 0.5; at 50, 0.8 and 1. The original's division would quicken the look under 40
+  and divide by zero at 0; here it stops at no slowing. `DH_AIM_LOG=1` logs the
   choices, the shots' turn and the friction (`=2`: what is weighed). Script: `face NAME DY YAW`
   turns the view YAW degrees off a character.
 - **What the guns and blades show** (`impacts.rs`): the pistol's flash at its muzzle (the gun's

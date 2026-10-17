@@ -806,8 +806,9 @@ pub struct TimeControl {
     pub blink_rate: f32,
 }
 
-/// How far Blink's layer would slow the world (`0.05`, reached only by a Blink lasting
-/// `m_fBendTimeDownTime`; a short hop leaves it near 0.94).
+/// How far Blink's layer would slow the world (`0.05`: the release asks 0.01 of the helper,
+/// which keeps a layer at 0.05 at least; reached only by a Blink lasting `m_fBendTimeDownTime`,
+/// a short hop leaves it near 0.94). Corvo's own pace stays (the layer's player rate is 1).
 pub const BLINK_FLOOR: f32 = 0.05;
 
 impl Default for TimeControl {
@@ -835,10 +836,12 @@ impl TimeControl {
         }
     }
     pub fn world_scale(&self) -> f32 {
-        // (bent time comes in and goes out over its warm-up and cool-down)
+        // (bent time comes in and goes out over its warm-up and cool-down; the slowings
+        // multiply, as the engine's time-dilation helper folds its layers each tick: the world's
+        // the product of every layer's, 0x009FCBC0, decoded for this rewrite)
         let bent = 1.0 + (self.world_dilation - 1.0) * self.bend_ramp();
         let scripted = self.scripted.map(|s| s.0).unwrap_or(1.0);
-        bent.min(scripted).min(self.finisher).min(self.aim_freeze).min(self.blink_layer) * self.wheel
+        bent * scripted * self.finisher * self.aim_freeze * self.blink_layer * self.wheel
     }
     /// Corvo's pace through his bent time (`m_PlayerDilation`, as it comes in).
     pub fn player_rate(&self) -> f32 {
@@ -1180,6 +1183,15 @@ fn tick_messages(time: Res<Time>, mut msgs: ResMut<HudMessages>) {
 #[cfg(test)]
 mod time_tests {
     use super::*;
+
+    #[test]
+    fn the_worlds_slowings_multiply() {
+        // (Blink's layer halfway down while a finisher slows the world: both apply)
+        let tc = TimeControl { blink_layer: 0.5, finisher: 0.5, ..Default::default() };
+        assert!((tc.world_scale() - 0.25).abs() < 1e-6);
+        // (Blink leaves Corvo's own pace)
+        assert_eq!(tc.player_rate(), 1.0);
+    }
 
     #[test]
     fn characters_out_of_bent_time_keep_corvos_time() {
