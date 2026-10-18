@@ -2028,14 +2028,14 @@ pub struct LightShafts {
     pub darkness: f32,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct PlayerStart {
     pub position: [f32; 3],
     pub yaw: f32,
     pub tag: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Spawner {
     pub name: String,
     pub position: [f32; 3],
@@ -2082,6 +2082,10 @@ pub struct Spawner {
     /// the volumes what it makes keeps within (`m_TetherVolumes`: `scene.volumes`)
     #[serde(default)]
     pub tether: Vec<u32>,
+    /// a travel spawner's (`DisTravelSpawner`): the travel destinations (player starts' tags) it
+    /// brings pursuers in at (`m_PlayerTravelLocationTags`)
+    #[serde(default)]
+    pub travel_tags: Vec<String>,
 }
 
 fn yes() -> bool {

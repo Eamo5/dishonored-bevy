@@ -1156,7 +1156,7 @@ impl<'a> Cooker<'a> {
                 "StaticMeshCollectionActor" => self.mesh_collection(&obj, &mut collected),
                 "StaticLightCollectionActor" => self.light_collection(&obj, &mut collected),
                 "PlayerStart" => self.player_start(&obj),
-                "DishonoredSpawner" => self.spawner(&obj),
+                "DishonoredSpawner" | "DisTravelSpawner" => self.spawner(&obj),
                 "DisFog" => self.fog(&obj),
                 "DisWallOfLight" | "DisDefenceTower" | "DisWatchTower" | "DisAlarmBell" | "DisWhaleOilReceptacle" | "DisWhaleOilBattery" => self.security(&obj),
                 "DisRatSpawner" => self.rat_spawner(&obj),
@@ -2584,6 +2584,17 @@ impl<'a> Cooker<'a> {
             spawn_visible: ch.bool("m_bCanSpawnWhenVisible").unwrap_or(false),
             spawn_near: ch.bool("m_bCanSpawnWhenPlayerNear").unwrap_or(false),
             tether: Vec::new(),
+            travel_tags: match ch.get_pkg("m_PlayerTravelLocationTags") {
+                Some((pkg, Value::Array { count, offset, size })) if *size >= count * 8 => (0..*count)
+                    .map(|k| {
+                        let at = offset + k * 8;
+                        let word = |o: usize| i32::from_le_bytes(pkg.data[o..o + 4].try_into().unwrap());
+                        pkg.name_of(word(at), word(at + 4))
+                    })
+                    .filter(|n| !n.is_empty() && n != "None")
+                    .collect(),
+                _ => Vec::new(),
+            },
         });
         // its tether volumes (resolved once all are in)
         let tether: Vec<kismet::ActorKey> = match ch.get_pkg("m_TetherVolumes") {
@@ -2643,6 +2654,7 @@ impl<'a> Cooker<'a> {
                 spawn_visible: true,
                 spawn_near: true,
                 tether: Vec::new(),
+                travel_tags: Vec::new(),
             });
             self.tether_keys.push(Vec::new());
             self.spawner_keys.push((String::new(), 0));

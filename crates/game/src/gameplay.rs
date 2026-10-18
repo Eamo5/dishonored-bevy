@@ -1154,6 +1154,9 @@ pub struct Campaign {
     /// the maps' states kept for a return within the mission (`DisSeqAct_SaveLevelState`):
     /// the map, its packages, its state (a save game's, as JSON)
     pub level_states: Vec<(String, Vec<String>, String)>,
+    /// the pursuers away from their maps after Corvo (`travel`), and the last trip's number
+    pub trips: Vec<crate::travel::Trip>,
+    pub next_trip: u32,
 }
 
 fn tick_time_control(time: Res<Time>, mut tc: ResMut<TimeControl>, mut sfx: MessageWriter<crate::audio::PostEvent>) {

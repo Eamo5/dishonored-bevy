@@ -2255,6 +2255,24 @@ against the install's own data where it carries them, then implemented independe
     (`m_fFreeFlightTimer`, 2 s), it turns and fights again once he is on it (within its
     `m_fCowerReactionDistance`, 6 m; `m_eCaughtReaction`: `EReaction_Fight`). (The kill handler,
     0x00B617C0, decoded for this rewrite from the user's own Dishonored.exe.)
+- **Pursuers through the door.** Guards hunting Corvo follow him into the next map, as the
+  original's travel manager has them (`UDisNPCTravelManager`, decoded for this rewrite from the
+  user's own Dishonored.exe: leaving 0x00AE2300, arriving 0x00AE2C90, the delay 0x00AE3760, going
+  home 0x00AE0AE0).
+  - Who: as he leaves a map, each enemy fighting him (its attention busted) goes after him, at
+    whatever distance, unless it is down, choked, being assassinated or burning
+    (`m_DisallowedNPCStates`). One frozen by Bend Time, carrying a key, or held to a tether he is
+    outside of stays behind and forgets him.
+  - When: each comes through d / (its run speed x `m_fTravelingNPCSpeedModifier`, 1.5) +
+    `m_fTravelingNPCDelay` (5 s) after him, d its distance from him as he left.
+  - Where: the map's travel spawners (`DisTravelSpawner`, 285 of them in 25 packages) that list his
+    destination's tag (`m_PlayerTravelLocationTags`) and make the same kind of character bring
+    them in, one each, in turn. Only the nearest `m_MaxTravelingNPCs` (3) come; the rest stay
+    home. They come in hunting him, at their own health.
+  - After: one that loses him walks back to where it came in and goes home through the door. The
+    next time he is in its home map it stands where it was, its memory of him gone. One that
+    dies stays where it fell, and one chased back home comes through as itself. The trips are
+    kept in saves.
 - **The alarm bell.** A guard who has found Corvo, within `m_fNPCGoToAlarmCloseness` of a bell,
   runs to it (the nearest of them; not with Corvo on him) and rings it after `m_fWaitTimeBeforeRing`,
   pulling its lever (`Sword_TriggerAlarm`, standing for it),

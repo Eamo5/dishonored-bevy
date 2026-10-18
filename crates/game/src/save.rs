@@ -283,6 +283,11 @@ pub struct SaveGame {
     /// the maps' states kept for a return to them (`Campaign::level_states`)
     #[serde(default)]
     level_states: Vec<(String, Vec<String>, String)>,
+    /// the pursuers away after Corvo (`Campaign::trips`)
+    #[serde(default)]
+    trips: Vec<crate::travel::Trip>,
+    #[serde(default)]
+    next_trip: u32,
     /// the HUD's tutorial stack (`m_TutorialStack`), as its save data keeps it
     #[serde(default)]
     tutorials: Vec<crate::gameplay::TutorialEntry>,
@@ -484,7 +489,7 @@ fn quick_keys(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn save_game(
+pub(crate) fn save_game(
     mut requests: MessageReader<SaveRequest>,
     level: Option<Res<LevelInfo>>,
     mut vm: Option<ResMut<Vm>>,
@@ -560,6 +565,8 @@ fn save_game(
         tutorials: msgs.stack.clone(),
         broken_doors: Vec::new(),
         level_states: Vec::new(),
+        trips: Vec::new(),
+        next_trip: 0,
         usables: usables.entered.iter().map(|(k, (s, d))| (*k, *s, *d)).collect(),
         usable_locks: usables.locks.iter().map(|(k, l)| (*k, *l)).collect(),
         factory_made: pickups.iter().filter(|(p, _)| level.scene.pickups.get(p.index as usize).is_some_and(|sp| sp.factory)).map(|(p, t)| (p.index, t.translation.to_array())).collect(),
@@ -661,6 +668,8 @@ fn save_game(
     }
     let Some(slot) = slot else { return };
     s.level_states = campaign.level_states.clone();
+    s.trips = campaign.trips.clone();
+    s.next_trip = campaign.next_trip;
     match serde_json::to_vec(&s).map_err(anyhow::Error::from).and_then(|d| {
         use std::io::Write;
         Ok(replace_save(&slot_path(slot), |file| file.write_all(&d))?)
@@ -680,7 +689,7 @@ fn save_game(
 /// A save game being loaded: applied once its map is up (or a map's kept state, on a return
 /// to it: the world only).
 #[derive(Resource)]
-struct PendingLoad {
+pub(crate) struct PendingLoad {
     save: SaveGame,
     frames: u32,
     armed: bool,
@@ -694,6 +703,7 @@ fn discard_level_states(vm: Option<ResMut<Vm>>, mut campaign: ResMut<crate::game
     for name in std::mem::take(&mut vm.level_state_discards) {
         if name == "*" {
             campaign.level_states.clear();
+            campaign.trips.clear();
             campaign.hub_taken.clear();
             continue;
         }
@@ -704,8 +714,63 @@ fn discard_level_states(vm: Option<ResMut<Vm>>, mut campaign: ResMut<crate::game
     }
 }
 
+/// A map's kept state (`Campaign::level_states`), changed by `f`; whether there was one.
+fn edit_kept(campaign: &mut crate::gameplay::Campaign, map: &str, f: impl FnOnce(&mut SaveGame)) -> bool {
+    let Some(entry) = campaign.level_states.iter_mut().find(|(m, _, _)| m.eq_ignore_ascii_case(map)) else { return false };
+    let Ok(mut save) = serde_json::from_str::<SaveGame>(&entry.2) else { return false };
+    f(&mut save);
+    match serde_json::to_string(&save) {
+        Ok(json) => {
+            entry.2 = json;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// A character leaving its map after Corvo (`travel`): taken out of the map's kept state, its
+/// saved self (as JSON) handed back.
+pub(crate) fn take_kept_npc(campaign: &mut crate::gameplay::Campaign, map: &str, spawner: u32) -> Option<String> {
+    let mut body = None;
+    edit_kept(campaign, map, |s| {
+        if let Some(i) = s.npcs.iter().position(|n| n.spawner == spawner) {
+            body = serde_json::to_string(&s.npcs.remove(i)).ok();
+        }
+    });
+    body
+}
+
+/// A character staying behind as Corvo leaves forgets him (the travel manager's 0x00AC4530):
+/// in the map's kept state it heads home, unaware.
+pub(crate) fn calm_kept_npc(campaign: &mut crate::gameplay::Campaign, map: &str, spawner: u32) {
+    edit_kept(campaign, map, |s| {
+        if let Some(n) = s.npcs.iter_mut().find(|n| n.spawner == spawner) {
+            calm(n);
+        }
+    });
+}
+
+/// A pursuer gone home (`travel`): its saved self back in its home map's kept state, where it
+/// was, its memory of Corvo gone (0x00AE2AE0).
+pub(crate) fn put_kept_npc(campaign: &mut crate::gameplay::Campaign, map: &str, body: &str) {
+    let Ok(mut n) = serde_json::from_str::<NpcSave>(body) else { return };
+    calm(&mut n);
+    edit_kept(campaign, map, |s| {
+        s.npcs.retain(|o| o.spawner != n.spawner);
+        s.npcs.push(n);
+    });
+}
+
+fn calm(n: &mut NpcSave) {
+    if !matches!(n.mode, Mode::Dead | Mode::Unconscious) {
+        n.alert = Alert::Unaware;
+        n.awareness = 0.0;
+        n.mode = Mode::Return;
+    }
+}
+
 /// Back in a map whose state was kept: as Corvo left it.
-fn return_to_level(mut commands: Commands, level: Option<Res<LevelInfo>>, campaign: Res<crate::gameplay::Campaign>, pending: Option<Res<PendingLoad>>) {
+pub(crate) fn return_to_level(mut commands: Commands, level: Option<Res<LevelInfo>>, campaign: Res<crate::gameplay::Campaign>, pending: Option<Res<PendingLoad>>) {
     let Some(level) = level else { return };
     if pending.is_some() {
         return;
@@ -862,6 +927,8 @@ fn apply_pending(
     if !level_only {
         campaign.hub_taken = s.hub_taken.iter().cloned().collect();
         campaign.level_states = std::mem::take(&mut s.level_states);
+        campaign.trips = std::mem::take(&mut s.trips);
+        campaign.next_trip = s.next_trip;
     }
     let taken: std::collections::HashSet<u32> = s.taken.iter().copied().collect();
     for (e, pk) in &pickups {

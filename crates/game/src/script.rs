@@ -1418,12 +1418,13 @@ fn run_script(
             });
         }
         "travel" => {
-            // leave for another map as the level scripts would (start 0)
+            // leave for another map as the level scripts would: travel MAP [START] (start 0)
             if let Some(map) = cmd.get(1) {
+                let start = cmd.get(2).and_then(|v| v.parse().ok()).unwrap_or(0);
                 commands.queue({
                     let map = map.clone();
                     move |w: &mut World| {
-                        w.write_message(crate::mission::TravelRequest { map, start: 0 });
+                        w.write_message(crate::mission::TravelRequest { map, start });
                     }
                 });
             }

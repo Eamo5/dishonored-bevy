@@ -13,6 +13,7 @@ mod mission;
 mod gamedata;
 mod heart;
 mod security;
+mod travel;
 mod wheel;
 mod journal;
 mod jview;
@@ -262,7 +263,7 @@ fn main() -> AppExit {
         .add_plugins((flares::FlaresPlugin, challenge::ChallengePlugin, dlc05hud::Dlc05HudPlugin, dlc05results::Dlc05ResultsPlugin, dlc05menu::Dlc05MenuPlugin, dlc05brief::Dlc05BriefPlugin, dlc05score::Dlc05ScorePlugin))
         .add_plugins((menu::MenuPlugin, save::SavePlugin, settings::SettingsPlugin, mission::MissionPlugin, ppgraph::PostGraphPlugin, watchtower::WatchTowerPlugin, highlight::HighlightPlugin, stealth::StealthPlugin, hudfx::HudFxPlugin, skip::SkipPlugin, pickuplog::PickupLogPlugin, targetcard::TargetCardPlugin, gauges::GaugesPlugin, zones::ZonesPlugin))
         .add_plugins((flash::FlashPlugin, awareness::AwarenessPlugin, location::LocationPlugin, crosshair::CrosshairPlugin, intwindow::IntWindowPlugin, hudtext::HudTextPlugin, softshadow::SoftShadowPlugin, tallboy::TallboyPlugin, plague::PlaguePlugin, objnotify::ObjNotifyPlugin, oxygen::OxygenPlugin, playerstate::PlayerStatePlugin, grenadeind::GrenadeIndPlugin, prompts::PromptsPlugin, tutwindow::TutWindowPlugin))
-        .add_plugins((gamedata::GameDataPlugin, journal::JournalPlugin, possession::PossessionPlugin, store::StorePlugin, swarm::SwarmPlugin, gadgets::GadgetsPlugin, whiskey::WhiskeyPlugin, thrown::ThrownPlugin, campaign::CampaignPlugin, heart::HeartPlugin, security::SecurityPlugin, wheel::WheelPlugin))
+        .add_plugins((gamedata::GameDataPlugin, journal::JournalPlugin, possession::PossessionPlugin, store::StorePlugin, swarm::SwarmPlugin, gadgets::GadgetsPlugin, whiskey::WhiskeyPlugin, thrown::ThrownPlugin, campaign::CampaignPlugin, heart::HeartPlugin, security::SecurityPlugin, wheel::WheelPlugin, travel::TravelPlugin))
         .add_plugins(dock::DockPlugin)
         .add_plugins(dpad::DpadPlugin)
         .add_plugins(quickpotion::QuickPotionPlugin)
