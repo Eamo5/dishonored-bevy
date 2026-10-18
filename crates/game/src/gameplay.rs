@@ -204,7 +204,7 @@ pub struct Struck {
 
 /// Corvo takes damage from something other than a blade (a krust's spit, a fish's bite): the
 /// red flash, a cry of pain, or death.
-pub fn hurt_player(stats: &mut PlayerStats, msgs: &mut HudMessages, sfx: &mut MessageWriter<crate::audio::PostEvent>, damage: f32) {
+pub fn hurt_player(stats: &mut PlayerStats, sfx: &mut MessageWriter<crate::audio::PostEvent>, damage: f32) {
     if stats.dead {
         return;
     }
@@ -212,7 +212,6 @@ pub fn hurt_player(stats: &mut PlayerStats, msgs: &mut HudMessages, sfx: &mut Me
     stats.damage_flash = 1.0;
     if stats.health <= 0.0 {
         stats.dead = true;
-        msgs.push("You died");
         sfx.write(crate::audio::PostEvent::named("Snd_VO_Bark_P_Death_cue_ak", None));
         sfx.write(crate::audio::PostEvent::named("VS_Death_Jingle", None));
     } else {

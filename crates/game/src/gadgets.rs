@@ -539,7 +539,6 @@ fn use_gadget(
     mut commands: Commands,
     mut uses: MessageReader<UseGadget>,
     mut stats: ResMut<PlayerStats>,
-    mut msgs: ResMut<HudMessages>,
     mut sfx: MessageWriter<PostEvent>,
     rapier: ReadRapierContext,
     player: Query<Entity, With<Player>>,
@@ -560,7 +559,6 @@ fn use_gadget(
         };
         let n = stats.items.get(key).copied().unwrap_or(0);
         if n == 0 {
-            msgs.push("Out of ammunition");
             sfx.write(PostEvent::named("Snd_Power_Empty", None));
             continue;
         }
@@ -626,7 +624,6 @@ fn use_gadget(
                     Gadget::StunMine => Some(MineKind::Stun),
                     _ => None,
                 };
-                let what = mine.map_or("springrazor", MineKind::name);
                 // placed on the surface aimed at, within reach
                 let Ok(ctx) = rapier.single() else { continue };
                 let mut filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
@@ -636,7 +633,6 @@ fn use_gadget(
                 // on the surface aimed at, else the floor in front
                 let ahead = u.eye + u.dir.with_y(0.0).normalize_or_zero() * 1.2;
                 let Some((_, hit)) = ctx.cast_ray_and_get_normal(u.eye, u.dir, 3.0, true, filter).or_else(|| ctx.cast_ray_and_get_normal(ahead, Vec3::NEG_Y, 3.0, true, filter)) else {
-                    msgs.push(format!("Cannot place the {} here", what.to_lowercase()));
                     continue;
                 };
                 stats.items.insert(key.into(), n - 1);

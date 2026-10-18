@@ -1216,7 +1216,6 @@ fn fly_spit(
     (npcs, mut hits, possession): (Query<(Entity, &crate::npc::Npc, &Transform), Without<Spit>>, MessageWriter<crate::gameplay::NpcHit>, Res<crate::possession::Possession>),
     cam: Query<Entity, With<PlayerCamera>>,
     mut stats: ResMut<PlayerStats>,
-    mut msgs: ResMut<crate::gameplay::HudMessages>,
     mut sfx: MessageWriter<PostEvent>,
     mut fx: MessageWriter<SpawnEffect>,
 ) {
@@ -1254,7 +1253,7 @@ fn fly_spit(
                 .filter(|hit| (wall.is_none() || *hit < limit) && npc.is_none_or(|n| *hit < n.2));
             if let Some(hit) = player_hit {
                 stats.hit_from = Some(a);
-                crate::gameplay::hurt_player(&mut stats, &mut msgs, &mut sfx, s.damage);
+                crate::gameplay::hurt_player(&mut stats, &mut sfx, s.damage);
                 if std::env::var("DH_KRUST_LOG").is_ok() {
                     info!("krust spit hits Corvo: -{} ({:.0} left)", s.damage, stats.health);
                 }

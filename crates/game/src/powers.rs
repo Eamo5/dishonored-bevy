@@ -241,24 +241,6 @@ impl Power {
             _ => return None,
         })
     }
-    /// Its ammunition's type (`eDisAmmoType` order), for its name.
-    pub fn ammo_type(self) -> Option<u8> {
-        Some(match self {
-            Power::Pistol => 0,
-            Power::ExplosiveBullet => 1,
-            Power::Crossbow => 2,
-            Power::SleepDart => 3,
-            Power::IncendiaryBolt => 4,
-            Power::SpringRazor => 5,
-            Power::Grenade => 6,
-            Power::StickyGrenade => 7,
-            Power::ExplosiveBolt => 8,
-            Power::ArcMine => 9,
-            Power::Chokedust => 10,
-            Power::StunMine => 11,
-            _ => return None,
-        })
-    }
     /// Ammunition left (`None` for powers and the Heart).
     pub fn ammo(self, stats: &PlayerStats) -> Option<u32> {
         match self {
@@ -1186,7 +1168,7 @@ fn use_power(
         powers.blink_crouch = dest.is_some_and(|d| d.1);
         powers.blink_spot = dest.map(|d| d.2);
     } else if sel == Power::Blink && can_act && mouse.just_pressed(MouseButton::Right) && stats.mana < Power::Blink.mana(&data) {
-        out_of_mana(&mut powers, &mut sfx, &mut msgs);
+        out_of_mana(&mut powers, &mut sfx);
     }
     // Use while it is aimed: "Cancel Blink" (`m_InteractionTexts[22]`): the aim ends with its
     // fizzle (`m_pFizzleSoundEvent`, Daud's `Snd_Pwr_Transversal_Cancel`) and Blink waits its
@@ -1238,7 +1220,6 @@ fn use_power(
         if let Some(target) = powers.blink_target.take() {
             if tune.inhibited {
                 // an Overseer's music box: the Mark fails
-                msgs.push("Your powers are blocked");
                 sfx.write(PostEvent::named("Snd_Power_Empty", None));
             } else if stats.mana >= cost {
                 stats.spend_mana(cost, &attrs);
@@ -1256,7 +1237,7 @@ fn use_power(
                 p.velocity = Vec3::ZERO;
                 powers.fov_kick = 1.0;
             } else {
-                out_of_mana(&mut powers, &mut sfx, &mut msgs);
+                out_of_mana(&mut powers, &mut sfx);
             }
         }
         return;
@@ -1277,7 +1258,6 @@ fn use_power(
         return;
     }
     if tune.inhibited && sel.key().is_some() {
-        msgs.push("Your powers are blocked");
         sfx.write(PostEvent::named("Snd_Power_Empty", None));
         powers.cooldown = 0.5;
         return;
@@ -1290,7 +1270,7 @@ fn use_power(
         sfx.write(PostEvent::named("Snd_UI_Ingame_Wheel_Mana", None));
     }
     if stats.mana < cost {
-        out_of_mana(&mut powers, &mut sfx, &mut msgs);
+        out_of_mana(&mut powers, &mut sfx);
         return;
     }
     let mut cast = true;
@@ -1354,7 +1334,6 @@ fn use_power(
         }
         Power::Grenade | Power::StickyGrenade | Power::SpringRazor | Power::Chokedust | Power::ArcMine | Power::StunMine => {
             if sel.ammo(&stats) == Some(0) {
-                msgs.push(format!("Out of {}", sel.ammo_type().map(crate::gadgets::ammo_name).unwrap_or("ammunition").to_lowercase()));
                 sfx.write(PostEvent::named("Snd_Power_Empty", None));
                 return;
             }
@@ -1373,11 +1352,11 @@ fn use_power(
             powers.cooldown = 1.0;
         }
         Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt => {
-            let (kind, empty) = match sel {
-                Power::SleepDart => (HitKind::SleepDart, "Out of sleep darts"),
-                Power::IncendiaryBolt => (HitKind::Fire, "Out of incendiary bolts"),
-                Power::ExplosiveBolt => (HitKind::ExplosiveBolt, "Out of explosive bolts"),
-                _ => (HitKind::Bolt, "Out of bolts"),
+            let kind = match sel {
+                Power::SleepDart => HitKind::SleepDart,
+                Power::IncendiaryBolt => HitKind::Fire,
+                Power::ExplosiveBolt => HitKind::ExplosiveBolt,
+                _ => HitKind::Bolt,
             };
             let ammo = match sel {
                 Power::SleepDart => &mut stats.sleep_darts,
@@ -1385,7 +1364,6 @@ fn use_power(
                 p => stats.items.entry(p.ammo_item().unwrap_or(crate::gadgets::FLARES).to_string()).or_default(),
             };
             if *ammo == 0 {
-                msgs.push(empty);
                 sfx.write(PostEvent::named("Snd_Power_Empty", None));
                 return;
             }
@@ -1444,7 +1422,6 @@ fn use_power(
             let explosive = sel == Power::ExplosiveBullet;
             let ammo = if explosive { stats.items.entry(crate::gadgets::EXPLOSIVE.to_string()).or_default() } else { &mut stats.bullets };
             if *ammo == 0 {
-                msgs.push(if explosive { "Out of explosive bullets" } else { "Out of bullets" });
                 sfx.write(PostEvent::named("Snd_Power_Empty", None));
                 return;
             }
@@ -1714,8 +1691,8 @@ fn windblast_gusts(
     powers.gusts.retain(|g| (g.targets.as_ref().is_none_or(|t| !t.is_empty()) || !g.impacts.is_empty()) && g.t < 3.0);
 }
 
-pub(crate) fn out_of_mana(powers: &mut Powers, sfx: &mut MessageWriter<PostEvent>, msgs: &mut HudMessages) {
-    msgs.push("Not enough mana");
+/// Too little mana: no line (the gauge, the hand's gesture and the sound tell it).
+pub(crate) fn out_of_mana(powers: &mut Powers, sfx: &mut MessageWriter<PostEvent>) {
     sfx.write(PostEvent::named("Snd_Power_Empty", None));
     powers.cooldown = 0.4;
     powers.no_mana_seq = powers.no_mana_seq.wrapping_add(1);
@@ -2302,7 +2279,6 @@ fn regenerate(
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
     attrs: Res<Attrs>,
     mut stats: ResMut<PlayerStats>,
-    mut msgs: ResMut<HudMessages>,
     mut sfx: MessageWriter<PostEvent>,
     mut last_health: Local<f32>,
 ) {
@@ -2330,12 +2306,10 @@ fn regenerate(
     if keys.just_pressed(bind.key(crate::bindings::Act::HealthElixir)) {
         if drink_elixir(&mut stats, &attrs, false, &mut sfx) {
             *last_health = stats.health;
-        } else if stats.health_elixirs == 0 {
-            msgs.push("No health elixirs");
         }
     }
-    if keys.just_pressed(bind.key(crate::bindings::Act::ManaElixir)) && !drink_elixir(&mut stats, &attrs, true, &mut sfx) && stats.mana_elixirs == 0 {
-        msgs.push("No mana elixirs");
+    if keys.just_pressed(bind.key(crate::bindings::Act::ManaElixir)) {
+        drink_elixir(&mut stats, &attrs, true, &mut sfx);
     }
 }
 

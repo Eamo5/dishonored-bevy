@@ -628,7 +628,14 @@ pub fn use_focus(
     if let Ok((mut p, song)) = pickups.get_mut(e) {
         if p.kind.at_capacity(&stats, &attrs) {
             timed.schedule(&[(0.0, "Snd_UI_Ingame_Max_Ammo".to_string())], None);
-            msgs.push(if matches!(p.kind, PickupKind::Ammo(_)) { "You can't carry more ammo of this type" } else { "You cannot carry any more of this elixir" });
+            // (the pickup's `m_CannotUseMessage`: the elixirs' own, else the stat pickups')
+            let tweak = match p.kind {
+                PickupKind::HealthElixir => "Elixir_Health_twk",
+                PickupKind::ManaElixir => "Elixir_Mana_twk",
+                _ => "StatPickupBase",
+            };
+            let m = data.text("Pickup", &format!("{tweak}.m_CannotUseMessage"));
+            msgs.push(if m.is_empty() { "You can't carry more ammo of this type".to_string() } else { m });
             return;
         }
         // a blade while he has one: left there (the original's cannot-pick-up sound)
@@ -699,8 +706,6 @@ pub fn use_focus(
                     } else {
                         read.write(crate::journal::ReadNote(item));
                     }
-                } else {
-                    msgs.push("You read the note");
                 }
             }
             PickupKind::Ammo(list) => {
@@ -763,7 +768,6 @@ pub fn use_focus(
                     stats.upgrades.push(bp.clone());
                 }
                 plog.add("Blueprint", Some("BluePrint_Small"));
-                msgs.push("Blueprint found: bring it to Piero");
                 // (the blueprints' tutorial, `m_TutorialNote`, the first time: the journal's
                 // key reads it while its message is up)
                 if let Some(id) = data.0.item_tutorials.get(bp.as_str()).cloned() {
@@ -821,12 +825,11 @@ pub fn use_focus(
         let at = Some(gt.translation());
         if door.locked {
             // a key on the ring opens it (and it swings open at once, as the original's do)
-            if let Some(k) = door.key_in(&stats.keys).cloned() {
+            if door.key_in(&stats.keys).is_some() {
                 door.locked = false;
                 if let Some(s) = sounds.filter(|s| !s.unlocked.is_empty()) {
                     timed.schedule(&[(0.0, s.unlocked.clone())], at);
                 }
-                msgs.push(format!("Unlocked: {k}"));
             } else {
                 if let Some(s) = sounds.filter(|s| !s.locked.is_empty()) {
                     timed.schedule(&[(0.0, s.locked.clone())], at);

@@ -791,7 +791,7 @@ fn run_script(
             if let Some(i) = wall {
                 devices.list[i].rewired = true;
             }
-            let ok = wall.is_some() || devices.rewire_near("", t.translation);
+            let ok = wall.is_some() || devices.rewire_near("", t.translation).is_some();
             let which: Vec<String> = devices.list.iter().filter(|d| d.rewired).map(|d| format!("{} ({})", d.def.actor, d.def.kind)).collect();
             info!("script: rewire {}: {}", if ok { "done" } else { "found nothing" }, which.join(", "));
         }

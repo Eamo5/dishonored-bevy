@@ -259,6 +259,7 @@ fn usable_focus(
     mut log: ResMut<UsableLog>,
     (mut stats, mut msgs, mut devices, mut sfx): (ResMut<crate::gameplay::PlayerStats>, ResMut<crate::gameplay::HudMessages>, ResMut<crate::security::Devices>, MessageWriter<crate::audio::PostEvent>),
     mut graphs: MessageWriter<crate::audiograph::PlayAudiograph>,
+    data: Res<crate::gamedata::Data>,
 ) {
     let Some(level) = level else { return };
     if focus.0 || carry.carrying() || possession.host.is_some() || held.0.is_some() || player.single().is_ok_and(|p| p.locked) {
@@ -294,10 +295,9 @@ fn usable_focus(
     }
     if r.locked {
         match key {
-            Some(k) => {
+            Some(_) => {
                 r.locked = false;
                 log.locks.insert(r.index, false);
-                msgs.push(format!("Unlocked: {k}"));
                 if let Some(actor) = r.actor {
                     used.write(Interaction::UsableLock { actor, locked: false });
                 }
@@ -310,12 +310,12 @@ fn usable_focus(
     if u.label.contains("Circuitry") {
         let tools = stats.items.get("RewireTool_twk").copied().unwrap_or(0);
         if tools == 0 {
-            msgs.push("A Rewire Tool is needed");
+            msgs.push(crate::security::panel_text(&data, "Generic", "m_CannotUseMessage"));
             return;
         }
         stats.items.insert("RewireTool_twk".into(), tools - 1);
-        if devices.rewire_near(&u.label, r.center) {
-            msgs.push("Rewired: it now protects you");
+        if let Some(group) = devices.rewire_near(&u.label, r.center) {
+            msgs.push(crate::security::panel_text(&data, group, "m_UseMessage"));
         }
         sfx.write(crate::audio::PostEvent::named("UI_Validation", Some(r.center)));
     }

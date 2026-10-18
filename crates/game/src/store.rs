@@ -4,7 +4,7 @@
 
 use crate::audio::PostEvent;
 use crate::gamedata::Data;
-use crate::gameplay::{HudMessages, PlayerStats};
+use crate::gameplay::PlayerStats;
 use crate::hud::Paused;
 use crate::ui_fonts::UiFonts;
 use crate::ui_images::UiImages;
@@ -115,7 +115,6 @@ fn open(
     mut store: ResMut<Store>,
     mut paused: ResMut<Paused>,
     mut cursor: Single<&mut CursorOptions>,
-    mut msgs: ResMut<HudMessages>,
     mut sfx: MessageWriter<PostEvent>,
 ) {
     let Some(r) = requests.read().last().cloned() else { return };
@@ -125,7 +124,6 @@ fn open(
         data.0.stores.iter().position(|s| s.id.starts_with(base))
     }) else {
         warn!("store {} not cooked", r.0);
-        msgs.push("The store is closed");
         return;
     };
     sfx.write(PostEvent::named("UI_S_OpenShop", None));
@@ -160,7 +158,7 @@ fn input(
     (rows, tabs_q): (Query<(&Interaction, &ItemRow), Changed<Interaction>>, Query<(&Interaction, &TabButton), Changed<Interaction>>),
     help: Query<(&Interaction, &crate::helpbar::HelpButton), Changed<Interaction>>,
     roots: Query<Entity, With<StoreRoot>>,
-    (mut sfx, mut msgs, attrs): (MessageWriter<PostEvent>, ResMut<HudMessages>, Res<crate::gamedata::Attrs>),
+    (mut sfx, attrs): (MessageWriter<PostEvent>, Res<crate::gamedata::Attrs>),
     scripted: Option<Res<crate::script::Scripted>>,
 ) {
     let Some(si) = store.open else { return };
@@ -265,12 +263,10 @@ fn input(
     }
     if at_capacity(&stats, &attrs, &it.item) {
         sfx.write(PostEvent::named("UI_Failure", None));
-        msgs.push("You cannot carry any more of this item");
         return;
     }
     if stats.coins < it.coins {
         sfx.write(PostEvent::named("UI_Failure", None));
-        msgs.push("Not enough coins");
         return;
     }
     // an upgrade is asked first, as the shop's upgrades list marks it (`confirmationRequired`:

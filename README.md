@@ -129,7 +129,7 @@ are in the settings file, `pad_binding_set` 0-3):
   (the original rats); enhancements Vitality, Blood Thirst, Shadow Kill, Agility. Runes buy
   them in the journal. Mana regenerates a portion above the last expense, like the original.
   A power cast without the mana for it gets the left hand's empty gesture (`Powers_OutOfMana`)
-  with "Not enough mana" and its sound (`Snd_Power_Empty`).
+  and its sound (`Snd_Power_Empty`), with no line, as the original.
   Going into a host plays the original transition (`POSSESSION_IN_INST`, a
   `MaterialInstanceTimeVarying` whose parameter curves are cooked into `scene.post_curves`:
   the eye opening, the retina's veins, the host's view coming in), coming out
@@ -1456,7 +1456,15 @@ are in the settings file, `pad_binding_set` 0-3):
 - **Event messages**: the HUD tweak's game messages for runes and bone charms found
   ("2/3 Runes found", the first time "New Rune added / Press [J] to acquire Powers", "New
   Bone Charm added / Press [J] to equip") and mission clues ("Mission Clues updated / Press
-  [J] to read").
+  [J] to read"). The other lines are the original's own: a pickup's `m_CannotUseMessage` when
+  he can carry no more ("You cannot carry any more elixirs", "... remedies", "You can't carry
+  more ammo of this type"), a security panel's `m_UseMessage` once rewired ("This Wall of Light
+  will now harm enemies instead of you.") or `m_CannotUseMessage` without a tool ("You don't
+  have any rewiring tools."), a launcher's once disarmed, the Devouring Swarm's
+  `m_CannotSpawnSwarmMessage`, the scripts'. The rewrite's own lines (kills, knockouts, parries,
+  "Not enough mana", "Out of bullets", saves, deaths) are gone: the original says these with
+  clips, sounds, the gauges, the saving icon and the death screen. Items a script hands Corvo
+  go to the pickup log, as picked-up ones do.
 - **Pickpocketing**: what a character carries (its spawner's `m_pStealablePickup`: a coin
   purse, a key) hangs at its belt; Corvo can take it from behind someone who hasn't noticed
   him, or from the body. Robbed while it stands, a character misses it a while later

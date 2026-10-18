@@ -12,7 +12,7 @@
 
 use crate::anim::{Animator, ClipId};
 use crate::audio::PostEvent;
-use crate::gameplay::{HitKind, HudMessages, NpcHit, PlayerStats};
+use crate::gameplay::{HitKind, NpcHit, PlayerStats};
 use crate::level::{GameAssets, GROUP_WORLD};
 use crate::npc::{Npc, NpcAnim, NpcRig};
 use crate::particles::SpawnEffect;
@@ -207,7 +207,7 @@ fn clouds(
     mut carriers: Query<(Entity, &Npc, &Transform, &mut Cloud)>,
     mut others: Query<(Entity, &mut Npc, &Transform), Without<Cloud>>,
     player: Query<&Transform, With<Player>>,
-    (mut stats, mut msgs, attrs): (ResMut<PlayerStats>, ResMut<HudMessages>, Res<crate::gamedata::Attrs>),
+    (mut stats, attrs): (ResMut<PlayerStats>, Res<crate::gamedata::Attrs>),
     (mut hits, mut sfx): (MessageWriter<NpcHit>, MessageWriter<PostEvent>),
     (mut vm, mut lens_n): (Option<ResMut<crate::kismet::Vm>>, Local<u32>),
 ) {
@@ -244,7 +244,7 @@ fn clouds(
             if damage > 0.0 {
                 stats.mana = (stats.mana + attrs.plague_mana).min(stats.max_mana);
                 stats.mana_cap = stats.mana_cap.max(stats.mana);
-                crate::gameplay::hurt_player(&mut stats, &mut msgs, &mut sfx, damage);
+                crate::gameplay::hurt_player(&mut stats, &mut sfx, damage);
                 stats.hit_from = Some(t.translation);
             }
             if !pl.hurt.is_empty() {

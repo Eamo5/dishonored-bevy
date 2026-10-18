@@ -1,7 +1,7 @@
 //! First-person player (Corvo) controller.
 
 use crate::footsteps::{Footfall, Gait, Walker};
-use crate::gameplay::{HudMessages, Noise, NoiseKind, PlayerStats};
+use crate::gameplay::{Noise, NoiseKind, PlayerStats};
 use crate::hud::Paused;
 use crate::level::{LevelInfo, LevelSpawnSet, GROUP_NPC, GROUP_PLAYER, GROUP_PROP, GROUP_WORLD};
 use crate::powers::Powers;
@@ -440,7 +440,7 @@ fn player_move(
     mut vinput: ResMut<VirtualInput>,
     mut stats: ResMut<PlayerStats>,
     (mut noise, mut steps): (MessageWriter<Noise>, MessageWriter<Footfall>),
-    (mut msgs, attrs, zone): (ResMut<HudMessages>, Res<crate::gamedata::Attrs>, Res<crate::zones::ZonePush>),
+    (attrs, zone): (Res<crate::gamedata::Attrs>, Res<crate::zones::ZonePush>),
     (swim, waters, carry, possession): (Res<crate::swim::Swim>, Option<Res<crate::swim::Waters>>, Res<crate::carry::Carry>, Res<crate::possession::Possession>),
     (mut climb, climbables, mut sfx): (ResMut<crate::climb::Climb>, Option<Res<crate::climb::Climbables>>, MessageWriter<crate::audio::PostEvent>),
     (cine, settings, paused, tc, mut slide, mut auto, mut hard): (Res<crate::script_world::Cinematic>, Res<crate::settings::Settings>, Res<Paused>, Res<crate::gameplay::TimeControl>, ResMut<Slide>, ResMut<AutoCrouch>, ResMut<HardLanding>),
@@ -640,7 +640,6 @@ fn player_move(
                 if stats.health <= 0.0 {
                     stats.dead = true;
                     stats.died_falling = true;
-                    msgs.push("You fell to your death");
                 }
             }
         }

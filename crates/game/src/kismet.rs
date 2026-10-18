@@ -6448,12 +6448,13 @@ pub fn apply_effects(
     pickups: Query<(Entity, &Pickup)>,
     (mut sounds, mut ambients, mut travel, mut store): (MessageWriter<crate::audio::PostEvent>, ResMut<crate::audio::Ambients>, MessageWriter<crate::mission::TravelRequest>, MessageWriter<crate::store::OpenStore>),
     level: Option<Res<LevelInfo>>,
-    (stream_cols, mut fog, mut autosave, mut choice, mut emitters): (
+    (stream_cols, mut fog, mut autosave, mut choice, mut emitters, mut plog): (
         Query<(&LevelInstance, &crate::level::InstanceCollider)>,
         ResMut<crate::fog::FogState>,
         MessageWriter<crate::save::SaveRequest>,
         ResMut<crate::choice::Choice>,
         Query<&mut crate::particles::ParticleEmitter>,
+        ResMut<crate::pickuplog::PickupLog>,
     ),
 ) {
     if vm.effects.is_empty() {
@@ -6577,7 +6578,7 @@ pub fn apply_effects(
             Effect::Key(name) => {
                 if !stats.keys.contains(&name) {
                     stats.keys.push(name.clone());
-                    msgs.push(name);
+                    plog.add(name, Some("Key_Small"));
                 }
             }
             Effect::TakeItem(path) => {

@@ -1180,6 +1180,29 @@ fn localization(cooked: &Path, d: &mut GameData) {
             }
         }
     }
+    // the security panels' and pickups' messages, by their tweak's group or name: a panel's once
+    // rewired and without a tool (`SecuritySystems_twk`: `WallOfLight.m_UseMessage`,
+    // `Generic.m_CannotUseMessage`), a pickup's when he can carry no more (`Pickups_twk`:
+    // `Elixir_Health_twk.m_CannotUseMessage`), as `Security.<..>` and `Pickup.<..>`
+    for (file, prefix) in [("SecuritySystems_twk.int", "Security"), ("Pickups_twk.int", "Pickup")] {
+        let Ok(raw) = std::fs::read(cooked.join("..").join("Localization").join("INT").join(file)) else { continue };
+        let mut owner = String::new();
+        for line in decode_int(&raw).lines() {
+            let line = line.trim();
+            if line.starts_with('[') && line.ends_with(']') {
+                // `[WallOfLight.WallOfLight_eye_panel_twk:pInteractableTweaks DisTweaks_..]`
+                let path = line[1..line.len() - 1].split([' ', ':']).next().unwrap_or("");
+                owner = if prefix == "Security" { path.split('.').next() } else { path.rsplit('.').next() }.unwrap_or("").to_string();
+                continue;
+            }
+            let Some((k, v)) = line.split_once('=') else { continue };
+            let v = v.trim();
+            let v = v.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(v);
+            if k.trim().ends_with("Message") && !v.is_empty() && !owner.is_empty() {
+                d.texts.entry(format!("{prefix}.{owner}.{}", k.trim())).or_insert_with(|| v.to_string());
+            }
+        }
+    }
     // the options' words (`Settings.int`: the settings, their values, the keys' names) as
     // `Settings.<section>.<key>`; the powers', ammunition's and keys' (`RPG.int`: each power's
     // level descriptions and mana consumption, `DisUISelectionType`) as `RPG.<section>.<key>`

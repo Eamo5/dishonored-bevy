@@ -465,7 +465,7 @@ fn fly_darts(
     mut darts: Query<(Entity, &mut Dart, &mut Transform)>,
     player: Query<(&Transform, &Player), Without<Dart>>,
     npcs: Query<(Entity, &crate::npc::Npc, &Transform), Without<Dart>>,
-    (mut stats, mut msgs): (ResMut<PlayerStats>, ResMut<HudMessages>),
+    mut stats: ResMut<PlayerStats>,
     (mut blasts, mut hits): (MessageWriter<crate::gadgets::Explosion>, MessageWriter<NpcHit>),
     mut sfx: MessageWriter<PostEvent>,
 ) {
@@ -522,7 +522,7 @@ fn fly_darts(
             sfx.write(PostEvent::named("Imp_Bullet_on_Body", Some(at)));
         } else if on_player {
             stats.hit_from = Some(a);
-            crate::gameplay::hurt_player(&mut stats, &mut msgs, &mut sfx, def.damage);
+            crate::gameplay::hurt_player(&mut stats, &mut sfx, def.damage);
         }
         if let Some(b) = &def.blast {
             let damage = b.damage[settings.difficulty.min(3) as usize];
@@ -626,7 +626,7 @@ mod projectile_tests {
             .insert_resource(crate::hud::Paused(false)).init_resource::<InteractFocus>()
             .init_resource::<crate::carry::Carry>().init_resource::<crate::possession::Possession>()
             .init_resource::<crate::props::Held>().init_resource::<PlayerStats>().init_resource::<HudMessages>()
-            .init_resource::<TrapLog>().insert_resource(attrs).add_message::<SpawnEffect>()
+            .init_resource::<TrapLog>().insert_resource(attrs).add_message::<SpawnEffect>().init_resource::<crate::pickuplog::PickupLog>()
             .insert_resource(LevelInfo { scene: dhcook::format::Scene { traps: vec![dhcook::format::Trap { launcher: true, harvest: vec![(2, 1)], ..default() }], ..default() } })
             .add_systems(Last, disarm_focus);
         app.world_mut().spawn((PlayerCamera, Transform::from_xyz(0.0, 0.4, 1.5)));
@@ -655,7 +655,7 @@ mod projectile_tests {
             .insert_resource(crate::hud::Paused(true)).init_resource::<InteractFocus>()
             .init_resource::<crate::carry::Carry>().init_resource::<crate::possession::Possession>()
             .init_resource::<crate::props::Held>().init_resource::<PlayerStats>().init_resource::<HudMessages>()
-            .init_resource::<TrapLog>().init_resource::<crate::gamedata::Attrs>().add_message::<SpawnEffect>()
+            .init_resource::<TrapLog>().init_resource::<crate::gamedata::Attrs>().add_message::<SpawnEffect>().init_resource::<crate::pickuplog::PickupLog>()
             .insert_resource(LevelInfo { scene: dhcook::format::Scene { traps: vec![dhcook::format::Trap { launcher: true, ..default() }], ..default() } })
             .add_systems(Last, disarm_focus);
         app.world_mut().spawn((PlayerCamera, Transform::from_xyz(0.0, 0.4, 1.5)));
@@ -753,6 +753,7 @@ fn disarm_focus(
     (carry, possession, held): (Res<crate::carry::Carry>, Res<crate::possession::Possession>, Res<crate::props::Held>),
     (mut stats, mut msgs, mut log, attrs): (ResMut<PlayerStats>, ResMut<HudMessages>, ResMut<TrapLog>, Res<crate::gamedata::Attrs>),
     mut fx: MessageWriter<SpawnEffect>,
+    mut plog: ResMut<crate::pickuplog::PickupLog>,
 ) {
     if paused.0 || stats.dead { return; }
     let Some(level) = level else { return };
@@ -801,7 +802,7 @@ fn disarm_focus(
         for &(ty, n) in &def.harvest {
             let (name, n) = crate::gadgets::give_ammo(&mut stats, &attrs, ty, n);
             if n > 0 {
-                msgs.push(format!("{name} +{n}"));
+                plog.add(format!("{name} +{n}"), crate::pickuplog::ammo_icon(ty));
                 taken = true;
             }
         }

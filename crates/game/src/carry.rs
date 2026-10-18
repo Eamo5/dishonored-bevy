@@ -682,7 +682,6 @@ fn fall(
     rapier: ReadRapierContext,
     waters: Option<Res<crate::swim::Waters>>,
     mut stats: ResMut<PlayerStats>,
-    mut msgs: ResMut<HudMessages>,
     mut q: Query<(Entity, &mut Transform, &mut Falling, &mut Npc, Option<&crate::npc::NpcRig>)>,
     joints: Query<&GlobalTransform>,
 ) {
@@ -724,7 +723,6 @@ fn fall(
                 npc.set_mode(Mode::Dead);
                 stats.killed(&npc.pawn, !npc.hostile());
                 stats.knockouts = stats.knockouts.saturating_sub(1);
-                msgs.push(format!("{} drowned", npc.name));
             }
         } else {
             t.translation += step;

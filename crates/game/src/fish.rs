@@ -7,7 +7,7 @@
 use crate::anim::{Animator, ClipId};
 use crate::audio::PostEvent;
 use crate::gadgets::Explosion;
-use crate::gameplay::{HudMessages, PlayerStats, Strikeable, Struck, TimeControl};
+use crate::gameplay::{PlayerStats, Strikeable, Struck, TimeControl};
 use crate::level::{GameAssets, LevelInfo, GROUP_PROP, GROUP_WORLD};
 use crate::npc::{Mode, Npc};
 use crate::player::{Player, PlayerCamera};
@@ -355,7 +355,7 @@ mod cover_tests {
     fn fish_animation_clock_stops_resumes_and_follows_possession() {
         let mut app = App::new();
         app.init_resource::<Time>().init_resource::<TimeControl>().init_resource::<crate::settings::Settings>()
-            .init_resource::<Swim>().init_resource::<PlayerStats>().init_resource::<HudMessages>().init_resource::<FishMeals>()
+            .init_resource::<Swim>().init_resource::<PlayerStats>().init_resource::<crate::gameplay::HudMessages>().init_resource::<FishMeals>()
             .init_resource::<crate::possession::Possession>().add_message::<PostEvent>()
             .add_systems(Update, fish_brain);
         let skeleton = dhcook::format::SkeletonDef::default();
@@ -420,7 +420,7 @@ fn fish_brain(
     waters: Option<Res<Waters>>,
     swim: Res<Swim>,
     rapier: ReadRapierContext,
-    (mut stats, mut msgs): (ResMut<PlayerStats>, ResMut<HudMessages>),
+    mut stats: ResMut<PlayerStats>,
     possession: Res<crate::possession::Possession>,
     player: Query<&Transform, (With<Player>, Without<Fish>)>,
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
@@ -563,7 +563,7 @@ fn fish_brain(
                     a.restart(b, false, 1.0, 0.05);
                 }
                 let dmg = def.damage[settings.difficulty.min(3) as usize];
-                crate::gameplay::hurt_player(&mut stats, &mut msgs, &mut sfx, dmg);
+                crate::gameplay::hurt_player(&mut stats, &mut sfx, dmg);
                 if log_on {
                     info!("fish #{} bites: -{dmg} ({:.0} left)", f.index, stats.health);
                 }

@@ -529,7 +529,6 @@ fn save_game(
             *waiting = (left > time.delta_secs()).then_some((s, left - time.delta_secs()));
         }
     }
-    let auto = slot.is_some_and(|s| is_autosave(s) || is_mission_save(s));
     let slot = slot.map(|s| if is_autosave(s) { autosave_target(&slots) } else { s });
     if slot.is_none() && keep.is_none() {
         return;
@@ -537,7 +536,6 @@ fn save_game(
     let Some(level) = level else { return };
     let Ok((pt, p)) = player.single() else { return };
     if (stats.dead || blocked.now) && slot.is_some() {
-        msgs.push("Can't save now");
         return;
     }
     let scene = &level.scene;
@@ -668,10 +666,8 @@ fn save_game(
         Ok(replace_save(&slot_path(slot), |file| file.write_all(&d))?)
     }) {
         Ok(()) => {
+            // (the saving icon says so: no line)
             saving.write(crate::globalui::ShowSaving);
-            if !auto {
-                msgs.push(if slot == 0 { "Quicksaved".to_string() } else { format!("Saved to slot {}", manual_number(slot)) });
-            }
             *slots = SaveSlots::scan();
         }
         Err(e) => {

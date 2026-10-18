@@ -114,6 +114,25 @@ pub struct DevicesSave {
     progress: Vec<(usize, Phase, f32, f32)>,
 }
 
+/// A device's panel in `SecuritySystems_twk` (`WallOfLight_eye_panel_twk`...).
+pub(crate) fn panel_group(kind: &str) -> &'static str {
+    match kind {
+        "WallOfLight" => "WallOfLight",
+        "ArcPylon" => "ArcPylon",
+        "WatchTower" => "WatchTower",
+        "AlarmBell" => "Alarm",
+        _ => "Generic",
+    }
+}
+
+/// A panel's message (`m_UseMessage`: "This Wall of Light will now harm enemies instead of
+/// you."; `m_CannotUseMessage`: "You don't have any rewiring tools."), its group's else the
+/// generic panel's.
+pub(crate) fn panel_text(data: &crate::gamedata::Data, group: &str, key: &str) -> String {
+    let t = data.text("Security", &format!("{group}.{key}"));
+    if t.is_empty() { data.text("Security", &format!("Generic.{key}")) } else { t }
+}
+
 impl Device {
     /// Its level instances.
     pub fn instances(&self) -> &[Entity] {
@@ -217,7 +236,9 @@ impl Devices {
     /// A circuitry panel rewired: the nearest device of its kind (the panel's label names it:
     /// "Wall of Light Circuitry", "Arc Pylon Circuitry", "Alarm Circuitry"; else any) turns on
     /// its owners. Whether one was found.
-    pub fn rewire_near(&mut self, label: &str, at: Vec3) -> bool {
+    /// The device a panel rewires: the nearest of its kind; its message group
+    /// (`SecuritySystems_twk`'s) if one was.
+    pub fn rewire_near(&mut self, label: &str, at: Vec3) -> Option<&'static str> {
         let kind = if label.contains("Wall of Light") {
             Some("WallOfLight")
         } else if label.contains("Arc Pylon") {
@@ -235,17 +256,13 @@ impl Devices {
             .map(|(i, d)| (i, Vec3::from(d.def.position).distance(at)))
             .filter(|(_, d)| *d < 30.0)
             .min_by(|a, b| a.1.total_cmp(&b.1));
-        match near {
-            Some((i, _)) => {
-                self.list[i].rewired = true;
-                // an alarm's panel silences it
-                if self.list[i].def.kind == "AlarmBell" {
-                    self.list[i].off = true;
-                }
-                true
-            }
-            None => false,
+        let (i, _) = near?;
+        self.list[i].rewired = true;
+        // an alarm's panel silences it
+        if self.list[i].def.kind == "AlarmBell" {
+            self.list[i].off = true;
         }
+        Some(panel_group(&self.list[i].def.kind))
     }
 
     /// `DisSeqAct_PlugWhaleOilBattery`: a tank into (or out of) a receptacle.
@@ -642,6 +659,7 @@ fn setup(
 
 #[allow(clippy::too_many_arguments)]
 fn use_devices(
+    data: Res<crate::gamedata::Data>,
     mut used: MessageReader<Interaction>,
     mut devices: ResMut<Devices>,
     mut stats: ResMut<PlayerStats>,
@@ -678,19 +696,19 @@ fn use_devices(
                     }
                 }
                 *stats.items.entry("WhaleOilTank".into()).or_default() += 1;
-                msgs.push("Whale oil tank removed");
             }
             "Receptacle" => {
                 let tools = stats.items.get("RewireTool_twk").copied().unwrap_or(0);
                 if devices.list[i].rewired {
-                    msgs.push("Already rewired");
                 } else if tools == 0 {
-                    msgs.push("A Rewire Tool is needed");
+                    msgs.push(panel_text(&data, "Generic", "m_CannotUseMessage"));
                 } else {
                     stats.items.insert("RewireTool_twk".into(), tools - 1);
                     devices.list[i].rewired = true;
                     sfx.write(PostEvent::named("UI_Validation", Some(Vec3::from(d.def.position))));
-                    msgs.push("Rewired: it now protects you");
+                    // (the panel's message: what the tank feeds)
+                    let fed = devices.list.iter().find(|x| x.receptacle_idx == Some(i)).map(|x| panel_group(&x.def.kind)).unwrap_or("Generic");
+                    msgs.push(panel_text(&data, fed, "m_UseMessage"));
                 }
             }
             "AlarmBell" => {
@@ -698,7 +716,6 @@ fn use_devices(
                     devices.list[i].phase = Phase::Idle;
                     let s = d.def.sounds.get("m_pAlarmRingEndEvent").cloned().unwrap_or_else(|| "Alarm_Stop".into());
                     sfx.write(PostEvent::named(&s, Some(Vec3::from(d.def.position))));
-                    msgs.push("Alarm silenced");
                 }
             }
             _ => {}
@@ -713,7 +730,6 @@ fn use_devices(
 fn walls(
     mut devices: ResMut<Devices>,
     mut stats: ResMut<PlayerStats>,
-    mut msgs: ResMut<HudMessages>,
     (mut sfx, mut fx): (MessageWriter<PostEvent>, MessageWriter<crate::particles::SpawnEffect>),
     mut hits: MessageWriter<NpcHit>,
     player: Query<&Transform, With<Player>>,
@@ -789,7 +805,6 @@ fn walls(
                 sfx.write(PostEvent::named(&s, None));
                 if stats.health <= 0.0 {
                     stats.dead = true;
-                    msgs.push("Disintegrated by a Wall of Light");
                 }
             }
             touching[i] = now_in;
@@ -947,7 +962,6 @@ fn alarms(
     mut devices: ResMut<Devices>,
     mut sfx: MessageWriter<PostEvent>,
     mut spawn: MessageWriter<SpawnRequest>,
-    mut msgs: ResMut<HudMessages>,
     player: Query<&Transform, With<Player>>,
     mut npcs: Query<(Entity, &mut Npc, &Transform), Without<Player>>,
     mut stats: ResMut<PlayerStats>,
@@ -1064,7 +1078,6 @@ fn alarms(
                     if let Some(s) = d.def.sounds.get("m_pAlarmRingBeginEvent") {
                         sfx.write(PostEvent::named(s, Some(pos)));
                     }
-                    msgs.push("The alarm has been raised");
                     // its spawners come: those far enough from Corvo
                     // (`m_fSpawnerMinDistFromPlayer`) first, up to `m_MaxSpawnedPawnsPerRing`
                     if let Some(level) = level.as_ref() {

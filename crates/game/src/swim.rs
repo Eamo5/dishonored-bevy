@@ -6,7 +6,7 @@
 
 use crate::audio::{event_id, PostEvent};
 use crate::bindings::{Act, Bindings};
-use crate::gameplay::{HudMessages, PlayerStats};
+use crate::gameplay::PlayerStats;
 use crate::level::LevelInfo;
 use crate::player::{Player, PlayerCamera, CROUCH_HALF, RADIUS, STAND_HALF};
 use crate::GameState;
@@ -296,7 +296,6 @@ fn breathe(
     time: Res<Time>,
     mut swim: ResMut<Swim>,
     mut stats: ResMut<PlayerStats>,
-    mut msgs: ResMut<HudMessages>,
     attrs: Res<crate::gamedata::Attrs>,
     data: Res<crate::gamedata::Data>,
     possession: Res<crate::possession::Possession>,
@@ -322,7 +321,6 @@ fn breathe(
                 if stats.health <= 0.0 {
                     stats.dead = true;
                     stats.died_drowning = true;
-                    msgs.push("You drowned");
                     break;
                 }
             }

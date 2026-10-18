@@ -407,7 +407,6 @@ fn aim(
     } else if selected && can_act && !st.swallow && mouse.just_pressed(MouseButton::Right) && powers.cooldown <= 0.0 {
         let cost = Power::SummonAssassin.mana(&data);
         if tune.inhibited {
-            msgs.push("Your powers are blocked");
             sfx.write(PostEvent::named("Snd_Power_Empty", None));
             powers.cooldown = 0.5;
         } else {
@@ -419,7 +418,7 @@ fn aim(
                 sfx.write(PostEvent::named("Snd_UI_Ingame_Wheel_Mana", None));
             }
             if stats.mana < cost {
-                crate::powers::out_of_mana(&mut powers, &mut sfx, &mut msgs);
+                crate::powers::out_of_mana(&mut powers, &mut sfx);
             } else {
                 st.on = true;
                 powers.aiming = true;

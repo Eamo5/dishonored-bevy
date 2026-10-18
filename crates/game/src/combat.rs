@@ -1,7 +1,7 @@
 //! Player melee: Corvo's sword (view model), attacks, assassinations, blocking/parrying,
 //! chokeholds, and receiving damage.
 
-use crate::gameplay::{HitKind, HudMessages, Noise, NoiseKind, NpcHit, NpcStagger, PlayerHit, PlayerStats};
+use crate::gameplay::{HitKind, Noise, NoiseKind, NpcHit, NpcStagger, PlayerHit, PlayerStats};
 use crate::level::{GameAssets, LevelSpawnSet};
 use crate::npc::{Alert, Mode, Npc};
 use crate::player::{Player, PlayerCamera};
@@ -156,7 +156,6 @@ fn versus(
     stats: Res<PlayerStats>,
     mut player: Query<(&Transform, &mut Player, &mut Sword), Without<Npc>>,
     mut npcs: Query<(&mut Npc, &Transform), Without<Player>>,
-    mut msgs: ResMut<HudMessages>,
     mut sfx: MessageWriter<crate::audio::PostEvent>,
 ) {
     if paused.0 { return; }
@@ -206,7 +205,6 @@ fn versus(
         // its guard broken wide: the next blow is a fatality
         npc.stagger = 2.0;
         npc.gesture(5);
-        msgs.push("Sword lock won");
         1
     } else if n >= medium {
         npc.stagger = 0.9;
@@ -640,7 +638,6 @@ fn sword_input(
     cursor: Single<&CursorOptions>,
     scripted: Option<Res<crate::script::Scripted>>,
     (mut stats, attrs, possession, paused): (ResMut<PlayerStats>, Res<crate::gamedata::Attrs>, Res<crate::possession::Possession>, Res<crate::hud::Paused>),
-    mut msgs: ResMut<HudMessages>,
     (mut hits, mut noise, mut sfx, mut rats): (MessageWriter<NpcHit>, MessageWriter<Noise>, MessageWriter<crate::audio::PostEvent>, MessageWriter<crate::swarm::KillRats>),
     mut player: Query<(Entity, &Transform, &mut Player, &mut Sword), Without<Npc>>,
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
@@ -785,7 +782,6 @@ fn sword_input(
             if attrs.drop_mana > 0.0 {
                 stats.mana = (stats.mana + attrs.drop_mana).min(stats.max_mana);
             }
-            msgs.push("Drop Assassination");
             // the body breaks the fall
             p.velocity.y = p.velocity.y.max(-3.0);
             p.fall_speed = 0.0;
@@ -797,7 +793,6 @@ fn sword_input(
         if let Some((e, _)) = nearest_target(eye, fwd, 2.6, 0.5, npcs.iter()) {
             hits.write(NpcHit { npc: e, damage: 999.0, kind: HitKind::Fatality, from: pt.translation });
             stats.adrenaline = 0.0;
-            msgs.push("Fatality");
             // (the finisher played out, as the counters' are)
             let behind = npcs.get(e).is_ok_and(|(_, n, t)| n.forward().dot((pt.translation - t.translation).with_y(0.0).normalize_or_zero()) < -0.2);
             let (now, one_foe) = (time.elapsed_secs(), !others_fighting(&npcs, e, pt.translation));
@@ -892,7 +887,6 @@ fn sword_input(
                     sword.bounce_seq += 1;
                     sword.bounce_wall = false;
                     shake.write(crate::player::ShakeCamera(CAM_SHAKE_PARRIED));
-                    msgs.push("Blocked");
                 } else {
                     npc.parries = 0;
                     hits.write(NpcHit { npc: e, damage: attrs.sword_damage, kind: HitKind::Sword, from: pt.translation });
@@ -1052,7 +1046,7 @@ mod pause_tests {
             .init_resource::<crate::bindings::Bindings>().init_resource::<crate::kismet::ScriptSwitches>()
             .init_resource::<PlayerStats>().init_resource::<crate::gamedata::Attrs>()
             .init_resource::<crate::props::Held>().init_resource::<crate::carry::Carry>()
-            .init_resource::<crate::possession::Possession>().init_resource::<HudMessages>()
+            .init_resource::<crate::possession::Possession>().init_resource::<crate::gameplay::HudMessages>()
             .insert_resource(crate::hud::Paused(true)).add_message::<NpcHit>()
             .add_systems(Update, chokehold);
         let target = app.world_mut().spawn_empty().id();
@@ -1080,7 +1074,6 @@ fn chokehold(
     (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
     stats: Res<PlayerStats>,
     (attrs, held, mut carry, possession): (Res<crate::gamedata::Attrs>, Res<crate::props::Held>, ResMut<crate::carry::Carry>, Res<crate::possession::Possession>),
-    mut msgs: ResMut<HudMessages>,
     mut hits: MessageWriter<NpcHit>,
     mut player: Query<(Entity, &Transform, &mut Player, Option<&mut Choking>), Without<Npc>>,
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
@@ -1135,7 +1128,6 @@ fn chokehold(
                 npc.stagger = CHOKE_LOSE;
                 npc.last_seen = Some(pt.translation);
             }
-            msgs.push("The victim broke free");
             ch.end = Some(ChokeEnd::Lose(0.0));
             return;
         }
@@ -1183,7 +1175,6 @@ fn chokehold(
     p.locked = true;
     // `ChokeTime` (Strong Arms shortens it) and the victim's In clip
     commands.entity(pe).insert(Choking { npc: e, t: 0.0, duration: attrs.choke_time.max(0.0) + CHOKE_IN, end: None, use_held: 0.0 });
-    msgs.push(format!("Choking {}...", npc.name));
 }
 
 /// The assassination under way: the victim set where its clip has Corvo (its `anchor_jnt`
@@ -1285,7 +1276,6 @@ fn receive_hits(
     mut stagger: MessageWriter<NpcStagger>,
     mut noise: MessageWriter<Noise>,
     mut stats: ResMut<PlayerStats>,
-    mut msgs: ResMut<HudMessages>,
     mut player: Query<(&Transform, &mut Player, &mut Sword)>,
     mut sfx: MessageWriter<crate::audio::PostEvent>,
     (mut versus, mut npcs, cam): (ResMut<Versus>, Query<(&mut Npc, &Transform), Without<Player>>, Query<&GlobalTransform, With<PlayerCamera>>),
@@ -1351,7 +1341,6 @@ fn receive_hits(
                 stagger.write(NpcStagger { npc: h.npc, secs: 1.8, parried: true });
                 sword.parry_flash = 0.25;
                 sword.forced_block = 0.3;
-                msgs.push("Parried!");
                 stats.trackers.hints.push(crate::tutorials::Hint::Blocked(true));
             } else {
                 stagger.write(NpcStagger { npc: h.npc, secs: 0.5, parried: false });
@@ -1398,7 +1387,6 @@ fn receive_hits(
         }
         if stats.health <= 0.0 {
             stats.dead = true;
-            msgs.push("You died");
             sfx.write(PostEvent::named("Snd_VO_Bark_P_Death_cue_ak", None));
             sfx.write(PostEvent::named("VS_Death_Jingle", None));
         } else {

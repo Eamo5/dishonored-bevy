@@ -1319,7 +1319,7 @@ fn weeper_grab(
     mut player: Query<(Entity, &Transform, &mut Player, Option<&Grabbed>)>,
     mut npcs: Query<(Entity, &mut Npc, &Transform), Without<Player>>,
     mut sfx: MessageWriter<crate::audio::PostEvent>,
-    (mut stats, mut msgs, settings): (ResMut<crate::gameplay::PlayerStats>, ResMut<crate::gameplay::HudMessages>, Res<crate::settings::Settings>),
+    (mut stats, settings): (ResMut<crate::gameplay::PlayerStats>, Res<crate::settings::Settings>),
 ) {
     let Ok((pe, pt, mut p, grabbed)) = player.single_mut() else { return };
     for (e, mut npc, t) in &mut npcs {
@@ -1336,7 +1336,7 @@ fn weeper_grab(
                     let hit = d < HOUND_HOLD + 0.5 && grabbed.is_none() && !npc.is_down() && !stats.dead;
                     if hit {
                         let dmg = HOUND_KNOCKDOWN[(settings.difficulty as usize).min(3)];
-                        crate::gameplay::hurt_player(&mut stats, &mut msgs, &mut sfx, dmg);
+                        crate::gameplay::hurt_player(&mut stats, &mut sfx, dmg);
                         stats.knockdown = (stats.knockdown.0 + 1, crate::combat::side_of(t.translation, pt.translation, p.yaw));
                         stats.knocked = KNOCKED_DOWN;
                     }
@@ -1367,7 +1367,7 @@ fn weeper_grab(
                 // the wolfhound's teeth while it pins him
                 let (presses, tick) = HOUND_LOOP[(settings.difficulty as usize).min(3)];
                 if hound && grabbed.is_some_and(|g| g.by == e) && (el / tick).floor() > ((el - time.delta_secs()) / tick).floor() {
-                    crate::gameplay::hurt_player(&mut stats, &mut msgs, &mut sfx, HOUND_BITE);
+                    crate::gameplay::hurt_player(&mut stats, &mut sfx, HOUND_BITE);
                     sfx.write(crate::audio::PostEvent::named("Snd_Wolfhound_Minigame_Bite", Some(t.translation + Vec3::Y * 0.5)));
                 }
                 let need = if hound { presses } else { GRAB_PRESSES };
@@ -2615,7 +2615,6 @@ fn npc_hits(
     mut staggers: MessageReader<NpcStagger>,
     mut noise: MessageWriter<Noise>,
     mut stats: ResMut<PlayerStats>,
-    mut msgs: ResMut<crate::gameplay::HudMessages>,
     mut npcs: Query<(Entity, &mut Npc, &Transform)>,
     mut commands: Commands,
     mut sfx: MessageWriter<crate::audio::PostEvent>,
@@ -2737,7 +2736,6 @@ fn npc_hits(
             HitKind::Choke => {
                 npc.set_mode(Mode::Unconscious);
                 stats.knockouts += 1;
-                msgs.push(format!("{} rendered unconscious", npc.name));
             }
             HitKind::SleepDart => {
                 // (someone fighting goes under after `m_fTimeBeforeSleep` 1.5 s, unless Corvo
@@ -2749,7 +2747,6 @@ fn npc_hits(
                     npc.set_mode(Mode::Unconscious);
                 }
                 stats.knockouts += 1;
-                msgs.push("Sleep dart hit");
                 noise.write(Noise { pos, radius: 3.0, kind: NoiseKind::Anomaly });
             }
             // a stun mine's lightning: asleep, falling limp where they stood
@@ -2789,9 +2786,6 @@ fn npc_hits(
                 // (a wall of light electrocutes its dead, who vanish: `DisWallOfLight`'s kill)
                 if h.kind == HitKind::WallOfLight {
                     commands.entity(e).try_insert(Electrocuted::new(true));
-                }
-                if h.kind == HitKind::Assassinate {
-                    msgs.push(format!("{} assassinated", npc.name));
                 }
                 noise.write(Noise { pos, radius: 3.0, kind: NoiseKind::DeathRattle });
             }

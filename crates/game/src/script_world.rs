@@ -5,7 +5,7 @@
 //! `DisSeqAct_AlarmBell`, `DisSeqAct_PlugWhaleOilBattery`), what they hand Corvo
 //! (`DisSeqAct_GivePickup`) and the mission's failure (`DisSeqAct_GameOver`).
 
-use crate::gameplay::{HudMessages, PlayerStats};
+use crate::gameplay::PlayerStats;
 use crate::kismet::{Val, Vm};
 use crate::level::{InstanceCollider, LevelInfo, LevelInstance};
 use crate::npc::{FromSpawner, Mode, Npc};
@@ -304,8 +304,8 @@ fn apply_ai_fx(
     colliders: Query<(&LevelInstance, &InstanceCollider)>,
     mut commands: Commands,
     mut devices: ResMut<crate::security::Devices>,
-    (mut stats, mut msgs, mut sfx, attrs): (ResMut<PlayerStats>, ResMut<HudMessages>, MessageWriter<crate::audio::PostEvent>, Res<crate::gamedata::Attrs>),
-    (mut noise, mut effects): (MessageWriter<crate::gameplay::Noise>, MessageWriter<crate::particles::SpawnEffect>),
+    (mut stats, mut sfx, attrs): (ResMut<PlayerStats>, MessageWriter<crate::audio::PostEvent>, Res<crate::gamedata::Attrs>),
+    (mut noise, mut effects, mut plog): (MessageWriter<crate::gameplay::Noise>, MessageWriter<crate::particles::SpawnEffect>, ResMut<crate::pickuplog::PickupLog>),
     mut instances: Query<(Entity, &LevelInstance, &mut Transform, &mut Visibility), (Without<Npc>, Without<crate::player::Player>)>,
     mut spawned: Local<std::collections::HashSet<u32>>,
     (mut cine, mut shots, mut swarms, mut overrides): (ResMut<Cinematic>, ResMut<ScriptedShots>, Query<&mut crate::swarm::Swarm>, ResMut<SpawnerOverrides>),
@@ -489,7 +489,7 @@ fn apply_ai_fx(
                     }
                 }
             }
-            AiFx::GivePickup(op) => give_pickup(&g.ops[op as usize].props, &data, &attrs, &mut stats, &mut msgs, &mut vm),
+            AiFx::GivePickup(op) => give_pickup(&g.ops[op as usize].props, &data, &attrs, &mut stats, &mut plog, &mut vm),
             AiFx::Noise { maker, at, loudness, kind } => {
                 let radius = data.0.noise_loudness.get(&loudness).copied().unwrap_or(5.0);
                 if let Some(pos) = at.iter().chain(maker.iter()).find_map(|v| place(v)) {
@@ -1301,8 +1301,8 @@ fn nearest(points: &[[f32; 3]], at: Vec3) -> usize {
     points.iter().enumerate().min_by(|a, b| Vec3::from(*a.1).distance(at).total_cmp(&Vec3::from(*b.1).distance(at))).map(|x| x.0).unwrap_or(0)
 }
 
-/// What a script hands Corvo: its pickup's contents (cooked onto the op).
-fn give_pickup(props: &std::collections::BTreeMap<String, KVal>, data: &crate::gamedata::Data, attrs: &crate::gamedata::Attrs, stats: &mut PlayerStats, msgs: &mut HudMessages, vm: &mut Vm) {
+/// What a script hands Corvo: its pickup's contents (cooked onto the op), logged as a pickup.
+fn give_pickup(props: &std::collections::BTreeMap<String, KVal>, data: &crate::gamedata::Data, attrs: &crate::gamedata::Attrs, stats: &mut PlayerStats, plog: &mut crate::pickuplog::PickupLog, vm: &mut Vm) {
     let s = |k: &str| match props.get(k) {
         Some(KVal::Str(v)) => v.clone(),
         _ => String::new(),
@@ -1343,7 +1343,7 @@ fn give_pickup(props: &std::collections::BTreeMap<String, KVal>, data: &crate::g
                     let min = match p.get(2) { Some(KVal::Int(min)) => (*min).max(0) as u32, _ => max };
                     let amount = crate::gadgets::roll_ammo_amount(min, max);
                     let (label, added) = crate::gadgets::give_ammo(stats, attrs, *ty as u8, amount);
-                    if added > 0 { msgs.push(format!("{label} +{added}")); }
+                    if added > 0 { plog.add(format!("{label} +{added}"), crate::pickuplog::ammo_icon(*ty as u8)); }
                     gave = true;
                 }
             }
@@ -1358,15 +1358,15 @@ fn give_pickup(props: &std::collections::BTreeMap<String, KVal>, data: &crate::g
         let n = Some(int("pickup_quantity")).filter(|q| *q > 0).map(|q| q as u32).or_else(|| name.split('_').filter_map(|p| p.parse::<u32>().ok()).last()).unwrap_or(10);
         stats.coins += n;
         stats.coins_found += n;
-        msgs.push(format!("+{n} coins"));
+        plog.add(format!("Coins +{n}"), Some("Money_Small"));
     } else if lname.contains("rune") {
         stats.runes += 1;
         stats.runes_found += 1;
-        msgs.push("Rune collected");
+        plog.add("Rune", Some("Rune_Small"));
     } else if lname.contains("bonecharm") {
         stats.bone_charms += 1;
         stats.charms_found += 1;
-        msgs.push("Bone charm collected");
+        plog.add("Bone Charm", Some("BoneCharms_Small"));
     } else {
         // an item for the inventory (an invitation), or a thing to carry
         let item = s("pickup_item");
@@ -1376,7 +1376,7 @@ fn give_pickup(props: &std::collections::BTreeMap<String, KVal>, data: &crate::g
         *stats.items.entry(name.clone()).or_default() += 1;
         let label = s("pickup_label");
         if !label.is_empty() {
-            msgs.push(label);
+            plog.add(label, None);
         }
     }
 }

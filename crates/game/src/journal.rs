@@ -449,7 +449,6 @@ fn interact(
     mut stats: ResMut<PlayerStats>,
     keys: Res<ButtonInput<KeyCode>>,
     mut sfx: MessageWriter<PostEvent>,
-    mut msgs: ResMut<crate::gameplay::HudMessages>,
     (tabs, subs, rows, acts, helps): (Query<(&Interaction, &JTab), Changed<Interaction>>, Query<(&Interaction, &JSub), Changed<Interaction>>, Query<(&Interaction, &JRow), Changed<Interaction>>, Query<&Interaction, (With<JAct>, Changed<Interaction>)>, Query<(&Interaction, &HelpButton), Changed<Interaction>>),
     (playback, mut graphs, taps, mut read, note, attrs): (Res<crate::audiograph::Playback>, MessageWriter<crate::audiograph::PlayAudiograph>, Res<crate::helpbar::Taps>, MessageWriter<ReadNote>, Res<crate::notescreen::NoteScreen>, Res<crate::gamedata::Attrs>),
     mut vm: Option<ResMut<crate::kismet::Vm>>,
@@ -483,8 +482,6 @@ fn interact(
                     stats.runes -= cost;
                     stats.powers.insert(name.to_string(), level + 1);
                     sfx.write(PostEvent::named("UI_J_BuyPower", None));
-                    let what = ENTRIES.iter().find(|e| e.0 == name).map(|e| data.text(J, e.1)).unwrap_or_default();
-                    msgs.push(if level == 0 { format!("{what} acquired") } else { format!("{what} upgraded") });
                 }
             }
             journal.dirty = true;

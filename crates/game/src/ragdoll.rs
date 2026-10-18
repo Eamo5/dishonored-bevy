@@ -452,7 +452,7 @@ fn pose_ragdolls(
     cfg: Query<&RapierConfiguration>,
     level: Option<Res<LevelInfo>>,
     waters: Option<Res<crate::swim::Waters>>,
-    (mut stats, mut msgs): (ResMut<crate::gameplay::PlayerStats>, ResMut<crate::gameplay::HudMessages>),
+    mut stats: ResMut<crate::gameplay::PlayerStats>,
     mut npcs: Query<(Entity, &mut Npc, &mut Transform, &NpcRig, &Children, &mut Ragdoll, Option<&Animator>), Without<ScriptedAnim>>,
     parts: Query<(&Transform, &Velocity), (With<RagdollPart>, Without<Npc>)>,
     visuals: Query<&Transform, (With<NpcVisual>, Without<Npc>, Without<RagdollPart>)>,
@@ -500,7 +500,6 @@ fn pose_ragdolls(
                     npc.set_mode(Mode::Dead);
                     stats.killed(&npc.pawn, !npc.hostile());
                     stats.knockouts = stats.knockouts.saturating_sub(1);
-                    msgs.push(format!("{} drowned", npc.name));
                 }
             }
             let lost = hips.is_some_and(|h| h.y < kill_y || !h.is_finite());
