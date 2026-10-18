@@ -2988,14 +2988,25 @@ fn npc_hearing(
             }
             // what it hears raises its attention (the original's increase for the noise's
             // context: an anomaly, a threat, danger, a death rattle, a cry for help, an alarm),
-            // at least to a level but never to busted: hearing alone can't find Corvo;
-            // investigating, it goes to look
+            // by its amount, at least to its level; investigating, it goes to look. Busted only
+            // where the noise's reason may take it there (the tweak's `m_ReasonSettings`
+            // `m_bCanIncreaseToBusted`, as roshan's r614/blink research found the increase
+            // applied: added, then floored at the level): a guard's for a cry for help
+            // (`DACRT_HeardHelpRequest`), not for sounds (`DACRT_Heard`), death rattles
+            // (`DACRT_HeardDeath`) or alarms (`DACRT_Alarm`)
             if let Some(att) = level.as_ref().and_then(|l| attention_of(&npc, &l.scene)) {
                 if npc.alert == Alert::Combat {
                     continue;
                 }
                 let (amount, lvl) = att.heard[n.kind.slot()];
-                let cap = (att.levels[3][0] - 0.001).min(att.max);
+                let reason = match n.kind {
+                    NoiseKind::DeathRattle => 2,
+                    NoiseKind::Alarm => 3,
+                    NoiseKind::Help => 6,
+                    _ => 7,
+                };
+                let busted = att.to_busted & (1 << reason) != 0;
+                let cap = if busted { att.max } else { (att.levels[3][0] - 0.001).min(att.max) };
                 let floor = match lvl {
                     0 => 0.0,
                     1..=4 => att.levels[lvl as usize - 1][0],
@@ -3004,6 +3015,15 @@ fn npc_hearing(
                 .min(cap);
                 npc.awareness = npc.awareness.max((npc.awareness + amount).max(floor).min(cap));
                 npc.last_seen = Some(n.pos);
+                if busted && npc.awareness >= att.levels[3][0] {
+                    // (busted by the call: after Corvo where it came from)
+                    if std::env::var("DH_NPC_LOG").is_ok() {
+                        info!("{}: busted by what it heard ({:?}) at {:.1}", npc.name, n.kind, n.pos);
+                    }
+                    npc.alert = Alert::Combat;
+                    npc.set_mode(Mode::Combat);
+                    continue;
+                }
                 if npc.awareness >= att.levels[2][0] {
                     npc.alert = Alert::Suspicious;
                     npc.target = Some(n.pos);

@@ -2229,7 +2229,12 @@ against the install's own data where it carries them, then implemented independe
   - Blades meeting and blows carry 8 m (a threat); the pistol 60 m and its bullet's impact 30 m
     (danger); a grenade 25 m; a death rattle 3 m. The crossbow makes no noise firing.
   - A guard's attention rises by the context's own amount (anomaly, threat, danger, death rattle,
-    help, alarm), never to busted: hearing alone can't find Corvo.
+    help, alarm), then to at least its level, as roshan's r614/blink research found. It reaches
+    busted only where the noise's reason may take it there (the attention tweak's
+    `m_ReasonSettings`, `m_bCanIncreaseToBusted`): a guard's for a cry for help
+    (`DACRT_HeardHelpRequest`, +1.0) does, so a guard hearing one comes running after Corvo,
+    fully alerted, to where the cry came from; sounds (`DACRT_Heard`), death rattles and alarm
+    bells don't. Before, no noise did.
   - Civilians panic at the noises their brain's panic behaviour lists (`m_HearNoise`'s
     `m_ScaryNoises`, cooked per character: every shipped civilian brain lists alarm bells, cries
     for help and death rattles), and at the rest of `TweaksBehavior_Panic_Civilian`'s triggers as

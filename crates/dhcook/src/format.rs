@@ -1458,6 +1458,10 @@ pub struct Attention {
     /// finding a body, being attacked
     pub corpse: (f32, u8),
     pub attacked: (f32, u8),
+    /// the reasons (`EDisAttentionChangeReasonType`, a bit each) that may take its attention to
+    /// busted (`m_ReasonSettings[k].m_bCanIncreaseToBusted`)
+    #[serde(default)]
+    pub to_busted: u32,
 }
 
 /// One of Corvo's health effects (`DisPlayerHealthEffect`): below its share of his health, a

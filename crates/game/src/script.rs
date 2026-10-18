@@ -1835,6 +1835,25 @@ fn run_script(
                 });
             }
         }
+        "noise" => {
+            // (tests) noise KIND [RADIUS]: a noise where Corvo stands (anomaly, threat, danger,
+            // rattle, help, alarm; 15 m)
+            use crate::gameplay::NoiseKind;
+            let kind = match cmd.get(1).map(|s| s.as_str()) {
+                Some("threat") => NoiseKind::Threatening,
+                Some("danger") => NoiseKind::Danger,
+                Some("rattle") => NoiseKind::DeathRattle,
+                Some("help") => NoiseKind::Help,
+                Some("alarm") => NoiseKind::Alarm,
+                _ => NoiseKind::Anomaly,
+            };
+            let radius = cmd.get(2).and_then(|v| v.parse().ok()).unwrap_or(15.0);
+            let pos = t.translation;
+            commands.queue(move |w: &mut World| {
+                w.write_message(crate::gameplay::Noise { pos, radius, kind });
+            });
+            info!("script: noise {kind:?} {radius} m");
+        }
         "killnpc" => {
             // (tests) killnpc [NAME]: the nearest standing character killed by Corvo's blade
             let named = cmd.get(1).cloned().unwrap_or_default();
