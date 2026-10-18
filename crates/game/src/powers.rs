@@ -1075,7 +1075,7 @@ fn use_power(
     mut commands: Commands,
     (time, mouse, cursor, scripted, settings, hard): (Res<Time>, Res<ButtonInput<MouseButton>>, Single<&CursorOptions>, Option<Res<crate::script::Scripted>>, Res<crate::settings::Settings>, Res<crate::player::HardLanding>),
     rapier: ReadRapierContext,
-    (assets, data, attrs, tune, level_info): (Option<Res<GameAssets>>, Res<Data>, Res<Attrs>, Res<crate::musicbox::Tune>, Option<Res<crate::level::LevelInfo>>),
+    (assets, data, attrs, tune, level_info, devices): (Option<Res<GameAssets>>, Res<Data>, Res<Attrs>, Res<crate::musicbox::Tune>, Option<Res<crate::level::LevelInfo>>, Option<Res<crate::security::Devices>>),
     mut powers: ResMut<Powers>,
     mut stats: ResMut<PlayerStats>,
     mut tc: ResMut<TimeControl>,
@@ -1396,6 +1396,10 @@ fn use_power(
                 .and_then(|(hit, toi, _)| {
                     let (_, nt, n) = npcs.get(hit).ok()?;
                     let at = eye + dir * toi;
+                    // (not through a running wall of light, which destroys it)
+                    if devices.as_ref().is_some_and(|d| d.wall_between(eye, at)) {
+                        return None;
+                    }
                     let damage = attrs.bolt.damage(0.0, at.y - nt.translation.y > HEAD, n.alert != crate::npc::Alert::Combat);
                     (!n.is_down() && n.min_health <= 0.0 && damage >= n.health).then_some(hit)
                 })
@@ -1773,7 +1777,7 @@ fn blink_travel(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn update_projectiles(
+pub(crate) fn update_projectiles(
     mut commands: Commands,
     time: Res<Time>,
     tc: Res<TimeControl>,

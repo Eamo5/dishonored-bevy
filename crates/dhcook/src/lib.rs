@@ -218,6 +218,8 @@ struct Cooker<'a> {
     portal_cell_keys: Vec<[Option<kismet::ActorKey>; 2]>,
     /// distractors' scenes, cooked once the level scripts are: (distractor, MatineeData)
     pending_soirees: Vec<(usize, Obj)>,
+    /// walls of light's spark emitters, resolved once every actor is: (wall, emitter actors)
+    pending_wall_sparks: Vec<(usize, Vec<kismet::ActorKey>)>,
     /// Height of the fog layer currently in `scene.fog`.
     fog_height: f32,
     /// What each level actor became in the scene, for the level scripts.
@@ -342,6 +344,7 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
         audio_cell_keys: HashMap::new(),
         portal_cell_keys: Vec::new(),
         pending_soirees: Vec::new(),
+        pending_wall_sparks: Vec::new(),
         fog_height: 0.0,
         actor_refs: HashMap::new(),
         actor_base: HashMap::new(),
@@ -447,6 +450,16 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
         c.scene.spawners.iter().filter(|s| s.spawn_on_begin_play).count(),
         c.scene.spawners.iter().filter(|s| s.script_start).count()
     );
+    // a wall of light's spark emitters wait for its power (it puts them out as it is placed)
+    for (wall, keys) in std::mem::take(&mut c.pending_wall_sparks) {
+        let parts: Vec<u32> = keys.iter().filter_map(|k| c.actor_refs.get(k)).flat_map(|r| r.particles.iter().copied()).collect();
+        for &p in &parts {
+            if let Some(pi) = c.scene.particles.get_mut(p as usize) {
+                pi.active = false;
+            }
+        }
+        c.scene.security[wall].spark_particles = parts;
+    }
     // what rides on another actor moves with it
     for (rider, base) in std::mem::take(&mut c.actor_base) {
         let Some(insts) = c.actor_refs.get(&rider).map(|r| r.instances.clone()).filter(|i| !i.is_empty()) else { continue };
@@ -2863,6 +2876,50 @@ impl<'a> Cooker<'a> {
                 d.params.insert("gravity".into(), pc.float("m_fGravityMultiplier").unwrap_or(1.0));
                 if let Some(s) = pc.obj_path("m_pSoundEvent_InAir") {
                     d.sounds.insert("fly".into(), s.rsplit('.').next().unwrap_or(&s).to_string());
+                }
+            }
+        }
+        // walls of light: what is seen of them (the wall itself is hidden; as roshan's r614/blink
+        // research found and the user's own Dishonored.exe shows: placement 0x00A28D80, tick
+        // 0x00A3EEE0, beams 0x00A30CA0): the spark emitters on the pylons, the cross spark
+        // between two of them, the beams struck into what it shocks
+        if kind == "WallOfLight" {
+            let list = |c: &Self, key: &str| -> Vec<Obj> {
+                let Some((pkg, Value::Array { count, offset, size })) = ch.get_pkg(key) else { return Vec::new() };
+                if *size < count * 4 {
+                    return Vec::new();
+                }
+                (0..*count)
+                    .map(|k| i32::from_le_bytes(pkg.data[offset + k * 4..offset + k * 4 + 4].try_into().unwrap()))
+                    .filter(|o| *o != 0)
+                    .filter_map(|o| c.assets.resolve(pkg, o))
+                    .collect()
+            };
+            let mut keys = Vec::new();
+            for em in list(self, "m_SparkEffects") {
+                let loc = self.chain(&em).vector("Location").unwrap_or([0.0; 3]);
+                d.sparks.push(ue_point(loc));
+                keys.push((em.pkg.name.clone(), em.idx));
+            }
+            for em in list(self, "m_Beams") {
+                let Some(psc) = self.chain(&em).obj(self.assets, "ParticleSystemComponent") else { continue };
+                let Some(sys) = self.chain(&psc).obj(self.assets, "Template").and_then(|t| self.particle_system(&t)) else { continue };
+                let m = self.actor_matrix(&em) * self.component_local(&psc);
+                d.beams.push((sys, ue_to_bevy(m).to_cols_array()));
+            }
+            self.pending_wall_sparks.push((self.scene.security.len(), keys));
+            if let Some(t) = &tweak {
+                let tc = self.chain(t);
+                let cross = ch.obj(self.assets, "m_CrossSparkEffect").and_then(|c| self.chain(&c).obj(self.assets, "Template")).or_else(|| tc.obj(self.assets, "m_CrossSparkEffectTemplate"));
+                if let Some(ps) = cross.and_then(|o| self.particle_system(&o)) {
+                    d.fx.insert("cross_spark".into(), ps);
+                }
+                if let Some(ps) = tc.obj(self.assets, "m_ShockParticleSystemTemplate").and_then(|o| self.particle_system(&o)) {
+                    d.fx.insert("shock".into(), ps);
+                }
+                // (the class's own spacing where the tweak keeps it)
+                for (k, v) in [("m_fMinSparkInterval", 0.2), ("m_fMaxSparkInterval", 1.5), ("m_fSparkDuration", 0.08), ("m_ActivationTime", 0.0), ("m_ActivationTimeForPawnEffect", 0.0)] {
+                    d.params.insert(k.into(), tc.float(k).unwrap_or(v));
                 }
             }
         }

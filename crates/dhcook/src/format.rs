@@ -3678,9 +3678,19 @@ pub struct Security {
     #[serde(default)]
     pub trail: Option<u32>,
     /// its own effects by name (`scene.particle_systems`): a watch tower's search light on and
-    /// off, its alert light on and off
+    /// off, its alert light on and off; a wall of light's cross spark and shock
     #[serde(default)]
     pub fx: std::collections::BTreeMap<String, u32>,
+    /// walls of light: their spark emitters (`m_SparkEffects`, placed `Emitter`s on the pylons):
+    /// where each stands, and their placed systems (`scene.particles`, lit while it is powered)
+    #[serde(default)]
+    pub sparks: Vec<[f32; 3]>,
+    #[serde(default)]
+    pub spark_particles: Vec<u32>,
+    /// walls of light: the beams it strikes into what it shocks (`m_Beams`, placed `Emitter`s):
+    /// each one's system (`scene.particle_systems`) and placement (Bevy-space matrix)
+    #[serde(default)]
+    pub beams: Vec<(u32, [f32; 16])>,
 }
 
 /// A Scaleform movie's timelines (`ui/<movie>/timeline.json`): its sprites' frames as the movie

@@ -22,7 +22,7 @@ impl Plugin for SecurityPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Devices>()
             .add_systems(OnEnter(GameState::InGame), setup.after(LevelSpawnSet))
-            .add_systems(Update, (use_devices, tank_seats, walls, eyes, pylons, alarms, receptacle_events).chain().run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (use_devices, tank_seats, walls.before(crate::powers::update_projectiles), wall_sparks, eyes, pylons, alarms, receptacle_events).chain().run_if(in_state(GameState::InGame)))
             .add_systems(Update, insert_tank.after(crate::interact::FocusSet).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)));
     }
 }
@@ -64,6 +64,8 @@ pub struct Device {
     receptacle_idx: Option<usize>,
     /// turned off by the level's scripts (`DisSeqAct_WallofLightControl`)
     pub off: bool,
+    /// walls of light: seconds to its next spark
+    spark_t: f32,
 }
 
 impl Device {
@@ -190,6 +192,12 @@ impl Devices {
         d.receptacle_idx.map(|r| self.list[r].has_tank && self.list[r].tank.is_none_or(|t| self.charged(t))).unwrap_or(true)
     }
 
+    /// Whether a running wall of light stands between two points (it meets projectiles while
+    /// powered: `ShouldTrace`, as roshan's r614/blink research decoded it).
+    pub fn wall_between(&self, a: Vec3, b: Vec3) -> bool {
+        self.list.iter().any(|d| d.wall.as_ref().is_some_and(|w| self.powered(d) && wall_crossing(w, a, b).is_some()))
+    }
+
     /// A tank has oil left.
     pub fn charged(&self, tank: Entity) -> bool {
         self.charges.get(&tank).is_none_or(|c| *c > 0.0)
@@ -291,6 +299,26 @@ impl Devices {
 #[cfg(test)]
 mod save_tests {
     use super::*;
+
+    #[test]
+    fn a_bolt_crossing_a_wall_of_light_in_one_step_meets_it() {
+        // a wall 0.2 m thick across x = 0, 4 m wide and 3 m high
+        let w = (Mat4::IDENTITY, Vec3::new(-0.1, 0.0, -2.0), Vec3::new(0.1, 3.0, 2.0));
+        // from in front of it to behind it in one frame: met at its (grown) face
+        let at = wall_crossing(&w, Vec3::new(-1.0, 1.5, 0.0), Vec3::new(1.0, 1.5, 0.0)).unwrap();
+        assert!((at.x + 0.35).abs() < 1e-4, "{at}");
+        // beside it, or short of it: not
+        assert!(wall_crossing(&w, Vec3::new(-1.0, 1.5, 3.0), Vec3::new(1.0, 1.5, 3.0)).is_none());
+        assert!(wall_crossing(&w, Vec3::new(-2.0, 1.5, 0.0), Vec3::new(-1.0, 1.5, 0.0)).is_none());
+        // lying in it
+        assert!(wall_crossing(&w, Vec3::new(0.0, 1.5, 0.0), Vec3::new(0.0, 1.5, 0.0)).is_some());
+        // a live wall stands between; an unpowered one (scripted off) doesn't
+        let mut devices = Devices::default();
+        devices.list.push(Device { wall: Some(w), ..default() });
+        assert!(devices.wall_between(Vec3::new(-1.0, 1.5, 0.0), Vec3::new(1.0, 1.5, 0.0)));
+        devices.list[0].off = true;
+        assert!(!devices.wall_between(Vec3::new(-1.0, 1.5, 0.0), Vec3::new(1.0, 1.5, 0.0)));
+    }
 
     #[test]
     fn security_progress_restores_all_phases_and_legacy_saves_clear_stale_timers() {
@@ -563,18 +591,12 @@ fn eyes(
     }
 }
 
-/// The visible sheet of a wall of light (the original draws it with beam particles).
-#[derive(Component)]
-struct WallSheet(usize);
-
 #[allow(clippy::too_many_arguments)]
 fn setup(
     mut commands: Commands,
     level: Option<Res<LevelInfo>>,
     mut devices: ResMut<Devices>,
     instances: Query<(Entity, &LevelInstance)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
 ) {
     *devices = Devices::default();
     let Some(level) = level else { return };
@@ -588,32 +610,12 @@ fn setup(
         let insts = by_inst.get(s.actor.as_str()).cloned().unwrap_or_default();
         d.instances = insts.iter().map(|x| x.0).collect();
         if s.kind == "WallOfLight" {
-            // the wall: its (editor-only) mesh's box
+            // the wall: its (editor-only, never drawn) mesh's box
             if let Some(inst) = insts.first().and_then(|x| scene.instances.get(x.1 as usize)) {
                 if let Some(m) = scene.meshes.get(inst.mesh as usize) {
                     let world = Mat4::from_cols_array(&inst.transform);
                     let (min, max) = (Vec3::from(m.min), Vec3::from(m.max));
                     d.wall = Some((world.inverse(), min, max));
-                    // its light: a thin glowing sheet over the wall's box
-                    let size = (max - min).max(Vec3::splat(0.02));
-                    let mat = mats.add(StandardMaterial {
-                        base_color: Color::srgba(0.35, 0.75, 1.0, 0.06),
-                        emissive: LinearRgba::rgb(0.5, 1.6, 3.2),
-                        alpha_mode: AlphaMode::Add,
-                        unlit: true,
-                        double_sided: true,
-                        cull_mode: None,
-                        ..default()
-                    });
-                    let local = Transform::from_translation((min + max) * 0.5);
-                    commands.spawn((
-                        WallSheet(i),
-                        Mesh3d(meshes.add(Cuboid::new(size.x.min(0.03), size.y, size.z))),
-                        MeshMaterial3d(mat),
-                        Transform::from_matrix(world * local.to_matrix()),
-                        bevy::light::NotShadowCaster,
-                        DespawnOnExit(GameState::InGame),
-                    ));
                 }
             }
         }
@@ -737,34 +739,18 @@ fn walls(
     player: Query<&Transform, With<Player>>,
     npcs: Query<(Entity, &Npc, &Transform), Without<Player>>,
     mut ambient: Local<Vec<bool>>,
-    (time, mut sheets): (Res<Time>, Query<(&WallSheet, &mut Visibility, &MeshMaterial3d<StandardMaterial>)>),
-    mut mats: ResMut<Assets<StandardMaterial>>,
+    time: Res<Time>,
     (tc, mut touching, mut struck): (Res<crate::gameplay::TimeControl>, Local<Vec<bool>>, Local<std::collections::HashSet<Entity>>),
     (mut commands, carry, ashes, thrown): (
         Commands,
         Res<crate::carry::Carry>,
         Query<(), Or<(With<crate::npc::Ashes>, With<crate::npc::Electrocuted>)>>,
-        Query<(Entity, &GlobalTransform), Or<(With<crate::powers::Projectile>, With<crate::gadgets::Grenade>)>>,
+        Query<(Entity, &Transform, Option<&crate::powers::Projectile>), Or<(With<crate::powers::Projectile>, With<crate::gadgets::Grenade>)>>,
     ),
+    mut last_thrown: Local<std::collections::HashMap<Entity, Vec3>>,
 ) {
     // (stopped time: no collision, nothing burns)
     let stopped = tc.bend_remaining > 0.0 && tc.world_dilation <= 0.0;
-    // the sheets show while their wall runs (blue; rewired, green), flickering
-    let flicker = 0.8 + 0.2 * (time.elapsed_secs() * 23.0).sin() * (time.elapsed_secs() * 7.0).cos();
-    for (s, mut v, m) in &mut sheets {
-        let Some(d) = devices.list.get(s.0) else { continue };
-        let on = devices.powered(d);
-        let want = if on { Visibility::Inherited } else { Visibility::Hidden };
-        if *v != want {
-            *v = want;
-        }
-        if on {
-            if let Some(mut mat) = mats.get_mut(&m.0) {
-                let c = if devices.rewired(d) { Vec3::new(0.2, 0.9, 0.3) } else { Vec3::new(0.15, 0.5, 1.1) } * flicker;
-                mat.emissive = LinearRgba::rgb(c.x, c.y, c.z);
-            }
-        }
-    }
     if ambient.len() != devices.list.len() {
         *ambient = vec![false; devices.list.len()];
     }
@@ -774,6 +760,31 @@ fn walls(
     let inside = |w: &(Mat4, Vec3, Vec3), p: Vec3| {
         let l = w.0.transform_point3(p);
         l.cmpge(w.1 - Vec3::splat(0.25)).all() && l.cmple(w.2 + Vec3::splat(0.25)).all()
+    };
+    // (each thrown thing's path: from where it was to where it is going this frame)
+    let step = time.delta_secs() * tc.world_scale();
+    let paths: Vec<(Entity, Vec3, Vec3)> = thrown
+        .iter()
+        .map(|(e, t, pr)| {
+            let p = t.translation;
+            let from = last_thrown.get(&e).copied().unwrap_or(p);
+            (e, from, pr.filter(|pr| !pr.stuck).map(|pr| p + pr.vel * step).unwrap_or(p))
+        })
+        .collect();
+    *last_thrown = thrown.iter().map(|(e, t, _)| (e, t.translation)).collect();
+    let mut gone: Vec<Entity> = Vec::new();
+    // the beams it strikes into what it shocks (`m_Beams`: activated with their far end on it,
+    // 0x00A30CA0) while its kill effect runs (`m_ActivationTimeForPawnEffect` for a character,
+    // else `m_ActivationTime`: 0.1 s)
+    let strike = |fx: &mut MessageWriter<crate::particles::SpawnEffect>, d: &Device, to: Vec3, pawn: bool| {
+        let secs = d.def.params.get(if pawn { "m_ActivationTimeForPawnEffect" } else { "m_ActivationTime" }).copied().unwrap_or(0.1);
+        if secs <= 0.0 {
+            return;
+        }
+        for (sys, m) in &d.def.beams {
+            let (_, rot, at) = Mat4::from_cols_array(m).to_scale_rotation_translation();
+            fx.write(crate::particles::SpawnEffect { system: Some(*sys), rot, secs, beam_to: Some(to), ..crate::particles::SpawnEffect::at("wall_beam", at) });
+        }
     };
     let mut killed = Vec::new();
     let mut spent = Vec::new();
@@ -799,6 +810,7 @@ fn walls(
         if let Ok(pt) = player.single() {
             let now_in = !rewired && !stats.dead && inside(w, pt.translation);
             if now_in && !touching[i] {
+                strike(&mut fx, d, pt.translation, true);
                 let damage = if d.def.damage > 0.0 { d.def.damage } else { 100.0 };
                 stats.take_damage(damage);
                 stats.damage_flash = 1.0;
@@ -813,12 +825,21 @@ fn walls(
         }
         // a bolt, dart or grenade meeting it is destroyed with a shock, nothing bursting or
         // sticking (the wall's `TakeDamage` from a causer that isn't a pawn)
-        for (e, g) in &thrown {
-            if inside(w, g.translation()) {
+        for &(e, from, to) in &paths {
+            if gone.contains(&e) {
+                continue;
+            }
+            if let Some(at) = wall_crossing(w, from, to) {
+                gone.push(e);
                 commands.entity(e).try_despawn();
-                fx.write(crate::particles::SpawnEffect { secs: 0.8, ..crate::particles::SpawnEffect::at("electrified", g.translation()) });
+                // (its own shock particles, `m_ShockParticleSystemTemplate`, turned with it)
+                fx.write(crate::particles::SpawnEffect { secs: 0.8, system: d.def.fx.get("shock").copied(), rot: Quat::from_rotation_y(d.def.yaw), ..crate::particles::SpawnEffect::at("electrified", at) });
+                strike(&mut fx, d, at, false);
                 let s = d.def.sounds.get("m_ShockSound").cloned().unwrap_or_else(|| "Snd_P_Death_Light".into());
-                sfx.write(PostEvent::named(&s, Some(g.translation())));
+                sfx.write(PostEvent::named(&s, Some(at)));
+                if std::env::var("DH_WALL_LOG").is_ok() {
+                    info!("wall {}: destroys a thrown thing at {at:.2}", d.def.actor);
+                }
             }
         }
         for (e, n, t) in &npcs {
@@ -842,6 +863,7 @@ fn walls(
             }
             if dies && inside(w, t.translation) {
                 hits.write(NpcHit { npc: e, damage: 999.0, kind: HitKind::WallOfLight, from: t.translation });
+                strike(&mut fx, d, t.translation + Vec3::Y * 0.3, true);
                 struck.insert(e);
                 killed.push(d.def.actor.clone());
                 // (a kill spends its tank's oil: `m_PawnChargeCost`)
@@ -856,6 +878,88 @@ fn walls(
     }
     devices.wall_kills.extend(killed);
     devices.drains.extend(spent);
+}
+
+/// Where a path from `a` to `b` first meets a wall of light's box (world -> local matrix and
+/// local bounds, grown a little). A bolt crosses the thin wall in less than a frame, so what it
+/// would reach this frame counts, as the original's projectile sweep meets the wall before
+/// whoever stands behind it.
+fn wall_crossing(w: &(Mat4, Vec3, Vec3), a: Vec3, b: Vec3) -> Option<Vec3> {
+    let (la, lb) = (w.0.transform_point3(a), w.0.transform_point3(b));
+    let (lo, hi) = (w.1 - Vec3::splat(0.25), w.2 + Vec3::splat(0.25));
+    let dir = lb - la;
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for k in 0..3 {
+        if dir[k].abs() < 1e-6 {
+            if la[k] < lo[k] || la[k] > hi[k] {
+                return None;
+            }
+            continue;
+        }
+        let (ta, tb) = ((lo[k] - la[k]) / dir[k], (hi[k] - la[k]) / dir[k]);
+        t0 = t0.max(ta.min(tb));
+        t1 = t1.min(ta.max(tb));
+        if t0 > t1 {
+            return None;
+        }
+    }
+    Some(a + (b - a) * t0)
+}
+
+/// What is seen of a wall of light (the wall itself is hidden), as roshan's r614/blink research
+/// found and the user's own Dishonored.exe shows (placement 0x00A28D80, tick 0x00A3EEE0): its
+/// spark emitters on the pylons, lit while it is powered; and every `m_fMinSparkInterval` to
+/// `m_fMaxSparkInterval` (2 to 3.5 s) a spark (`m_CrossSparkEffect`) set on one of them with its
+/// beam's end on another, for `m_fSparkDuration` (0.17 s), seen while it is powered (the wall's
+/// own component, hidden with it).
+fn wall_sparks(
+    time: Res<Time>,
+    mut devices: ResMut<Devices>,
+    mut emitters: Query<&mut crate::particles::ParticleEmitter>,
+    mut fx: MessageWriter<crate::particles::SpawnEffect>,
+) {
+    let dt = time.delta_secs();
+    let live: Vec<bool> = devices.list.iter().map(|d| d.def.kind == "WallOfLight" && devices.powered(d)).collect();
+    let lit: std::collections::HashMap<u32, bool> = devices.list.iter().zip(&live).flat_map(|(d, on)| d.def.spark_particles.iter().map(move |p| (*p, *on))).collect();
+    if !lit.is_empty() {
+        for mut em in &mut emitters {
+            if let Some(&on) = lit.get(&em.index) {
+                if em.active != on {
+                    em.active = on;
+                }
+            }
+        }
+    }
+    for (d, on) in devices.list.iter_mut().zip(live) {
+        let n = d.def.sparks.len();
+        let Some(&sys) = d.def.fx.get("cross_spark").filter(|_| n >= 2) else { continue };
+        d.spark_t -= dt;
+        if d.spark_t > 0.0 {
+            continue;
+        }
+        let p = |k: &str, v: f32| d.def.params.get(k).copied().unwrap_or(v);
+        let (lo, hi, dur) = (p("m_fMinSparkInterval", 0.2), p("m_fMaxSparkInterval", 1.5), p("m_fSparkDuration", 0.08));
+        d.spark_t = lo + rand::random::<f32>() * (hi - lo).max(0.0);
+        if !on {
+            continue;
+        }
+        // (two different ones)
+        let a = rand::random::<u32>() as usize % n;
+        let mut b = rand::random::<u32>() as usize % n;
+        if b == a {
+            b = (b + 1) % n;
+        }
+        if std::env::var("DH_WALL_LOG").is_ok() {
+            info!("wall {}: a spark from {a} to {b}", d.def.actor);
+        }
+        fx.write(crate::particles::SpawnEffect {
+            system: Some(sys),
+            rot: Quat::from_rotation_y(d.def.yaw),
+            secs: dur.max(0.05),
+            beam_to: Some(Vec3::from(d.def.sparks[b])),
+            ..crate::particles::SpawnEffect::at("wall_spark", Vec3::from(d.def.sparks[a]))
+        });
+    }
 }
 
 /// How near one of its own keeps a guard from ringing at a sighting (`m_fCompanionRange`, 2000 uu).

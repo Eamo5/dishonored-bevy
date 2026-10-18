@@ -2171,6 +2171,19 @@ against the install's own data where it carries them, then implemented independe
   a kill's cost of its tank), unless Corvo carries it through; a bolt, dart or grenade meeting it
   is destroyed with a shock, bursting and sticking nowhere (the wall's `TakeDamage` from a causer
   that isn't a pawn), as roshan's r614/blink research decoded `DisWallOfLight`.
+  - *What is seen of it.* The wall itself is never drawn: its mesh is the editor's
+    (`walllight_visible_in_editor`, `HiddenGame`) and the actor hides itself as it is placed. While
+    powered, its spark emitters on the pylons (`m_SparkEffects`, placed `Lightnings`) crackle; every
+    `m_fMinSparkInterval` to `m_fMaxSparkInterval` (2 to 3.5 s) a spark (`m_CrossSparkEffect`,
+    `Lightnings3_random`) leaps from one of them to another for `m_fSparkDuration` (0.17 s). What it
+    shocks takes its beams (`m_Beams`, placed `Lightnings2`) from the pylons for its kill effect's
+    `m_ActivationTime` (0.1 s), and a bolt or dart it destroys its own shock particles
+    (`ps_shock_electrified`). (The placement 0x00A28D80, tick 0x00A3EEE0 and beams 0x00A30CA0,
+    decoded for this rewrite from the user's own Dishonored.exe, as roshan's r614/blink research
+    found them too.) The rewrite drew a glowing sheet of its own before.
+  - A bolt meets the wall on its way, not only where a frame leaves it: the path it flies in a frame
+    counts, so a fast one no longer slips through to whoever stands behind; and the kill cam
+    doesn't follow a bolt a running wall will stop.
   - *Electrocuted* (`StateNPCMasterDead_Electrocuted`, with `DisTweaks_NPCPawn`'s settings). One
     struck standing plays its own death (`DisNPCAnim_DeathWallOfLight`: `Generic_Electrified`),
     lightning playing on its limbs: `ps_electrified` on the twelve bones of `m_ElectrocutedFXs`, with
