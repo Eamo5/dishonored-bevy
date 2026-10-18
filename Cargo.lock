@@ -2442,8 +2442,10 @@ dependencies = [
  "anyhow",
  "dhcook",
  "env_logger",
+ "glam 0.30.10",
  "image",
  "log",
+ "serde_json",
  "texpresso",
  "upk",
 ]

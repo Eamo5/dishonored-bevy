@@ -1624,7 +1624,7 @@ fn animate_arms(
 /// The held guns' rigs move with the hand: the pistol's hammer falls as it fires and its fast
 /// reload plays (`CorvoGun_Fire_Hammer`, `CorvoGun_FastReload`); the crossbow plays the hand's clip of
 /// its own name (its shot, reloads, the shot through the optics), else rests loaded or, with no
-/// bolts left, empty (`Crossbow_Idle`, `Crossbow_OutOfAmmo_Idle`).
+/// bolts left, empty (`Crossbow_Idle`, `Crossbow_OutOfAmmo_Idle`); the Heart beats.
 fn animate_held(
     arms: Query<&Animator, With<ArmsRoot>>,
     mut held: Query<(&HeldRig, &mut Animator, &Visibility), Without<ArmsRoot>>,
@@ -1639,6 +1639,8 @@ fn animate_held(
         }
         let lib = anim.lib.clone();
         let (clip, synced) = match rig.0 {
+            // (the Heart beats in his hand, its own tree's looping `Heart_Beat`: `Heart_at`)
+            "heart" => ("Heart_Beat", false),
             "pistol" => match arm.as_str() {
                 "Pistol_Fire" | "Pistol_Fire_Accurate" | "Pistol_Spyglass_Fire" | "Pistol_Spyglass_FireAccurate" => ("CorvoGun_Fire_Hammer", true),
                 "Pistol_FastReload" => ("CorvoGun_FastReload", true),

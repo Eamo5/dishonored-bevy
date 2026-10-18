@@ -219,6 +219,39 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Some("rigcheck") => {
+            // dhtool rigcheck <map> <prop rig> <clip>: each joint's model-space place at bind and
+            // at the clip's first frame (a rig whose clip tears its mesh: which joints jump)
+            let scene: dhcook::format::Scene = serde_json::from_slice(&std::fs::read(format!("cache/maps/{}.json", args[2].to_ascii_lowercase()))?)?;
+            let t = *scene.prop_rigs.get(&args[3]).expect("no such rig") as usize;
+            let ty = &scene.npc_types[t];
+            let sk = &scene.skeletons[ty.skeleton.expect("no skeleton") as usize];
+            let n = sk.bones.len();
+            let mut rot: Vec<glam::Quat> = sk.bones.iter().map(|b| glam::Quat::from_array(b.rotation).normalize()).collect();
+            let mut tr: Vec<glam::Vec3> = sk.bones.iter().map(|b| glam::Vec3::from(b.translation)).collect();
+            let model = |rot: &[glam::Quat], tr: &[glam::Vec3], j: usize| {
+                let (mut p, mut i) = (glam::Vec3::ZERO, j as i32);
+                while i >= 0 && (i as usize) < n {
+                    p = rot[i as usize] * p + tr[i as usize];
+                    let parent = sk.bones[i as usize].parent;
+                    if parent == i { break; }
+                    i = parent;
+                }
+                p
+            };
+            let bind: Vec<glam::Vec3> = (0..n).map(|j| model(&rot, &tr, j)).collect();
+            for &si in &ty.anim_sets {
+                let f = dhcook::format::AnimFile::read(&std::path::Path::new("cache").join(&scene.anim_sets[si as usize].file))?;
+                let Some(c) = f.clips.iter().find(|c| c.name.eq_ignore_ascii_case(&args[4])) else { continue };
+                let idx = |name: &str| sk.bones.iter().position(|b| b.name.eq_ignore_ascii_case(name));
+                for k in &c.rotations { if let (Some(j), Some(v)) = (idx(&f.bones[k.bone as usize]), k.values.first()) { rot[j] = glam::Quat::from_array(*v).normalize(); } }
+                for k in &c.translations { if let (Some(j), Some(v)) = (idx(&f.bones[k.bone as usize]), k.values.first()) { tr[j] = glam::Vec3::from(*v); } }
+                for j in 0..n {
+                    let p = model(&rot, &tr, j);
+                    println!("{:3} {:24} parent {:3} bind {:>7.3?} posed {:>7.3?} moved {:.3} | local bind t {:>7.3?} r {:>6.3?} posed t {:>7.3?} r {:>6.3?}", j, sk.bones[j].name, sk.bones[j].parent, bind[j].to_array(), p.to_array(), (p - bind[j]).length(), sk.bones[j].translation, sk.bones[j].rotation, tr[j].to_array(), rot[j].to_array());
+                }
+            }
+        }
         Some("animdump") => {
             // dhtool animdump <file.anim> <clip>: a cooked clip's tracks (bone, keys, value range)
             let f = dhcook::format::AnimFile::read(std::path::Path::new(&args[2]))?;

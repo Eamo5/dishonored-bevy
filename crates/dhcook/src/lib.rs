@@ -7354,6 +7354,7 @@ impl<'a> Cooker<'a> {
                 ("crossbow", "Crossbows.crossbow_01", "Crossbows_as.Crossbow_as"),
                 // (his folding sword: its blade snapping out as it's drawn, `PlySword_Anim_as`)
                 ("player_sword", "Wpn_PlySwords.Wpn_PlySword01", "PlySword_Anim_as.PlySword_Anim_as"),
+                ("heart", "Heart.Heart", "Heart_as.Heart_as"),
             ] {
                 let (Some(m), Some(s)) = (self.assets.find(mesh), self.assets.find(set)) else { continue };
                 match self.cook_device(&m, vec![s]) {
@@ -8325,9 +8326,13 @@ fn cook_anim_set(set: &Obj, layout: &AnimLayout, path: &Path) -> Result<bool> {
         // a carried body's clips place it relative to the carrier through its root bone; the
         // fish is modelled upright and swims laid flat by its root
         let keep_root = clip.name.starts_with("Corpses_CarryCorpse") || clip.name.starts_with("Empty_CarryCorpse") || clip.name.starts_with("Fish_");
+        // (the Heart's own set, `Heart_as`, holds its `Root_jnt` turned 130 degrees through every
+        // clip, where its place in Corvo's hand has it at rest: the beat alone)
+        let held_heart = set.path() == "Heart_as.Heart_as";
+        let skip = |j: usize| held_heart && layout.names.get(j).is_some_and(|n| n == "Root_jnt");
         for t in a.rotations {
             let root = layout.root == Some(t.joint as usize);
-            if root && !keep_root {
+            if (root && !keep_root) || skip(t.joint as usize) {
                 continue;
             }
             // the root bone goes through the mesh's component transform (as its bind pose)
@@ -8342,6 +8347,9 @@ fn cook_anim_set(set: &Obj, layout: &AnimLayout, path: &Path) -> Result<bool> {
             clip.rotations.push(KeyTrack { bone: t.joint, frames: t.frames, values });
         }
         for t in a.translations {
+            if skip(t.joint as usize) {
+                continue;
+            }
             if layout.root == Some(t.joint as usize) && !keep_root {
                 if let (Some(a), Some(b)) = (t.values.first(), t.values.last()) {
                     let delta = cq * (Vec3::from(*b) - Vec3::from(*a));

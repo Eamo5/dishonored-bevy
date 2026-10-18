@@ -11,3 +11,5 @@ texpresso = "2"
 dhcook = { path = "../dhcook" }
 env_logger = "0.11"
 log = "0.4"
+glam = "0.30"
+serde_json = "1"
