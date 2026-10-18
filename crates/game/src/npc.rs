@@ -48,6 +48,7 @@ impl Plugin for NpcPlugin {
                     record_trail,
                     spawn_requested,
                     npc_hits,
+                    last_survivors,
                     age_corpses,
                     (ash_marked, electrocute, burn_ashes).chain(),
                     npc_shots,
@@ -301,6 +302,16 @@ pub struct Npc {
     pub search_run: bool,
     /// it saw one of its own die (the alarm's `m_fAlarmChanceUponWitnessDeath`)
     pub witnessed_death: bool,
+    /// Corvo dealt its last blow (else another character or the world did)
+    pub hit_by_player: bool,
+    /// its panic behaviour's last-survivor count (`DisAIBrainProcessPanic.m_KillQueue`: when
+    /// each of its own fell to Corvo), how often it has panicked, and, panicking, how near Corvo
+    /// may come before it turns on him (a fighter's `EReaction_Fight`; 0: it never does) and how
+    /// long it runs heedless first (`m_fFreeFlightTimer`)
+    pub kill_queue: Vec<f32>,
+    pub panics: u32,
+    pub panic_fight: f32,
+    pub free_flight: f32,
     /// a plague carrier's time until it coughs again, and how long its cough holds it
     pub cough_cd: f32,
     pub cough_hold: f32,
@@ -2212,6 +2223,11 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         taunt_hold: 0.0,
         search_run: false,
         witnessed_death: false,
+        hit_by_player: false,
+        kill_queue: Vec::new(),
+        panics: 0,
+        panic_fight: 0.0,
+        free_flight: 0.0,
         cough_cd: rand::random::<f32>() * 3.0,
         cough_hold: 0.0,
         hit_from: None,
@@ -2636,6 +2652,7 @@ fn npc_hits(
             commands.entity(h.npc).try_remove::<LegHit>();
         }
         let Ok((e, mut npc, t)) = npcs.get_mut(h.npc) else { continue };
+        npc.hit_by_player = !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats);
         npc.leg_hit = leg;
         npc.small_hit = h.kind == HitKind::Impact;
         npc.shot_hit = h.kind == HitKind::Bolt;
@@ -3080,9 +3097,12 @@ pub(crate) fn npc_perception(
     mut npcs: Query<(Entity, &mut Npc, &Transform), (Without<Player>, Without<ConsumedBody>)>,
     possession: Res<crate::possession::Possession>,
     mut found: Local<std::collections::HashSet<Entity>>,
-    (froms, mut events): (Query<&FromSpawner>, MessageWriter<crate::interact::Interaction>),
+    (froms, mut events, swarms): (Query<&FromSpawner>, MessageWriter<crate::interact::Interaction>, Query<(&Transform, &crate::swarm::Swarm), Without<Npc>>),
     (level, pvis, settings, notarget): (Option<Res<LevelInfo>>, Res<crate::stealth::PlayerVisibility>, Res<crate::settings::Settings>, Option<Res<crate::script::NoTarget>>),
 ) {
+    // (rat swarms about that would attack: Corvo's, or a level's grown to its
+    // `m_InitialRatCountToBeAggressive`; a stray rat or two only scurries off)
+    let swarm_at: Vec<Vec3> = swarms.iter().filter(|(_, s)| !s.rats.is_empty() && s.wild.as_ref().is_none_or(|w| s.rats.len() >= w.aggressive)).map(|(t, _)| t.translation).collect();
     let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
     // inside a host, Corvo is the host
     // (`DH_NOTARGET`, `notarget`: unseen, for watching the characters in tests)
@@ -3304,7 +3324,12 @@ pub(crate) fn npc_perception(
                     }
                 }
             }
-        } else if civilian_may_panic(&npc) {
+        }
+        // (an unarmed one on the guards' side, a servant, panics only at a swarm: what else it
+        // sees it reports to them)
+        let civilian = civilian_may_panic(&npc);
+        let servant = npc.hostile() && !npc.fighter() && npc.may_panic() && npc.can_flee && npc.mode != Mode::Flee && !npc.is_down();
+        if civilian || servant {
             // a civilian panics (`TweaksBehavior_Panic_Civilian`, as roshan's r614/blink research
             // listed its triggers): a body in its sight (`WitnessCorpse`, `WitnessDeath`), a guard
             // fighting in its sight within the group distance (`WitnessAllyCombat`), another
@@ -3318,13 +3343,22 @@ pub(crate) fn npc_perception(
                     ctx.cast_ray(eye, dir, d - 0.3, true, filter).is_none()
                 }
             };
+            // (each as its own panic behaviour has the rule on, where it lists any; a rat swarm
+            // in sight, `SeeRatSwarm`, only where it does)
+            let rules = level.as_ref().and_then(|l| npc.npc_type.and_then(|i| l.scene.npc_types.get(i as usize))).and_then(|ty| ty.sight.as_ref()).and_then(|s| s.panic.as_ref()).map(|p| p.rules.clone()).filter(|r| !r.is_empty());
+            let on = |r: &str| rules.as_ref().is_none_or(|rs| rs.iter().any(|x| x == r));
+            // (a body: any, `WitnessCorpse`; one dying before its eyes, `WitnessDeath`)
             let why = body_positions
                 .iter()
-                .map(|(_, b)| *b)
-                .find(|b| in_sight(*b))
-                .or_else(|| fighting.iter().copied().find(|f| f.distance(pos) < GROUP_DISTANCE && in_sight(*f + Vec3::Y * 0.5)))
-                .or_else(|| panicking.iter().copied().find(|f| f.distance(pos) < GROUP_DISTANCE && f.distance(pos) > 0.05));
-            if let Some(from) = why {
+                .find(|(be, b)| civilian && (on("WitnessCorpse") || (on("WitnessDeath") && fresh.iter().any(|f| f.0 == *be))) && in_sight(*b))
+                .map(|(_, b)| (*b, "a body"))
+                .or_else(|| fighting.iter().copied().find(|f| civilian && on("WitnessAllyCombat") && f.distance(pos) < GROUP_DISTANCE && in_sight(*f + Vec3::Y * 0.5)).map(|f| (f, "a fight")))
+                .or_else(|| panicking.iter().copied().find(|f| civilian && on("WitnessAllyPanic") && f.distance(pos) < GROUP_DISTANCE && f.distance(pos) > 0.05).map(|f| (f, "another panicking")))
+                .or_else(|| rules.as_ref().filter(|rs| rs.iter().any(|x| x == "SeeRatSwarm")).and_then(|_| swarm_at.iter().copied().find(|s| in_sight(*s))).map(|s| (s, "a swarm")));
+            if let Some((from, what)) = why {
+                if std::env::var("DH_NPC_LOG").is_ok() {
+                    info!("{}: panics at {what} at {from:.1}", npc.name);
+                }
                 npc.last_seen = Some(from);
                 npc.set_mode(Mode::Flee);
             }
@@ -3841,6 +3875,21 @@ pub(crate) fn npc_brain(
             }
             Mode::Flee => {
                 let from = npc.last_seen.unwrap_or(ppos);
+                // a fighter that panicked (its last survivor rule) runs heedless a moment
+                // (`m_fFreeFlightTimer`); then, Corvo upon it (within its
+                // `m_fCowerReactionDistance`), it turns and fights (`EReaction_Fight`)
+                if npc.fighter() && npc.panic_fight > 0.0 {
+                    if std::env::var("DH_NPC_LOG").is_ok() && (npc.mode_timer * 2.0).fract() < dt * 2.0 {
+                        info!("{}: fleeing {:.1} s at {pos:.1}, {:.1} m from Corvo", npc.name, npc.mode_timer, (ppos - pos).length());
+                    }
+                    npc.free_flight = (npc.free_flight - dt).max(0.0);
+                    if npc.free_flight <= 0.0 && (ppos - pos).length() < npc.panic_fight && npc.sees_player {
+                        npc.panic_fight = 0.0;
+                        npc.last_seen = Some(ppos);
+                        npc.set_mode(Mode::Combat);
+                        continue;
+                    }
+                }
                 // caught: Corvo upon it (within the panic's `m_fCowerReactionDistance`, 350 uu),
                 // a civilian gives up running and begs where it is, facing him
                 // (`m_eCaughtReaction`: `EReaction_Beg`), its cry for help heard 15 m; once he
@@ -4728,6 +4777,80 @@ const GROUP_DISTANCE: f32 = 10.0;
 
 /// The search's locomotion modifier (`SearchSword`, `SearchEmpty`).
 const SEARCH_SPEED: f32 = 0.8;
+
+/// The panic behaviour's last survivor rule (`DisAIBrainProcessPanic`'s kill handler,
+/// 0x00B617C0, decoded for this rewrite): when one of a character's own falls to Corvo, it
+/// counts the fall (the count forgets falls older than `m_fKillCountResetTimer`); with at
+/// least `m_iKillCount` counted, Corvo within `m_fFearDistanceFromKiller`, it fighting him, and
+/// no more than `m_iSurvivorCount` left fighting him, it panics and flees from him (at most
+/// `m_PanicCountLimit` times).
+fn last_survivors(
+    time: Res<Time>,
+    level: Option<Res<LevelInfo>>,
+    mut npcs: Query<(Entity, &mut Npc, &Transform), Without<Player>>,
+    player: Query<&Transform, With<Player>>,
+    mut seen: Local<std::collections::HashSet<Entity>>,
+) {
+    let (Some(level), Ok(pt)) = (level, player.single()) else { return };
+    let ppos = pt.translation;
+    // who fell to Corvo since last time (their side)
+    let mut fallen: Vec<String> = Vec::new();
+    for (e, npc, _) in &npcs {
+        if npc.mode == Mode::Dead && seen.insert(e) && npc.hit_by_player {
+            fallen.push(npc.faction.clone());
+        }
+    }
+    seen.retain(|e| npcs.get(*e).is_ok_and(|(_, n, _)| n.mode == Mode::Dead));
+    if fallen.is_empty() {
+        return;
+    }
+    let now = time.elapsed_secs();
+    let fighting: Vec<String> = npcs.iter().filter(|(_, n, _)| !n.is_down() && n.hostile() && n.mode == Mode::Combat).map(|(_, n, _)| n.faction.clone()).collect();
+    for (_, mut npc, t) in &mut npcs {
+        if npc.is_down() || !npc.hostile() {
+            continue;
+        }
+        let Some(p) = npc.npc_type.and_then(|i| level.scene.npc_types.get(i as usize)).and_then(|ty| ty.sight.as_ref()).and_then(|s| s.panic.as_ref()) else { continue };
+        if !p.rules.iter().any(|r| r == "LastSurvivor") {
+            continue;
+        }
+        let fell = fallen.iter().filter(|f| **f == npc.faction).count();
+        let left = fighting.iter().filter(|f| **f == npc.faction).count();
+        let near = t.translation.distance(ppos);
+        let fights = npc.mode == Mode::Combat;
+        let panics = npc.panics;
+        let go = last_survivor(p, &mut npc.kill_queue, now, fell, near, fights, left, panics);
+        if std::env::var("DH_NPC_LOG").is_ok() && fell > 0 {
+            info!("{}: one of its own fell ({} counted, {near:.1} m from Corvo, {:?}, {left} fighting him)", npc.name, npc.kill_queue.len(), npc.mode);
+        }
+        if go {
+            if std::env::var("DH_NPC_LOG").is_ok() {
+                info!("{}: last survivor ({} fallen, {left} left): panics", npc.name, npc.kill_queue.len());
+            }
+            npc.panics += 1;
+            npc.kill_queue.clear();
+            npc.last_seen = Some(ppos);
+            npc.panic_fight = if p.caught == "Fight" { p.cower } else { 0.0 };
+            npc.free_flight = p.free_flight;
+            npc.flee_to = None;
+            npc.set_mode(Mode::Flee);
+        }
+    }
+}
+
+/// The kill handler's count and test: each of its own that fell counted (falls older than
+/// `m_fKillCountResetTimer` forgotten first); then whether it panics: `m_iKillCount` counted,
+/// Corvo within `m_fFearDistanceFromKiller`, it fighting him, no more than `m_iSurvivorCount`
+/// (itself among them) left fighting him, and its `m_PanicCountLimit` not used up.
+#[allow(clippy::too_many_arguments)]
+fn last_survivor(p: &dhcook::format::PanicTweak, queue: &mut Vec<f32>, now: f32, fell: usize, near: f32, fights: bool, left: usize, panics: u32) -> bool {
+    let [survivors, kills, reset, fear] = p.survivor;
+    for _ in 0..fell {
+        queue.retain(|k| now - *k < reset);
+        queue.push(now);
+    }
+    queue.len() as f32 >= kills && near <= fear && fights && left as f32 <= survivors && (p.count_limit == 0 || panics < p.count_limit)
+}
 
 /// A civilian that may panic now: unarmed, not barred from it, able to run, not already
 /// running, not of Corvo's own people.
@@ -7327,6 +7450,27 @@ mod wear_tests {
         // (none it can keep: none)
         let st = NpcStats { outer_shapes: vec![PatternShape { ideal: "Jump".into(), flank: 45.0 }], ..st };
         assert_eq!(super::Arms::of(&st, 1, 3).outer_place, None);
+    }
+
+    #[test]
+    fn last_survivor_panics_as_the_kill_handler() {
+        // (a city guard's: 2 left, 2 counted, 20 s, 25 m; twice at most)
+        let p = dhcook::format::PanicTweak { rules: vec!["LastSurvivor".into()], survivor: [2.0, 2.0, 20.0, 25.0], count_limit: 2, cower: 6.0, free_flight: 2.0, caught: "Fight".into() };
+        let mut q = Vec::new();
+        // one fall: not yet
+        assert!(!super::last_survivor(&p, &mut q, 0.0, 1, 5.0, true, 2, 0));
+        // a second within the reset, two left fighting, Corvo near: it panics
+        assert!(super::last_survivor(&p, &mut q.clone(), 10.0, 1, 5.0, true, 2, 0));
+        // three still fighting him, Corvo too far, it not fighting, or its panics used up: not
+        assert!(!super::last_survivor(&p, &mut q.clone(), 10.0, 1, 5.0, true, 3, 0));
+        assert!(!super::last_survivor(&p, &mut q.clone(), 10.0, 1, 30.0, true, 2, 0));
+        assert!(!super::last_survivor(&p, &mut q.clone(), 10.0, 1, 5.0, false, 2, 0));
+        assert!(!super::last_survivor(&p, &mut q.clone(), 10.0, 1, 5.0, true, 2, 2));
+        // the first fall forgotten past the reset
+        assert!(!super::last_survivor(&p, &mut q, 25.0, 1, 5.0, true, 2, 0));
+        assert_eq!(q, vec![25.0]);
+        // two at once
+        assert!(super::last_survivor(&p, &mut Vec::new(), 0.0, 2, 5.0, true, 1, 0));
     }
 
     #[test]

@@ -4057,7 +4057,8 @@ impl<'a> Cooker<'a> {
         let neutral = attention(self, "m_pAttentionTweaks_Neutral");
         let protect_neutrals = matches!(self.tweak_prop(&brain, "m_bProtectNeutrals", 0, 0), Some((_, Value::Bool(true))));
         let scary = self.scary_noises(&brain);
-        Some(Sight { inner, outer, unsuspecting, suspecting, neutral, aware_level, protect_neutrals, scary })
+        let panic = self.panic_tweak(&brain);
+        Some(Sight { inner, outer, unsuspecting, suspecting, neutral, aware_level, protect_neutrals, scary, panic })
     }
 
     /// The noises that panic a brain's character: its panic behaviour (`m_BehaviorTweak`'s
@@ -4088,6 +4089,48 @@ impl<'a> Cooker<'a> {
             out.push(n.trim_start_matches("EAINoiseContext_").to_string());
         }
         Some(out)
+    }
+
+    /// A brain's panic behaviour's rules (`m_BehaviorTweak`'s normal difficulty one of class
+    /// `DisTweaks_AIBehavior_Panic`): the rules on, the last survivor's numbers (the class
+    /// defaults where the tweak leaves them: 1 survivor, 2 kills, 10 s, 1000 uu), the limit,
+    /// the cower distance, the caught reaction (default `Fight`).
+    fn panic_tweak(&mut self, brain: &Obj) -> Option<PanicTweak> {
+        let Some((pkg, Value::Array { count, offset, size })) = self.tweak_prop(brain, "m_BehaviorTweak", 0, 0) else { return None };
+        let panic = parse_struct_array(&pkg, offset, size, count)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|b| match b.get_idx("m_Difficulty", 1) {
+                Some(Value::Object(o)) if *o != 0 => self.assets.resolve(&pkg, *o),
+                _ => None,
+            })
+            .find(|o| o.class() == "DisTweaks_AIBehavior_Panic")?;
+        let mut t = PanicTweak { survivor: [1.0, 2.0, 10.0, 10.0], cower: 3.5, free_flight: 2.0, caught: "Fight".into(), ..Default::default() };
+        for n in ["LastSurvivor", "SeeRatSwarm", "HearNoise", "WitnessDeath", "WitnessCorpse", "SeeEnemy", "WitnessAllyCombat", "WitnessAllyPanic", "WithinDangerZone", "AttackedMelee", "AttackedRanged", "FightingRadius"] {
+            let Some((_, Value::Struct(_, rule))) = self.tweak_prop(&panic, &format!("m_{n}"), 0, 0) else { continue };
+            let rule = Props(rule);
+            if matches!(rule.get("m_bIsActive"), Some(Value::Bool(true))) {
+                t.rules.push(n.to_string());
+            }
+            if n == "LastSurvivor" {
+                let int = |k: &str, or: f32| match rule.get(k) {
+                    Some(Value::Int(v)) => *v as f32,
+                    _ => or,
+                };
+                t.survivor = [int("m_iSurvivorCount", 1.0), int("m_iKillCount", 2.0), rule.float("m_fKillCountResetTimer").unwrap_or(10.0), rule.float("m_fFearDistanceFromKiller").unwrap_or(1000.0) * crate::xform::UNIT];
+            }
+        }
+        if let Some((_, Value::Struct(_, r))) = self.tweak_prop(&panic, "m_PanicCountLimit", 0, 0) {
+            if let Some(Value::Int(v)) = Props(r).get("m_iPanicCountLimit") {
+                t.count_limit = (*v).max(0) as u32;
+            }
+        }
+        t.cower = self.tweak_float(&panic, "m_fCowerReactionDistance", 0).unwrap_or(350.0) * crate::xform::UNIT;
+        t.free_flight = self.tweak_float(&panic, "m_fFreeFlightTimer", 0).unwrap_or(2.0);
+        if let Some((_, Value::Enum(e))) = self.tweak_prop(&panic, "m_eCaughtReaction", 0, 0) {
+            t.caught = e.trim_start_matches("EReaction_").to_string();
+        }
+        Some(t)
     }
 
     /// A `DisTweaks_PawnAttention`.

@@ -1398,6 +1398,10 @@ pub struct Sight {
     /// known
     #[serde(default)]
     pub scary: Option<Vec<String>>,
+    /// its panic behaviour's other rules (`DisTweaks_AIBehavior_Panic`); none: no panic
+    /// behaviour known
+    #[serde(default)]
+    pub panic: Option<PanicTweak>,
     /// focused vision: full horizontal angle (degrees), range (m), vertical scales up and down
     /// (of the half angle)
     pub inner: [f32; 4],
@@ -1409,6 +1413,24 @@ pub struct Sight {
     /// the attention level it acts on as aware of Corvo (`m_MinAttentionForAwareness`:
     /// 1 head track, 2 turn to face, 3 investigate, 4 busted)
     pub aware_level: u8,
+}
+
+/// A panic behaviour's rules (`DisTweaks_AIBehavior_Panic`): which are on (by name, `m_` off:
+/// `SeeEnemy`, `SeeRatSwarm`, `WitnessDeath`, `LastSurvivor`...), the last survivor's numbers,
+/// how often it may panic, how near Corvo catches it, and what it does then.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct PanicTweak {
+    pub rules: Vec<String>,
+    /// `m_LastSurvivor`: `m_iSurvivorCount`, `m_iKillCount`, `m_fKillCountResetTimer` (s),
+    /// `m_fFearDistanceFromKiller` (m)
+    pub survivor: [f32; 4],
+    /// `m_PanicCountLimit` (0: no limit)
+    pub count_limit: u32,
+    /// `m_fCowerReactionDistance` (m), `m_fFreeFlightTimer` (s)
+    pub cower: f32,
+    pub free_flight: f32,
+    /// `m_eCaughtReaction`: `FleeAgain`, `Beg`, `Fight`
+    pub caught: String,
 }
 
 /// `DisTweaks_PawnAttention`: attention (0..`max`) leaks away, seeing Corvo raises it, and its

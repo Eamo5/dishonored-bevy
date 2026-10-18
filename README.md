@@ -2225,6 +2225,19 @@ against the install's own data where it carries them, then implemented independe
     `Empty_Idle_Panic_Recover`), pleading every few seconds (`COMBAT_BEGGING`: "Help me!") and
     crying for help again; once he has backed off a moment it gets up and runs on. Run as far as
     its flee points go, it cowers there.
+  - Each character's own panic behaviour (`DisTweaks_AIBehavior_Panic`, cooked per character)
+    says which of those triggers it heeds: conspirators panic at a death, a fight or another's
+    panic but not at a body come upon; a swarm that would attack (Corvo's, or a level's grown to
+    its `m_InitialRatCountToBeAggressive`) in sight sets those listing `SeeRatSwarm` running,
+    Sokolov's servants and the other unarmed on the guards' side among them.
+  - Guards: the last survivors. A city or lower guard (`m_LastSurvivor`) counts each of its own
+    that falls to Corvo, forgetting falls older than `m_fKillCountResetTimer` (20 s); with two
+    counted (`m_iKillCount`), Corvo within `m_fFearDistanceFromKiller` (25 m), it fighting him and
+    no more than `m_iSurvivorCount` (two, itself among them) left fighting him, it panics and runs
+    from him, at most `m_PanicCountLimit` times (twice). Running heedless a moment
+    (`m_fFreeFlightTimer`, 2 s), it turns and fights again once he is on it (within its
+    `m_fCowerReactionDistance`, 6 m; `m_eCaughtReaction`: `EReaction_Fight`). (The kill handler,
+    0x00B617C0, decoded for this rewrite from the user's own Dishonored.exe.)
 - **The alarm bell.** A guard who has found Corvo, within `m_fNPCGoToAlarmCloseness` of a bell,
   runs to it (the nearest of them; not with Corvo on him) and rings it after `m_fWaitTimeBeforeRing`,
   pulling its lever (`Sword_TriggerAlarm`, standing for it),
