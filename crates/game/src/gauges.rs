@@ -11,7 +11,17 @@
 //! its regeneration's limit, mana to the cap its last spending left); a shard raised by a whale
 //! bone charm or by Vitality grows (its `upgd2`, `upgd4`, `upgd6` frames: a piece more at its tip,
 //! its masks taller); and a drink plays the shard's `refill_mc`.
+//!
+//! The ring's item is the movie's `itemIcons` (`_equipment_mc`, at 65%): the art on its disc,
+//! its count on the disc's plate. As the HUD's `SetPower` / `SetWeapon` have it, with what the
+//! game tells them (0x00B9F6E0, 0x00B981F0, decoded for this rewrite): a power's disc
+//! `stop_pow`; `stop_pow_over` while it is held or on (the light disc, the art dark: the power's
+//! own test, Blink and Possession aimed or a host ridden, Bend Time running, Dark Vision on);
+//! `stop_pow_empty` without the mana for it (`mana >= cost`, 0x00BF3060, or with powers held
+//! back: the art a grey silhouette on the darkened disc). A weapon's `default`; `stop_empty`
+//! out of ammunition.
 
+use crate::flash::{Clip, FlashClip, MovieTimelines};
 use crate::gameplay::PlayerStats;
 use crate::powers::Powers;
 use crate::GameState;
@@ -189,6 +199,14 @@ const BACKGROUND: [(u32, Vec2, Vec2, f32); 4] = [
 /// `_equipment_mc` (the `itemIcons` symbol, centred, at 65%): the icon, its `quantity` below
 const ICON_AT: Vec2 = Vec2::new(196.75, 221.7);
 const ICON_SIZE: f32 = 65.0;
+/// `itemIcons` (the power wheel movie's, sprite 29: its disc, glow and count plate), at 65%
+const DISC_SPRITE: u16 = 29;
+const DISC_SCALE: f32 = 0.65;
+/// the art as each of the disc's frames colours it (`ic`'s colour: none, or a flat colour):
+/// `stop_pow_over`'s dark blue, `stop_pow_empty`'s grey blue, `stop_empty`'s grey
+const ART_ON: Color = Color::srgb(11.0 / 255.0, 33.0 / 255.0, 52.0 / 255.0);
+const ART_NO_MANA: Color = Color::srgb(94.0 / 255.0, 98.0 / 255.0, 105.0 / 255.0);
+const ART_NO_AMMO: Color = Color::srgb(65.0 / 255.0, 65.0 / 255.0, 65.0 / 255.0);
 
 /// The meters' shown levels (tweened) and their glows' phases.
 #[derive(Resource, Default)]
@@ -236,6 +254,8 @@ struct Pointer(usize);
 #[derive(Component)]
 struct Icon;
 #[derive(Component)]
+struct Disc;
+#[derive(Component)]
 struct Ammo;
 #[derive(Component)]
 pub struct GaugesRoot;
@@ -246,8 +266,16 @@ fn spawn_gauges(
     mut images: ResMut<Assets<Image>>,
     mut mats: ResMut<Assets<BarFill>>,
     mut meters: ResMut<Meters>,
+    (mut timelines, data): (ResMut<MovieTimelines>, Res<crate::gamedata::Data>),
 ) {
     *meters = Meters::default();
+    // (Daud's wheel movie has his own discs)
+    let movie = if data.is_daud() && timelines.get("powerwheel_DLC06").is_some() { "powerwheel_DLC06" } else { "powerwheel" };
+    let disc = timelines.get(movie).map(|tl| {
+        let mut fc = FlashClip::new(movie, tl.clone(), Clip::new(&tl, DISC_SPRITE));
+        fc.m = [DISC_SCALE, 0.0, 0.0, DISC_SCALE, 0.0, 0.0];
+        fc
+    });
     let mut img = |id: u32| ui.get(&mut images, "HUD", id).map(|(h, _)| h);
     let node = || Node { position_type: PositionType::Absolute, ..default() };
     let piece = |min: Vec2, size: Vec2, turn: f32| Piece { min, size, turn, stage: true };
@@ -260,6 +288,9 @@ fn spawn_gauges(
                 if let Some(h) = img(id) {
                     c.spawn((piece(mid - size * 0.5, size, turn), ImageNode::new(h).with_mode(NodeImageMode::Stretch), node(), UiTransform::default()));
                 }
+            }
+            if let Some(fc) = disc {
+                c.spawn((Disc, fc, node(), Pickable::IGNORE));
             }
             c.spawn((Icon, piece(ICON_AT - Vec2::splat(ICON_SIZE * 0.5), Vec2::splat(ICON_SIZE), 0.0), ImageNode::default().with_mode(NodeImageMode::Stretch), node(), UiTransform::default(), Visibility::Hidden));
             c.spawn((
@@ -345,6 +376,12 @@ fn update_gauges(
     attrs: Res<crate::gamedata::Attrs>,
     mut upgrades: Query<(&Upgrade, &mut Visibility), Without<Icon>>,
     mut flashes: Query<(&Flash, &MaterialNode<BarFill>, &mut Visibility), (Without<Icon>, Without<Upgrade>)>,
+    (mut discs, tc, tune, possession): (
+        Query<(&mut FlashClip, &mut Node), (With<Disc>, Without<Piece>)>,
+        Res<crate::gameplay::TimeControl>,
+        Res<crate::musicbox::Tune>,
+        Res<crate::possession::Possession>,
+    ),
 ) {
     let dt = time.delta_secs();
     let Ok(w) = window.single() else { return };
@@ -434,6 +471,49 @@ fn update_gauges(
         let a = powers.selected.ammo(&stats).map(|n| n.to_string()).unwrap_or_default();
         if t.0 != a {
             t.0 = a;
+        }
+    }
+    // the item's disc and the art's colour, as `SetPower` / `SetWeapon` turn them
+    let sel = powers.selected;
+    let (label, art) = if sel.key().is_some() {
+        let on = match sel {
+            crate::powers::Power::DarkVision => powers.dark_vision,
+            crate::powers::Power::BendTime => tc.bend_remaining > 0.0,
+            crate::powers::Power::Possess => powers.aiming || possession.host.is_some(),
+            _ => powers.aiming,
+        };
+        let enough = stats.mana + 1e-3 >= sel.mana(&data) && !tune.inhibited;
+        if on {
+            ("stop_pow_over", ART_ON)
+        } else if enough {
+            ("stop_pow", Color::WHITE)
+        } else {
+            ("stop_pow_empty", ART_NO_MANA)
+        }
+    } else if sel.ammo(&stats) == Some(0) {
+        ("stop_empty", ART_NO_AMMO)
+    } else {
+        ("default", Color::WHITE)
+    };
+    for (mut fc, mut n) in &mut discs {
+        if fc.label("") != Some(label) {
+            fc.goto("", label, false);
+        }
+        // (its count's plate with a count)
+        let plate = sel.key().is_none() && sel.ammo(&stats).is_some();
+        fc.set_visible("quantity", plate);
+        // (nothing in the hand: none, `_equipment_mc._visible = false`)
+        fc.alpha = if sel == crate::powers::Power::Empty { 0.0 } else { 1.0 };
+        let at = off + ICON_AT * s;
+        n.left = Val::Px(at.x);
+        n.top = Val::Px(at.y);
+        fc.scale = s;
+    }
+    for (_, _, _, _, _, _, _, im, _, is_icon) in &mut pieces {
+        if let (true, Some(mut im)) = (is_icon, im) {
+            if im.color != art {
+                im.color = art;
+            }
         }
     }
     for (p, mut n, mut tf, _, glow, fill, pointer, im, mat, _) in &mut pieces {

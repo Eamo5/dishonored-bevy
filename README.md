@@ -1176,7 +1176,14 @@ are in the settings file, `pad_binding_set` 0-3):
   drink flashes its shard as the shard's `refill_mc` does (its colour transforms at the movie's
   30 frames a second: the health's white twice, then fading; the mana's blue-white twice), cut
   to the shard's own outline (the movie's mask is a vector shape; the glints crossing it are
-  left out).
+  left out). The left hand's item sits on its disc (`itemIcons` at 65%, its count on the
+  disc's plate), turned as the HUD's `SetPower` / `SetWeapon` turn it with what the game tells
+  them (decoded from the executable, 0x00B9F6E0, 0x00B981F0): a power on its dark disc
+  (`stop_pow`); on the light disc, its art dark, while it is held or on (`stop_pow_over`: each
+  power's own test, Blink and Possession aimed or a host ridden, Bend Time running, Dark Vision
+  on); a grey silhouette on the darkened disc without the mana for it (`stop_pow_empty`: mana
+  below its cost, 0x00BF3060, or powers held back by a music box); a weapon out of ammunition
+  grey on grey (`stop_empty`).
 - **The pickup log** (`pickuplog.rs`, the HUD movie's `PickupLog` class): what Corvo picks
   up comes in at the right of the screen (its name and small item icon, `UI_ItemIcons_Small`,
   over a brush stroke; sliding in over 0.4 s), the older entries rise a slot and dim (60%,
