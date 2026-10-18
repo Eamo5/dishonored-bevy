@@ -421,7 +421,7 @@ fn main() -> Result<()> {
                 if only.is_some_and(|o| o != mi) {
                     continue;
                 }
-                for policy in [dhcook::ue3prog::Policy::DirectionalLightMap, dhcook::ue3prog::Policy::NoLightMap] {
+                for policy in [dhcook::ue3prog::Policy::DirectionalLightMap, dhcook::ue3prog::Policy::NoLightMap, dhcook::ue3prog::Policy::BloomPart] {
                     let (vst, pst) = policy.shader_types();
                     let (Some(vg), Some(pg)) = (map.shader("FLocalVertexFactory", vst), map.shader("FLocalVertexFactory", pst)) else {
                         missing += 1;
@@ -435,7 +435,8 @@ fn main() -> Result<()> {
                     let sun = (|| {
                         let (lv, lp) = dhcook::ue3prog::Policy::SUN;
                         Some((cooked.code.get(&map.shader("FLocalVertexFactory", lv)?)?.as_slice(), cooked.code.get(&map.shader("FLocalVertexFactory", lp)?)?.as_slice()))
-                    })();
+                    })()
+                    .filter(|_| policy != dhcook::ue3prog::Policy::BloomPart);
                     match dhcook::ue3prog::build(map, vc, pc, sun, platform) {
                         Ok(p) => {
                             for u in &p.unknown {

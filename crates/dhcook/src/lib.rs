@@ -1601,6 +1601,7 @@ impl<'a> Cooker<'a> {
             self.movable(actor, index);
         }
 
+        let soul = self.soul(actor);
         self.scene.instances.push(Instance {
             mesh: mesh_id,
             materials,
@@ -1617,8 +1618,93 @@ impl<'a> Cooker<'a> {
             light_shadows: Vec::new(),
             irrelevant_lights: Vec::new(),
             reflect,
+            soul,
         });
         Ok(())
+    }
+
+    /// What Dark Vision makes of an actor, by its class's `IDisSoulRenderInterface` (decoded for
+    /// this rewrite from the user's own Dishonored.exe; `IsSoulVisible` tests the flag pair as
+    /// "level 1 and up" / "level 2"): its flags and material, its tweak's, or its class's own.
+    /// Pickups (`Pickup::key_item`), tripwires and launchers (by their state) are the game's.
+    fn soul(&mut self, actor: &Obj) -> Option<Soul> {
+        let class = actor.class();
+        let ch = self.chain(actor);
+        let kind = |n: Option<&str>, d: u8| match n {
+            Some(n) if n.ends_with("Soul") => 0,
+            Some(n) if n.ends_with("Item") => 1,
+            Some(n) if n.ends_with("Mechanic") => 2,
+            _ => d,
+        };
+        let flags = |c: &Chain, l1: bool, l2: bool, d: u8, force: Option<u8>| -> Option<Soul> {
+            let (l1, l2) = (c.bool("m_bVisibleAtLevel1").unwrap_or(l1), c.bool("m_bVisibleAtLevel2").unwrap_or(l2));
+            (l1 || l2).then(|| Soul { kind: force.unwrap_or_else(|| kind(c.name("m_SoulMaterialToUse"), d)), level1: l1 })
+        };
+        let tweak = |s: &mut Self, field: &str| ch.obj(s.assets, field).map(|t| s.chain(&t));
+        let always = |kind: u8| Some(Soul { kind, level1: true });
+        if self.class_is(&class, "DisPickup_Base") || self.class_is(&class, "DisTripwire") || self.class_is(&class, "DisProjectileLauncher") {
+            return None;
+        }
+        if self.class_is(&class, "DisStaticMeshActor") {
+            return flags(&ch, false, true, 2, None);
+        }
+        if self.class_is(&class, "DisSplineLoftActor") {
+            return flags(&ch, true, true, 2, None);
+        }
+        for (base, field, d, force) in [
+            ("DishonoredUsableObject", "m_pUsableObjTweaks", 2, None),
+            ("DisWhaleOilBattery", "m_pWhaleOilTweaks", 2, None),
+            ("DisWallOfLight", "m_pWallOfLightTweaks", 2, Some(2)),
+            ("DisDetectionEye", "m_pEyeTweaks", 2, None),
+            ("DisDefenceTower", "m_pDefenceTowerTweaks", 2, None),
+            ("DisFish", "m_pTweaks", 0, None),
+        ] {
+            if self.class_is(&class, base) {
+                return tweak(self, field).and_then(|t| flags(&t, false, false, d, force));
+            }
+        }
+        if self.class_is(&class, "DishonoredMovable") {
+            return tweak(self, "m_pMovableTweaks").filter(|t| t.bool("m_bIsKeyItem").unwrap_or(false)).and(always(1));
+        }
+        if ["DisWatchTower", "DisWatchTowerPlatform", "DisClimbable"].iter().any(|b| self.class_is(&class, b)) {
+            return always(2);
+        }
+        if self.class_is(&class, "DisUpgrade") {
+            return always(1);
+        }
+        if ["DisRiverKrust", "DisMovableLimb", "DisDLC07SkeletalMovable"].iter().any(|b| self.class_is(&class, b)) {
+            return always(0);
+        }
+        None
+    }
+
+    /// Whether a script class is `base` or derives from it (the classes of `DishonoredGame`).
+    fn class_is(&self, class: &str, base: &str) -> bool {
+        static SUPERS: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+        let supers = SUPERS.get_or_init(|| {
+            let mut m = HashMap::new();
+            if let Some(pkg) = self.assets.package("DishonoredGame") {
+                for i in 1..=pkg.exports.len() as i32 {
+                    let e = &pkg.exports[i as usize - 1];
+                    if pkg.class_name(i) == "Class" && e.super_ != 0 {
+                        let s = pkg.obj_path(e.super_);
+                        m.insert(pkg.obj_name(i).to_string(), s.rsplit('.').next().unwrap_or(&s).to_string());
+                    }
+                }
+            }
+            m
+        });
+        let mut c = class;
+        for _ in 0..32 {
+            if c == base {
+                return true;
+            }
+            match supers.get(c) {
+                Some(s) => c = s,
+                None => return false,
+            }
+        }
+        false
     }
 
     /// Match the instances' shadow maps and irrelevant lights to the dominant lights.
@@ -1734,7 +1820,9 @@ impl<'a> Cooker<'a> {
             }
         }
         self.actor_ref(actor).instances.push(index);
+        let soul = self.soul(actor);
         self.scene.instances.push(Instance {
+            soul,
             mesh: mesh_id,
             materials: section_mats,
             transform: world.to_cols_array(),
@@ -2430,7 +2518,10 @@ impl<'a> Cooker<'a> {
         };
         let textures = map.pixel.textures.iter().map(|e| texture(self, e, false)).collect();
         let cube_textures = map.cube_textures.iter().map(|e| texture(self, e, true)).collect();
-        Some(Ue3Material { map: mi as u32, params, param_names, textures, cube_textures, blend: rm.blend, two_sided: rm.two_sided, unlit: rm.unlit })
+        // (the bloom parts: flagged, and its map has their shaders)
+        let (bvs, bps) = ue3prog::Policy::BloomPart.shader_types();
+        let bloom = rm.bloom == Some(true) && map.shader("FLocalVertexFactory", bvs).is_some() && map.shader("FLocalVertexFactory", bps).is_some();
+        Some(Ue3Material { map: mi as u32, params, param_names, textures, cube_textures, blend: rm.blend, two_sided: rm.two_sided, unlit: rm.unlit, bloom })
     }
 
     /// A `TextureCube`'s six faces, cooked (index into `scene.cubes`).
@@ -2872,6 +2963,12 @@ impl<'a> Cooker<'a> {
                 }
                 if let Some(n) = tc.name("m_AINoiseLoudness") {
                     d.params.insert("noise_m".into(), noise_meters(&self.assets.cooked_dir, n));
+                }
+                // the danger zone it lays about what it shoots at (`m_fArrowDangerRadius`, m;
+                // `m_ArrowDangerShape`: a sphere, or a capsule from its arrows' socket)
+                d.params.insert("arrow_danger_m".into(), tc.float("m_fArrowDangerRadius").unwrap_or(250.0) * UNIT);
+                if tc.name("m_ArrowDangerShape").is_some_and(|n| n.contains("Capsule")) {
+                    d.params.insert("arrow_danger_capsule".into(), 1.0);
                 }
                 let level = tc.name("m_AllyAttentionLevelToTrack").and_then(|n| ["DAL_Unaware", "DAL_HeadTrack", "DAL_TurnToFace", "DAL_Investigate", "DAL_Busted"].iter().position(|l| *l == n));
                 d.params.insert("ally_level".into(), level.unwrap_or(3) as f32);
@@ -3632,6 +3729,36 @@ impl<'a> Cooker<'a> {
         None
     }
 
+    /// How danger zones steer a character (its brain's `m_pSteeringTweaks`), and the zone a
+    /// tallboy's aim lays (its combat behaviour's `m_fAimingDangerSphereRadius`).
+    fn danger_steering(&mut self, pawn: &Obj) -> NpcDanger {
+        let mut out = NpcDanger::default();
+        let Some(brain) = self.tweak_obj(pawn, "m_pBrainTweak") else { return out };
+        if let Some(st) = self.tweak_obj(&brain, "m_pSteeringTweaks") {
+            if let Some((_, Value::Struct(_, s))) = self.tweak_prop(&st, "m_DangerSteeringSettings", 0, 0) {
+                let p = Props(s);
+                out.steered = p.bool("m_bTickAllowed").unwrap_or(true);
+                out.smooth = p.float("m_fInfluenceSmoothSpeed").unwrap_or(2.0);
+            }
+            out.fade = self.tweak_float(&st, "m_fInfluenceFadeSpeed", 0).unwrap_or(2.0);
+        }
+        if let Some((pkg, Value::Array { count, offset, size })) = self.tweak_prop(&brain, "m_BehaviorTweak", 0, 0) {
+            let behaviours: Vec<Obj> = parse_struct_array(&pkg, offset, size, count)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|b| match b.get_idx("m_Difficulty", 1) {
+                    Some(Value::Object(o)) if *o != 0 => self.assets.resolve(&pkg, *o),
+                    _ => None,
+                })
+                .filter(|b| b.class().contains("TallBoyCombat"))
+                .collect();
+            for b in behaviours {
+                out.aim_radius = out.aim_radius.max(self.tweak_float(&b, "m_fAimingDangerSphereRadius", 0).unwrap_or(0.0) * UNIT);
+            }
+        }
+        out
+    }
+
     /// Where each of a combat behaviour's attack patterns places its character
     /// (`m_pIdealRangeSource`, `m_fFlankAngleDegrees`), as `attack_patterns` lists them.
     fn pattern_shapes(&mut self, pawn: &Obj, list: &str) -> Vec<PatternShape> {
@@ -3810,7 +3937,8 @@ impl<'a> Cooker<'a> {
                 speed: f(self, "m_fThrowSpeed", 1500.0) * UNIT,
                 jump: f(self, "m_fJumpClearance", 0.0) * UNIT,
                 fuse: [3.0, 1.0],
-                blast: TrapBlast { radius: 3.5, full: 1.0, player_radius: 6.0, player_full: 1.5, damage: [50.0; 4], effect: None, sound: String::new() },
+                blast: TrapBlast { radius: 3.5, full: 1.0, player_radius: 6.0, player_full: 1.5, damage: [50.0; 4], effect: None, sound: String::new(), danger: 3.5 },
+                danger: f(self, "m_fGrenadeDangerZone", 0.0) * UNIT,
             };
             // its grenade
             if let Some(proj) = self.tweak_obj(&c, "m_pProjectileType") {
@@ -3844,7 +3972,7 @@ impl<'a> Cooker<'a> {
             blind: f(self, &fire, "m_fBlindEffectTime", 2.0),
             throw_speed: 25.0,
             cooldown_unreachable: [2.0, 3.0],
-            blast: TrapBlast { radius: 2.5, full: 0.5, player_radius: 2.0, player_full: 0.25, damage: [30.0; 4], effect: None, sound: String::new() },
+            blast: TrapBlast { radius: 2.5, full: 0.5, player_radius: 2.0, player_full: 0.25, damage: [30.0; 4], effect: None, sound: String::new(), danger: 2.5 },
         };
         if let Some(t) = throw {
             out.throw_speed = f(self, &t, "m_fThrowSpeed", 2500.0) * UNIT;
@@ -3980,6 +4108,7 @@ impl<'a> Cooker<'a> {
         }
         st.plague = self.npc_plague(pawn);
         st.pacing = self.pacing(pawn);
+        st.danger = self.danger_steering(pawn);
         log::debug!(
             "npc stats {}: health {:?}, weapons {:?}, ammo {:?}",
             pawn.name(),
@@ -4671,6 +4800,7 @@ impl<'a> Cooker<'a> {
                 light_shadows: Vec::new(),
                 irrelevant_lights: Vec::new(),
                 reflect: 0,
+                soul: None,
             });
             let pickup = self.scene.pickups.len() as u32;
             self.scene.pickups.push(Pickup {
@@ -4690,6 +4820,7 @@ impl<'a> Cooker<'a> {
                 coins,
                 factory: true,
                 key,
+                key_item: tc.bool("m_bIsKeyItem").unwrap_or(false),
                 inv_item: tc.obj_path("m_pItem").map(|p| p.rsplit('.').next().unwrap_or(&p).to_string()).unwrap_or_default(),
                 verb,
             });
@@ -5235,10 +5366,14 @@ impl<'a> Cooker<'a> {
             }
         }
         let key = if actor.class().starts_with("DisKey") { ch.name("m_Name").unwrap_or_default().to_string() } else { String::new() };
+        // (what Dark Vision shows: `DisPickup_Base`'s `IsSoulVisible`)
+        let key_item = ch.bool("m_bIsKeyItemOverride").unwrap_or(false)
+            || TWEAKS.iter().find_map(|n| ch.obj(self.assets, n)).is_some_and(|t| self.chain(&t).bool("m_bIsKeyItem").unwrap_or(false));
         let index = self.scene.pickups.len() as u32;
         self.actor_ref(actor).pickup = Some(index);
         self.scene.pickups.push(Pickup {
             key,
+            key_item,
             label,
             quantity,
             coins,
@@ -5748,8 +5883,10 @@ impl<'a> Cooker<'a> {
         }
         let effect = xc.obj(self.assets, "m_pExplosionEffect").and_then(|ps| self.particle_system(&ps));
         let sound = xc.obj_path("m_pSoundEvent").map(|p| p.rsplit('.').next().unwrap_or(&p).to_string()).unwrap_or_default();
+        let radius = xc.float("m_fDamageRadius").unwrap_or(600.0) * UNIT;
         TrapBlast {
-            radius: xc.float("m_fDamageRadius").unwrap_or(600.0) * UNIT,
+            danger: radius * xc.float("m_fAIDangerRatio").unwrap_or(1.0),
+            radius,
             full: xc.float("m_fFullDamageRadius").unwrap_or(300.0) * UNIT,
             player_radius: xc.float("m_fPlayerDamageRadius").unwrap_or(600.0) * UNIT,
             player_full: xc.float("m_fPlayerFullDamageRadius").unwrap_or(150.0) * UNIT,
@@ -6479,6 +6616,7 @@ impl<'a> Cooker<'a> {
                 light_shadows: Vec::new(),
                 irrelevant_lights: Vec::new(),
                 reflect: 0,
+                soul: None,
             });
             let mut m = self.movable_of(tw, instance, Some(name.clone()), false);
             m.pool = Some(pool_index);

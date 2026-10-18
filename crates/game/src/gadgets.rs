@@ -231,6 +231,9 @@ pub struct NpcGrenade {
     pub vel: Vec3,
     pub fuse: [f32; 2],
     pub blast: dhcook::format::TrapBlast,
+    /// what it is thrown at, and the danger zone the throw lays to it (`danger`)
+    pub target: Vec3,
+    pub danger: f32,
 }
 
 /// What pulls a thrown grenade down (m/s², the original's 1500 uu/s²).
@@ -280,6 +283,10 @@ pub struct Grenade {
     throwback: bool,
     /// Kept separately from adhesion, which changes after a sticky grenade lands.
     kind: HitKind,
+    /// the danger zone about it (m: its reach x `m_fAIDangerRatio`), and whether it has laid it
+    /// since it left the hand (`danger`: again where it strikes)
+    danger: f32,
+    armed: bool,
 }
 
 impl Grenade {
@@ -407,6 +414,12 @@ impl Razor {
     fn placed(mine: Option<MineKind>) -> Self {
         Razor { armed: 0.0, triggered: None, mine, shots: 0, wait: 0.0 }
     }
+
+    /// what Dark Vision shows of it (`darkvision`): an item, a mine once it has fired a
+    /// mechanism (`DisDLC06Gadget_ArcMinePlaced`: unused, its shots all left)
+    pub(crate) fn soul(&self) -> u8 {
+        if self.mine.is_some() && self.shots > 0 { 2 } else { 1 }
+    }
 }
 
 /// Entity references use saved NPC spawners, never runtime entity IDs.
@@ -432,6 +445,8 @@ struct GrenadeSave {
     throwback: bool,
     kind: HitKind,
     held: bool,
+    #[serde(default)]
+    danger: f32,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -465,7 +480,7 @@ impl GadgetsSave {
                 fuse: g.fuse, fuse_total: g.fuse_total, after_hit: g.after_hit, sticky: g.sticky,
                 stuck: g.stuck.map(|(e, offset)| (npcs.get(&e).copied(), offset.to_array())),
                 blast: g.blast, owner: g.owner.and_then(|e| npcs.get(&e).copied()),
-                throwback: g.throwback, kind: g.kind, held: held == Some(e),
+                throwback: g.throwback, kind: g.kind, held: held == Some(e), danger: g.danger,
             }).collect(),
             razors: razors.into_iter().map(|(r, t)| RazorSave {
                 position: t.translation.to_array(), rotation: t.rotation.to_array(), armed: r.armed, triggered: r.triggered,
@@ -515,6 +530,7 @@ fn restore_gadgets(
                 vel: Vec3::from(g.velocity), fuse: g.fuse, fuse_total: g.fuse_total, after_hit: g.after_hit,
                 sticky: g.sticky, stuck: g.stuck.map(|(s, off)| (s.and_then(|s| npcs.get(&s).copied()).unwrap_or(Entity::PLACEHOLDER), Vec3::from(off))),
                 blast: g.blast, owner: g.owner.and_then(|s| npcs.get(&s).copied()), throwback: g.throwback, kind: g.kind,
+                danger: if g.danger > 0.0 { g.danger } else { g.blast[0] }, armed: false,
             },
             Transform::from_translation(Vec3::from(g.position)).with_rotation(Quat::from_array(g.rotation)),
             Visibility::default(), DespawnOnExit(GameState::InGame),
@@ -607,6 +623,9 @@ fn use_gadget(
                             Gadget::Chokedust => HitKind::Chokedust,
                             _ => HitKind::Explosion,
                         },
+                        // (its explosion's `m_fAIDangerRatio`: Corvo's grenade's the default, 1)
+                        danger: blast[0] * if choke { data.pawn("chokedust.explosion.m_fAIDangerRatio", 1.0) } else { 1.0 },
+                        armed: false,
                     },
                     Transform::from_translation(u.eye + u.dir * 0.5),
                     Visibility::default(),
@@ -668,6 +687,8 @@ fn npc_grenades(mut commands: Commands, mut throws: MessageReader<NpcGrenade>, a
                 owner: Some(g.owner),
                 throwback: false,
                 kind: HitKind::EnemyExplosion,
+                danger: b.danger,
+                armed: false,
             },
             Transform::from_translation(g.from),
             Visibility::default(),
@@ -696,7 +717,7 @@ fn fly_grenades(
     mut sfx: MessageWriter<PostEvent>,
     mut held: ResMut<crate::props::Held>,
     cam: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
-    (mut clouds, mut hits): (MessageWriter<ChokeDust>, MessageWriter<NpcHit>),
+    (mut clouds, mut hits, mut zones): (MessageWriter<ChokeDust>, MessageWriter<NpcHit>, ResMut<crate::danger::DangerZones>),
 ) {
     let dt = time.delta_secs() * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
@@ -740,6 +761,11 @@ fn fly_grenades(
         if in_hand {
             continue;
         }
+        // its danger zone, as it leaves the hand, for the rest of its fuse (`danger`)
+        if !g.armed {
+            g.armed = true;
+            zones.sphere(e, g.fuse, t.translation, g.danger);
+        }
         // (Corvo's own pass through him; a character's through its thrower)
         let filter = match (g.owner, pe) {
             (Some(o), _) => all.exclude_collider(o),
@@ -760,6 +786,8 @@ fn fly_grenades(
         }
         if let Some((hit, h)) = ctx.cast_ray_and_get_normal(t.translation, step / len, len + 0.06, true, filter) {
             t.translation = h.point + h.normal * 0.06;
+            // (laid again where it strikes)
+            zones.sphere(e, g.fuse, t.translation, g.danger);
             if g.sticky {
                 // sticks to what it hits, sunk 5 uu into it (as roshan's r614/blink research found):
                 // a person carries it; on the world it keeps how far out its blast starts
@@ -1191,7 +1219,7 @@ mod tests {
     use super::*;
 
     fn grenade(owner: Option<Entity>) -> Grenade {
-        Grenade { vel: Vec3::X, fuse: 0.7, fuse_total: 3.0, after_hit: 0.5, sticky: false, stuck: None, blast: BLAST, owner, throwback: false, kind: if owner.is_some() { HitKind::EnemyExplosion } else { HitKind::Explosion } }
+        Grenade { vel: Vec3::X, fuse: 0.7, fuse_total: 3.0, after_hit: 0.5, sticky: false, stuck: None, blast: BLAST, owner, throwback: false, kind: if owner.is_some() { HitKind::EnemyExplosion } else { HitKind::Explosion }, danger: BLAST[0], armed: false }
     }
 
     #[test]
@@ -1235,7 +1263,7 @@ mod tests {
         app.world_mut().resource_mut::<crate::gamedata::Data>().0.charms.push(dhcook::format::CharmDef { attribute: "GrenadeExplosionDelay".into(), levels: vec![("Clockwork Malfunction".into(), String::new(), 1.0)] });
         app.world_mut().resource_mut::<PlayerStats>().charms.push("Clockwork Malfunction".into());
         let owner = app.world_mut().spawn_empty().id();
-        app.world_mut().write_message(NpcGrenade { owner, from: Vec3::ZERO, vel: Vec3::X, fuse: [3.0, 0.5], blast: dhcook::format::TrapBlast { damage: [10.0, 20.0, 30.0, 40.0], ..default() } });
+        app.world_mut().write_message(NpcGrenade { owner, from: Vec3::ZERO, vel: Vec3::X, fuse: [3.0, 0.5], blast: dhcook::format::TrapBlast { damage: [10.0, 20.0, 30.0, 40.0], ..default() }, target: Vec3::X, danger: 0.0 });
         app.update();
         let mut q = app.world_mut().query::<&Grenade>();
         let g = q.single(app.world()).unwrap();

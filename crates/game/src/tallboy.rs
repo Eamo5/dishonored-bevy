@@ -48,6 +48,10 @@ impl Arrow {
 
 /// The arrow's speed (m/s: 2000 uu/s) and how much of gravity takes it.
 const SPEED: f32 = 20.0;
+/// The danger zone an arrow lays along its way (`TallboyExplosiveArrow_twk`:
+/// `m_fDangerCapsuleRadius` 2000 uu, `m_fDangerCapsuleProjectionTime` and `_LifeTime` 2 s).
+const DANGER_RADIUS: f32 = 20.0;
+const DANGER_AHEAD: f32 = 2.0;
 const GRAVITY: f32 = 9.81 * 0.5;
 /// The most a miss turns aside (`m_fCheatAngleDeviation`).
 const MISS: f32 = 30.0;
@@ -108,6 +112,7 @@ fn fly(
     npcs: Query<(Entity, &Npc, &Transform), Without<Arrow>>,
     stats: Res<PlayerStats>,
     mut blasts: MessageWriter<crate::gadgets::Explosion>,
+    mut zones: ResMut<crate::danger::DangerZones>,
 ) {
     let dt = time.delta_secs() * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
@@ -118,6 +123,12 @@ fn fly(
         if a.life <= 0.0 {
             commands.entity(e).despawn();
             continue;
+        }
+        // in flight, the danger zone along its next while (`danger`: the arrow's tick 0x00C54F00,
+        // `TallboyExplosiveArrow_twk`'s capsule 2000 uu across 2 s of its path, lasting 2 s)
+        if dt > 0.0 {
+            let ahead = t.translation + a.vel * DANGER_AHEAD - Vec3::Y * (0.5 * GRAVITY * DANGER_AHEAD * DANGER_AHEAD);
+            zones.capsule(e, DANGER_AHEAD, t.translation, ahead, DANGER_RADIUS);
         }
         a.vel.y -= GRAVITY * dt;
         let step = a.vel * dt;

@@ -312,14 +312,14 @@ fn towers(
     tc: Res<crate::gameplay::TimeControl>,
     level: Option<Res<LevelInfo>>,
     rapier: ReadRapierContext,
-    mut towers: Query<&mut Tower>,
+    mut towers: Query<(Entity, &mut Tower)>,
     mut cones: Query<(&mut Transform, &mut Visibility), (Without<Player>, Without<crate::props::Prop>, Without<crate::npc::Npc>)>,
     player: Query<(Entity, &Transform), With<Player>>,
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
     props: Query<(Entity, &crate::props::Prop, &Transform), (Without<Player>, Without<Tower>)>,
     (stats, mut blinding, mut sfx, mut fx): (Res<PlayerStats>, ResMut<Blinding>, MessageWriter<PostEvent>, MessageWriter<SpawnEffect>),
     mut vm: Option<ResMut<crate::kismet::Vm>>,
-    (mut devices, npcs): (ResMut<crate::security::Devices>, Query<(Entity, &crate::npc::Npc, &Transform), (Without<Player>, Without<crate::props::Prop>, Without<Tower>)>),
+    (mut devices, npcs, mut zones): (ResMut<crate::security::Devices>, Query<(Entity, &crate::npc::Npc, &Transform), (Without<Player>, Without<crate::props::Prop>, Without<Tower>)>, ResMut<crate::danger::DangerZones>),
     (mut noise, mut rtpcs, mut tagged): (MessageWriter<crate::gameplay::Noise>, ResMut<crate::audio::Rtpcs>, Query<(&crate::particles::EffectTag, &mut crate::particles::ParticleEmitter)>),
 ) {
     // (the motors' sound parameters: the fastest tower's)
@@ -333,7 +333,7 @@ fn towers(
     let Ok((pe, pt)) = player.single() else { return };
     let chest = pt.translation + Vec3::Y * 0.3;
     let walls = QueryFilter::default().exclude_collider(pe).exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
-    for mut t in &mut towers {
+    for (te, mut t) in &mut towers {
         let t = &mut *t;
         let Some(d) = level.scene.security.get(t.index) else { continue };
         // the head as it is turned now: the lamp and the arrows' socket with it
@@ -619,6 +619,18 @@ fn towers(
                     continue;
                 }
                 let State::Attack(_, left) = t.state else { continue };
+                // shooting at what it sees: the danger zone about its middle, renewed while it
+                // does (0x00A3C640: `m_fArrowDangerRadius`, 2 s; a capsule from its arrows'
+                // socket with `m_ArrowDangerShape`), which keeps the AI out of its fire (`danger`)
+                if sees && dt > 0.0 {
+                    let middle = if hacked { chest } else { pt.translation };
+                    let r = p("arrow_danger_m", 2.5);
+                    if p("arrow_danger_capsule", 0.0) > 0.5 {
+                        zones.capsule(te, 2.0, arrow_at, middle, r);
+                    } else {
+                        zones.sphere(te, 2.0, middle, r);
+                    }
+                }
                 let wait = s - dt;
                 if wait > 0.0 {
                     t.state = State::Attack(wait, left);
@@ -763,7 +775,7 @@ mod projectile_tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
             .init_resource::<Assets<Mesh>>().init_resource::<crate::gameplay::TimeControl>()
-            .init_resource::<PlayerStats>().init_resource::<Blinding>().init_resource::<crate::security::Devices>()
+            .init_resource::<PlayerStats>().init_resource::<Blinding>().init_resource::<crate::security::Devices>().init_resource::<crate::danger::DangerZones>()
             .init_resource::<TowerRestore>()
             .add_message::<PostEvent>().add_message::<SpawnEffect>().add_message::<crate::gameplay::Noise>().init_resource::<crate::audio::Rtpcs>()
             .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))

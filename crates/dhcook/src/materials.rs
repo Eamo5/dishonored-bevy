@@ -32,6 +32,8 @@ pub struct ResolvedMaterial {
     pub base_resource: Option<MaterialResource>,
     /// Physical material name (leaf-most), e.g. `Phm_Stone`: footstep / impact surface.
     pub phys: Option<String>,
+    /// Whether it blooms (`bHasBloomPart`, leaf-most).
+    pub bloom: Option<bool>,
 }
 
 /// The FMaterialResource serialized after a material's tagged properties.
@@ -266,6 +268,9 @@ pub fn resolve_material(assets: &Assets, start: &Obj) -> ResolvedMaterial {
         out.chain.push(o.path());
         let cls = o.class();
         let Ok(props) = o.props() else { break };
+        if out.bloom.is_none() {
+            out.bloom = props.bool("bHasBloomPart");
+        }
         if out.phys.is_none() {
             if let Some(p) = props.object("PhysMaterial").filter(|p| *p != 0) {
                 let path = o.pkg.obj_path(p);

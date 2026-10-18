@@ -743,7 +743,8 @@ fn run_script(
                 let from = if at_npc { feet + Vec3::Y * 0.2 } else { camera.translation() + camera.forward().as_vec3() * 1.0 };
                 w.write_message(crate::gadgets::NpcGrenade {
                     owner, from, vel: Vec3::ZERO, fuse: [fuse, 0.5],
-                    blast: dhcook::format::TrapBlast { radius: 3.5, full: 3.0, player_radius: 6.0, player_full: 1.5, damage: [50.0; 4], ..default() },
+                    blast: dhcook::format::TrapBlast { radius: 3.5, full: 3.0, player_radius: 6.0, player_full: 1.5, damage: [50.0; 4], danger: 3.5 * 3.0, ..default() },
+                    target: from, danger: 0.0,
                 });
                 info!("script: enemy grenade at {from:.2}, fuse {fuse}");
             });
@@ -1853,6 +1854,17 @@ fn run_script(
                 w.write_message(crate::gameplay::Noise { pos, radius, kind });
             });
             info!("script: noise {kind:?} {radius} m");
+        }
+        "danger" => {
+            // (tests) danger [RADIUS] [SECS]: a danger zone about where Corvo stands (12 m, 5 s)
+            let radius = cmd.get(1).and_then(|v| v.parse().ok()).unwrap_or(12.0);
+            let secs = cmd.get(2).and_then(|v| v.parse().ok()).unwrap_or(5.0);
+            let at = t.translation;
+            commands.queue(move |w: &mut World| {
+                let me = w.spawn(DespawnOnExit(crate::GameState::InGame)).id();
+                w.resource_mut::<crate::danger::DangerZones>().sphere(me, secs, at, radius);
+            });
+            info!("script: danger zone {radius} m, {secs} s");
         }
         "killnpc" => {
             // (tests) killnpc [NAME]: the nearest standing character killed by Corvo's blade

@@ -1,6 +1,6 @@
 // Arkane's level post-processing (WorldInfo.m_ArkDefaultPpSettings) as the original
 // FArkPpDofUber pixel shader applies it, after a linear scene colour (no tonemapper):
-//   bloom (added in linear), then the colour LUT: scene colour clamped to [0, 1], its square
+//   (the bloom parts added before it: `bloom`), the colour LUT: scene colour clamped to [0, 1], its square
 //   root addresses a 16x16x16 table (256x16 texels, blue slices side by side) baked by the
 //   original FArkPpDofLutBlender shader (exposure, colour balance, gamma, contrast), giving
 //   the display colour; film grain is added on top.
@@ -10,9 +10,7 @@
 @group(0) @binding(1) var samp: sampler;
 
 struct ArkGrade {
-    // bloom tint (rgb), bloom scale
-    bloom: vec4<f32>,
-    // x = time, y = bloom threshold, z = enabled, w = film grain amplitude (display units)
+    // x = time, z = enabled, w = film grain amplitude (display units)
     misc: vec4<f32>,
     // 256x16 RGBA8 texels, four per entry
     lut: array<vec4<u32>, 1024>,
@@ -23,10 +21,6 @@ fn to_linear(c: vec3<f32>) -> vec3<f32> {
     let lo = c / 12.92;
     let hi = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
     return select(hi, lo, c <= vec3<f32>(0.04045));
-}
-
-fn luma(c: vec3<f32>) -> f32 {
-    return dot(c, vec3<f32>(0.299, 0.587, 0.114));
 }
 
 fn texel(x: i32, y: i32) -> vec4<f32> {
@@ -57,28 +51,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     if g.misc.z < 0.5 {
         return src;
     }
-    var lin = max(src.rgb, vec3<f32>(0.0));
-
-    // bloom: thresholded glow from two rings of taps
-    if g.bloom.w > 0.0 {
-        let dims = vec2<f32>(textureDimensions(screen));
-        let px = 1.0 / dims;
-        var glow = vec3<f32>(0.0);
-        var wsum = 0.0;
-        for (var ring = 1; ring <= 2; ring++) {
-            let r = f32(ring) * 0.0045 * dims.y;
-            for (var i = 0; i < 8; i++) {
-                let a = (f32(i) + f32(ring) * 0.5) * 0.7853982;
-                let uv = in.uv + vec2<f32>(cos(a), sin(a)) * r * px;
-                let s = min(textureSample(screen, samp, uv).rgb, vec3<f32>(1.0));
-                let bright = max(luma(s) - g.misc.y, 0.0) / max(luma(s), 1e-4);
-                let w = 1.0 / f32(ring);
-                glow += s * bright * w;
-                wsum += w;
-            }
-        }
-        lin += glow / wsum * g.bloom.rgb * g.bloom.w;
-    }
+    let lin = max(src.rgb, vec3<f32>(0.0));
 
     // LUT addressing of FArkPpDofUber: sqrt-encoded, red within a slice clamped to
     // [0.1, 14.9] texels, linear blend between the two blue slices

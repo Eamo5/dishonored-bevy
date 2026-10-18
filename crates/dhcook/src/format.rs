@@ -1144,6 +1144,27 @@ pub struct NpcStats {
     /// how it paces its fight (its combat behaviour's `DisTweaks_AISubProcess_ManageAttacks`)
     #[serde(default)]
     pub pacing: Option<NpcPacing>,
+    /// how danger zones steer it, and the one its aim lays
+    #[serde(default)]
+    pub danger: NpcDanger,
+}
+
+/// How the AI's danger zones steer a character (its brain's `m_pSteeringTweaks`:
+/// `m_DangerSteeringSettings` `{m_bTickAllowed, m_fInfluenceSmoothSpeed}` and
+/// `m_fInfluenceFadeSpeed`, a second each), and the zone its aim lays about its target (a
+/// tallboy's combat behaviour, `m_fAimingDangerSphereRadius`, m; 0: none).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct NpcDanger {
+    pub steered: bool,
+    pub smooth: f32,
+    pub fade: f32,
+    pub aim_radius: f32,
+}
+
+impl Default for NpcDanger {
+    fn default() -> Self {
+        NpcDanger { steered: true, smooth: 2.0, fade: 2.0, aim_radius: 0.0 }
+    }
 }
 
 /// A fighter's pacing (`DisTweaks_AISubProcess_ManageAttacks`, at normal difficulty): blows a
@@ -1324,6 +1345,9 @@ pub struct GrenadeThrow {
     /// someone (`m_fDetonationDelay`, `m_fMinDetonationDelayAfterHit`)
     pub fuse: [f32; 2],
     pub blast: TrapBlast,
+    /// the danger zone its throw lays from the thrower to its target (`m_fGrenadeDangerZone`, m)
+    #[serde(default)]
+    pub danger: f32,
 }
 
 /// A part a character carries on a socket of its skeleton (its pawn's `m_pAttachmentsTweaks`: a
@@ -1854,6 +1878,10 @@ pub struct Ue3Material {
     pub blend: Blend,
     pub two_sided: bool,
     pub unlit: bool,
+    /// it blooms (`MaterialInterface.bHasBloomPart`): drawn into the bloom parts with its shader
+    /// map's `TBloomPartMesh` shaders
+    #[serde(default)]
+    pub bloom: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -1935,6 +1963,19 @@ pub struct Instance {
     /// the reflections it shows in (its component's `ReflectionChannels`, `REFLECT_*` bits)
     #[serde(default)]
     pub reflect: u16,
+    /// what Dark Vision makes of it (its actor's): none, or how it is shown
+    #[serde(default)]
+    pub soul: Option<Soul>,
+}
+
+/// How Dark Vision shows an actor (its `IDisSoulRenderInterface`: `IsSoulVisible`,
+/// `UpdateSoul`'s `DisSoulMaterial`): as a soul (`DSM_Soul`, 0), an item (`DSM_Item`, 1) or a
+/// mechanism (`DSM_Mechanic`, 2), from the power's first level (`m_bVisibleAtLevel1`) or else at
+/// its second.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Soul {
+    pub kind: u8,
+    pub level1: bool,
 }
 
 /// `RenderingChannelContainer`'s fields, as bits (`Instance::reflect`, `Reflection::channels`).
@@ -2143,6 +2184,9 @@ pub struct Pickup {
     /// the key it is (`DisKey_Base.m_Name`: what doors' `m_MatchingKeys` name)
     #[serde(default)]
     pub key: String,
+    /// Dark Vision shows it, an item (`m_bIsKeyItemOverride`, or its tweak's `m_bIsKeyItem`)
+    #[serde(default)]
+    pub key_item: bool,
     /// the inventory item a weapon pickup gives (`DisTweaks_InventoryPickup.m_pItem`:
     /// `Twk_Inv_PistolEliteGuard_Player`, the Prison's sword)
     #[serde(default)]
@@ -2451,6 +2495,10 @@ pub struct TrapBlast {
     pub damage: [f32; 4],
     pub effect: Option<u32>,
     pub sound: String,
+    /// the AI's danger zone about it, before it goes off (m: its reach to characters x
+    /// `m_fAIDangerRatio`)
+    #[serde(default)]
+    pub danger: f32,
 }
 
 /// A usable object (`DishonoredUsableObject` + `DisTweaks_UsableObject`): its moving part's

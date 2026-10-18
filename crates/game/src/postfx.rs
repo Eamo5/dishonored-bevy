@@ -2,7 +2,8 @@
 //! LUT baked by the game's own `FArkPpDofLutBlenderPS` (its D3D9 bytecode evaluated on the
 //! CPU with the level's exposure, colour balance, gamma and contrast), applied to the linear
 //! scene colour with the addressing of `FArkPpDofUber` in a full-screen pass
-//! (`ark_grade.wgsl`), plus bloom and film grain. `DH_NO_POST=1` turns it off.
+//! (`ark_grade.wgsl`), plus film grain (the bloom parts are added before it: `bloom`).
+//! `DH_NO_POST=1` turns it off.
 
 use crate::level::LevelInfo;
 use crate::player::PlayerCamera;
@@ -38,14 +39,13 @@ pub const LUT_ENTRIES: usize = 1024;
 
 #[derive(Component, ExtractComponent, Clone, Copy, ShaderType)]
 pub struct ArkGrade {
-    bloom: Vec4,
     misc: Vec4,
     lut: [UVec4; LUT_ENTRIES],
 }
 
 impl Default for ArkGrade {
     fn default() -> Self {
-        ArkGrade { bloom: Vec4::ZERO, misc: Vec4::ZERO, lut: [UVec4::ZERO; LUT_ENTRIES] }
+        ArkGrade { misc: Vec4::ZERO, lut: [UVec4::ZERO; LUT_ENTRIES] }
     }
 }
 
@@ -408,9 +408,8 @@ fn attach_grade(
             return;
         };
         let grade = ArkGrade {
-            bloom: Vec3::from(p.bloom_tint).extend(if p.bloom { p.bloom_scale } else { 0.0 }),
-            // linear-space bloom threshold; grain in display units (original noise / 255)
-            misc: Vec4::new(0.0, 0.25 + p.bloom_threshold * 0.5, 1.0, p.film_grain / 255.0),
+            // grain in display units (original noise / 255)
+            misc: Vec4::new(0.0, 0.0, 1.0, p.film_grain / 255.0),
             lut,
         };
         commands.entity(e).insert((grade, Tonemapping::None));

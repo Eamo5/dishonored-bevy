@@ -84,6 +84,14 @@ impl TrapPart {
     pub fn index(&self) -> u32 {
         self.index
     }
+    /// what Dark Vision shows of it (`darkvision`): a wire while it is armed (`ETS_Armed`), a
+    /// mechanism; a launcher until its ammunition is taken (`m_bHarvested`), an item
+    pub fn soul(&self) -> Option<u8> {
+        match self.launcher {
+            true => (!self.harvested && !self.away).then_some(1),
+            false => (!self.sprung && !self.disarmed && !self.away).then_some(2),
+        }
+    }
     /// what the saves keep of it (`TrapLog::state`): sprung 1, disarmed 2, harvested 4
     fn logged(&self) -> u8 {
         self.sprung as u8 | (self.disarmed as u8) << 1 | (self.harvested as u8) << 2

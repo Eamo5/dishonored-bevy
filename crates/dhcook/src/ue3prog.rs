@@ -28,6 +28,9 @@ pub enum Policy {
     /// page layer in `DYN_SHADOW_SLOT`)
     PointLightShadowed,
     SpotLightShadowed,
+    /// the bloom parts (`TBloomPartMesh*Shader<FBloomPartMeshPolicy>`): what of the surface
+    /// blooms (Arkane's `BloomColor` material input), LogLuv-encoded
+    BloomPart,
 }
 
 /// Two material uniform slots of a shadowed dynamic light pass: the shadow map's coordinate
@@ -61,6 +64,7 @@ impl Policy {
                 "TBasePassVertexShaderFDirectionalLightMapTexturePolicy",
                 "TBasePassPixelShaderFDirectionalLightMapTexturePolicyNoSkyLightFALSEFALSE",
             ),
+            Policy::BloomPart => ("TBloomPartMeshVertexShader<FBloomPartMeshPolicy>", "TBloomPartMeshPixelShader<FBloomPartMeshPolicy>"),
         }
     }
 }

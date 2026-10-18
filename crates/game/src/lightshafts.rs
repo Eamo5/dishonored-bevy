@@ -119,7 +119,7 @@ fn update_shafts(
 }
 
 #[derive(Resource)]
-struct ShaftPipelines {
+pub(crate) struct ShaftPipelines {
     layout: [BindGroupLayoutDescriptor; 2],
     sampler: Sampler,
     shader: Handle<Shader>,
@@ -184,7 +184,7 @@ fn prepare_pipelines(mut pipelines: ResMut<ShaftPipelines>, pipeline_cache: Res<
 
 /// A view's two half-size buffers (the blur goes back and forth between them).
 #[derive(Component)]
-struct ShaftTextures {
+pub(crate) struct ShaftTextures {
     a: CachedTexture,
     b: CachedTexture,
 }
@@ -213,7 +213,7 @@ fn prepare_textures(mut commands: Commands, mut cache: ResMut<TextureCache>, dev
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_shafts(
+pub(crate) fn draw_shafts(
     view: ViewQuery<(&ExtractedView, &ViewTarget, &ViewPrepassTextures, &ArkShafts, &Msaa, Option<&ShaftTextures>)>,
     pipelines: Res<ShaftPipelines>,
     pipeline_cache: Res<PipelineCache>,

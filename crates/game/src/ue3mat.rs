@@ -60,6 +60,29 @@ pub fn library() -> Option<Arc<CookedLibrary>> {
 /// Program shaders, indexed by the program id in a material's key.
 static PROGRAMS: RwLock<Vec<Handle<Shader>>> = RwLock::new(Vec::new());
 
+/// A built program's shader.
+pub fn program_shader(id: u32) -> Option<Handle<Shader>> {
+    PROGRAMS.read().ok()?.get(id as usize).cloned()
+}
+
+/// The vertex inputs of the programs (UE3's local vertex factory, from the Bevy mesh), and the
+/// skin's when the mesh has one.
+pub fn vertex_attributes(layout: &MeshVertexBufferLayoutRef) -> Vec<bevy::mesh::VertexAttributeDescriptor> {
+    let mut attributes = vec![
+        Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
+        Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
+        Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
+        Mesh::ATTRIBUTE_UV_1.at_shader_location(3),
+        Mesh::ATTRIBUTE_TANGENT.at_shader_location(4),
+        Mesh::ATTRIBUTE_COLOR.at_shader_location(5),
+    ];
+    if layout.0.contains(Mesh::ATTRIBUTE_JOINT_INDEX) && layout.0.contains(Mesh::ATTRIBUTE_JOINT_WEIGHT) {
+        attributes.push(Mesh::ATTRIBUTE_JOINT_INDEX.at_shader_location(6));
+        attributes.push(Mesh::ATTRIBUTE_JOINT_WEIGHT.at_shader_location(7));
+    }
+    attributes
+}
+
 /// Programs built so far, by (shader map, light-map policy).
 #[derive(Resource, Default)]
 pub struct Ue3Programs {
@@ -323,19 +346,7 @@ impl Material for Ue3Material {
         }
         descriptor.vertex.shader = shader.clone();
         descriptor.vertex.entry_point = Some(if prepass { "prepass_vertex" } else { "vertex" }.into());
-        let mut attributes = vec![
-            Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
-            Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
-            Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
-            Mesh::ATTRIBUTE_UV_1.at_shader_location(3),
-            Mesh::ATTRIBUTE_TANGENT.at_shader_location(4),
-            Mesh::ATTRIBUTE_COLOR.at_shader_location(5),
-        ];
-        if layout.0.contains(Mesh::ATTRIBUTE_JOINT_INDEX) && layout.0.contains(Mesh::ATTRIBUTE_JOINT_WEIGHT) {
-            attributes.push(Mesh::ATTRIBUTE_JOINT_INDEX.at_shader_location(6));
-            attributes.push(Mesh::ATTRIBUTE_JOINT_WEIGHT.at_shader_location(7));
-        }
-        descriptor.vertex.buffers = vec![layout.0.get_layout(&attributes)?];
+        descriptor.vertex.buffers = vec![layout.0.get_layout(&vertex_attributes(layout))?];
         descriptor.primitive.cull_mode = if k.two_sided { None } else { Some(Face::Back) };
         if k.light_pass {
             // the light pass's vertex shader places the surface where the base pass did, up

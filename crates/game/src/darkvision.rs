@@ -606,6 +606,17 @@ pub enum Eye {
     OpeningOff,
 }
 
+/// The other things Dark Vision shows: creatures, the level's things, traps, gadgets and
+/// what flies.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct SoulThings<'w, 's> {
+    creatures: Query<'w, 's, (Entity, &'static GlobalTransform), Or<(With<crate::swarm::Rat>, With<crate::fish::Fish>, With<crate::krust::Krust>, With<crate::gore::SeveredPiece>)>>,
+    instances: Query<'w, 's, (Entity, &'static crate::level::LevelInstance, &'static GlobalTransform)>,
+    traps: Query<'w, 's, (Entity, &'static crate::traps::TrapPart, &'static GlobalTransform)>,
+    razors: Query<'w, 's, (Entity, &'static crate::gadgets::Razor, &'static GlobalTransform)>,
+    flying: Query<'w, 's, (Entity, &'static GlobalTransform), Or<(With<crate::gadgets::Grenade>, With<crate::tallboy::Arrow>, With<crate::watchtower::Arrow>)>>,
+}
+
 /// What Dark Vision shows (living beings within its reach; at level 2 items and mechanisms
 /// too), their sight (`Ps_DVision_VCone_Blue_01`, `PS_DVision_VCone_Red_01` once alerted, within
 /// `m_fSecondaryEffectDistance`; the combat one in a fight), and the eye's timeline (`m_PpPerLevelParameters`: the
@@ -613,20 +624,20 @@ pub enum Eye {
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_dark_vision(
     mut commands: Commands,
-    (time, powers, data, stats, assets, devices): (
+    (time, powers, data, stats, assets): (
         Res<Time>,
         Res<crate::powers::Powers>,
         Res<crate::gamedata::Data>,
         Res<crate::gameplay::PlayerStats>,
         Option<Res<crate::level::GameAssets>>,
-        Res<crate::security::Devices>,
     ),
     mut souls: ResMut<DvSouls>,
     mut eye: Local<(Eye, f32)>,
     mut fx: MessageWriter<crate::particles::SpawnEffect>,
-    player: Query<&Transform, With<crate::player::Player>>,
-    npcs: Query<(Entity, &crate::npc::Npc, &Transform, &Children)>,
+    (camera, level_info): (Query<&GlobalTransform, With<crate::player::PlayerCamera>>, Option<Res<crate::level::LevelInfo>>),
+    npcs: Query<(Entity, &crate::npc::Npc, &Transform, &Children, (Has<crate::npc::Ashes>, Has<crate::npc::Electrocuted>))>,
     pickups: Query<(&crate::interact::Pickup, &Transform), Without<crate::npc::Npc>>,
+    things: SoulThings,
     children: Query<&Children>,
     meshes: Query<(Entity, Option<&DvSoul>), With<Mesh3d>>,
     mut cones: Query<(&crate::particles::EffectTag, &mut crate::particles::ParticleEmitter)>,
@@ -696,7 +707,8 @@ pub fn update_dark_vision(
         Eye::OpeningOff => (1, 1.0 - (*t / open).min(1.0)),
     };
     let show = souls.mode == 2;
-    let at = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
+    // (its reach about the camera, `CameraCache.POV.Location`)
+    let at = camera.single().map(|t| t.translation()).unwrap_or(Vec3::ZERO);
     // the meshes of each thing shown (a character's are its descendants)
     let mut want: HashMap<Entity, u8> = HashMap::default();
     let collect = |root: Entity, kind: u8, want: &mut HashMap<Entity, u8>| {
@@ -720,10 +732,15 @@ pub fn update_dark_vision(
             }
         }
     }
+    // (what each thing is shown as, by its `IDisSoulRenderInterface`: 0 a soul, 1 an item, 2 a
+    // mechanism; the items and mechanisms only at the second level, which has their materials)
+    let second = level >= 2;
+    let scene = level_info.as_ref().map(|l| &l.scene);
     if show && !charms_only {
-        for (e, npc, t, _) in &npcs {
+        // characters, their bodies too (not one burnt to ashes or electrocuted)
+        for (e, npc, t, _, (ashes, electrocuted)) in &npcs {
             let d = t.translation.distance(at);
-            if npc.mode == crate::npc::Mode::Dead || d > reach {
+            if ashes || electrocuted || d > reach {
                 continue;
             }
             collect(e, 0, &mut want);
@@ -732,18 +749,46 @@ pub fn update_dark_vision(
                 sighted.insert(e, npc.alert == crate::npc::Alert::Combat);
             }
         }
-        if level >= 2 {
-            for (p, t) in &pickups {
-                if t.translation.distance(at) <= reach {
-                    for &m in &p.entities {
-                        collect(m, 1, &mut want);
-                    }
+        // rats, fish, river krusts, severed limbs: souls at both levels
+        for (e, t) in things.creatures.iter() {
+            if t.translation().distance(at) <= reach {
+                collect(e, 0, &mut want);
+            }
+        }
+        // the level's things by their actors' flags
+        if let Some(scene) = scene {
+            for (e, li, t) in &things.instances {
+                let Some(s) = scene.instances.get(li.index as usize).and_then(|i| i.soul) else { continue };
+                if (s.kind == 0 && !(second || s.level1)) || (s.kind != 0 && !second) || t.translation().distance(at) > reach {
+                    continue;
+                }
+                collect(e, s.kind, &mut want);
+            }
+        }
+    }
+    if show && second {
+        // key items (`m_bIsKeyItem`)
+        for (p, t) in &pickups {
+            if scene.and_then(|s| s.pickups.get(p.index as usize)).is_some_and(|d| d.key_item) && t.translation.distance(at) <= reach {
+                for &m in &p.entities {
+                    collect(m, 1, &mut want);
                 }
             }
-            for d in &devices.list {
-                for &i in d.instances() {
-                    collect(i, 2, &mut want);
-                }
+        }
+        // armed wires, launchers not yet emptied; placed gadgets, grenades and arrows in flight
+        for (e, part, t) in &things.traps {
+            if let Some(k) = part.soul().filter(|_| t.translation().distance(at) <= reach) {
+                collect(e, k, &mut want);
+            }
+        }
+        for (e, razor, t) in &things.razors {
+            if t.translation().distance(at) <= reach {
+                collect(e, razor.soul(), &mut want);
+            }
+        }
+        for (e, t) in things.flying.iter() {
+            if t.translation().distance(at) <= reach {
+                collect(e, 1, &mut want);
             }
         }
     }

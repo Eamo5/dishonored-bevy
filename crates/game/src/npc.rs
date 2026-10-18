@@ -369,6 +369,11 @@ pub struct Npc {
     /// a live explosive it makes off from (`DisBehaviorEscapeExplosion`): where it is, and how
     /// long it keeps away yet
     pub escape: Option<(Vec3, f32)>,
+    /// the danger zones' push on it as its brain steers it (`danger`): what bends its way,
+    /// and its eased push and fade before that
+    pub danger: Vec3,
+    pub danger_smooth: Vec3,
+    pub danger_fade: f32,
     /// out of a plague carrier's cloud it's in (`DisBehaviorEscapePlague`'s `GetOuttaHere`):
     /// where it makes for, and how long yet
     pub plague_escape: Option<(Vec3, f32)>,
@@ -478,6 +483,8 @@ pub struct Arms {
     pub whiskey: Option<dhcook::format::NpcWhiskey>,
     /// how it paces its fight (its combat behaviour's)
     pub pacing: Option<dhcook::format::NpcPacing>,
+    /// how danger zones steer it, and the one its aim lays (`danger`)
+    pub danger: dhcook::format::NpcDanger,
     /// what it throws with its bare hand
     pub throwing: Option<dhcook::format::NpcThrowing>,
     /// the moves it uses only from outside the ring of those at Corvo (or with him out of
@@ -489,7 +496,7 @@ pub struct Arms {
 
 impl Default for Arms {
     fn default() -> Self {
-        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, pacing: None, throwing: None, outer_only: Vec::new(), outer_place: None }
+        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, pacing: None, danger: Default::default(), throwing: None, outer_only: Vec::new(), outer_place: None }
     }
 }
 
@@ -638,6 +645,7 @@ impl Arms {
         a.moves = st.melee.clone();
         a.whiskey = st.whiskey.clone();
         a.pacing = st.pacing.clone();
+        a.danger = st.danger.clone();
         // (its outer pattern's place: the ideal reach of the move it names, a projectile's that of
         // its firearm, its bottle or its throw)
         let drawn = (seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as usize;
@@ -2265,6 +2273,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         caught: None,
         rat_help: None,
         escape: None,
+        danger: Vec3::ZERO,
+        danger_smooth: Vec3::ZERO,
+        danger_fade: 0.0,
         plague_escape: None,
         robbed: None,
         rising: 0.0,
@@ -4185,7 +4196,7 @@ pub(crate) fn npc_brain(
                         let from = pos + Vec3::Y * 0.6 + toward * 0.5;
                         let vel = crate::gadgets::aim_throw(from, ppos - Vec3::Y * 0.8, g.speed);
                         info!("{} throws a grenade ({}) {d:.1} m away", npc.name, g.kind.trim_start_matches("DisTweaks_"));
-                        grenades.write(crate::gadgets::NpcGrenade { owner: e, from, vel, fuse: g.fuse, blast: g.blast.clone() });
+                        grenades.write(crate::gadgets::NpcGrenade { owner: e, from, vel, fuse: g.fuse, blast: g.blast.clone(), target: ppos, danger: g.danger });
                         noise.write(Noise { pos, radius: 20.0, kind: NoiseKind::Threatening });
                         if g.jump > 0.0 {
                             // (`m_fJumpClearance`)
@@ -4519,6 +4530,7 @@ pub(crate) fn npc_brain(
                         );
                     }
                     let mut step = None;
+                    let mut danger_way = None;
                     if swinging && npc.attack_t.is_none() && npc.stagger <= 0.0 && npc.retreat.is_none() && npc.sees_player {
                         npc.incoming = (npc.incoming.0 + 1, 0.0);
                         let after = pace.back_step_after[0] + rand::random::<f32>() * (pace.back_step_after[1] - pace.back_step_after[0]).max(0.0);
@@ -4547,6 +4559,13 @@ pub(crate) fn npc_brain(
                     } else if npc.ranged_threat.1 >= 0.0 && npc.ranged_threat.0 >= npc.ranged_threat.1 && npc.attack_t.is_none() && npc.stagger <= 0.0 && npc.retreat.is_none() {
                         npc.ranged_threat = (0.0, -1.0);
                         step = Some("SideStep");
+                    } else if npc.attack_t.is_none() && npc.stagger <= 0.0 && npc.retreat.is_none() && facing_within(npc.forward(), ppos - pos, DANGER_STEP_ANGLE) {
+                        // a danger zone's push (`danger`; ManageAttacks 0x00B3A300): tried each tick
+                        // it is pushed, as its steps' cooldowns allow
+                        if let Some(k) = danger_step(npc.forward(), npc.danger) {
+                            step = Some(k);
+                            danger_way = Some(npc.danger);
+                        }
                     }
                     if let Some(kind) = step {
                         let moves = npc.arms.moves.clone();
@@ -4563,11 +4582,21 @@ pub(crate) fn npc_brain(
                                 if kind == "BackStep" {
                                     npc.incoming.0 = 0;
                                 }
+                                // (a step from danger starts its threats' count afresh)
+                                if danger_way.is_some() {
+                                    npc.incoming = (0, 0.0);
+                                    npc.ranged_threat = (0.0, -1.0);
+                                }
                                 inhibited.insert(m.kind.clone(), (inhibition(&m.kind), e));
                                 let toward = (ppos - pos).with_y(0.0).normalize_or_zero();
                                 let away = if m.kind == "SideStep" {
                                     let side = Vec3::new(-toward.z, 0.0, toward.x);
-                                    if rand::random::<bool>() { side } else { -side }
+                                    // (from danger, the way it is pushed: 0x00C20690)
+                                    match danger_way {
+                                        Some(w) if w.dot(side).abs() > 1e-6 => side * w.dot(side).signum(),
+                                        _ if rand::random::<bool>() => side,
+                                        _ => -side,
+                                    }
                                 } else {
                                     -toward
                                 };
@@ -4897,8 +4926,38 @@ fn runs_to(kind: NoiseKind) -> bool {
     matches!(kind, NoiseKind::Danger | NoiseKind::DeathRattle | NoiseKind::Help | NoiseKind::Alarm)
 }
 
+/// How far off its target a fighter may face and still step from danger (the steps'
+/// `m_fAllowedAngle`, 25 degrees for guards).
+const DANGER_STEP_ANGLE: f32 = 25.0;
+
+/// Whether `facing` is within `deg` degrees of `to` (on the ground).
+fn facing_within(facing: Vec3, to: Vec3, deg: f32) -> bool {
+    let to = to.with_y(0.0).normalize_or_zero();
+    to != Vec3::ZERO && facing.with_y(0.0).normalize_or_zero().dot(to) >= deg.to_radians().cos()
+}
+
+/// The step a danger zone's push asks of a fighter (ManageAttacks 0x00B3A300, 0x00BBE6D0): where
+/// the danger lies (against the push) by quadrants of its facing: ahead, a step back; at a
+/// side, a step aside; behind, none.
+pub(crate) fn danger_step(facing: Vec3, push: Vec3) -> Option<&'static str> {
+    if push.abs().max_element() < 1e-4 {
+        return None;
+    }
+    let fwd = facing.with_y(0.0).normalize_or(Vec3::NEG_Z);
+    let right = Vec3::new(-fwd.z, 0.0, fwd.x);
+    let to_danger = -push.with_y(0.0);
+    let (x, y) = (to_danger.dot(fwd), to_danger.dot(right));
+    if x.abs() > y.abs() {
+        (x > 0.0).then_some("BackStep")
+    } else if y.abs() > 0.0 {
+        Some("SideStep")
+    } else {
+        None
+    }
+}
+
 /// Steering + kinematic movement.
-fn npc_move(
+pub(crate) fn npc_move(
     time: Res<Time>,
     tc: Res<TimeControl>,
     rapier: ReadRapierContext,
@@ -5035,6 +5094,15 @@ fn npc_move(
             (Some((GrabPhase::Release | GrabPhase::Miss | GrabPhase::Kill, el)), _) if npc.grab_len > 0.0 && el < npc.grab_len => wish = npc.forward() * npc.grab_drift,
             (Some(_), _) => wish = Vec3::ZERO,
             _ => {}
+        }
+        // the danger zones' push bends its way as it moves (`danger`; the locomotion 0x0094A630:
+        // its heading and the push, together at most a full stride; standing, it isn't moved)
+        let pushed = npc.danger.with_y(0.0);
+        if pushed.length_squared() > 1e-8 && npc.grab.is_none() {
+            let s = wish.length();
+            if s > 0.05 {
+                wish = (wish / s + pushed.clamp_length_max(1.0)).clamp_length_max(1.0) * s;
+            }
         }
         // stuck handling: sidestep perpendicular to the desired direction
         if wish.length_squared() > 0.01 && !paced {

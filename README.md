@@ -145,8 +145,17 @@ are in the settings file, `pad_binding_set` 0-3):
   `m_StaticUberAdjustement` (desaturated sepia) over the level's grading, and living beings
   are drawn as souls (`DarkVision_PMAT` / `DarkVision_Souls_INST`: yellow, brighter at the
   silhouette, a stirred behind colour through walls, fading out at the power's reach) into a
-  mask mixed over the graded image in display space; at level 2 items (green) and security
-  devices (blue) too. Characters' sight shows as the original cone particles from their eyes
+  mask mixed over the graded image in display space. What it shows, as the original's power
+  gathers it (every tick, within its reach about the camera, through walls) and each class's
+  `IDisSoulRenderInterface` answers (decoded for this rewrite from the user's own
+  Dishonored.exe): at level 1 the living and the dead (characters and their bodies, not ashes
+  or the electrocuted; rats, fish, river krusts, severed limbs); at level 2 also items (green:
+  key items, `m_bIsKeyItem`, not money or bottles; launchers not yet emptied; placed gadgets,
+  grenades and arrows in flight) and mechanisms (blue: by the actors' and their tweaks'
+  `m_bVisibleAtLevel1` / `2` and `m_SoulMaterialToUse`, cooked as `Instance::soul`: levers,
+  valves and panels, whale oil tanks, arc pylons and the walls' eyes, modules and generators,
+  the oil wiring's cables, watch towers, climbables, armed tripwires; never a wall's beams or
+  a door). Characters' sight shows as the original cone particles from their eyes
   (`Ps_DVision_VCone_Blue_01`, red eyes in a fight) and heard noises as `Ps_DVision_Sounds`.
   The soul and composite shaders are the original pixel shaders (`dhtool mapshader`) by hand;
   the soul pass is a custom render phase on Bevy's mesh pipeline after the grading pass.
@@ -456,6 +465,16 @@ are in the settings file, `pad_binding_set` 0-3):
   bloom near the light (over `BloomThreshold`, `BloomScale`) is drawn out towards it twice and
   added tinted (`BloomTint`) where the scene is dark (`BloomScreenBlendThreshold`); fading as the
   light comes round behind. `Light Shafts` turns them off.
+- **Bloom parts** (`bloom.rs`), as the original renders them (its `BloomParts` pass,
+  0x009251A0, after roshan's r614/blink research): no bright scene blooms, only surfaces whose
+  material blooms (`MaterialInterface.bHasBloomPart`: lamps, sconces, lanterns). Those are drawn
+  again with their shader map's own `TBloomPartMesh` shaders, translated like the base pass:
+  what of them blooms (Arkane's `BloomColor` input; for the generic materials
+  `E_Emissive x E_Emissive_Color x B_Bloom_Intensity`), LogLuv-encoded, against the scene's
+  depth. That is reduced to a quarter of the size (`FBloomDownSamplePixelShader`: tinted by the
+  level's `m_Tint x m_Scale`, less its threshold), blurred along x then y
+  (`TBloomBlurPixelShader<5>`), and added after the fog, before the colour grading. Before, the
+  grading bloomed everything bright. `DH_NO_BLOOM=1` turns it off.
 - **The store as `UI_Shop` draws it** (`store.rs`): `PURCHASES` and `UPGRADES` tabs (the
   upgrades under `Weapon Upgrades` / `Equipment Upgrades`), the tilted cards four across with
   their price tags (red and crossed out when out of reach, padlocked while a prerequisite is
@@ -2277,6 +2296,25 @@ against the install's own data where it carries them, then implemented independe
     (`DisNPCAnim_MagicLostTarget`: `Sword_` / `Empty_Magic_OutOfSight`), in a fight too, the
     behaviour's slot standing above it (`EAISlot_Awe`). Before, every unwary guard seeing a Blink
     played the clip, and every power, Dark Vision too, drew the line.
+- **Danger zones** (`danger.rs`), as the original's AI danger manager keeps them
+  (`DisGlobalAIDangerManager` and the brains' `DisSteeringInfluence_Danger`, decoded for this
+  rewrite from the user's own Dishonored.exe):
+  - Who lays them, one shape each: a watch tower shooting at what it has in sight (a sphere about
+    its middle, `m_fArrowDangerRadius`: 30 m on the city's towers, renewed while it shoots), a
+    tallboy fighting (a sphere about where it knows Corvo to be, 20 m), a grenade (about it as
+    it leaves the hand and where it strikes, its reach x `m_fAIDangerRatio`: an overseer's three
+    times its blast, for the rest of its fuse), an overseer's throw (a capsule to its target,
+    `m_fGrenadeDangerZone`, 1 s), and a tallboy's arrow in flight (a capsule 20 m across along
+    the next 2 s of its path).
+  - Each pushes a character in it away (`1 - d²/r²`; not the one that laid it); the pushes
+    summed, at most 1, eased towards and faded in at its brain's `m_DangerSteeringSettings`
+    (2 a second; none for Brisby, Samuel, the weepers, the Outsider, and fading out while it
+    escapes a grenade). The push bends its way as it moves (standing, it isn't moved), and a
+    fighter facing Corvo steps back from danger ahead of it or aside from one at its side, the
+    way it is pushed, as its steps' cooldowns allow (ManageAttacks 0x00B3A300). So guards keep
+    out of a tower's fire and give a tallboy's arrows room.
+  - Not yet: the line of fire's capsule, burning characters, the zones about rewired walls and
+    pylons that killed an ally.
 - **Pursuers through the door.** Guards hunting Corvo follow him into the next map, as the
   original's travel manager has them (`UDisNPCTravelManager`, decoded for this rewrite from the
   user's own Dishonored.exe: leaving 0x00AE2300, arriving 0x00AE2C90, the delay 0x00AE3760, going
