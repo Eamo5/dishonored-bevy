@@ -2448,7 +2448,8 @@ pub struct UsableObj {
     pub playing_anim: String,
     /// its words while locked, from its tweak: `focus_locked` (`m_FocusLockedMessage`: "This
     /// locker is locked"), `locked` (`m_LockedMessage`, used while locked), `unlock`
-    /// (`m_UnlockInteractText`)
+    /// (`m_UnlockInteractText`); and `focus`, a line under its prompt (`m_FocusMessage`: the
+    /// circuitry's "Rewire Tools Remaining: `q")
     #[serde(default)]
     pub texts: std::collections::BTreeMap<String, String>,
 }

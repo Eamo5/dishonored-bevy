@@ -267,13 +267,21 @@ fn usable_focus(
     }
     let Ok(c) = cam.single() else { return };
     let (eye, fwd) = (c.translation(), c.forward().as_vec3());
+    let seen = |r: &UsableRig, v: Option<&InheritedVisibility>| {
+        let to = r.center - eye;
+        // (not in a sublevel streamed out: a Hound Pits variant's)
+        !r.done && v.is_none_or(|v| v.get()) && to.length() < REACH && to.normalize_or_zero().dot(fwd) > 0.8
+    };
+    // (an open box whose next move is to close, with something else in it: its doors are out of
+    // the way, and what it holds is what's looked at: a security panel's circuitry)
+    let centers: Vec<Vec3> = rigs.iter().filter(|(r, _, v)| seen(r, v.as_deref())).map(|(r, _, _)| r.center).collect();
+    let open_box = |r: &UsableRig| {
+        level.scene.usables.get(r.index as usize).and_then(|u| u.stages.get(r.stage)).is_some_and(|st| st.text.contains("Close"))
+            && centers.iter().any(|c| c.distance(r.center) > 1e-3 && c.distance(r.center) < 0.5)
+    };
     let near = rigs
         .iter_mut()
-        .filter(|(r, _, v)| {
-            let to = r.center - eye;
-            // (not in a sublevel streamed out: a Hound Pits variant's)
-            !r.done && v.is_none_or(|v| v.get()) && to.length() < REACH && to.normalize_or_zero().dot(fwd) > 0.8
-        })
+        .filter(|(r, _, v)| seen(r, v.as_deref()) && !open_box(r))
         .min_by(|a, b| a.0.center.distance(eye).total_cmp(&b.0.center.distance(eye)));
     let Some((mut r, a, _)) = near else { return };
     let Some(u) = level.scene.usables.get(r.index as usize) else { return };
@@ -283,6 +291,8 @@ fn usable_focus(
     let key = r.locked.then(|| stats.keys.iter().find(|k| u.keys.iter().any(|m| m.eq_ignore_ascii_case(k))).cloned()).flatten();
     focus.0 = true;
     focus.1 = None;
+    // (its name above: `m_Name`, "Wall of Light Circuitry")
+    focus.3 = u.label.clone();
     // locked: its own words (`m_UnlockInteractText`; its `m_LockedMessage`: "This locker is
     // locked", "`k needed" with the key it wants, plain "Locked" when none is named)
     let say = |k: &str, or: &str| {
@@ -294,7 +304,13 @@ fn usable_focus(
         }
     };
     focus.2 = if !r.locked {
-        crate::gamedata::readable(&raw.replace("`GBA_Use`", &hint(Act::Use)))
+        let line = crate::gamedata::readable(&raw.replace("`GBA_Use`", &hint(Act::Use)));
+        // (and its own line under it: the circuitry's "Rewire Tools Remaining: `q", the tools
+        // he has)
+        match u.texts.get("focus") {
+            Some(f) => format!("{line}\n{}", crate::gamedata::readable(&f.replace("`q", &stats.items.get("RewireTool_twk").copied().unwrap_or(0).to_string()))),
+            None => line,
+        }
     } else if key.is_some() {
         crate::gamedata::readable(&say("unlock", "`GBA_Use` Unlock").replace("`GBA_Use`", &hint(Act::Use)))
     } else {

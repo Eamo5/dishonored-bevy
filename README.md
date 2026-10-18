@@ -1614,7 +1614,11 @@ are in the settings file, `pad_binding_set` 0-3):
   `m_InteractText`: "[F] Pick up", food's "[F] Eat"); on a body or in a pocket, the HUD's
   "[F] Loot" (`m_InteractionTexts[30]`). What the scripts make usable says the HUD's "[F] Use"
   (`m_InteractionTexts[27]`); a whale oil tank "Whale Oil Tank" over "[F] Carry", a
-  receptacle rewired by hand "Circuitry" over "[F] Rewire" (`SecuritySystems_twk`).
+  receptacle rewired by hand "Circuitry" over "[F] Rewire" (`SecuritySystems_twk`). Usable
+  objects show their name over the prompt (`m_Name`: "Security Door Panel"); a security
+  device's circuitry adds its own line under it, "Rewire Tools Remaining: 2" (its
+  `m_FocusMessage`, the tools Corvo carries), and once its panel's box is open the circuitry
+  inside takes the focus, not the box.
 - **Distractions**: patrollers stop at the levels' distractors (`DisNPCDistractor`: on
   their routes, by chance, with a cooldown) to play their scenes - the original soirees
   (`DistractionSoiree.*`: leaning on a railing, scavenging, a smoke, retching), their "Loop"

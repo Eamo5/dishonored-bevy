@@ -5529,7 +5529,7 @@ impl<'a> Cooker<'a> {
             playing_anim = chains.iter().find_map(|c| c.name("m_PlayingAnimName")).filter(|n| *n != "None").unwrap_or_default().to_string();
         }
         let mut texts = std::collections::BTreeMap::new();
-        for (k, field) in [("focus_locked", "m_FocusLockedMessage"), ("locked", "m_LockedMessage"), ("unlock", "m_UnlockInteractText")] {
+        for (k, field) in [("focus_locked", "m_FocusLockedMessage"), ("locked", "m_LockedMessage"), ("unlock", "m_UnlockInteractText"), ("focus", "m_FocusMessage")] {
             if let Some(v) = chains.iter().find_map(|c| c.name(field)).filter(|v| !v.trim().is_empty()) {
                 texts.insert(k.to_string(), v.to_string());
             }
