@@ -1343,9 +1343,8 @@ are in the settings file, `pad_binding_set` 0-3):
   noticing, threatening, losing Corvo, hurting, dying and victory, a civilian starting to run
   says its `PANIC_START` (`FLEEING`), a guard set alight `COMBAT_IMMOLATED`, off to a bell
   `ALARM_GO_TO_RING_ALARM`, a grenade by it `ESCAPE_IMPENDING_EXPLOSION`, Corvo's magic before
-  its eyes `MAGIC_WITNESSED` (Blink: `MAGIC_DISAPPEARED`; not yet fighting him, it is taken
-  aback, standing for its `Sword_Magic_OutOfSight` / `Empty_Magic_OutOfSight`: the original's
-  `DisBehaviorMagicResponse`; losing him in a fight, it lowers its sword to its patrol stance,
+  its eyes `MAGIC_WITNESSED` or `MAGIC_DISAPPEARED` (see *Corvo's magic seen*); losing him in a
+  fight, it lowers its sword to its patrol stance,
   `Sword_SwordToPatrol`, and looks about, `Sword_OutOfSight`, standing for both: the original's
   `DisNPCAnim_SearchLostTarget`, where something noticed is looked into with `PlayerCheck`,
   `DisNPCAnim_ReactToNoticing`; searching or looking into something it keeps that patrol stance,
@@ -2260,6 +2259,24 @@ against the install's own data where it carries them, then implemented independe
     (`m_fFreeFlightTimer`, 2 s), it turns and fights again once he is on it (within its
     `m_fCowerReactionDistance`, 6 m; `m_eCaughtReaction`: `EReaction_Fight`). (The kill handler,
     0x00B617C0, decoded for this rewrite from the user's own Dishonored.exe.)
+- **Corvo's magic seen** (`magic.rs`), as the original's power broadcaster (0x00BF9FB0), the
+  brain's witness rule (0x00B23E50) and `DisBehaviorMagicResponse` have it, decoded for this
+  rewrite from the user's own Dishonored.exe:
+  - What is seen: Blink (Corvo vanishing as it starts, appearing where it ends, if he moved),
+    Possession (vanishing into a host, appearing out of one, told for
+    `m_fMagicalAppearanceDelay`, 0.8 s), Bend Time stopping the world (vanishing; appearing as it
+    ends) or only slowing it (a spell, as it ends), and Wind Blast, the Devouring Swarm and
+    Summon Assassin (spells). Dark Vision is never seen. Those who see him take it.
+  - Busted on him, a character reacts to a spell or to his appearing. His vanishing gives it 3 s
+    in which it reacts if it loses him. Not busted, his appearing catches its eye
+    (`m_IncreaseForMagic`: a guard +0.1, to head-tracking) and gives it 3 s in which it reacts
+    if it finds him.
+  - Its reaction comes 0.2 to 0.3 s later (`m_MagicReactionDelay`): its line
+    (`DDH_MAGIC_WITNESSED`, or `DDH_MAGIC_DISAPPEARED` when he vanished). When he vanished from it
+    and it isn't his ally, it turns to where it saw him and is taken aback
+    (`DisNPCAnim_MagicLostTarget`: `Sword_` / `Empty_Magic_OutOfSight`), in a fight too, the
+    behaviour's slot standing above it (`EAISlot_Awe`). Before, every unwary guard seeing a Blink
+    played the clip, and every power, Dark Vision too, drew the line.
 - **Pursuers through the door.** Guards hunting Corvo follow him into the next map, as the
   original's travel manager has them (`UDisNPCTravelManager`, decoded for this rewrite from the
   user's own Dishonored.exe: leaving 0x00AE2300, arriving 0x00AE2C90, the delay 0x00AE3760, going

@@ -302,6 +302,11 @@ pub struct Npc {
     pub search_run: bool,
     /// it saw one of its own die (the alarm's `m_fAlarmChanceUponWitnessDeath`)
     pub witnessed_death: bool,
+    /// Corvo's magic seen (`magic`): the while after it (seconds left, busted when it began),
+    /// its reaction to come (seconds, he vanished), and the line it says this frame (he vanished)
+    pub magic_pending: Option<(f32, bool)>,
+    pub magic_react: Option<(f32, bool)>,
+    pub magic_bark: Option<bool>,
     /// Corvo dealt its last blow (else another character or the world did)
     pub hit_by_player: bool,
     /// its panic behaviour's last-survivor count (`DisAIBrainProcessPanic.m_KillQueue`: when
@@ -2223,6 +2228,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         taunt_hold: 0.0,
         search_run: false,
         witnessed_death: false,
+        magic_pending: None,
+        magic_react: None,
+        magic_bark: None,
         hit_by_player: false,
         kill_queue: Vec::new(),
         panics: 0,
@@ -3069,6 +3077,21 @@ pub fn attention_level(att: &dhcook::format::Attention, a: f32, cur: u8) -> u8 {
 
 /// The attention tweak a character uses towards Corvo: an enemy it doesn't yet suspect, one it
 /// suspects, or no enemy.
+/// Its attention raised for a reason (`DisAttentionIncrease`: the amount added, then at least the
+/// level's start, as roshan's r614/blink research found), busted only where the reason may take
+/// it there (`m_ReasonSettings[reason].m_bCanIncreaseToBusted`).
+pub(crate) fn raise_attention(npc: &mut Npc, att: &dhcook::format::Attention, (amount, lvl): (f32, u8), reason: u32) {
+    let busted = att.to_busted & (1 << reason) != 0;
+    let cap = if busted { att.max } else { (att.levels[3][0] - 0.001).min(att.max) };
+    let floor = match lvl {
+        0 => 0.0,
+        1..=4 => att.levels[lvl as usize - 1][0],
+        _ => att.max,
+    }
+    .min(cap);
+    npc.awareness = npc.awareness.max((npc.awareness + amount).max(floor).min(cap));
+}
+
 pub fn attention_of<'a>(npc: &Npc, scene: &'a dhcook::format::Scene) -> Option<&'a dhcook::format::Attention> {
     let s = npc.npc_type.and_then(|t| scene.npc_types.get(t as usize)).and_then(|t| t.sight.as_ref())?;
     Some(if !npc.hostile() {
@@ -3490,7 +3513,7 @@ pub(crate) fn npc_brain(
         Local<f32>,
     ),
     (mut grenades, mut bottles, mut whiskey_fx, mut throws): (MessageWriter<crate::gadgets::NpcGrenade>, MessageWriter<crate::whiskey::NpcBottle>, MessageWriter<crate::particles::SpawnEffect>, MessageWriter<crate::thrown::NpcThrow>),
-    (mut powers_used, finishing, mut finishers, mut tallboy_shots): (MessageReader<crate::powers::PowerUsed>, Query<(), With<FinisherClip>>, MessageWriter<NpcFinisher>, MessageWriter<crate::tallboy::TallboyShot>),
+    (finishing, mut finishers, mut tallboy_shots): (Query<(), With<FinisherClip>>, MessageWriter<NpcFinisher>, MessageWriter<crate::tallboy::TallboyShot>),
 ) {
     let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
     let max_attackers = INNER_SKIRMISH_CAPS[(settings.difficulty as usize).min(3)];
@@ -3515,16 +3538,6 @@ pub(crate) fn npc_brain(
     let mut alerts: Vec<(Vec3, Vec3)> = Vec::new();
     // attack tokens: swings already in progress count against the limit
     let mut attackers = npcs.iter().filter(|(_, n, _)| n.attack_t.is_some()).count();
-    // Corvo gone before their eyes by Blink: those who saw him, not yet fighting him, are taken
-    // aback (the original's `DisBehaviorMagicResponse`, its `Magic_OutOfSight` clip; their line
-    // is the barks'; in a fight, our reading, they keep at him)
-    if powers_used.read().any(|u| u.0 == crate::powers::Power::Blink) {
-        for (_, mut npc, _) in &mut npcs {
-            if npc.sees_player && npc.hostile() && npc.alert != Alert::Combat && !npc.is_down() && npc.attack_t.is_none() && npc.aim.is_none() && npc.grab.is_none() {
-                npc.gesture(20);
-            }
-        }
-    }
     // the ring at Corvo: of those fighting him, as many as the cap, the nearest; the others wait
     // outside it
     let ring: Vec<Entity> = {

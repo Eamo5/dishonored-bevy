@@ -1462,6 +1462,9 @@ pub struct Attention {
     /// busted (`m_ReasonSettings[k].m_bCanIncreaseToBusted`)
     #[serde(default)]
     pub to_busted: u32,
+    /// Corvo seen appearing by magic (`m_IncreaseForMagic`)
+    #[serde(default)]
+    pub magic: (f32, u8),
 }
 
 /// One of Corvo's health effects (`DisPlayerHealthEffect`): below its share of his health, a

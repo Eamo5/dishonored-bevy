@@ -4242,6 +4242,7 @@ impl<'a> Cooker<'a> {
         ];
         a.corpse = increase(self, "m_IncreaseForDiscoveredCorpse");
         a.attacked = increase(self, "m_IncreaseForAttackedBy");
+        a.magic = increase(self, "m_IncreaseForMagic");
         for k in 0..21 {
             if let Some((_, Value::Struct(_, r))) = self.tweak_prop(tw, "m_ReasonSettings", k, 0) {
                 if Props(r).bool("m_bCanIncreaseToBusted") == Some(true) {

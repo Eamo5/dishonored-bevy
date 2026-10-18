@@ -246,7 +246,7 @@ fn npc_barks(
     mut out: MessageWriter<PostEvent>,
     mut subs: MessageWriter<Subtitle>,
     data: Res<crate::gamedata::Data>,
-    (mut used, burning): (MessageReader<crate::powers::PowerUsed>, Query<(), With<crate::powers::Ignite>>),
+    burning: Query<(), With<crate::powers::Ignite>>,
     mut hits: MessageReader<crate::gameplay::NpcHit>,
     (mut memory, vm): (ResMut<BarkMemory>, Option<Res<crate::kismet::Vm>>),
 ) {
@@ -274,8 +274,6 @@ fn npc_barks(
     }
     let mut requests: Vec<Request> = Vec::new();
     let log = std::env::var("DH_AUDIO_LOG").is_ok();
-    // a power Corvo used this frame (Blink: he vanishes from where they saw him)
-    let magic = used.read().last().map(|u| u.0);
     // (who a bolt or bullet struck this frame)
     let shot: Vec<Entity> = hits.read().filter(|h| matches!(h.kind, HitKind::Bolt | HitKind::Bullet | HitKind::ExplosiveBullet | HitKind::ExplosiveBolt)).map(|h| h.npc).collect();
     // (who stands where, for the barks said in a group: those of one side within reach)
@@ -431,10 +429,10 @@ fn npc_barks(
         } else if !down && npc.hostile() && !st.grenade && npc.escape.is_some() {
             // a grenade by it, making off (`ESCAPE_IMPENDING_EXPLOSION`)
             want = Some(&["ESCAPE_IMPENDING_EXPLOSION"]);
-        } else if !down && npc.hostile() && npc.sees_player && magic.is_some() {
-            // Corvo's magic before its eyes: gone from where it saw him, else a power seen
-            // (`MAGIC_DISAPPEARED`, `WITNESSEDMAGIC`)
-            want = Some(if magic == Some(crate::powers::Power::Blink) { &["MAGIC_DISAPPEARED", "MAGIC_WITNESSED"] } else { &["MAGIC_WITNESSED"] });
+        } else if !down && npc.magic_bark.is_some() {
+            // Corvo's magic witnessed (`magic`: its reaction): gone from where it saw him, else
+            // seen (`DDH_MAGIC_DISAPPEARED`, `DDH_MAGIC_WITNESSED`)
+            want = Some(if npc.magic_bark == Some(true) { &["MAGIC_DISAPPEARED", "MAGIC_WITNESSED"] } else { &["MAGIC_WITNESSED"] });
         } else if !down && st.taunt {
             // Corvo out of its reach (`UNREACH_TAUNT`, `UNREACH_BELOW`, `COMBAT_CANT_REACH`),
             // asked for until it goes out
