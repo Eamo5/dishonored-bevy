@@ -1612,7 +1612,9 @@ are in the settings file, `pad_binding_set` 0-3):
   (most say nothing but their sound). Lockers and the other usable objects likewise ("This
   locker is locked"). Things lying about give their own prompt (their interactable's
   `m_InteractText`: "[F] Pick up", food's "[F] Eat"); on a body or in a pocket, the HUD's
-  "[F] Loot" (`m_InteractionTexts[30]`).
+  "[F] Loot" (`m_InteractionTexts[30]`). What the scripts make usable says the HUD's "[F] Use"
+  (`m_InteractionTexts[27]`); a whale oil tank "Whale Oil Tank" over "[F] Carry", a
+  receptacle rewired by hand "Circuitry" over "[F] Rewire" (`SecuritySystems_twk`).
 - **Distractions**: patrollers stop at the levels' distractors (`DisNPCDistractor`: on
   their routes, by chance, with a cooldown) to play their scenes - the original soirees
   (`DistractionSoiree.*`: leaning on a railing, scavenging, a smoke, retching), their "Loop"
@@ -1653,7 +1655,7 @@ are in the settings file, `pad_binding_set` 0-3):
   drawn with their translated shaders.
 - **Dialogue**: the original dialogue trees (the one-shot dialogue actors' and each
   character's, through its voice): Kismet inputs, the player approaching, lingering or
-  talking to a character ([F] Talk to Piero Joplin) enter through the trees' hooks, whose
+  talking to a character (their name over the HUD's "[F] Talk", `m_InteractionTexts[29]`) enter through the trees' hooks, whose
   story-flag, conversation-already-had, time-limit and branch nodes pick what is said; lines
   are voiced from the speaker and subtitled, and conversations set
   their story flags and raise their Kismet outputs. A conversation's soiree

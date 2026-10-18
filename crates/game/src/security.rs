@@ -625,16 +625,18 @@ fn setup(
         });
         // (a tank that is a prop of its own is picked up as one)
         let tank_prop = s.kind == "Battery" && scene.movables.iter().any(|m| m.tank.as_deref() == Some(s.actor.as_str()));
+        // (their words as `SecuritySystems_twk` has them: the tank's "Whale Oil Tank", "Carry";
+        // the panel's "Circuitry", "Rewire"; the bell's name)
         let label = match s.kind.as_str() {
             "Battery" if tank_prop => None,
-            "Battery" => Some("Take Whale Oil Tank"),
-            "Receptacle" if !circuitry_near => Some("Rewire"),
-            "AlarmBell" => Some("Silence Alarm"),
+            "Battery" => Some(("Carry", "Whale Oil Tank")),
+            "Receptacle" if !circuitry_near => Some(("Rewire", "Circuitry")),
+            "AlarmBell" => Some(("Silence Alarm", "Alarm Bell")),
             _ => None,
         };
-        if let Some(label) = label {
+        if let Some((label, name)) = label {
             commands.spawn((
-                Usable { actor: SECURITY_USABLE + i as u32, label: label.into() },
+                Usable { actor: SECURITY_USABLE + i as u32, label: label.into(), name: name.into() },
                 Transform::from_translation(Vec3::from(s.position) + Vec3::Y * 0.3),
                 DespawnOnExit(GameState::InGame),
             ));

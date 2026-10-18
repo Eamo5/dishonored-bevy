@@ -247,7 +247,9 @@ pub struct TravelActors(pub std::collections::HashSet<u32>);
 #[derive(Component)]
 pub struct Usable {
     pub actor: u32,
+    /// what it does (the prompt's verb) and its name above it
     pub label: String,
+    pub name: String,
 }
 
 /// The player used something (reported to the level scripts).
@@ -582,7 +584,7 @@ fn find_focus(
         }
         let score = d * (2.0 - c) + 0.1;
         if best.as_ref().map(|b| score < b.0).unwrap_or(true) {
-            best = Some((score, e, format!("{} {}", crate::bindings::hint(crate::bindings::Act::Use), u.label), String::new()));
+            best = Some((score, e, format!("{} {}", crate::bindings::hint(crate::bindings::Act::Use), u.label), u.name.clone()));
         }
     }
     // bodies (the unconscious and the dead) can be picked up

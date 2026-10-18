@@ -5477,9 +5477,9 @@ fn setup(
         if !used || a.pickup.is_some() || a.class == "DisDoor" || a.spawner.is_some() || crate::usables::animated(&level, a.usable) {
             continue;
         }
-        let label = if a.class.contains("Usable") || a.class.contains("Lever") || a.class.contains("Button") { "Use" } else { "Interact" };
+        // (the HUD's own word for it: `m_InteractionTexts[27]`, "Use")
         commands.spawn((
-            Usable { actor: i as u32, label: label.into() },
+            Usable { actor: i as u32, label: "Use".into(), name: String::new() },
             Transform::from_translation(Vec3::from(a.position) + Vec3::Y * 0.2),
             DespawnOnExit(GameState::InGame),
         ));
@@ -5589,11 +5589,9 @@ fn talk_prompts(
         match (can, usable) {
             (Some(a), None) => {
                 let (package, object) = npc.pawn.split_once('.').unwrap_or((&npc.pawn, &npc.pawn));
-                let label = match data.0.pawn_names.get(object).or(data.0.pawn_names.get(package)) {
-                    Some(n) => format!("Talk to {n}"),
-                    None => "Talk".to_string(),
-                };
-                commands.entity(e).try_insert(Usable { actor: a, label });
+                // (the HUD's "Talk", `m_InteractionTexts[29]`, under their name)
+                let name = data.0.pawn_names.get(object).or(data.0.pawn_names.get(package)).cloned().unwrap_or_default();
+                commands.entity(e).try_insert(Usable { actor: a, label: "Talk".into(), name });
             }
             (None, Some(_)) => {
                 commands.entity(e).try_remove::<Usable>();
