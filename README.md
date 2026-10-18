@@ -1235,7 +1235,11 @@ are in the settings file, `pad_binding_set` 0-3):
   of its own sees him (`m_AllyAttentionLevelToTrack`, busted on the city's towers); its lamp
   glows while lit (`ps_WT_SearchLight_on`) and red while alerted or firing
   (`ps_WT_RedLight_On`); and its motors sound as the head turns and the light nods
-  (`Snd_Rotating_Tower`, `Rotating_Light_Mvt`, their RTPCs with the speed). `DH_TOWER_LOG=1`
+  (`Snd_Rotating_Tower`, `Rotating_Light_Mvt`, their RTPCs with the speed). Alerted, it keeps
+  its beam on Corvo only while it sees him; lost, it holds on where it saw him last and sways
+  across the line to it, frantic (its attack state's aim moved sideways by
+  sin(2 pi `m_fFranticSpeed` t) `m_fFranticRandomRange` a second: 0.5 Hz, 10 m/s on the
+  city's towers) until `m_fStateAttackTimeout` sends it back to its sweep. `DH_TOWER_LOG=1`
   traces them.
 - **Gadgets**: grenades and sticky grenades, springrazors, incendiary bolts and explosive
   bullets with the original blast radii, arming times and effects; level pickups give the
@@ -1597,10 +1601,18 @@ are in the settings file, `pad_binding_set` 0-3):
 - **Taps and fountains** (`DisWaterSource`): [Use] "Drink" turns the valve and runs the water
   (the tap's own "Use" sequence: its sounds and stream); the Water of Life and Spirit Water
   charms make a drink give back health or mana (`WaterDrinkingHealthBonus`, `...ManaBonus`).
-- **Locks and keys**: doors locked in the level (`m_bLocked`) stay shut ("Locked") until
-  Corvo has one of their keys (`m_MatchingKeys`, by name: "Golden Cat Master Key"); keys
-  come from key pickups (`DisKey_Base.m_Name`), pockets and the scripts
-  (`DisSeqAct_AddKey`), go on his ring (kept in saves) and unlock the door on use.
+- **Locks and keys**: doors locked in the level (`m_bLocked`) stay shut until Corvo has one
+  of their keys (`m_MatchingKeys`, by name: "Golden Cat Master Key"); keys come from key
+  pickups (`DisKey_Base.m_Name`), pockets and the scripts (`DisSeqAct_AddKey`), go on his
+  ring (kept in saves) and unlock the door on use. A door says what its tweaks say: its name
+  (`m_Name`: "Door", "Unbreakable Door") over "[F] Open" (`m_InteractText`), "[F] Close" (its
+  close move's `m_InteractTextOverride`), "[F] Unlock" with the key (`m_UnlockInteractText`),
+  and locked its own line (`m_FocusLockedMessage`: "Locked", "Blocked from the other side",
+  "Golden Cat Master Key needed"); tried while locked, its `m_LockedMessage` if it has one
+  (most say nothing but their sound). Lockers and the other usable objects likewise ("This
+  locker is locked"). Things lying about give their own prompt (their interactable's
+  `m_InteractText`: "[F] Pick up", food's "[F] Eat"); on a body or in a pocket, the HUD's
+  "[F] Loot" (`m_InteractionTexts[30]`).
 - **Distractions**: patrollers stop at the levels' distractors (`DisNPCDistractor`: on
   their routes, by chance, with a cooldown) to play their scenes - the original soirees
   (`DistractionSoiree.*`: leaning on a railing, scavenging, a smoke, retching), their "Loop"

@@ -472,6 +472,7 @@ fn find_focus(
     usables: Query<(Entity, &Usable, &Transform)>,
     player: Query<&Player>,
     rapier: bevy_rapier3d::prelude::ReadRapierContext,
+    level: Option<Res<LevelInfo>>,
     (bodies, carry, data, owners, stats): (
         Query<(Entity, &crate::npc::Npc, &Transform, Option<&crate::anim::Animator>), (Without<Player>, Without<crate::npc::ConsumedBody>)>,
         Res<crate::carry::Carry>,
@@ -516,11 +517,17 @@ fn find_focus(
         // what can be taken comes first when it's looked at
         let score = d * (2.0 - c) - 0.3;
         if best.as_ref().map(|b| score < b.0).unwrap_or(true) {
-            // (`DUI_Crosshair_Pickup`)
-            best = Some((score, e, format!("{} Loot", crate::bindings::hint(crate::bindings::Act::Use)), p.label.clone()));
+            // (`DUI_Crosshair_Pickup`) on someone, or on a body: the HUD's "Loot"
+            // (`m_InteractionTexts[30]`); lying about, its own (`m_InteractText`: "Pick up", "Eat")
+            let own = level.as_ref().and_then(|l| l.scene.pickups.get(p.index as usize)).map(|d| d.verb.as_str()).filter(|v| !v.is_empty() && pocket.is_none());
+            let text = match own {
+                Some(v) => crate::gamedata::readable(&v.replace("`GBA_Use`", &crate::bindings::hint(crate::bindings::Act::Use))),
+                None => format!("{} Loot", crate::bindings::hint(crate::bindings::Act::Use)),
+            };
+            best = Some((score, e, text, p.label.clone()));
         }
     }
-    for (e, door, gt, _) in &doors {
+    for (e, door, gt, li) in &doors {
         if door.broken {
             continue;
         }
@@ -535,14 +542,25 @@ fn find_focus(
         }
         let score = d * (2.0 - c) + 0.3;
         if best.as_ref().map(|b| score < b.0).unwrap_or(true) {
-            let what = if !door.locked {
-                if door.target > 0.5 { "Close door" } else { "Open door" }
+            // the door's own words (its tweak's: "Open", "Close", "Unlock"; locked, its
+            // `m_FocusLockedMessage`: "Blocked from the other side", "`k needed"), its name above
+            let words = level.as_ref().and_then(|l| l.scene.door(&li.actor, li.index)).map(|s| &s.texts);
+            let say = |k: &str, or: &str| words.and_then(|w| w.get(k)).cloned().unwrap_or_else(|| or.to_string());
+            let raw = if !door.locked {
+                if door.target > 0.5 { say("close", "`GBA_Use` Close") } else { say("open", "`GBA_Use` Open") }
             } else if door.key_in(&stats.keys).is_some() {
-                "Unlock door"
+                say("unlock", "`GBA_Use` Unlock")
             } else {
-                "Locked"
+                say("focus_locked", "Locked")
             };
-            best = Some((score, e, format!("{} {what}", crate::bindings::hint(crate::bindings::Act::Use)), String::new()));
+            // (`k: the key it wants; none named, plain "Locked")
+            let raw = match door.keys.first() {
+                Some(k) => raw.replace("`k", k),
+                None if raw.contains("`k") => "Locked".to_string(),
+                None => raw,
+            };
+            let text = crate::gamedata::readable(&raw.replace("`GBA_Use`", &crate::bindings::hint(crate::bindings::Act::Use)));
+            best = Some((score, e, text, say("name", "")));
         }
     }
     // what is behind a wall can't be used
@@ -834,7 +852,10 @@ pub fn use_focus(
                 if let Some(s) = sounds.filter(|s| !s.locked.is_empty()) {
                     timed.schedule(&[(0.0, s.locked.clone())], at);
                 }
-                msgs.push("Locked");
+                // (its `m_LockedMessage`, if it has one: most say nothing but their sound)
+                if let Some(m) = sounds.and_then(|s| s.texts.get("locked")).filter(|m| !m.contains("`k") || !door.keys.is_empty()) {
+                    msgs.push(crate::gamedata::readable(&m.replace("`k", door.keys.first().map(String::as_str).unwrap_or_default())));
+                }
                 used.write(Interaction::DoorLocked(li.index));
                 return;
             }

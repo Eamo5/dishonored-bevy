@@ -94,6 +94,9 @@ pub(crate) struct Tower {
     turning: [bool; 2],
     still: [f32; 2],
     last: (f32, f32),
+    /// where it turns while it has someone: on them while it sees them, else where it saw them
+    /// last, swaying across (`m_fFranticSpeed`, `m_fFranticRandomRange`)
+    aim: Option<Vec3>,
 }
 
 #[derive(Resource, Default)]
@@ -110,12 +113,14 @@ pub(crate) struct TowerSave {
     state: State,
     lost: f32,
     warned: bool,
+    #[serde(default)]
+    aim: Option<[f32; 3]>,
 }
 
 impl TowerSave {
     pub(crate) fn capture(t: &Tower) -> Self {
         Self { index: t.index, tank: t.tank.map(|v| v.to_array()), tank_found: t.tank_found,
-            yaw: t.yaw, pitch: t.pitch, sweep: t.sweep, state: t.state, lost: t.lost, warned: t.warned }
+            yaw: t.yaw, pitch: t.pitch, sweep: t.sweep, state: t.state, lost: t.lost, warned: t.warned, aim: t.aim.map(|v| v.to_array()) }
     }
 }
 
@@ -131,6 +136,7 @@ fn restore_towers(mut pending: ResMut<TowerRestore>, mut towers: Query<&mut Towe
         t.state = s.state;
         t.lost = s.lost;
         t.warned = s.warned;
+        t.aim = s.aim.map(Vec3::from);
         // (the head put where it was, not turned there: its motors stay quiet)
         t.last = (s.yaw, s.pitch);
     }
@@ -266,6 +272,7 @@ fn setup_towers(
                 turning: [false; 2],
                 still: [0.0; 2],
                 last: (yaw, pitch),
+                aim: None,
             },
             Transform::from_translation(origin),
             DespawnOnExit(GameState::InGame),
@@ -574,12 +581,22 @@ fn towers(
                 }
             }
             State::Alert(s) | State::Attack(s, _) => {
-                // the beam follows Corvo
-                let flat = (chest - lamp).with_y(0.0);
+                // the beam on Corvo while it sees him; lost, on where it saw him last, swaying
+                // across the line to it as the attack state does (0x00A3C640: the aim moved
+                // sideways by sin(2 pi `m_fFranticSpeed` t) `m_fFranticRandomRange` a second)
+                let aim = match t.aim {
+                    Some(a) if !sees => frantic(a, t.origin, t.lost, dt, p("m_fFranticSpeed", 0.5), p("m_fFranticRandomRange", 1000.0) * 0.01),
+                    _ => chest,
+                };
+                t.aim = Some(aim);
+                if !sees && std::env::var("DH_TOWER_LOG").is_ok() && (t.lost * 2.0).fract() < dt * 2.0 {
+                    info!("watch tower {}: lost {:.1} s, aiming at {aim:.1}", d.actor, t.lost);
+                }
+                let flat = (aim - lamp).with_y(0.0);
                 if flat.length() > 0.1 {
                     t.yaw = turn(t.yaw, (-flat.x).atan2(-flat.z), tower_speed * dt);
                 }
-                let down = (chest - lamp).normalize_or(Vec3::NEG_Y);
+                let down = (aim - lamp).normalize_or(Vec3::NEG_Y);
                 t.pitch = turn(t.pitch, down.dot(Vec3::NEG_Y).clamp(-1.0, 1.0).acos(), light_speed * dt);
                 t.lost = if sees { 0.0 } else { t.lost + dt };
                 if t.lost > p("m_fStateAttackTimeout", 7.0) {
@@ -587,6 +604,7 @@ fn towers(
                         info!("watch tower {}: lost him", d.actor);
                     }
                     t.state = State::Explore;
+                    t.aim = None;
                     sound(&mut sfx, "m_pSoundTargetLost", lamp);
                     continue;
                 }
@@ -659,6 +677,13 @@ fn towers(
     blinding.0 = if blind > blinding.0 { blind } else { (blinding.0 - dt * 0.8).max(blind) };
 }
 
+/// A tower's aim, its target lost (seconds since): swayed across the line from the tower, at
+/// `speed` Hz, up to `range` a second (`m_fFranticSpeed`, `m_fFranticRandomRange`).
+fn frantic(aim: Vec3, tower: Vec3, lost: f32, dt: f32, speed: f32, range: f32) -> Vec3 {
+    let across = (aim - tower).with_y(0.0).cross(Vec3::Y).normalize_or_zero();
+    aim + across * (std::f32::consts::TAU * speed * lost).sin() * range * dt
+}
+
 /// One of a tower's sounds, where it stands.
 fn sound_at(sfx: &mut MessageWriter<PostEvent>, d: &dhcook::format::Security, key: &str, at: Vec3) {
     if let Some(s) = d.sounds.get(key) {
@@ -722,6 +747,18 @@ mod projectile_tests {
     }
 
     #[test]
+    fn a_tower_that_lost_its_target_sways_across_where_it_saw_it() {
+        let (tower, seen) = (Vec3::ZERO, Vec3::new(0.0, -10.0, -20.0));
+        // a quarter of a sway in: moving sideways at its fastest, never along the line
+        let a = frantic(seen, tower, 0.5, 0.1, 0.5, 10.0);
+        assert!((a - seen).dot(Vec3::NEG_Z).abs() < 1e-5 && (a.y - seen.y).abs() < 1e-5);
+        assert!(((a - seen).length() - 1.0).abs() < 1e-4);
+        // at the sway's ends it stands still, and comes back the other way after
+        assert!(frantic(seen, tower, 1.0, 0.1, 0.5, 10.0).distance(seen) < 1e-4);
+        assert!((frantic(seen, tower, 1.5, 0.1, 0.5, 10.0) - seen).dot(a - seen) < 0.0);
+    }
+
+    #[test]
     fn tower_decisions_obey_world_time_and_solid_cover() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
@@ -744,7 +781,7 @@ mod projectile_tests {
             sweep: 0.0, state: State::Attack(0.0, 3), lost: 0.0, warned: false,
             cone: None, cone_size: Vec3::ONE, pivot: Vec3::ZERO, yaw0: 0.0, head: vec![],
             was: None, corpses: Default::default(), lights: [None; 2], shown: [None; 2],
-            turning: [false; 2], still: [0.0; 2], last: (0.0, 0.0),
+            turning: [false; 2], still: [0.0; 2], last: (0.0, 0.0), aim: None,
         }).id();
         app.world_mut().resource_mut::<crate::gameplay::TimeControl>().bend_remaining = 10.0;
         let original = serde_json::to_string(&vec![TowerSave::capture(app.world().get::<Tower>(tower).unwrap())]).unwrap();

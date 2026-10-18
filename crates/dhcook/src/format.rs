@@ -1761,6 +1761,12 @@ pub struct DoorSounds {
     pub breakable: bool,
     #[serde(default)]
     pub keys: Vec<String>,
+    /// its words, from its tweaks: `name` (`m_Name`: "Door"), `open` (`m_InteractText`), `close`
+    /// (`m_DoorCloseCW`'s override), `unlock` (`m_UnlockInteractText`), `keyhole`
+    /// (`m_AltInteractText`), `focus_locked` (`m_FocusLockedMessage`: "Blocked from the other
+    /// side"), `locked` (`m_LockedMessage`, used while locked)
+    #[serde(default)]
+    pub texts: std::collections::BTreeMap<String, String>,
     /// a breakable door's health (`m_Health`), the least blow that wears it (`m_DamageThreshold`)
     /// and what happens when it breaks (its last `m_DoorBreakSteps`: the wood's sound, the
     /// splinters, the pieces)
@@ -2108,6 +2114,10 @@ pub struct Pickup {
     /// `Twk_Inv_PistolEliteGuard_Player`, the Prison's sword)
     #[serde(default)]
     pub inv_item: String,
+    /// its prompt lying in the world (its interactable's `m_InteractText`: "`GBA_Use` Pick
+    /// up", food's "`GBA_Use` Eat")
+    #[serde(default)]
+    pub verb: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -2436,6 +2446,11 @@ pub struct UsableObj {
     pub flavor: Vec<String>,
     #[serde(default)]
     pub playing_anim: String,
+    /// its words while locked, from its tweak: `focus_locked` (`m_FocusLockedMessage`: "This
+    /// locker is locked"), `locked` (`m_LockedMessage`, used while locked), `unlock`
+    /// (`m_UnlockInteractText`)
+    #[serde(default)]
+    pub texts: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

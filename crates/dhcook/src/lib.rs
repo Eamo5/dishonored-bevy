@@ -1076,6 +1076,24 @@ impl<'a> Cooker<'a> {
                 if let Some(t) = tweak.as_ref() {
                     let tc = self.chain(t);
                     d.occlusion = [tc.float("m_fPlayerSoundOcclusion").unwrap_or(0.0), tc.float("m_fAISoundOcclusion").unwrap_or(0.0)];
+                    // its words: the door's tweak's and its interactable's
+                    let mut put = |k: &str, v: Option<&str>| {
+                        if let Some(v) = v.filter(|v| !v.trim().is_empty()) {
+                            d.texts.insert(k.to_string(), v.to_string());
+                        }
+                    };
+                    put("unlock", tc.name("m_UnlockInteractText"));
+                    put("focus_locked", tc.name("m_FocusLockedMessage"));
+                    put("locked", tc.name("m_LockedMessage"));
+                    if let Some(Value::Struct(_, s)) = tc.get("m_DoorCloseCW") {
+                        put("close", Props(s.clone()).name("m_InteractTextOverride"));
+                    }
+                    if let Some(it) = tc.obj(self.assets, "m_pInteractableTweaks") {
+                        let ic = self.chain(&it);
+                        put("name", ic.name("m_Name"));
+                        put("open", ic.name("m_InteractText"));
+                        put("keyhole", ic.name("m_AltInteractText"));
+                    }
                 }
                 d.locked_start = ch.bool("m_bLocked").unwrap_or(false);
                 d.keys = str_array(&ch, "m_MatchingKeys");
@@ -4508,7 +4526,13 @@ impl<'a> Cooker<'a> {
             let item_path = tc.obj_path("m_pAbstractItem").unwrap_or_default();
             let coins = item_path.ends_with("Coins_AbsItm");
             let item = item_path.split_once('.').map(|x| x.1.to_string()).unwrap_or(item_path);
-            let label = tc.obj(self.assets, "m_pInteractableTweaks").map(|it| self.chain(&it).name("m_Name").unwrap_or_default().to_string()).unwrap_or_default();
+            let (label, verb) = tc
+                .obj(self.assets, "m_pInteractableTweaks")
+                .map(|it| {
+                    let ic = self.chain(&it);
+                    (ic.name("m_Name").unwrap_or_default().to_string(), ic.name("m_InteractText").unwrap_or_default().trim().to_string())
+                })
+                .unwrap_or_default();
             let name = format!("Factory_{i}");
             let instance = self.scene.instances.len() as u32;
             self.scene.instances.push(Instance {
@@ -4547,6 +4571,7 @@ impl<'a> Cooker<'a> {
                 factory: true,
                 key,
                 inv_item: tc.obj_path("m_pItem").map(|p| p.rsplit('.').next().unwrap_or(&p).to_string()).unwrap_or_default(),
+                verb,
             });
             self.scene.kismet.ops[i].props.insert("factory_pickup".into(), KVal::Int(pickup as i32));
         }
@@ -5072,7 +5097,7 @@ impl<'a> Cooker<'a> {
             }
         }
         // its name, how many and whether it's money
-        let (mut label, mut quantity, mut coins) = (String::new(), 0, false);
+        let (mut label, mut quantity, mut coins, mut verb) = (String::new(), 0, false, String::new());
         let mut inv_item = String::new();
         if let Some(tw) = ["m_pTweaks", "m_pPickupTweaks", "m_pStatPickupTweaks", "m_pInventoryTweaks", "m_pKeyTweaks", "m_pInvPickupTweaks"].iter().find_map(|n| ch.obj(self.assets, n)) {
             let tch = self.chain(&tw);
@@ -5084,7 +5109,9 @@ impl<'a> Cooker<'a> {
             }
             coins = tch.obj_path("m_pAbstractItem").is_some_and(|p| p.ends_with("Coins_AbsItm"));
             if let Some(it) = tch.obj(self.assets, "m_pInteractableTweaks") {
-                label = self.chain(&it).name("m_Name").unwrap_or_default().to_string();
+                let ic = self.chain(&it);
+                label = ic.name("m_Name").unwrap_or_default().to_string();
+                verb = ic.name("m_InteractText").unwrap_or_default().trim().to_string();
             }
         }
         let key = if actor.class().starts_with("DisKey") { ch.name("m_Name").unwrap_or_default().to_string() } else { String::new() };
@@ -5106,6 +5133,7 @@ impl<'a> Cooker<'a> {
             food_health,
             factory: false,
             inv_item,
+            verb,
         });
         Ok(())
     }
@@ -5500,6 +5528,12 @@ impl<'a> Cooker<'a> {
             }
             playing_anim = chains.iter().find_map(|c| c.name("m_PlayingAnimName")).filter(|n| *n != "None").unwrap_or_default().to_string();
         }
+        let mut texts = std::collections::BTreeMap::new();
+        for (k, field) in [("focus_locked", "m_FocusLockedMessage"), ("locked", "m_LockedMessage"), ("unlock", "m_UnlockInteractText")] {
+            if let Some(v) = chains.iter().find_map(|c| c.name(field)).filter(|v| !v.trim().is_empty()) {
+                texts.insert(k.to_string(), v.to_string());
+            }
+        }
         let index = self.scene.usables.len() as u32;
         self.scene.usables.push(UsableObj {
             name: actor.name().to_string(),
@@ -5513,6 +5547,7 @@ impl<'a> Cooker<'a> {
             audiograph,
             flavor,
             playing_anim,
+            texts,
         });
         self.usable_ids.insert(actor.key(), index);
         self.actor_ref(actor).usable = Some(index);

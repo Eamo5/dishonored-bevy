@@ -283,12 +283,22 @@ fn usable_focus(
     let key = r.locked.then(|| stats.keys.iter().find(|k| u.keys.iter().any(|m| m.eq_ignore_ascii_case(k))).cloned()).flatten();
     focus.0 = true;
     focus.1 = None;
+    // locked: its own words (`m_UnlockInteractText`; its `m_LockedMessage`: "This locker is
+    // locked", "`k needed" with the key it wants, plain "Locked" when none is named)
+    let say = |k: &str, or: &str| {
+        let t = u.texts.get(k).map(String::as_str).unwrap_or(or);
+        match u.keys.first() {
+            Some(key) => t.replace("`k", key),
+            None if t.contains("`k") => "Locked".to_string(),
+            None => t.to_string(),
+        }
+    };
     focus.2 = if !r.locked {
         crate::gamedata::readable(&raw.replace("`GBA_Use`", &hint(Act::Use)))
     } else if key.is_some() {
-        format!("{} Unlock", hint(Act::Use))
+        crate::gamedata::readable(&say("unlock", "`GBA_Use` Unlock").replace("`GBA_Use`", &hint(Act::Use)))
     } else {
-        "Locked".to_string()
+        crate::gamedata::readable(&say(if u.texts.contains_key("focus_locked") { "focus_locked" } else { "locked" }, "Locked"))
     };
     if !keys.just_pressed(bind.key(Act::Use)) {
         return;
@@ -302,7 +312,8 @@ fn usable_focus(
                     used.write(Interaction::UsableLock { actor, locked: false });
                 }
             }
-            None => msgs.push("Locked"),
+            // (its line is already up: nothing more)
+            None => {}
         }
         return;
     }
