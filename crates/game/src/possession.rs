@@ -31,7 +31,9 @@ impl Plugin for PossessionPlugin {
             })
             .add_systems(Update, restore_possession.after(crate::swarm::restore_swarms).after(crate::fish::restore_fish).after(crate::krust::restore_krust_state).after(crate::save::restore_npcs).before(script_overrides).run_if(in_state(GameState::InGame)))
             .add_systems(Update, (script_overrides, start, ride).chain().run_if(in_state(GameState::InGame)))
-            .add_systems(Update, refusal.run_if(in_state(GameState::InGame)));
+            .init_resource::<PossessAim>()
+            .add_systems(OnExit(GameState::InGame), |mut a: ResMut<PossessAim>| *a = PossessAim::default())
+            .add_systems(Update, aim.run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -233,22 +235,6 @@ fn restore_possession(mut commands: Commands, mut pending: ResMut<PossessionRest
     *pos = Possession { host: Some(host), left: saved.left, level: saved.level, exit_requested: saved.exit_requested, warned: saved.warned, body: saved.body, exit: saved.exit, intro: 0.0 };
 }
 
-/// The best host in front of the player: the original weighs distance against how far off
-/// the aim it is (`m_fDistanceWeight` 1, `m_fAngleWeight` 10) within a fraction of the view.
-pub fn find_target<'a>(
-    ctx: &RapierContext,
-    player: Entity,
-    eye: Vec3,
-    dir: Vec3,
-    range: f32,
-    level: u8,
-    npcs: impl Iterator<Item = (Entity, &'a Transform, &'a Npc)>,
-    hosts: impl Iterator<Item = (Entity, Vec3)>,
-    overrides: &PossessOverrides,
-) -> Option<Entity> {
-    best_host(ctx, player, eye, dir, range, level, npcs, hosts, overrides, false).map(|b| b.0)
-}
-
 /// The host the aim settles on, among those Corvo may take or (`refused_too`) also those he
 /// may not, and whether it is one he may not.
 #[allow(clippy::too_many_arguments)]
@@ -308,36 +294,188 @@ fn best_host<'a>(
     best.map(|b| (b.1, b.2))
 }
 
-/// Possession in hand, its aim on someone Corvo may not take (the scripts forbid it, or a story
-/// character they don't allow): the possessable's `m_DisallowPossessionMessage` ("This target
-/// cannot be possessed right now") up while it stays there, as the exe's refusal state 3 holds
-/// its tutorial line (the obstructed and busy states have no words).
+/// Possession aimed and let go, as its component has it (`UDishonoredActivePowerComponent_Possess`,
+/// decoded from the user's executable for this rewrite: its tick 0x00BFD6D0 runs a state by
+/// `+0xB8`; the aim, state 1, 0x00BFD300; let go, 0x00BF3790; given up, 0x00BFB520). Held, the
+/// hand comes up (`Powers_Cast_Possession_In`, `_Loop`) and the aim settles on a host each frame,
+/// the possessable's own highlight on it (`m_pTargetingHighlightEffect` at
+/// `m_TargetingHighlightEffectAttachSocket`: a person's `PossesTarget_Human_01` at the chest's
+/// `WindBlast_Impact`, a rat's `PossesTarget_Rats_01` at its `Possess`). On someone he may not
+/// take, the possessable's refusal (`m_DisallowPossessionMessage`, "This target cannot be
+/// possessed right now") is up while it stays there (0x00BF66A0, only while aiming). Let go on
+/// a host, he goes in (`_OutUU`); on none, the aim just ends. Use gives it up ("Cancel
+/// Possess", `m_InteractionTexts[24]`): `m_pCancelSoundEvent`, the arms' `_Cancel`, and the
+/// power held back `m_fCancelCooldown`.
+#[derive(Resource, Default)]
+pub struct PossessAim {
+    pub on: bool,
+    pub cancel_seq: u32,
+    target: Option<(Entity, bool)>,
+    shown: Option<(Entity, &'static str)>,
+    /// the highlight's own tag (it follows the host)
+    tag: Option<Entity>,
+    refused: bool,
+    /// the power held back after a cancel (s), and the hand held on after it
+    cooldown: f32,
+    swallow: bool,
+}
+
+/// A target's highlight and where on it (a rat's, else a person's at the chest).
+fn highlight(rat: bool) -> (&'static str, Vec3) {
+    if rat {
+        ("possess_target_rat", Vec3::ZERO)
+    } else {
+        ("possess_target", Vec3::Y * 0.35)
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn refusal(
-    (powers, stats, possession, overrides, data): (Res<crate::powers::Powers>, Res<PlayerStats>, Res<Possession>, Res<PossessOverrides>, Res<Data>),
+fn aim(
+    mut commands: Commands,
+    (mouse, keys, bind, paused, cursor, scripted, time): (Res<ButtonInput<MouseButton>>, Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>, Res<crate::hud::Paused>, Single<&bevy::window::CursorOptions>, Option<Res<crate::script::Scripted>>, Res<Time>),
+    (mut st, mut powers, mut stats, data, attrs, tune, settings, tc, held, mut possession, overrides): (
+        ResMut<PossessAim>,
+        ResMut<crate::powers::Powers>,
+        ResMut<PlayerStats>,
+        Res<Data>,
+        Res<crate::gamedata::Attrs>,
+        Res<crate::musicbox::Tune>,
+        Res<crate::settings::Settings>,
+        Res<crate::gameplay::TimeControl>,
+        Res<crate::props::Held>,
+        ResMut<Possession>,
+        Res<PossessOverrides>,
+    ),
     rapier: ReadRapierContext,
-    player: Query<Entity, With<Player>>,
+    player: Query<(Entity, &Player)>,
     cam: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
     npcs: Query<(Entity, &Transform, &Npc), Without<Player>>,
-    hosts: Query<(Entity, &GlobalTransform), (With<Host>, Without<Possessed>)>,
-    mut msgs: ResMut<HudMessages>,
-    mut was: Local<bool>,
+    hosts: Query<(Entity, &GlobalTransform, &Host), Without<Possessed>>,
+    (mut msgs, mut sfx, mut fx, mut start_possess, mut used): (ResMut<HudMessages>, MessageWriter<PostEvent>, MessageWriter<crate::particles::SpawnEffect>, MessageWriter<PossessRequest>, MessageWriter<crate::powers::PowerUsed>),
+    mut tagged: Query<(&crate::particles::EffectTag, &mut crate::particles::ParticleEmitter)>,
+    level_info: Option<Res<crate::level::LevelInfo>>,
 ) {
+    if paused.0 {
+        return;
+    }
+    st.cooldown = (st.cooldown - time.delta_secs()).max(0.0);
     let power = crate::powers::Power::Possess;
-    let refused = powers.selected == power && possession.host.is_none() && !stats.dead && {
-        let (Ok(ctx), Ok(pe), Ok(cg)) = (rapier.single(), player.single(), cam.single()) else { return };
-        let level = power.level(&stats);
-        let range = data.power_f("Possess", level, "m_fPossessRange", 1000.0) * 0.01;
-        best_host(&ctx, pe, cg.translation(), cg.forward().as_vec3(), range, level, npcs.iter(), hosts.iter().map(|(e, g)| (e, g.translation() + Vec3::Y * 0.1)), &overrides, true).is_some_and(|b| b.1)
-    };
-    if refused != *was {
-        let t = data.text("DisTweaks_Possessable", "m_DisallowPossessionMessage");
-        if refused && !t.is_empty() {
-            msgs.tutorial(t, f32::INFINITY);
-        } else if !refused {
-            msgs.drop_tutorial(&t);
+    // on the way in (its intro, the component's state 2), Use gives it up too: out again
+    if possession.host.is_some() && possession.intro > 0.0 && keys.just_pressed(bind.key(crate::bindings::Act::Use)) {
+        possession.intro = 0.0;
+        possession.exit_requested = true;
+        sfx.write(PostEvent::named("Snd_Power_Empty", None));
+        st.cooldown = data.active("Possess").and_then(|a| a.params.get("m_fCancelCooldown")).copied().unwrap_or(1.0);
+        return;
+    }
+    let level = power.level(&stats);
+    let Ok((pe, p)) = player.single() else { return };
+    let grabbed = cursor.grab_mode != bevy::window::CursorGrabMode::None || scripted.is_some();
+    let can_act = grabbed && !stats.dead && !p.locked && !held.busy() && powers.blink.is_none() && tc.wheel >= 1.0 && possession.host.is_none();
+    let selected = powers.selected == power;
+    if st.swallow && !mouse.pressed(MouseButton::Right) {
+        st.swallow = false;
+    }
+    let refusal = data.text("DisTweaks_Possessable", "m_DisallowPossessionMessage");
+    let end = |st: &mut PossessAim, powers: &mut crate::powers::Powers, msgs: &mut HudMessages| {
+        st.on = false;
+        st.target = None;
+        powers.aiming = false;
+        if st.refused {
+            msgs.drop_tutorial(&refusal);
+            st.refused = false;
         }
-        *was = refused;
+    };
+    if st.on {
+        if !selected || !can_act || !powers.aiming {
+            end(&mut st, &mut powers, &mut msgs);
+        } else if keys.just_pressed(bind.key(crate::bindings::Act::Use)) {
+            // "Cancel Possess": its sound, and the power held back
+            sfx.write(PostEvent::named("Snd_Power_Empty", None));
+            st.cooldown = data.active("Possess").and_then(|a| a.params.get("m_fCancelCooldown")).copied().unwrap_or(1.0);
+            st.cancel_seq = st.cancel_seq.wrapping_add(1);
+            st.swallow = mouse.pressed(MouseButton::Right);
+            end(&mut st, &mut powers, &mut msgs);
+        } else if !mouse.pressed(MouseButton::Right) {
+            // let go: into the host aimed at, if he may take it
+            let cost = power.mana(&data);
+            if let Some((host, false)) = st.target {
+                if stats.mana >= cost {
+                    stats.spend_mana(cost, &attrs);
+                    start_possess.write(PossessRequest { host, level });
+                    powers.cooldown = 1.0;
+                    powers.cast_seq = powers.cast_seq.wrapping_add(1);
+                    powers.cast_power = power;
+                    used.write(crate::powers::PowerUsed(power));
+                } else {
+                    crate::powers::out_of_mana(&mut powers, &mut sfx, &mut msgs);
+                }
+            }
+            end(&mut st, &mut powers, &mut msgs);
+        }
+    } else if selected && can_act && !st.swallow && mouse.just_pressed(MouseButton::Right) && powers.cooldown <= 0.0 && st.cooldown <= 0.0 {
+        let cost = power.mana(&data);
+        if tune.inhibited {
+            msgs.push("Your powers are blocked");
+            sfx.write(PostEvent::named("Snd_Power_Empty", None));
+            powers.cooldown = 0.5;
+        } else {
+            // (short of mana: a remedy drunk first, if the option says so)
+            if stats.mana < cost && settings.auto_mana_elixir && stats.mana_elixirs > 0 {
+                stats.mana_elixirs -= 1;
+                stats.mana = (stats.mana + attrs.mana_elixir_amount(stats.max_mana, rand::random::<f32>())).min(stats.max_mana);
+                stats.mana_cap = stats.mana_cap.max(stats.mana);
+                sfx.write(PostEvent::named("Snd_UI_Ingame_Wheel_Mana", None));
+            }
+            if stats.mana < cost {
+                crate::powers::out_of_mana(&mut powers, &mut sfx, &mut msgs);
+            } else {
+                st.on = true;
+                powers.aiming = true;
+            }
+        }
+    }
+    // the host the aim settles on, while aiming
+    if st.on {
+        if let (Ok(ctx), Ok(cg)) = (rapier.single(), cam.single()) {
+            let range = data.power_f("Possess", level, "m_fPossessRange", 1000.0) * 0.01;
+            st.target = best_host(&ctx, pe, cg.translation(), cg.forward().as_vec3(), range, level, npcs.iter(), hosts.iter().map(|(e, g, _)| (e, g.translation() + Vec3::Y * 0.1)), &overrides, true);
+        }
+        // the possessable's refusal, up while it stays on one he may not take
+        let refused = st.target.is_some_and(|t| t.1) && !refusal.is_empty();
+        if refused != st.refused {
+            if refused {
+                msgs.tutorial(refusal.clone(), f32::INFINITY);
+            } else {
+                msgs.drop_tutorial(&refusal);
+            }
+            st.refused = refused;
+        }
+    }
+    // the highlight on the host aimed at (on one he may take)
+    let want = st.target.filter(|t| st.on && !t.1).map(|(e, _)| {
+        let rat = hosts.get(e).is_ok_and(|(_, _, h)| !h.fish && !h.rooted);
+        (e, rat)
+    });
+    let has = |n: &str| level_info.as_ref().is_some_and(|l| l.scene.effects.iter().any(|e| e.0 == n));
+    let want = want.and_then(|(e, rat)| {
+        let (name, _) = highlight(rat);
+        has(name).then_some((e, name))
+    });
+    if want != st.shown {
+        let tag = *st.tag.get_or_insert_with(|| commands.spawn((Transform::default(), DespawnOnExit(GameState::InGame))).id());
+        if st.shown.is_some() {
+            for (t, mut em) in &mut tagged {
+                if t.0 == tag {
+                    em.stop();
+                }
+            }
+        }
+        if let Some((e, name)) = want {
+            let rat = name == "possess_target_rat";
+            fx.write(crate::particles::SpawnEffect { follow: Some(e), tag: Some(tag), secs: 600.0, ..crate::particles::SpawnEffect::at(name, highlight(rat).1) });
+        }
+        st.shown = want;
     }
 }
 
@@ -420,7 +558,6 @@ fn start(
     hosts: Query<(&Host, &GlobalTransform)>,
     mut arms: Query<&mut Visibility, With<crate::arms::ArmsRoot>>,
     mut sfx: MessageWriter<PostEvent>,
-    mut msgs: ResMut<HudMessages>,
     overrides: Res<PossessOverrides>,
     white_rats: Query<(), With<crate::swarm::WhiteRat>>,
     stats: Res<crate::gameplay::PlayerStats>,
@@ -460,7 +597,6 @@ fn start(
             *v = Visibility::Hidden;
         }
         sfx.write(PostEvent::named(data.power_sound("Possess", r.level, "m_pIntroSoundEvent").unwrap_or("Snd_Power_Possession_In_Lvl1"), None));
-        msgs.push(if host.fish { "Possessing a fish" } else if host.rooted { "Possessing a river krust" } else { "Possessing a rat" });
         *pos = Possession { host: Some(r.host), left: secs, level: r.level, exit_requested: false, warned: false, body: Some(body), exit: None, intro: data.power_f("Possess", r.level, "m_IntroDuration", 1.1) };
         extend_bend(&data, &mut tc, r.level);
         return;
@@ -499,7 +635,6 @@ fn start(
         *v = Visibility::Hidden;
     }
     sfx.write(PostEvent::named(data.power_sound("Possess", r.level, "m_pIntroSoundEvent").unwrap_or("Snd_Power_Possession_In_Lvl1"), None));
-    msgs.push(format!("Possessing {}", npc.name));
     *pos = Possession { host: Some(r.host), left, level: r.level, exit_requested: false, warned: false, body, exit: ov.and_then(|o| o.exit), intro: data.power_f("Possess", r.level, "m_IntroDuration", 1.1) };
     extend_bend(&data, &mut tc, r.level);
 }
@@ -570,7 +705,7 @@ fn ride(
     mut npcs: Query<(&mut Transform, &mut Npc), Without<Player>>,
     mut hosts: Query<(&Host, &mut Transform), (Without<Player>, Without<Npc>)>,
     mut arms: Query<&mut Visibility, With<crate::arms::ArmsRoot>>,
-    (mut sfx, mut msgs): (MessageWriter<PostEvent>, ResMut<HudMessages>),
+    mut sfx: MessageWriter<PostEvent>,
     ai: Res<crate::aiworld::AiWorld>,
 ) {
     let Some(host) = pos.host else { return };
@@ -589,7 +724,7 @@ fn ride(
     if let Some(body) = pos.body.filter(|_| !npcs.contains(host)) {
         if pos.left < 4.0 && !pos.warned {
             pos.warned = true;
-            msgs.push("Possession is ending");
+            // (the original says so with its lens alone: `m_WarnMaxBlur`, `ppgraph.rs`)
         }
         let alive = hosts.get(host).is_ok();
         // (where he can't come out, a pipe: held in the creature until out of it)
@@ -641,7 +776,7 @@ fn ride(
     let alive = npcs.get(host).map(|(_, n)| !n.is_down()).unwrap_or(false);
     if pos.left < 4.0 && !pos.warned {
         pos.warned = true;
-        msgs.push("Possession is ending");
+        // (the original says so with its lens alone)
     }
     if pos.left > 0.0 && !pos.exit_requested && alive && !stats.dead {
         // the host goes where Corvo goes

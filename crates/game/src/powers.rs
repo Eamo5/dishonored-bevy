@@ -1103,12 +1103,7 @@ fn use_power(
     (cam, surfaces, strikeables, mut struck): (Query<&GlobalTransform, With<PlayerCamera>>, Query<&ColliderSurfaces>, Query<&crate::gameplay::Strikeable>, MessageWriter<crate::gameplay::Struck>),
     mut marker: Query<(Entity, &mut Transform, &mut Visibility), (With<BlinkMarker>, Without<Player>)>,
     npcs: Query<(Entity, &Transform, &Npc), (Without<Player>, Without<BlinkMarker>)>,
-    (mut possession, mut start_possess, hosts, possess_overrides): (
-        ResMut<crate::possession::Possession>,
-        MessageWriter<crate::possession::PossessRequest>,
-        Query<(Entity, &GlobalTransform), (With<crate::possession::Host>, Without<crate::possession::Possessed>)>,
-        Res<crate::possession::PossessOverrides>,
-    ),
+    mut possession: ResMut<crate::possession::Possession>,
     (mut swarm, mut gadget, mut blast, mut kill_cams, mut decals): (
         MessageWriter<crate::swarm::SummonSwarm>,
         MessageWriter<crate::gadgets::UseGadget>,
@@ -1267,7 +1262,7 @@ fn use_power(
         return;
     }
     // the Heart's whispers are its own (heart.rs)
-    if !can_act || !mouse.just_pressed(MouseButton::Right) || powers.cooldown > 0.0 || matches!(sel, Power::Empty | Power::Blink | Power::Heart | Power::SummonAssassin) {
+    if !can_act || !mouse.just_pressed(MouseButton::Right) || powers.cooldown > 0.0 || matches!(sel, Power::Empty | Power::Blink | Power::Heart | Power::SummonAssassin | Power::Possess) {
         return;
     }
     // toggles end for free
@@ -1300,8 +1295,8 @@ fn use_power(
     }
     let mut cast = true;
     match sel {
-        // (Summon Assassin is aimed and let go: summon.rs)
-        Power::Empty | Power::Blink | Power::Heart | Power::SummonAssassin => {}
+        // (Summon Assassin and Possession are aimed and let go: summon.rs, possession.rs)
+        Power::Empty | Power::Blink | Power::Heart | Power::SummonAssassin | Power::Possess => {}
         Power::DarkVision => {
             stats.spend_mana(cost, &attrs);
             powers.dark_vision = true;
@@ -1331,21 +1326,6 @@ fn use_power(
             sfx.write(PostEvent::named(data.power_sound("Windblast", level, "m_pWindBlastSoundEvent").unwrap_or("Snd_Pwr_P_Windblast_Lvl_1"), None));
             // (the blast itself starts at the cast clip's `DisNotify_WindBlast`: `windblast_gusts`)
             powers.gusts.push(Gust { t: 0.0, eye, dir, from: pt.translation, level, targets: None, impacts: Vec::new() });
-        }
-        Power::Possess => {
-            let range = data.power_f("Possess", level, "m_fPossessRange", 1000.0) * UU;
-            match crate::possession::find_target(&ctx, pe, eye, dir, range, level, npcs.iter().map(|(e, t, n)| (e, t, &*n)), hosts.iter().map(|(e, g)| (e, g.translation() + Vec3::Y * 0.1)), &possess_overrides) {
-                Some(target) => {
-                    stats.spend_mana(cost, &attrs);
-                    start_possess.write(crate::possession::PossessRequest { host: target, level });
-                    powers.cooldown = 1.0;
-                }
-                None => {
-                    msgs.push(if level >= 2 { "No one to possess" } else { "No animal to possess" });
-                    sfx.write(PostEvent::named("Snd_Power_Empty", None));
-                    cast = false;
-                }
-            }
         }
         Power::DevouringSwarm => {
             let reach = data.power_f("DevouringSwarm", level, "m_fMaxDistance", 1500.0) * UU;

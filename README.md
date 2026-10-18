@@ -2101,11 +2101,19 @@ against the install's own data where it carries them, then implemented independe
   combat included. The target is chosen with the angle weighted ten times the distance, plus its
   priority: combatants over civilians over animals. Someone he comes out of is thrown off as he
   does (`Empty_Unpossess_Eject`), then dazed, with its line (`_Dizzy`, 3.5 s), or retching, with
-  its sick (`_Puke`, 6.1 s), one or the other (our reading), standing for it all. With the power
-  in hand and the aim settled on someone he may not take (the scripts forbid it: Slackjaw, the
-  bridge's guards; or a story character they don't allow), the possessable's
+  its sick (`_Puke`, 6.1 s), one or the other (our reading), standing for it all. The power is
+  aimed while held and cast as it is let go, as its component does it (decoded from the
+  executable, `UDishonoredActivePowerComponent_Possess`: the tick 0x00BFD6D0 runs a state, the
+  aim being state 1, 0x00BFD300; let go 0x00BF3790; given up 0x00BFB520), so a tap possesses as
+  before. Held, the hand comes up (`Powers_Cast_Possession_In`, `_Loop`) and the host the aim
+  settles on wears its possessable's highlight (`m_pTargetingHighlightEffect`: a person's
+  `PossesTarget_Human_01` at the chest, a rat's `PossesTarget_Rats_01`). Let go on a host he goes
+  in (`_OutUU`); on none the aim ends. `[F] Cancel Possess` (`m_InteractionTexts[24]`) gives it
+  up with `m_pCancelSoundEvent` and `_Cancel`, and the power waits `m_fCancelCooldown` (1 s).
+  The aim settled on someone he may not take (the scripts forbid it: Slackjaw, the bridge's
+  guards; or a story character they don't allow), the possessable's
   `m_DisallowPossessionMessage` stays up while the aim does ("This target cannot be possessed right
-  now"), as the exe's refusal state holds its tutorial line.
+  now"), only while aiming, as the exe's refusal state holds its tutorial line (0x00BF66A0).
 - **Melee timing.** A blow lands where the original's zone handler opens the damage: in the last
   `m_fDamageZoneMaxTime` of its clip's `DishonoredNotify_AttackZone`. That is 0.29 s into Corvo's
   swing (blink measured 0.30–0.35 s).

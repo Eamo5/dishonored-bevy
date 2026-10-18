@@ -6785,7 +6785,10 @@ impl<'a> Cooker<'a> {
             ("blood_limb", "Vfx_PhysMat.Blood.SeveredLimbs.Pfx_BloodSLimbBody"),
             ("blood_throat", "Vfx_PhysMat.Blood.Fatalities.Pfx_BloodThroat"),
             ("blood_lunge", "Vfx_PhysMat.Blood.Fatalities.Pfx_BloodLunge"),
+            // (Possession's target, as the possessable marks it: `m_pTargetingHighlightEffect`,
+            // a person's and a rat's)
             ("possess_target", "Vfx_GamePlay.Possession.PossesTarget_Human_01"),
+            ("possess_target_rat", "Vfx_GamePlay.Possession.PossesTarget_Rats_01"),
             ("mana_empty", "Vfx_GamePlay.Powers.Ps_Mana_Empty"),
             // Blink's target, as `Twk_Blink` marks it: on the ground (`m_pGroundPS`), a ledge
             // it will climb (`m_pMantlePS`), the air it will fall from (`m_pLowFallPS`)

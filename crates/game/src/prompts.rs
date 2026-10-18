@@ -46,6 +46,7 @@ const CANCEL_COOKING: usize = 20;
 const END_BEND_TIME: usize = 21;
 const CANCEL_BLINK: usize = 22;
 const END_DARK_VISION: usize = 23;
+const CANCEL_POSSESS: usize = 24;
 const END_POSSESS: usize = 25;
 const CANCEL_SUMMON: usize = 38;
 
@@ -67,6 +68,7 @@ fn fallback(i: usize) -> &'static str {
         SPYGLASS_ZOOM => "`GBA_Use` Change zoom level",
         CANCEL_COOKING => "`GBA_Use` Cancel Cooking",
         CANCEL_BLINK => "`GBA_Use` Cancel Blink",
+        CANCEL_POSSESS => "`GBA_Use` Cancel Possess",
         CANCEL_SUMMON => "`GBA_Use` Cancel Summon",
         END_BEND_TIME => "`GBA_Secondary` End Bend Time",
         END_DARK_VISION => "`GBA_Secondary` End Dark Vision",
@@ -333,6 +335,7 @@ fn wanted_context(
     powers: &crate::powers::Powers,
     tc: &crate::gameplay::TimeControl,
     possessing: bool,
+    possessing_in: bool,
 ) -> Vec<usize> {
     use crate::powers::Power;
     let mut out = Vec::new();
@@ -362,16 +365,18 @@ fn wanted_context(
     if powers.cooking.is_some() {
         out.push(CANCEL_COOKING);
     }
-    // a Blink or a summoning aimed: Use gives it up
+    // a Blink, a possession or a summoning aimed: Use gives it up
     if powers.aiming && powers.blink.is_none() {
         match powers.selected {
             Power::Blink => out.push(CANCEL_BLINK),
+            Power::Possess => out.push(CANCEL_POSSESS),
             Power::SummonAssassin => out.push(CANCEL_SUMMON),
             _ => {}
         }
     }
     if possessing {
-        out.push(END_POSSESS);
+        // (on the way in, Use gives it up)
+        out.push(if possessing_in { CANCEL_POSSESS } else { END_POSSESS });
     } else if powers.selected == Power::BendTime && tc.bend_remaining > 0.0 {
         out.push(END_BEND_TIME);
     } else if powers.selected == Power::DarkVision && powers.dark_vision {
@@ -430,7 +435,7 @@ fn context_line(
             return;
         }
     };
-    let mut want = wanted_context(&carry, &held, &peek, &climb, !grabbed.is_empty(), &zoom, &stats, &powers, &tc, possession.host.is_some());
+    let mut want = wanted_context(&carry, &held, &peek, &climb, !grabbed.is_empty(), &zoom, &stats, &powers, &tc, possession.host.is_some(), possession.host.is_some() && possession.intro > 0.0);
     if versus.npc.is_some() {
         want.insert(0, VERSUS);
     }
