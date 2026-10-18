@@ -6946,6 +6946,8 @@ impl<'a> Cooker<'a> {
             // a person's and a rat's)
             ("possess_target", "Vfx_GamePlay.Possession.PossesTarget_Human_01"),
             ("possess_target_rat", "Vfx_GamePlay.Possession.PossesTarget_Rats_01"),
+            // (its glow on the left hand while aimed: `m_pHandCastParticle`)
+            ("possess_hand", "Vfx_GamePlay.Possession.Possession_HandCast_01"),
             ("mana_empty", "Vfx_GamePlay.Powers.Ps_Mana_Empty"),
             // Blink's target, as `Twk_Blink` marks it: on the ground (`m_pGroundPS`), a ledge
             // it will climb (`m_pMantlePS`), the air it will fall from (`m_pLowFallPS`)

@@ -27,7 +27,7 @@ impl Plugin for ArmsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DeathFall>()
             .add_systems(OnEnter(GameState::InGame), spawn_arms.after(spawn_view_model))
-            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_effects.after(ArmsAnimSet), (animate_held, animate_sword, show_bolts).after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_effects.after(ArmsAnimSet), possess_hand.after(ArmsAnimSet), (animate_held, animate_sword, show_bolts).after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, (align_arms.in_set(ArmsAlign), arm_pitch).after(AnimPose).before(TransformSystems::Propagate));
     }
 }
@@ -697,10 +697,12 @@ fn spawn_arms(
                 held.push((power, holder));
             }
         }
-        // the sockets the clips' effects play at (the Mark: `Tattoo`)
+        // the sockets the clips' effects play at (the Mark: `Tattoo`), and Possession's glow
+        // (`LeftHand_PowerCastA`)
         let mut sockets = Vec::new();
         if let Some(level) = level.as_ref() {
             let mut names: Vec<&str> = level.scene.arm_fx.iter().map(|f| f.socket.as_str()).collect();
+            names.push(POSSESS_HAND_SOCKET);
             names.sort_unstable();
             names.dedup();
             for name in names {
@@ -1695,6 +1697,40 @@ fn cast_clip(p: Power) -> &'static str {
         Power::Grenade | Power::StickyGrenade | Power::Chokedust => "Gadgets_Grenade_Deploy",
         Power::SpringRazor | Power::ArcMine | Power::StunMine => "Gadgets_SpringRazor_Deploy",
     }
+}
+
+/// Where Possession's glow sits on the left hand (`DisTweaks_Possess`'s
+/// `m_HandCastParticleAttachSocket`).
+const POSSESS_HAND_SOCKET: &str = "LeftHand_PowerCastA";
+
+/// Possession's glow on the left hand while it is aimed (`DisTweaks_Possess.m_pHandCastParticle`,
+/// `Possession_HandCast_01`): the power's tick (0x00BF37E0, decoded for this rewrite from the
+/// user's own Dishonored.exe) keeps it on while the power is aimed and Corvo is neither swimming
+/// nor on a chain (ladder physics), and puts it out otherwise.
+fn possess_hand(
+    (aim, swim, climb): (Res<crate::possession::PossessAim>, Res<crate::swim::Swim>, Res<crate::climb::Climb>),
+    arms: Query<&ArmsAnim>,
+    mut tagged: Query<(&crate::particles::EffectTag, &mut crate::particles::ParticleEmitter)>,
+    mut fx: MessageWriter<crate::particles::SpawnEffect>,
+    mut shown: Local<Option<Entity>>,
+) {
+    let want = aim.on && !swim.swimming() && climb.on.is_none();
+    let socket = arms.iter().find_map(|a| a.sockets.iter().find(|(n, _)| n.eq_ignore_ascii_case(POSSESS_HAND_SOCKET)).map(|(_, e)| *e));
+    let target = socket.filter(|_| want);
+    if *shown == target {
+        return;
+    }
+    if let Some(old) = shown.take() {
+        for (tag, mut em) in &mut tagged {
+            if tag.0 == old {
+                em.stop();
+            }
+        }
+    }
+    if let Some(s) = target {
+        fx.write(crate::particles::SpawnEffect { follow: Some(s), tag: Some(s), turn: true, view: true, secs: 600.0, ..crate::particles::SpawnEffect::at("possess_hand", Vec3::ZERO) });
+    }
+    *shown = target;
 }
 
 /// The clips' effects at the arms' sockets (`scene.arm_fx`: the Mark glowing as he casts),

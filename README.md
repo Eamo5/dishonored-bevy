@@ -2155,6 +2155,10 @@ against the install's own data where it carries them, then implemented independe
   guards; or a story character they don't allow), the possessable's
   `m_DisallowPossessionMessage` stays up while the aim does ("This target cannot be possessed right
   now"), only while aiming, as the exe's refusal state holds its tutorial line (0x00BF66A0).
+  While aimed, the left hand glows with the power's own effect (`m_pHandCastParticle`,
+  `Possession_HandCast_01`, at `m_HandCastParticleAttachSocket`, `LeftHand_PowerCastA`), put out
+  as the aim ends, and not shown while he swims or hangs on a chain (the component's tick,
+  0x00BF37E0, keeps it on in the aim's state unless the pawn's physics is swimming or ladder).
 - **Melee timing.** A blow lands where the original's zone handler opens the damage: in the last
   `m_fDamageZoneMaxTime` of its clip's `DishonoredNotify_AttackZone`. That is 0.29 s into Corvo's
   swing (blink measured 0.30–0.35 s).
