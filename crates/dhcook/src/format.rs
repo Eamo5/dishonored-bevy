@@ -3639,6 +3639,10 @@ pub struct Security {
     pub blast: Option<TrapBlast>,
     #[serde(default)]
     pub trail: Option<u32>,
+    /// its own effects by name (`scene.particle_systems`): a watch tower's search light on and
+    /// off, its alert light on and off
+    #[serde(default)]
+    pub fx: std::collections::BTreeMap<String, u32>,
 }
 
 /// A Scaleform movie's timelines (`ui/<movie>/timeline.json`): its sprites' frames as the movie

@@ -1221,7 +1221,15 @@ are in the settings file, `pad_binding_set` 0-3):
   Blinded node). Rewired, a tower turns its beam and arrows on its owners; the scripts can
   turn towers and pylons off, on or round (`DisSeqAct_WallofLightControl`,
   `DisSeqAct_DefenceTower`) and order a volley at something
-  (`DisSeqAct_WatchTowerShootAtTarget`). `DH_TOWER_LOG=1` traces them.
+  (`DisSeqAct_WatchTowerShootAtTarget`). As the tower's own code has it (decoded from the
+  executable: its attack state 0x00A3C640, its ally tracking 0x00A3C370, its state change
+  0x00A31280), each shot is a noise heard as a watch tower's attack (`m_AINoiseLoudness`,
+  `EAINoiseContext_WatchTowerAttack`: danger); exploring, it turns its light on Corvo where one
+  of its own sees him (`m_AllyAttentionLevelToTrack`, busted on the city's towers); its lamp
+  glows while lit (`ps_WT_SearchLight_on`) and red while alerted or firing
+  (`ps_WT_RedLight_On`); and its motors sound as the head turns and the light nods
+  (`Snd_Rotating_Tower`, `Rotating_Light_Mvt`, their RTPCs with the speed). `DH_TOWER_LOG=1`
+  traces them.
 - **Gadgets**: grenades and sticky grenades, springrazors, incendiary bolts and explosive
   bullets with the original blast radii, arming times and effects; level pickups give the
   ammunition type their tweak names. Valuables carry their tweak's name and worth ("Take

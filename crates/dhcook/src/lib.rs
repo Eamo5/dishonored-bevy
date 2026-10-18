@@ -2816,6 +2816,28 @@ impl<'a> Cooker<'a> {
             if let Some(f) = ch.obj(self.assets, "m_pFactionTweakOverride").or_else(|| tweak.as_ref().and_then(|t| self.chain(t).obj(self.assets, "m_pFactionTweak"))) {
                 d.friendly.push(f.name().to_string());
             }
+            if let Some(t) = &tweak {
+                let tc = self.chain(t);
+                // its lights (`m_pLightParticleSystemOn` / `Off`, `m_pAlertLightParticleSystemOn` /
+                // `Off`), the noise of each shot (`m_AINoiseLoudness`, metres), the attention of
+                // an ally it follows (`m_AllyAttentionLevelToTrack`: `EDisAttentionLevel`'s
+                // index), and its motors' sound parameters (`m_SoundRotationRTPC`, `_Spot`)
+                for (key, field) in [("search_on", "m_pLightParticleSystemOn"), ("search_off", "m_pLightParticleSystemOff"), ("alert_on", "m_pAlertLightParticleSystemOn"), ("alert_off", "m_pAlertLightParticleSystemOff")] {
+                    if let Some(ps) = tc.obj(self.assets, field).and_then(|o| self.particle_system(&o)) {
+                        d.fx.insert(key.to_string(), ps);
+                    }
+                }
+                if let Some(n) = tc.name("m_AINoiseLoudness") {
+                    d.params.insert("noise_m".into(), noise_meters(&self.assets.cooked_dir, n));
+                }
+                let level = tc.name("m_AllyAttentionLevelToTrack").and_then(|n| ["DAL_Unaware", "DAL_HeadTrack", "DAL_TurnToFace", "DAL_Investigate", "DAL_Busted"].iter().position(|l| *l == n));
+                d.params.insert("ally_level".into(), level.unwrap_or(3) as f32);
+                for (key, field) in [("rtpc_tower", "m_SoundRotationRTPC"), ("rtpc_spot", "m_SoundRotationRTPCSpot")] {
+                    if let Some(n) = tc.name(field).filter(|n| !n.is_empty() && *n != "None") {
+                        d.sounds.insert(key.to_string(), n.to_string());
+                    }
+                }
+            }
             if let Some(p) = tweak.as_ref().and_then(|t| self.chain(t).obj(self.assets, "m_pProjectileTweak")) {
                 let pc = self.chain(&p);
                 d.blast = pc.obj(self.assets, "m_pExplosionTweak").map(|x| self.blast(&x));

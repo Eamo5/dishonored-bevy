@@ -7,6 +7,13 @@
 //! sounds `m_fSoundAttackWarningTime` before the first volley (`m_fStateAttackInitialDelay`),
 //! and it fires `m_VolleyShots` explosive arrows (`m_pProjectileTweak`) from `Arrow_Socket`
 //! every `m_fDelayBetweenVolleys` while it sees him, giving up after `m_fStateAttackTimeout`.
+//! Each shot is a noise (`m_AINoiseLoudness`, as a watch tower's attack: danger to those who
+//! hear it). Exploring, it turns its light on Corvo where one of its own sees him
+//! (`m_AllyAttentionLevelToTrack`: busted), as the tower's tick does it (0x00A3C370, decoded for
+//! this rewrite). Its lamp glows while it is lit (`m_pLightParticleSystemOn`, `_Off`), red while
+//! alerted or firing (`m_pAlertLightParticleSystemOn`, `_Off`); its motors sound as it turns and
+//! as its light nods (`m_pSoundStartRotation` / `Stop`, `_Spot`, their `m_SoundRotationRTPC` up
+//! to `m_fSoundRotationRTPCMax` with the speed).
 //! Its whale oil tank taken, it goes dark. The scripts hear of it (`DisSeqEvent_WatchTower`): put
 //! out of action or back ("Deactivated", "Activated"), rewired ("Hacked"), a body in its beam
 //! ("Ally Corpse Seen" for its owners', else "Neutral Corpse Seen"). Looking into the beam up close blinds
@@ -79,6 +86,14 @@ pub(crate) struct Tower {
     /// as last told the scripts: lit (powered), rewired; the bodies it has seen
     was: Option<(bool, bool)>,
     corpses: std::collections::HashSet<Entity>,
+    /// its lamp's lights (search, alert): what carries each and the effect shown
+    lights: [Option<Entity>; 2],
+    shown: [Option<&'static str>; 2],
+    /// its motors running (the tower, the light), how long each has been still, and its head
+    /// as last frame
+    turning: [bool; 2],
+    still: [f32; 2],
+    last: (f32, f32),
 }
 
 #[derive(Resource, Default)]
@@ -116,6 +131,8 @@ fn restore_towers(mut pending: ResMut<TowerRestore>, mut towers: Query<&mut Towe
         t.state = s.state;
         t.lost = s.lost;
         t.warned = s.warned;
+        // (the head put where it was, not turned there: its motors stay quiet)
+        t.last = (s.yaw, s.pitch);
     }
 }
 
@@ -239,8 +256,17 @@ fn setup_towers(
                 head.push((e, Transform::from_matrix(m)));
             }
         }
+        // (what carries its lamp's lights)
+        let lights = [0, 1].map(|_| Some(commands.spawn((Transform::from_translation(origin), Visibility::default(), DespawnOnExit(GameState::InGame))).id()));
         commands.spawn((
-            Tower { index: i, origin, arrow, tank, receptacle: at, tank_found, yaw, pitch, sweep: 0.0, state: State::Explore, lost: 0.0, warned: false, cone, cone_size, pivot, yaw0: yaw, head, was: None, corpses: Default::default() },
+            Tower {
+                index: i, origin, arrow, tank, receptacle: at, tank_found, yaw, pitch, sweep: 0.0, state: State::Explore, lost: 0.0, warned: false, cone, cone_size, pivot, yaw0: yaw, head, was: None, corpses: Default::default(),
+                lights,
+                shown: [None; 2],
+                turning: [false; 2],
+                still: [0.0; 2],
+                last: (yaw, pitch),
+            },
             Transform::from_translation(origin),
             DespawnOnExit(GameState::InGame),
         ));
@@ -287,7 +313,10 @@ fn towers(
     (stats, mut blinding, mut sfx, mut fx): (Res<PlayerStats>, ResMut<Blinding>, MessageWriter<PostEvent>, MessageWriter<SpawnEffect>),
     mut vm: Option<ResMut<crate::kismet::Vm>>,
     (mut devices, npcs): (ResMut<crate::security::Devices>, Query<(Entity, &crate::npc::Npc, &Transform), (Without<Player>, Without<crate::props::Prop>, Without<Tower>)>),
+    (mut noise, mut rtpcs, mut tagged): (MessageWriter<crate::gameplay::Noise>, ResMut<crate::audio::Rtpcs>, Query<(&crate::particles::EffectTag, &mut crate::particles::ParticleEmitter)>),
 ) {
+    // (the motors' sound parameters: the fastest tower's)
+    let mut motor: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
     let Some(level) = level else { return };
     let Ok(ctx) = rapier.single() else { return };
     let dt = time.delta_secs() * tc.world_scale();
@@ -382,6 +411,48 @@ fn towers(
                 *v = want;
             }
         }
+        // its lamp's lights: lit or dark; red while alerted or firing
+        let alerted = powered && !matches!(t.state, State::Explore);
+        let want_fx: [&'static str; 2] = [if powered { "search_on" } else { "search_off" }, if alerted { "alert_on" } else { "alert_off" }];
+        for k in 0..2 {
+            let Some(carrier) = t.lights[k] else { continue };
+            if let Ok((mut lt, _)) = cones.get_mut(carrier) {
+                lt.translation = lamp;
+            }
+            let want = Some(want_fx[k]).filter(|n| d.fx.contains_key(*n));
+            if want != t.shown[k] {
+                for (tag, mut em) in &mut tagged {
+                    if tag.0 == carrier {
+                        em.stop();
+                    }
+                }
+                if let Some(sys) = want.and_then(|n| d.fx.get(n)) {
+                    fx.write(SpawnEffect { follow: Some(carrier), tag: Some(carrier), system: Some(*sys), secs: 1.0e6, ..SpawnEffect::at("", Vec3::ZERO) });
+                }
+                t.shown[k] = want;
+            }
+        }
+        // its motors: the tower turning, its light nodding, each sounding while it moves, its
+        // parameter with the speed (`m_SoundRotationRTPC` up to `m_fSoundRotationRTPCMax`)
+        if dt > 0.0 {
+            let speeds = [((t.yaw - t.last.0 + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI).abs() / dt, (t.pitch - t.last.1).abs() / dt];
+            let tops = [p("m_fStateMaxTowerRotSpeedDeg", 40.0).to_radians(), p("m_fStateMaxLightRotSpeedDeg", 40.0).to_radians()];
+            for (k, (start, stop, rtpc, top)) in [("m_pSoundStartRotation", "m_pSoundStopRotation", "rtpc_tower", "m_fSoundRotationRTPCMax"), ("m_pSoundStartRotationSpot", "m_pSoundStopRotationSpot", "rtpc_spot", "m_fSoundRotationRTPCMaxSpot")].into_iter().enumerate() {
+                // (a motor stops once it has been still a moment: the sweep's nod slows at its ends)
+                t.still[k] = if speeds[k] > 0.03 { 0.0 } else { t.still[k] + dt };
+                let moving = powered && t.still[k] < 0.4;
+                if moving != t.turning[k] {
+                    sound_at(&mut sfx, d, if moving { start } else { stop }, t.pivot);
+                    t.turning[k] = moving;
+                }
+                if let Some(name) = d.sounds.get(rtpc) {
+                    let v = if moving { (speeds[k] / tops[k].max(1e-3)).min(1.0) * p(top, 10.0) } else { 0.0 };
+                    let e = motor.entry(name.clone()).or_insert(0.0);
+                    *e = e.max(v);
+                }
+            }
+        }
+        t.last = (t.yaw, t.pitch);
         // the scripts told (`DisSeqEvent_WatchTower`): put out of action or back (its tank out,
         // the scripts' switch: "Deactivated", "Activated"), rewired ("Hacked")
         if dt > 0.0 {
@@ -468,12 +539,30 @@ fn towers(
         };
         if dt > 0.0 { match t.state {
             State::Explore => {
-                // the sweep: round the tower, the beam nodding between its angles
-                t.sweep += dt;
-                t.yaw += tower_speed * 0.5 * dt;
-                let (hi, lo) = (p("m_fStateLightHighestRotDeg", 60.0).to_radians(), p("m_fStateLightLowestRotDeg", 70.0).to_radians());
-                let want = hi + (lo - hi) * (0.5 + 0.5 * (t.sweep * 0.6).sin());
-                t.pitch = turn(t.pitch, want, light_speed * dt);
+                // one of its own who sees him (`m_AllyAttentionLevelToTrack`): the light turned
+                // on where they see him (0x00A3C370)
+                let level = p("ally_level", 4.0) as u8;
+                let tracked = npcs
+                    .iter()
+                    .filter(|(_, n, _)| !hacked && !n.is_down() && n.attn_level >= level && d.friendly.iter().any(|f| *f == n.faction))
+                    .filter_map(|(_, n, nt)| n.last_seen.map(|at| (nt.translation.distance(lamp), at)))
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, at)| at);
+                if let Some(at) = tracked {
+                    let flat = (at - lamp).with_y(0.0);
+                    if flat.length() > 0.1 {
+                        t.yaw = turn(t.yaw, (-flat.x).atan2(-flat.z), tower_speed * dt);
+                    }
+                    let down = (at - lamp).normalize_or(Vec3::NEG_Y);
+                    t.pitch = turn(t.pitch, down.dot(Vec3::NEG_Y).clamp(-1.0, 1.0).acos(), light_speed * dt);
+                } else {
+                    // the sweep: round the tower, the beam nodding between its angles
+                    t.sweep += dt;
+                    t.yaw += tower_speed * 0.5 * dt;
+                    let (hi, lo) = (p("m_fStateLightHighestRotDeg", 60.0).to_radians(), p("m_fStateLightLowestRotDeg", 70.0).to_radians());
+                    let want = hi + (lo - hi) * (0.5 + 0.5 * (t.sweep * 0.6).sin());
+                    t.pitch = turn(t.pitch, want, light_speed * dt);
+                }
                 if sees {
                     if std::env::var("DH_TOWER_LOG").is_ok() {
                         info!("watch tower {}: alerted", d.actor);
@@ -534,6 +623,8 @@ fn towers(
                     fx.write(SpawnEffect { follow: Some(arrow), system: Some(trail), secs: 6.0, ..SpawnEffect::at("", Vec3::ZERO) });
                 }
                 sound(&mut sfx, "fly", arrow_at);
+                // (a watch tower's attack, heard about it: `m_AINoiseLoudness`)
+                noise.write(crate::gameplay::Noise { pos: lamp, radius: p("noise_m", 12.0), kind: crate::gameplay::NoiseKind::Danger });
                 if std::env::var("DH_TOWER_LOG").is_ok() {
                     info!("watch tower {}: fires at {:.1}", d.actor, pt.translation);
                 }
@@ -558,11 +649,21 @@ fn towers(
             ct.scale = Vec3::new(spot / t.cone_size.x.max(0.01), hit / t.cone_size.y, spot / t.cone_size.z.max(0.01));
         }
     }
+    for (name, v) in motor {
+        rtpcs.set(&name, v);
+    }
     if blind > 0.0 && std::env::var("DH_TOWER_LOG").is_ok() {
         info!("watch tower: blinding {blind:.2}");
     }
     // (eyes adjust)
     blinding.0 = if blind > blinding.0 { blind } else { (blinding.0 - dt * 0.8).max(blind) };
+}
+
+/// One of a tower's sounds, where it stands.
+fn sound_at(sfx: &mut MessageWriter<PostEvent>, d: &dhcook::format::Security, key: &str, at: Vec3) {
+    if let Some(s) = d.sounds.get(key) {
+        sfx.write(PostEvent::named(s, Some(at)));
+    }
 }
 
 /// A pseudo-random number in -1..1 (the shots' spread).
@@ -627,7 +728,7 @@ mod projectile_tests {
             .init_resource::<Assets<Mesh>>().init_resource::<crate::gameplay::TimeControl>()
             .init_resource::<PlayerStats>().init_resource::<Blinding>().init_resource::<crate::security::Devices>()
             .init_resource::<TowerRestore>()
-            .add_message::<PostEvent>().add_message::<SpawnEffect>()
+            .add_message::<PostEvent>().add_message::<SpawnEffect>().add_message::<crate::gameplay::Noise>().init_resource::<crate::audio::Rtpcs>()
             .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
             .insert_resource(LevelInfo { scene: dhcook::format::Scene { security: vec![dhcook::format::Security::default()], ..default() } })
             .add_systems(Last, (restore_towers, towers).chain());
@@ -642,7 +743,8 @@ mod projectile_tests {
             tank: None, receptacle: None, tank_found: true, yaw: 0.0, pitch: 0.0,
             sweep: 0.0, state: State::Attack(0.0, 3), lost: 0.0, warned: false,
             cone: None, cone_size: Vec3::ONE, pivot: Vec3::ZERO, yaw0: 0.0, head: vec![],
-            was: None, corpses: Default::default(),
+            was: None, corpses: Default::default(), lights: [None; 2], shown: [None; 2],
+            turning: [false; 2], still: [0.0; 2], last: (0.0, 0.0),
         }).id();
         app.world_mut().resource_mut::<crate::gameplay::TimeControl>().bend_remaining = 10.0;
         let original = serde_json::to_string(&vec![TowerSave::capture(app.world().get::<Tower>(tower).unwrap())]).unwrap();
