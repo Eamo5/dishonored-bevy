@@ -882,7 +882,7 @@ pub fn use_focus(
             }
             used.write(Interaction::Door { instance: li.index, opened: true, cw: door.dir > 0.0 });
         }
-        noise.write(Noise { pos: gt.translation(), radius: 5.0, kind: NoiseKind::Anomaly });
+        noise.write(Noise { corvo: true, pos: gt.translation(), radius: 5.0, kind: NoiseKind::Anomaly });
     }
 }
 

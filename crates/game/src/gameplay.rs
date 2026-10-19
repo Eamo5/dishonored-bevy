@@ -47,6 +47,8 @@ pub struct Noise {
     pub pos: Vec3,
     pub radius: f32,
     pub kind: NoiseKind,
+    /// Corvo made it (its instigator): it sets the search's proxy on him (`crumbs`)
+    pub corvo: bool,
 }
 
 /// What a noise is to those who hear it (`EAINoiseContext` as their attention takes it): an

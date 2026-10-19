@@ -261,7 +261,7 @@ fn scripted_shots(
         }
         let hit = rand::random::<f32>() < q.4;
         shots.write(crate::npc::NpcShot { from, to: at, bow: sn.ranged >= 2, miss: !hit });
-        noise.write(crate::gameplay::Noise { pos: from, radius: 40.0, kind: crate::gameplay::NoiseKind::Danger });
+        noise.write(crate::gameplay::Noise { corvo: false, pos: from, radius: 40.0, kind: crate::gameplay::NoiseKind::Danger });
         if hit {
             // (the pistol's 20; a character's bullet kills another outright:
             // `m_bInstaDeath_NonPlayerToNPC`)
@@ -493,7 +493,7 @@ fn apply_ai_fx(
             AiFx::Noise { maker, at, loudness, kind } => {
                 let radius = data.0.noise_loudness.get(&loudness).copied().unwrap_or(5.0);
                 if let Some(pos) = at.iter().chain(maker.iter()).find_map(|v| place(v)) {
-                    noise.write(crate::gameplay::Noise { pos, radius, kind });
+                    noise.write(crate::gameplay::Noise { corvo: false, pos, radius, kind });
                 }
             }
             AiFx::Distract { targets, to } => {

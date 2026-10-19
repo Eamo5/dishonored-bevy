@@ -839,7 +839,7 @@ fn prop_impacts(
                     fx.write(SpawnEffect { system: Some(ps), ..SpawnEffect::at("", at) });
                 }
                 if im.noise > 0.0 {
-                    noise.write(Noise { pos: at, radius: im.noise, kind: if im.threatening { NoiseKind::Threatening } else { NoiseKind::Anomaly } });
+                    noise.write(Noise { corvo: prop.thrown, pos: at, radius: im.noise, kind: if im.threatening { NoiseKind::Threatening } else { NoiseKind::Anomaly } });
                 }
             }
         }
@@ -860,7 +860,7 @@ fn prop_impacts(
         if let (Some((ne, _)), true) = (body_hit, prop.thrown) {
             stagger.write(NpcStagger { npc: ne, secs: 0.6, parried: false });
             npc_hits.write(crate::gameplay::NpcHit { npc: ne, damage: m.damage, kind: crate::gameplay::HitKind::Impact, from: at });
-            noise.write(Noise { pos: at, radius: 6.0, kind: NoiseKind::Threatening });
+            noise.write(Noise { corvo: true, pos: at, radius: 6.0, kind: NoiseKind::Threatening });
         }
         // (settling as the level starts breaks nothing)
         let breaking = if prop.thrown { m.break_speed } else if prop.quiet > 0.0 && prop.settling { f32::INFINITY } else { m.break_speed_drop };
@@ -916,7 +916,7 @@ pub fn break_pieces(commands: &mut Commands, assets: &GameAssets, b: &dhcook::fo
         sfx.write(PostEvent::named(&b.sound, Some(at)));
     }
     if b.noise > 0.0 {
-        noise.write(Noise { pos: at, radius: b.noise, kind: if b.threatening { NoiseKind::Threatening } else { NoiseKind::Anomaly } });
+        noise.write(Noise { corvo: false, pos: at, radius: b.noise, kind: if b.threatening { NoiseKind::Threatening } else { NoiseKind::Anomaly } });
     }
     if let Some(ps) = b.particle {
         fx.write(SpawnEffect { system: Some(ps), ..SpawnEffect::at("", at + t.rotation * Vec3::from(b.particle_offset)) });

@@ -1497,13 +1497,13 @@ fn use_power(
                     sfx.write(PostEvent::named("Imp_Bullet_on_Body", Some(at)));
                 } else {
                     sfx.write(PostEvent::named(&format!("Imp_Bullet_on_{}", impact_surface(surface)), Some(at)));
-                    noise.write(Noise { pos: at, radius: 30.0, kind: NoiseKind::Danger });
+                    noise.write(Noise { corvo: true, pos: at, radius: 30.0, kind: NoiseKind::Danger });
                 }
                 if npcs.get(hit).is_err() {
                     world_hits.write(WorldDamage::player(Reach::Hit { collider: hit, at }, attrs.bullet.damage(toi, false, false), crate::worlddamage::bullet_type(toi, &attrs)));
                 }
             }
-            noise.write(Noise { pos: pt.translation, radius: 60.0, kind: NoiseKind::Danger });
+            noise.write(Noise { corvo: true, pos: pt.translation, radius: 60.0, kind: NoiseKind::Danger });
         }
     }
     if cast {
@@ -1644,7 +1644,7 @@ fn windblast_gusts(
             if turned > 0 {
                 info!("windblast turns {turned} projectiles back");
             }
-            noise.write(Noise { pos: g.from, radius: 15.0, kind: NoiseKind::Danger });
+            noise.write(Noise { corvo: true, pos: g.from, radius: 15.0, kind: NoiseKind::Danger });
         }
         let front = (g.t - WINDBLAST_NOTIFY) * speed;
         // (its puffs where the front has reached the world: `Windblast_GroundImpact_01`, its Y

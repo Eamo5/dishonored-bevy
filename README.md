@@ -1353,6 +1353,34 @@ are in the settings file, `pad_binding_set` 0-3):
     take no notice of any.
   - Corvo unseen (in a host, or `notarget` in tests) only stops them seeing him. Bodies are
     found as ever.
+- **Corvo seen carrying a body** (`npc.rs`; 0x00B304D0 and 0x00B42610..0x00B42730, decoded from
+  `Dishonored.exe` for this rewrite):
+  - Coming into a guard's sight with a body on his shoulder makes it suspect
+    (`m_bEscalateSuspicionIfSeeAnyCorpse`: its suspecting profile until a search ends).
+  - Civilians with `m_bBecomeEnemyIfSeeCorpseCarry` take him for an enemy then, unless on his
+    side. A line of sight is enough.
+  - One neither his enemy nor of his side that comes to bust him with a body on his shoulder
+    (the guests and guards of Lady Boyle's party, say) turns on him if the body is of its side,
+    or a neutral's it protects (`m_CarryAllyCorpseResponse`, Hostile). A neutral's or an enemy's
+    body it only remarks on (`DDH_NOTICE_CARRYING_*_CORPSE`; none of the shipped voices has
+    lines for them).
+- **The search follows Corvo's crumbs** (`crumbs.rs`; `DishonoredSearchCrumbsComponent`, decoded
+  from `Dishonored.exe` for this rewrite):
+  - One proxy for where Corvo might be, shared by every searcher. Every noise he makes and every
+    tick of a fight with him set it on him, held there a second. Seeing him doesn't.
+  - Every 0.8 s it wanders on from there as he might have gone: the way it last went, turned up
+    to 60 degrees, 5-10 m a step, stopped by the walls. After a long step it heads straight at
+    him one time in four (`m_fChanceOfPsychicSearch`).
+  - Ahead of it lie up to 25 crumbs, 8 m apart, each lasting 150 s.
+  - A searcher goes to a crumb taken at random within its tether, which no other searcher then
+    takes. With none left, it heads 5-10 m back toward its post. The search has no timer: it
+    ends when its attention falls below the Investigate stop (12 s unsuspecting, 27 s
+    suspecting, 47 s after a fight).
+  - An investigation it can't finish: where Corvo is out of reach more than 5 m above, it stares
+    up there (`StareAtUnreachable`), 5 s while he stays unseen, ended once he is 5 m from that
+    spot. Otherwise it stands 0.5-1 s, then searches on.
+  - The watch points and the random spots about where he was lost that it went to before are
+    gone. `DH_SEARCH_LOG` logs the crumbs and the searchers' picks.
 - **Assassinations**: attacking someone unaware of Corvo (from behind, or anyone who hasn't
   noticed him) plays the original paired clips by the side he takes them from — front, back,
   left or right; slow and deliberate while sneaking, quick otherwise, and their own variants

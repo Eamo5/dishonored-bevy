@@ -1097,7 +1097,7 @@ fn pylons(
                             }
                         }
                     }
-                    noise.write(Noise { pos: base, radius: 20.0, kind: NoiseKind::Threatening });
+                    noise.write(Noise { corvo: false, pos: base, radius: 20.0, kind: NoiseKind::Threatening });
                     gizmos.line(base + Vec3::Y * d.def.height * 0.9, at, Color::srgb(0.6, 0.85, 1.0));
                     Phase::Firing(0.0)
                 } else {
@@ -1156,7 +1156,7 @@ fn alarms(
                 // he was
                 let delay = d.def.params.get("m_fAlarmRingDelayBeforeAINoise").copied().unwrap_or(2.5);
                 if t < delay && t + dt >= delay {
-                    noise.write(Noise { pos, radius: 60.0, kind: NoiseKind::Alarm });
+                    noise.write(Noise { corvo: false, pos, radius: 60.0, kind: NoiseKind::Alarm });
                     for (_, mut n, nt) in &mut npcs {
                         if n.hostile() && !n.is_down() && nt.translation.distance(pos) < 60.0 && n.mode != Mode::Combat && n.alert == Alert::Combat {
                             n.last_seen = Some(ppos);

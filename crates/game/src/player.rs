@@ -662,7 +662,7 @@ fn player_move(
                     info!("landing: {v:.1} m/s after {:.2} s (jumped {}, sneaking {}): heard {radius:?} m", p.air_time, fall.jumped, fall.sneaking);
                 }
                 if let Some(radius) = radius {
-                    noise.write(Noise { pos: t.translation, radius, kind: NoiseKind::Anomaly });
+                    noise.write(Noise { corvo: true, pos: t.translation, radius, kind: NoiseKind::Anomaly });
                 }
             }
             // the original's: none up to `MaxSpeedBeforeFallingDamage`, all of his health at
@@ -880,7 +880,7 @@ fn player_move(
                 6.0
             };
             if radius > 0.0 {
-                noise.write(Noise { pos: t.translation, radius, kind: NoiseKind::Anomaly });
+                noise.write(Noise { corvo: true, pos: t.translation, radius, kind: NoiseKind::Anomaly });
             }
         }
     }

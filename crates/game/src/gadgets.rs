@@ -920,7 +920,7 @@ fn razors(
                 // `m_NonNPCDamage`'s 5 and the cut, as roshan's r614/blink research decoded it)
                 sfx.write(PostEvent::named("Snd_Spring_Razor_Shot", Some(p)));
                 fx.write(SpawnEffect { rot: t.rotation, ..SpawnEffect::at("springrazor", p) });
-                noise.write(Noise { pos: p, radius: 15.0, kind: NoiseKind::Threatening });
+                noise.write(Noise { corvo: false, pos: p, radius: 15.0, kind: NoiseKind::Threatening });
                 if let Ok(pt) = player.single() {
                     if inside(pt.translation, 2.5 * bonus) && seen(pt.translation) && !stats.dead {
                         stats.take_damage(50.0);
@@ -981,7 +981,7 @@ fn explode(
             crate::rumble::play_near("contact.Explosion.DisContactType.radius", b.at);
         }
         fx.write(SpawnEffect::at(b.effect, b.at));
-        noise.write(Noise { pos: b.at, radius: 25.0, kind: NoiseKind::Threatening });
+        noise.write(Noise { corvo: !matches!(b.kind, HitKind::EnemyExplosion | HitKind::ByOthers), pos: b.at, radius: 25.0, kind: NoiseKind::Threatening });
         let scale = |d: f32| if d <= b.full { 1.0 } else { (1.0 - (d - b.full) / (b.radius - b.full).max(0.1)).max(0.0) };
         // a blast sets off the Spring Razors it reaches (`m_fDamageReactionTime` 0.75 s)
         for (mut r, rt) in &mut razors {
@@ -1094,7 +1094,7 @@ fn mines(
         fx.write(SpawnEffect { follow: Some(ne), secs: 1.0, ..SpawnEffect::at("electrified", Vec3::ZERO) });
         hits.write(NpcHit { npc: ne, damage: v("m_DamageToPawns", 50.0), kind: if kind == MineKind::Stun { HitKind::StunMine } else { HitKind::ArcMine }, from: muzzle });
         // (`m_ShootingNoiseLoudness`: 2 m)
-        noise.write(Noise { pos: muzzle, radius: 2.0, kind: NoiseKind::Anomaly });
+        noise.write(Noise { corvo: false, pos: muzzle, radius: 2.0, kind: NoiseKind::Anomaly });
         m.shots += 1;
         m.wait = v("m_fDelayBetweenShots", 1.0);
         if m.shots >= v("m_NumShots", 2.0).max(1.0) as u32 {
@@ -1102,7 +1102,7 @@ fn mines(
             sfx.write(PostEvent::named("Snd_ArcMine_Idle_Stop", Some(at)));
             sfx.write(PostEvent::named("Snd_ArcMine_Destroy_Start", Some(at)));
             fx.write(SpawnEffect { rot: t.rotation, ..SpawnEffect::at(if kind == MineKind::Stun { "stunmine_break" } else { "arcmine_break" }, at) });
-            noise.write(Noise { pos: at, radius: 20.0, kind: NoiseKind::Threatening });
+            noise.write(Noise { corvo: false, pos: at, radius: 20.0, kind: NoiseKind::Threatening });
             commands.entity(e).despawn();
         }
     }
@@ -1198,7 +1198,7 @@ fn choke_clouds(
         sfx.write(PostEvent::named("Snd_DLC06_ChokeDust", Some(p.at)));
         fx.write(SpawnEffect { secs: p.secs + 2.0, ..SpawnEffect::at("chokedust", p.at) });
         rats.write(crate::swarm::KillRats { at: p.at, radius: data.pawn("chokedust.explosion.m_fRatKillRadius", 200.0) * 0.01, by_player: true, source: p.at });
-        noise.write(Noise { pos: p.at, radius: 10.0, kind: NoiseKind::Threatening });
+        noise.write(Noise { corvo: true, pos: p.at, radius: 10.0, kind: NoiseKind::Threatening });
         commands.spawn((ChokeCloud { radius: p.radius, left: p.secs, had: Vec::new() }, Transform::from_translation(p.at), DespawnOnExit(GameState::InGame)));
     }
     let dt = time.delta_secs() * tc.world_scale();

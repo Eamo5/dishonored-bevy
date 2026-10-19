@@ -106,7 +106,7 @@ fn summon(
             Summoned { foe: r.target, fresh: true, idle: 0.0 },
         ));
         fx.write(crate::particles::SpawnEffect::at("summon_trigger", r.at));
-        noise.write(Noise { pos: r.at, radius: 4.0, kind: NoiseKind::Threatening });
+        noise.write(Noise { corvo: false, pos: r.at, radius: 4.0, kind: NoiseKind::Threatening });
         if std::env::var_os("DH_SUMMON_LOG").is_some() {
             info!("summon: assassin (level {}) at {:.1}{}", r.level, r.at, if r.target.is_some() { ", for an enemy" } else { "" });
         }

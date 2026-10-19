@@ -142,7 +142,7 @@ fn lock_blades(v: &mut Versus, e: Entity, npc: &mut Npc, at: Vec3, sfx: &mut Mes
     npc.gesture(4);
     info!("sword lock with {}", npc.name);
     sfx.write(crate::audio::PostEvent::named("Snd_Imp_Sword_vs_Sword_ak", Some(at)));
-    noise.write(Noise { pos: at, radius: 8.0, kind: NoiseKind::Threatening });
+    noise.write(Noise { corvo: true, pos: at, radius: 8.0, kind: NoiseKind::Threatening });
 }
 
 /// The lock under way: Corvo's presses, then how it ends.
@@ -874,7 +874,7 @@ fn sword_input(
                         npc.parries = 0;
                         npc.stagger = 0.9;
                     }
-                    noise.write(Noise { pos: nt.translation, radius: 8.0, kind: NoiseKind::Threatening });
+                    noise.write(Noise { corvo: true, pos: nt.translation, radius: 8.0, kind: NoiseKind::Threatening });
                     sfx.write(crate::audio::PostEvent::named("Snd_Imp_Sword_vs_Sword_ak", Some(nt.translation + Vec3::Y)));
                     // (the blades' sparks where they meet, `Dis_ContactSystem`'s sword on sword)
                     if let Some(level) = level.as_ref() {
@@ -939,7 +939,7 @@ fn sword_input(
                         if let Some(sound) = sword_impact_sound(&level.scene, what) {
                             sfx.write(crate::audio::PostEvent::named(sound, Some(at)));
                         }
-                        noise.write(Noise { pos: at, radius: 8.0, kind: NoiseKind::Threatening });
+                        noise.write(Noise { corvo: true, pos: at, radius: 8.0, kind: NoiseKind::Threatening });
                         shake.write(crate::player::ShakeCamera(CAM_SHAKE_ON_HIT_ENV));
                         sword.bounce_seq += 1;
                         sword.bounce_wall = true;
@@ -1318,7 +1318,7 @@ fn receive_hits(
             stats.hit_from = Some(h.from);
             stats.blow = (stats.blow.0.wrapping_add(1), side_of(h.from, pt.translation, p.yaw));
             sfx.write(PostEvent::named("Snd_Imp_Fist_on_Body_cue_ak", None));
-            noise.write(Noise { pos: pt.translation, radius: 15.0, kind: NoiseKind::Help });
+            noise.write(Noise { corvo: false, pos: pt.translation, radius: 15.0, kind: NoiseKind::Help });
             continue;
         }
         let fwd = Quat::from_rotation_y(p.yaw) * Vec3::NEG_Z;
@@ -1327,7 +1327,7 @@ fn receive_hits(
         // is a block begun within `m_fTapForPerfectParryWindow` (0.2 s) of the blow
         let facing = fwd.dot(to_npc) > 50f32.to_radians().cos();
         if sword.blocking && facing && !h.unblockable {
-            noise.write(Noise { pos: pt.translation, radius: 8.0, kind: NoiseKind::Threatening });
+            noise.write(Noise { corvo: true, pos: pt.translation, radius: 8.0, kind: NoiseKind::Threatening });
             shake.write(crate::player::ShakeCamera(h.damage * CAM_SHAKE_BLOCK_SCALE));
             sfx.write(PostEvent::named("Snd_Imp_Sword_vs_Sword_ak", None));
             crate::rumble::play("contact.Sword.Sword.struck");

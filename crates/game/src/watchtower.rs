@@ -654,7 +654,7 @@ fn towers(
                 }
                 sound(&mut sfx, "fly", arrow_at);
                 // (a watch tower's attack, heard about it: `m_AINoiseLoudness`)
-                noise.write(crate::gameplay::Noise { pos: lamp, radius: p("noise_m", 12.0), kind: crate::gameplay::NoiseKind::Danger });
+                noise.write(crate::gameplay::Noise { corvo: false, pos: lamp, radius: p("noise_m", 12.0), kind: crate::gameplay::NoiseKind::Danger });
                 if std::env::var("DH_TOWER_LOG").is_ok() {
                     info!("watch tower {}: fires at {:.1}", d.actor, pt.translation);
                 }

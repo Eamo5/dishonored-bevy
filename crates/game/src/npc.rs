@@ -314,6 +314,9 @@ pub struct Npc {
     pub magic_pending: Option<(f32, bool)>,
     pub magic_react: Option<(f32, bool)>,
     pub magic_bark: Option<bool>,
+    /// what it says this frame of a body Corvo carries (busted, not his enemy: the body one of
+    /// its side's 0, neutral to it 1, its enemy's 2)
+    pub carry_bark: Option<u8>,
     /// Corvo dealt its last blow (else another character or the world did)
     pub hit_by_player: bool,
     /// its panic behaviour's last-survivor count (`DisAIBrainProcessPanic.m_KillQueue`: when
@@ -390,10 +393,9 @@ pub struct Npc {
     /// back off; then the seconds left getting up again
     pub caught: Option<(f32, f32)>,
     pub rising: f32,
-    /// a watch point it checks while searching: the point and seconds left watching it; those
-    /// checked this search
-    pub watch: Option<(usize, f32)>,
-    pub watched: Vec<usize>,
+    /// an investigation it couldn't finish: seconds left standing, and whether it stares up at
+    /// where Corvo is out of reach (`StareAtUnreachable`)
+    pub hold: Option<(f32, bool)>,
     /// Corvo trespassing in its forbidden zone: it takes him for an enemy (what it thought
     /// before)
     pub trespass: Option<bool>,
@@ -2238,6 +2240,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         magic_pending: None,
         magic_react: None,
         magic_bark: None,
+        carry_bark: None,
         hit_by_player: false,
         kill_queue: Vec::new(),
         panics: 0,
@@ -2278,8 +2281,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         plague_escape: None,
         robbed: None,
         rising: 0.0,
-        watch: None,
-        watched: Vec::new(),
+        hold: None,
         trespass: None,
         ambush_at: None,
         protect_neutrals: None,
@@ -2782,14 +2784,14 @@ fn npc_hits(
                     npc.set_mode(Mode::Unconscious);
                 }
                 stats.knockouts += 1;
-                noise.write(Noise { pos, radius: 3.0, kind: NoiseKind::Anomaly });
+                noise.write(Noise { corvo: false, pos, radius: 3.0, kind: NoiseKind::Anomaly });
             }
             // a stun mine's lightning: asleep, falling limp where they stood
             HitKind::StunMine => {
                 npc.set_mode(Mode::Unconscious);
                 stats.knockouts += 1;
                 commands.entity(e).try_insert(crate::ragdoll::GoLimp::now((pos - h.from).with_y(0.0).normalize_or_zero() * 0.5, None));
-                noise.write(Noise { pos, radius: 3.0, kind: NoiseKind::Anomaly });
+                noise.write(Noise { corvo: false, pos, radius: 3.0, kind: NoiseKind::Anomaly });
             }
             // chokedust: choking where they stand a while, unharmed; then after whoever threw it
             HitKind::Chokedust => {
@@ -2812,7 +2814,7 @@ fn npc_hits(
                 commands.entity(e).try_insert((Ashes(-0.9), Immolated));
                 sfx.write(crate::audio::PostEvent::named("Amb_Fire_Alcohol_Immolation", Some(pos + Vec3::Y)));
                 fx.write(crate::particles::SpawnEffect { follow: Some(e), secs: 1.6, ..crate::particles::SpawnEffect::at("immolation", Vec3::ZERO) });
-                noise.write(Noise { pos, radius: 14.0, kind: NoiseKind::Danger });
+                noise.write(Noise { corvo: false, pos, radius: 14.0, kind: NoiseKind::Danger });
             }
             HitKind::Assassinate | HitKind::Fatality | HitKind::WallOfLight => {
                 npc.health = 0.0;
@@ -2822,7 +2824,7 @@ fn npc_hits(
                 if h.kind == HitKind::WallOfLight {
                     commands.entity(e).try_insert(Electrocuted::new(true));
                 }
-                noise.write(Noise { pos, radius: 3.0, kind: NoiseKind::DeathRattle });
+                noise.write(Noise { corvo: false, pos, radius: 3.0, kind: NoiseKind::DeathRattle });
             }
             HitKind::ByOthers | HitKind::EnemyExplosion => {
                 // another NPC's blow (or the level's rats): it fights back
@@ -2834,7 +2836,7 @@ fn npc_hits(
                 if npc.health <= 0.0 {
                     npc.set_mode(Mode::Dead);
                 }
-                noise.write(Noise { pos, radius: 8.0, kind: NoiseKind::Threatening });
+                noise.write(Noise { corvo: false, pos, radius: 8.0, kind: NoiseKind::Threatening });
             }
             _ => {
                 npc.health = (npc.health - h.damage).max(npc.min_health);
@@ -2869,10 +2871,10 @@ fn npc_hits(
                 if npc.health <= 0.0 {
                     npc.set_mode(Mode::Dead);
                     stats.killed(&npc.pawn, !npc.hostile());
-                    noise.write(Noise { pos, radius: 8.0, kind: NoiseKind::Threatening });
-                    noise.write(Noise { pos, radius: 3.0, kind: NoiseKind::DeathRattle });
+                    noise.write(Noise { corvo: false, pos, radius: 8.0, kind: NoiseKind::Threatening });
+                    noise.write(Noise { corvo: false, pos, radius: 3.0, kind: NoiseKind::DeathRattle });
                 } else {
-                    noise.write(Noise { pos, radius: 8.0, kind: NoiseKind::Threatening });
+                    noise.write(Noise { corvo: false, pos, radius: 8.0, kind: NoiseKind::Threatening });
                 }
             }
         }
@@ -3122,6 +3124,18 @@ pub struct BodyLight(pub f32, f32);
 #[derive(Resource, Default)]
 pub struct HandledBodies(pub std::collections::HashSet<Entity>);
 
+/// A character's side's stance to another's (by their factions): 1 its own or an ally, 2 an
+/// enemy, 0 neutral.
+fn relation(scene: Option<&dhcook::format::Scene>, me: &str, them: &str) -> u8 {
+    if !me.is_empty() && (me == them || scene.and_then(|s| s.allies.get(me)).is_some_and(|a| a.iter().any(|f| f == them))) {
+        1
+    } else if scene.and_then(|s| s.factions.get(me)).is_some_and(|en| en.iter().any(|f| f == them)) {
+        2
+    } else {
+        0
+    }
+}
+
 /// The marks a body is seen at (`Twk_Attn_Simple_*`): a body, a death as it happens.
 const SEE_CORPSE: f32 = 0.35;
 const SEE_DEATH: f32 = 0.025;
@@ -3230,7 +3244,7 @@ pub(crate) fn npc_perception(
     let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
     // inside a host, Corvo is the host
     // (`DH_NOTARGET`, `notarget`: unseen, for watching the characters in tests)
-    let hidden = possession.host.is_some() || std::env::var("DH_NOTARGET").is_ok() || notarget.is_some();
+    let hidden = possession.host.is_some() || notarget.is_some();
     // (no time at all: paused)
     if dt_world <= 0.0 && dt_own <= 0.0 {
         return;
@@ -3257,6 +3271,8 @@ pub(crate) fn npc_perception(
         .filter(|(e, n, _)| n.is_down() && !n.corpse && carry.body != Some(*e))
         .map(|(e, n, t)| (e, t.translation, body_lights.get(e).map_or(0.0, |l| l.0), n.faction.clone(), handled.0.contains(&e)))
         .collect();
+    // (the body Corvo carries: whose side it was on)
+    let carried: Option<String> = carry.body.and_then(|b| npcs.get(b).ok()).map(|(_, n, _)| n.faction.clone());
     // (deaths just now: the bodies of the last two seconds)
     let fresh: Vec<(Entity, Vec3)> = npcs.iter().filter(|(_, n, _)| n.mode == Mode::Dead && !n.corpse && n.corpse_age < 2.0).map(|(e, _, t)| (e, t.translation)).collect();
     // (for the civilians: the guards fighting, the others panicking)
@@ -3264,6 +3280,7 @@ pub(crate) fn npc_perception(
     let panicking: Vec<Vec3> = npcs.iter().filter(|(_, n, _)| n.mode == Mode::Flee && !n.fighter() && !n.is_down()).map(|(_, _, t)| t.translation).collect();
     let mut newly_detected = false;
     for (e, mut npc, t) in &mut npcs {
+        npc.carry_bark = None;
         if npc.is_down() || npc.kind == Kind::Story || npc.mode == Mode::Choked || stats.dead || Some(e) == possession.host || npc.blind {
             npc.sees_player = false;
             continue;
@@ -3325,6 +3342,24 @@ pub(crate) fn npc_perception(
                 dist = off.length();
             }
         }
+        // Corvo come into its sight carrying a body (0x00B304D0, decoded for this rewrite):
+        // it suspects (`m_bEscalateSuspicionIfSeeAnyCorpse`: its suspecting profile, held as a
+        // search's is), and those with `m_bBecomeEnemyIfSeeCorpseCarry` (the civilians) take him
+        // for an enemy unless on his side; its line of sight is enough
+        let scene = level.as_ref().map(|l| &l.scene);
+        let corvo_side = dhcook::format::is_player_faction(&npc.faction) || scene.and_then(|s| s.allies.get(&npc.faction)).is_some_and(|a| a.iter().any(|f| dhcook::format::is_player_faction(f)));
+        if visible && !npc.sees_player && carried.is_some() {
+            let flags = sight.map(|s| s.corpses).unwrap_or_default();
+            if flags.escalate && npc.hostile() && npc.alert == Alert::Unaware {
+                npc.alert = Alert::Suspicious;
+            }
+            if flags.enemy_if_carried && !npc.hostile() && !corvo_side {
+                npc.enemy = true;
+                if log {
+                    info!("{} sees Corvo carry a body: an enemy now", npc.name);
+                }
+            }
+        }
         npc.sees_player = visible;
         if visible {
             npc.last_seen = Some(pt.translation);
@@ -3354,6 +3389,24 @@ pub(crate) fn npc_perception(
             npc.attn_fill = (npc.awareness / att.levels[3][0].max(0.05)).clamp(0.0, 1.0);
             if log && npc.attn_level != was {
                 info!("attention: {} {:.2} level {} -> {} (sees {visible} at {:.1} m of {:.0}, vis {:.2})", npc.name, npc.awareness, was, npc.attn_level, dist.min(99.0), range, pvis.value);
+            }
+            // busted with a body on his shoulder, by one neither his enemy nor of his side
+            // (`CarryingCorpseOrBodyPart`, 0x00B42610..0x00B42730): a body of its side, or a
+            // neutral's it protects, makes him its enemy (`m_CarryAllyCorpseResponse`, Hostile);
+            // a neutral's or an enemy's it only remarks on (Harmless)
+            if npc.attn_level >= 4 && was < 4 && !npc.hostile() && !corvo_side {
+                if let Some(victim) = &carried {
+                    let rel = relation(scene, &npc.faction, victim);
+                    let protects = sight.is_some_and(|s| s.protect_neutrals);
+                    let ally = rel == 1 || rel == 0 && protects;
+                    npc.carry_bark = Some(if ally { 0 } else if rel == 0 { 1 } else { 2 });
+                    if ally {
+                        npc.enemy = true;
+                    }
+                    if log {
+                        info!("{} sees Corvo carry a body ({victim}): {}", npc.name, if ally { "an enemy now" } else { "remarks on it" });
+                    }
+                }
             }
             if visible && npc.hostile() {
                 if npc.attn_level >= 4 && npc.alert != Alert::Combat {
@@ -3434,22 +3487,12 @@ pub(crate) fn npc_perception(
             // `m_bIgnoreAllCorpses`; the knocked out as the dead
             let flags = sight.map(|s| s.corpses).unwrap_or_default();
             let protects = sight.is_some_and(|s| s.protect_neutrals);
-            let relation = |victim: &str| -> u8 {
-                let scene = level.as_ref().map(|l| &l.scene);
-                if !npc.faction.is_empty() && (npc.faction == victim || scene.and_then(|s| s.allies.get(&npc.faction)).is_some_and(|a| a.iter().any(|f| f == victim))) {
-                    1
-                } else if scene.and_then(|s| s.factions.get(&npc.faction)).is_some_and(|en| en.iter().any(|f| f == victim)) {
-                    2
-                } else {
-                    0
-                }
-            };
             if !npc.saw_body && npc.alert != Alert::Combat && !flags.ignore {
                 for (body, b, light, faction, was_handled) in &bodies {
                     if npc.found_bodies.contains(body) || *was_handled && !flags.handled_too {
                         continue;
                     }
-                    let rel = relation(faction);
+                    let rel = relation(scene, &npc.faction, faction);
                     if !(rel == 1 || rel == 0 && protects) {
                         continue;
                     }
@@ -3658,13 +3701,14 @@ pub(crate) fn npc_brain(
         Local<f32>,
     ),
     (mut grenades, mut bottles, mut whiskey_fx, mut throws): (MessageWriter<crate::gadgets::NpcGrenade>, MessageWriter<crate::whiskey::NpcBottle>, MessageWriter<crate::particles::SpawnEffect>, MessageWriter<crate::thrown::NpcThrow>),
-    (finishing, mut finishers, mut tallboy_shots, devices, mut patrols, mut handled): (
+    (finishing, mut finishers, mut tallboy_shots, devices, mut patrols, mut handled, mut crumbs): (
         Query<(), With<FinisherClip>>,
         MessageWriter<NpcFinisher>,
         MessageWriter<crate::tallboy::TallboyShot>,
         Res<crate::security::Devices>,
         ResMut<crate::patrol::Patrols>,
         ResMut<HandledBodies>,
+        ResMut<crate::crumbs::Crumbs>,
     ),
 ) {
     let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
@@ -3828,7 +3872,7 @@ pub(crate) fn npc_brain(
                     if t_att < 0.55 && t_new >= 0.55 && d < 2.3 {
                         let damage = npc.arms.melee;
                         npc_hits.write(NpcHit { npc: npc.foe.unwrap(), damage, kind: HitKind::ByOthers, from: pos });
-                        noise.write(Noise { pos, radius: 8.0, kind: NoiseKind::Threatening });
+                        noise.write(Noise { corvo: false, pos, radius: 8.0, kind: NoiseKind::Threatening });
                     }
                     npc.attack_t = if t_new > 0.95 { None } else { Some(t_new) };
                 } else if d < 2.0 && npc.attack_cd <= 0.0 && npc.stagger <= 0.0 {
@@ -3991,7 +4035,13 @@ pub(crate) fn npc_brain(
             Mode::Investigate => {
                 let goal = npc.target.or(npc.last_seen).unwrap_or(npc.home);
                 npc.target = Some(goal);
-                if pos.distance(goal) < 1.6 || npc.mode_timer > 14.0 {
+                if pos.distance(goal) < 1.6 || npc.mode_timer > 14.0 || npc.stuck > 1.5 {
+                    // (not come to it, 0x00AFEB00: where Corvo is out of reach more than 5 m
+                    // above, it stares up there, `StareAtUnreachable`, 5 s at most; else it
+                    // stands a moment, 0.5-1 s; then it searches on)
+                    if pos.distance(goal) >= 1.6 {
+                        npc.hold = Some(if goal.y - pos.y > 5.0 { (5.0, true) } else { (0.5 + rand::random::<f32>() * 0.5, false) });
+                    }
                     // (come to a body it found: it looks it over, `Sword_CorpseCheck`, and from then
                     // on the others pass it by, `m_bCorpseHandled`)
                     if std::mem::take(&mut npc.body_check) && pos.distance(goal) < 1.6 {
@@ -4002,7 +4052,7 @@ pub(crate) fn npc_brain(
                             // those within the dark's sight, 10.8 m, with a clear line)
                             let eye = pos + Vec3::Y * 0.72;
                             for o in downed.iter().filter(|o| o.0 != b && o.1.distance(eye) < 10.8) {
-                                let ally = o.2 == npc.faction || level.as_ref().and_then(|l| l.scene.allies.get(&npc.faction)).is_some_and(|a| a.contains(&o.2));
+                                let ally = relation(level.as_ref().map(|l| &l.scene), &npc.faction, &o.2) == 1;
                                 let dir = (o.1 + Vec3::Y * 0.2 - eye).normalize_or_zero();
                                 if ally && ctx.cast_ray(eye, dir, o.1.distance(eye) - 0.3, true, wall_filter).is_none() {
                                     handled.0.insert(o.0);
@@ -4016,47 +4066,61 @@ pub(crate) fn npc_brain(
             Mode::Search => {
                 // the search lasts while its attention holds above the Investigate stop (out
                 // of sight it leaks: about 12 s unsuspecting, half a minute and more suspecting,
-                // as roshan's r614/blink research measured), its crumbs' worth at most
+                // as roshan's r614/blink research measured); it has no timer of its own, its
+                // crumbs never running out
                 let given_up = match level.as_ref().and_then(|l| attention_of(&npc, &l.scene)) {
-                    Some(a) => npc.mode_timer > 3.0 && (npc.awareness < a.levels[2][1] || npc.mode_timer > 40.0 + npc.watched.len() as f32 * 4.0),
-                    None => npc.mode_timer > 10.0 + (npc.alert == Alert::Combat) as u8 as f32 * 6.0 + npc.watched.len() as f32 * 4.0,
+                    Some(a) => npc.mode_timer > 3.0 && npc.awareness < a.levels[2][1],
+                    None => npc.mode_timer > 10.0 + (npc.alert == Alert::Combat) as u8 as f32 * 6.0,
                 };
                 if given_up {
                     npc.alert = Alert::Unaware;
                     npc.awareness = npc.awareness.min(0.2);
                     npc.saw_body = false;
-                    npc.watch = None;
-                    npc.watched.clear();
+                    npc.hold = None;
                     npc.set_mode(Mode::Return);
-                } else if let Some((w, left)) = npc.watch {
-                    // at a watch point: watching for its time, turning about
-                    let at = ai.watch_point(w).map(|p| Vec3::from(p.position)).unwrap_or(pos);
-                    if pos.distance(at) < 1.2 {
-                        npc.target = None;
-                        npc.yaw += dt * 0.8 * (left * 1.7).sin().signum();
-                        npc.watch = if left - dt <= 0.0 { None } else { Some((w, left - dt)) };
-                    } else if npc.stuck > 1.5 {
-                        npc.watch = None;
-                    } else {
-                        npc.target = Some(at);
+                } else if let Some((left, stare)) = npc.hold {
+                    // (an investigation it couldn't finish: standing a moment, or staring up at
+                    // where Corvo is out of reach, its time counted while he is unseen and
+                    // ended once he is 5 m from there, 0x00AF4C40 / 0x00AF4440)
+                    npc.target = None;
+                    let at = npc.last_seen.unwrap_or(pos);
+                    let to = (at - pos).with_y(0.0);
+                    if stare && to.length() > 0.1 {
+                        let want = (-to.x).atan2(-to.z);
+                        let turn = (want - npc.yaw + PI).rem_euclid(TAU) - PI;
+                        npc.yaw += turn.clamp(-4.0 * dt, 4.0 * dt);
                     }
-                } else if npc.target.map(|g| pos.distance(g) < 1.0).unwrap_or(true) || npc.stuck > 1.0 {
-                    let center = npc.last_seen.unwrap_or(pos);
-                    // last seen in a hideout: looked into from its access point; else the watch
-                    // points about where he was lost; else about there
-                    if let Some((at, _)) = ai.hideout_access(center).filter(|(at, _)| pos.distance(*at) > 1.2 && !npc.watched.contains(&usize::MAX)) {
-                        npc.watched.push(usize::MAX);
-                        npc.target = Some(at);
-                    } else if let Some(w) = ai.watch_near(center, 14.0, &npc.watched) {
-                        let p = ai.watch_point(w).cloned().unwrap_or_default();
-                        npc.watched.push(w);
-                        npc.watch = Some((w, p.time[0] + rand::random::<f32>() * (p.time[1] - p.time[0]).max(0.0)));
-                        npc.target = Some(Vec3::from(p.position));
+                    let left = if stare && npc.sees_player { left } else { left - dt };
+                    let gone = stare && ppos.distance(at) > 5.0;
+                    npc.hold = (left > 0.0 && !gone).then_some((left, stare));
+                } else if npc.target.map(|g| pos.distance(g) < 1.5).unwrap_or(true) || npc.stuck > 1.0 {
+                    // tracking him (`TrackTarget`, 0x00B2EB20): on to a crumb Corvo's search
+                    // proxy laid that no other searcher has taken, within its tether; with none,
+                    // 5-10 m back the way of its post. A way that fails: the first of 8
+                    // directions 45 degrees apart (from a random one) open for 2 m, up to 10 m
+                    // (a point within reach of a step isn't one: it would be come to at once)
+                    let open = |dir: Vec3, len: f32| {
+                        let reach = ctx.cast_ray(pos, dir, len, true, wall_filter).map_or(len, |(_, toi)| toi - 0.5);
+                        (reach > 2.0).then(|| pos + dir * reach)
+                    };
+                    let around = || {
+                        let start = rand::random::<f32>() * TAU;
+                        (0..8).find_map(|k| open(Quat::from_rotation_y(start + k as f32 * PI / 4.0) * Vec3::NEG_Z, 10.0))
+                    };
+                    let next = if npc.stuck > 1.0 {
+                        around()
                     } else {
-                        let a = rand::random::<f32>() * TAU;
-                        let r = 2.0 + rand::random::<f32>() * 4.0;
-                        npc.target = Some(center + Vec3::new(a.cos() * r, 0.0, a.sin() * r));
+                        let tether = npc.tether.clone();
+                        crumbs.next(|p| p.distance(pos) > 2.0 && ai.within_tether(&tether, p)).or_else(|| {
+                            let home = (npc.home - pos).with_y(0.0).normalize_or_zero();
+                            let way = if home == Vec3::ZERO { Quat::from_rotation_y(rand::random::<f32>() * TAU) * Vec3::NEG_Z } else { home };
+                            (0..4).find_map(|_| open(Quat::from_rotation_y((rand::random::<f32>() * 2.0 - 1.0) * PI / 3.0) * way, 5.0 + rand::random::<f32>() * 5.0)).or_else(around)
+                        })
+                    };
+                    if std::env::var_os("DH_SEARCH_LOG").is_some() {
+                        info!("{} searches on to {next:.1?}", npc.name);
                     }
+                    npc.target = next;
                     npc.stuck = 0.0;
                 }
             }
@@ -4095,7 +4159,7 @@ pub(crate) fn npc_brain(
                     match npc.caught {
                         None if npc.rising <= 0.0 && near && (npc.sees_player || (ppos - pos).length() < 2.0) => {
                             npc.caught = Some((0.0, 0.0));
-                            noise.write(Noise { pos, radius: 15.0, kind: NoiseKind::Help });
+                            noise.write(Noise { corvo: false, pos, radius: 15.0, kind: NoiseKind::Help });
                         }
                         Some((t, away)) => {
                             let away = if (ppos - pos).length() > BEG_REACH + 1.5 { away + dt } else { 0.0 };
@@ -4125,7 +4189,7 @@ pub(crate) fn npc_brain(
                 // a civilian starting to run cries for help: a 15 m call the guards hear (the
                 // panic's help bark at `Loudness2`)
                 if npc.mode_timer < dt * 1.5 && !npc.fighter() {
-                    noise.write(Noise { pos, radius: 15.0, kind: NoiseKind::Help });
+                    noise.write(Noise { corvo: false, pos, radius: 15.0, kind: NoiseKind::Help });
                 }
                 // its squad's flee point away from the danger, and on along their chain
                 if npc.flee_to.is_none() && npc.mode_timer < dt * 1.5 {
@@ -4349,7 +4413,7 @@ pub(crate) fn npc_brain(
                         let vel = crate::gadgets::aim_throw(from, ppos - Vec3::Y * 0.8, g.speed);
                         info!("{} throws a grenade ({}) {d:.1} m away", npc.name, g.kind.trim_start_matches("DisTweaks_"));
                         grenades.write(crate::gadgets::NpcGrenade { owner: e, from, vel, fuse: g.fuse, blast: g.blast.clone(), target: ppos, danger: g.danger });
-                        noise.write(Noise { pos, radius: 20.0, kind: NoiseKind::Threatening });
+                        noise.write(Noise { corvo: false, pos, radius: 20.0, kind: NoiseKind::Threatening });
                         if g.jump > 0.0 {
                             // (`m_fJumpClearance`)
                             npc.retreat = Some((pos - toward * g.jump, 0.7));
@@ -4509,10 +4573,10 @@ pub(crate) fn npc_brain(
                         if npc.ranged == 1 {
                             npc.gun_hold = GUN_HOLD;
                             npc.target = None;
-                            noise.write(Noise { pos, radius: 40.0, kind: NoiseKind::Danger });
+                            noise.write(Noise { corvo: false, pos, radius: 40.0, kind: NoiseKind::Danger });
                             continue;
                         }
-                        noise.write(Noise { pos, radius: 40.0, kind: NoiseKind::Danger });
+                        noise.write(Noise { corvo: false, pos, radius: 40.0, kind: NoiseKind::Danger });
                     }
                     if npc.ranged == 2 {
                         // tallboys keep their distance and shoot
@@ -4802,7 +4866,7 @@ pub(crate) fn npc_brain(
                                 }
                                 shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: true, miss: !hit });
                                 npc.shots += 1;
-                                noise.write(Noise { pos, radius: 40.0, kind: NoiseKind::Danger });
+                                noise.write(Noise { corvo: false, pos, radius: 40.0, kind: NoiseKind::Danger });
                                 continue;
                             }
                             // a thing thrown with the bare hand at him
@@ -4833,7 +4897,7 @@ pub(crate) fn npc_brain(
                                     }
                                     let at = if struck { ppos + Vec3::Y * 0.6 } else { mouth + f * along.clamp(0.5, w.fire_range) };
                                     whiskey_fx.write(crate::particles::SpawnEffect { secs: w.blind.max(1.0), ..crate::particles::SpawnEffect::at("whiskey_smoke", at) });
-                                    noise.write(Noise { pos, radius: 8.0, kind: NoiseKind::Threatening });
+                                    noise.write(Noise { corvo: false, pos, radius: 8.0, kind: NoiseKind::Threatening });
                                 } else {
                                     let from = pos + Vec3::Y * 0.7 + f * 0.4;
                                     let vel = crate::gadgets::aim_throw(from, ppos - Vec3::Y * 0.8, w.throw_speed);
@@ -4854,9 +4918,9 @@ pub(crate) fn npc_brain(
                             }
                             if shot {
                                 shots.write(NpcShot { from: pos + Vec3::Y * 0.2, to: ppos, bow: false, miss: !struck });
-                                noise.write(Noise { pos, radius: 40.0, kind: NoiseKind::Danger });
+                                noise.write(Noise { corvo: false, pos, radius: 40.0, kind: NoiseKind::Danger });
                             } else {
-                                noise.write(Noise { pos, radius: 8.0, kind: NoiseKind::Threatening });
+                                noise.write(Noise { corvo: false, pos, radius: 8.0, kind: NoiseKind::Threatening });
                             }
                         }
                         npc.attack_t = if t_new > len { None } else { Some(t_new) };

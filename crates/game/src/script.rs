@@ -20,6 +20,10 @@ pub struct ScriptPlugin;
 
 impl Plugin for ScriptPlugin {
     fn build(&self, app: &mut App) {
+        // (`DH_NOTARGET`: unseen from the start, until a script's `notarget 0`)
+        if std::env::var("DH_NOTARGET").is_ok() {
+            app.insert_resource(NoTarget);
+        }
         if let Ok(s) = std::env::var("DH_SCRIPT") {
             let cmds: Vec<Vec<String>> = s
                 .split(';')
@@ -1851,7 +1855,7 @@ fn run_script(
             let radius = cmd.get(2).and_then(|v| v.parse().ok()).unwrap_or(15.0);
             let pos = t.translation;
             commands.queue(move |w: &mut World| {
-                w.write_message(crate::gameplay::Noise { pos, radius, kind });
+                w.write_message(crate::gameplay::Noise { corvo: false, pos, radius, kind });
             });
             info!("script: noise {kind:?} {radius} m");
         }

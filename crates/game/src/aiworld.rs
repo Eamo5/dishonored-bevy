@@ -92,19 +92,6 @@ impl AiWorld {
     pub fn flee_point(&self, i: usize) -> Option<&dhcook::format::FleePoint> {
         self.markers.flee.get(i)
     }
-    /// A watch point within `r` of `center` the guard hasn't checked yet.
-    pub fn watch_near(&self, center: Vec3, r: f32, used: &[usize]) -> Option<usize> {
-        let w = &self.markers.watch;
-        (0..w.len())
-            .filter(|i| !used.contains(i))
-            .map(|i| (i, Vec3::from(w[i].position).distance(center)))
-            .filter(|(_, d)| *d < r)
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(i, _)| i)
-    }
-    pub fn watch_point(&self, i: usize) -> Option<&dhcook::format::WatchPoint> {
-        self.markers.watch.get(i)
-    }
     /// Where a guard looks into the hideout `p` is in (its nearest access point).
     pub fn hideout_access(&self, p: Vec3) -> Option<(Vec3, f32)> {
         // (the volumes are slabs on the floor, half a metre high: the low part of his body

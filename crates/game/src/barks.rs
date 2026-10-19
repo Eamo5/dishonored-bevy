@@ -429,6 +429,14 @@ fn npc_barks(
         } else if !down && npc.hostile() && !st.grenade && npc.escape.is_some() {
             // a grenade by it, making off (`ESCAPE_IMPENDING_EXPLOSION`)
             want = Some(&["ESCAPE_IMPENDING_EXPLOSION"]);
+        } else if !down && npc.carry_bark.is_some() {
+            // Corvo seen carrying a body, by one not his enemy (`DDH_NOTICE_CARRYING_*_CORPSE`,
+            // as its relation to the body: none of the shipped voices has lines for them)
+            want = Some(match npc.carry_bark {
+                Some(0) => &["NOTICE_CARRYING_ALLY_CORPSE"],
+                Some(1) => &["NOTICE_CARRYING_NEUTRAL_CORPSE"],
+                _ => &["NOTICE_CARRYING_ENEMY_CORPSE"],
+            });
         } else if !down && npc.magic_bark.is_some() {
             // Corvo's magic witnessed (`magic`: its reaction): gone from where it saw him, else
             // seen (`DDH_MAGIC_DISAPPEARED`, `DDH_MAGIC_WITNESSED`)

@@ -156,7 +156,7 @@ fn contacts(
             }
             if im.noise > 0.0 && speed >= im.noise_min_speed {
                 use crate::gameplay::{Noise, NoiseKind};
-                noise.write(Noise { pos: at, radius: im.noise, kind: if im.threatening { NoiseKind::Threatening } else { NoiseKind::Anomaly } });
+                noise.write(Noise { corvo: false, pos: at, radius: im.noise, kind: if im.threatening { NoiseKind::Threatening } else { NoiseKind::Anomaly } });
             }
         }
         if !wet && crate::impacts::mark(&mut decals, &level.scene, "Corpse", struck, at, normal, dir, speed / UU) {

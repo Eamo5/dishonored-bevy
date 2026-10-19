@@ -231,6 +231,60 @@ impl NavGrid {
         })
     }
 
+    /// The nearest place on the mesh to feet at `at`, at most `reach` across (its height on its
+    /// polygon), or none.
+    pub fn snap(&self, at: Vec3, reach: f32) -> Option<Vec3> {
+        let r = (reach / CELL).ceil() as i32;
+        let (cx, cz) = cell(at.x, at.z);
+        let mut best: Option<(f32, Vec3)> = None;
+        for dx in -r..=r {
+            for dz in -r..=r {
+                for &pi in self.cells.get(&(cx + dx, cz + dz)).into_iter().flatten() {
+                    let p = &self.polys[pi as usize];
+                    if self.parted.get(pi as usize).copied().unwrap_or(false) || at.y < p.lo - 2.0 || at.y > p.hi + 2.0 || p.verts.len() < 3 {
+                        continue;
+                    }
+                    let q = if Self::inside(p, at) { at } else { Self::edge_nearest(p, at) };
+                    let q = q.with_y(Self::height(p, q));
+                    let across = (q - at).with_y(0.0).length();
+                    let d = across + (q.y - at.y).abs();
+                    if across <= reach && best.is_none_or(|b| d < b.0) {
+                        best = Some((d, q));
+                    }
+                }
+            }
+        }
+        best.map(|b| b.1)
+    }
+
+    /// The nearest point of a polygon's rim to `at` (across), drawn a little inside.
+    fn edge_nearest(p: &Poly, at: Vec3) -> Vec3 {
+        let n = p.verts.len();
+        let mut best = (f32::MAX, p.center);
+        for i in 0..n {
+            let (a, b) = (p.verts[i].with_y(0.0), p.verts[(i + 1) % n].with_y(0.0));
+            let ab = b - a;
+            let t = ((at.with_y(0.0) - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
+            let q = a + ab * t;
+            let d = q.distance(at.with_y(0.0));
+            if d < best.0 {
+                best = (d, q);
+            }
+        }
+        let c = p.center.with_y(0.0);
+        best.1 + (c - best.1).normalize_or_zero() * 0.1_f32.min(best.1.distance(c))
+    }
+
+    /// A polygon's floor height at `q` (across), on its plane.
+    fn height(p: &Poly, q: Vec3) -> f32 {
+        let (a, b, c) = (p.verts[0], p.verts[1], p.verts[2]);
+        let n = (b - a).cross(c - a);
+        if n.y.abs() < 1e-4 {
+            return p.center.y;
+        }
+        (a.y - (n.x * (q.x - a.x) + n.z * (q.z - a.z)) / n.y).clamp(p.lo, p.hi)
+    }
+
     /// The polygon under feet at `at` (else the nearest one close by).
     pub fn locate(&self, at: Vec3) -> Option<u32> {
         let (cx, cz) = cell(at.x, at.z);
