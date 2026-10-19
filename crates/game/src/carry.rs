@@ -721,7 +721,7 @@ fn fall(
             // the unconscious drown (the original counts it as a kill)
             if in_water.is_some() && npc.mode == Mode::Unconscious {
                 npc.set_mode(Mode::Dead);
-                stats.killed(&npc.pawn, !npc.hostile());
+                stats.killed(&npc.pawn, npc.civilian());
                 stats.knockouts = stats.knockouts.saturating_sub(1);
             }
         } else {

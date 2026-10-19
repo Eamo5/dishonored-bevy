@@ -741,6 +741,11 @@ impl Npc {
     pub fn hostile(&self) -> bool {
         self.enemy
     }
+    /// One of the people, not of those against Corvo by their type (the statistics' civilians:
+    /// what it is, however it stands to him now).
+    pub fn civilian(&self) -> bool {
+        !self.enemy_default
+    }
     /// Armed: a sword or a gun, bow or wrist bow.
     pub fn fighter(&self) -> bool {
         self.has_sword || self.ranged > 0
@@ -2687,7 +2692,7 @@ fn npc_hits(
                 npc.health = 0.0;
                 npc.set_mode(Mode::Dead);
                 stats.knockouts = stats.knockouts.saturating_sub(1);
-                stats.killed(&npc.pawn, !npc.hostile());
+                stats.killed(&npc.pawn, npc.civilian());
                 if h.kind == HitKind::Fire {
                     commands.entity(e).try_insert(Ashes(-0.9));
                 }
@@ -2735,11 +2740,17 @@ fn npc_hits(
             }
             h.damage = 0.0;
         }
-        // those who can fight turn on Corvo when he hurts them (the Tower's guards too)
-        if !npc.enemy && npc.fighter() && !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats | HitKind::Assassinate | HitKind::Fatality | HitKind::Choke | HitKind::SleepDart | HitKind::WallOfLight | HitKind::StunMine) {
+        // those who can fight turn on Corvo when he hurts them (the Tower's guards too); any other
+        // neutral to him takes him for an enemy once he does it harm (`IncomingDamage`'s
+        // hatred, 0x00B23780, decoded for this rewrite)
+        let corvo_side = dhcook::format::is_player_faction(&npc.faction) || level.as_ref().and_then(|l| l.scene.allies.get(&npc.faction)).is_some_and(|a| a.iter().any(|f| dhcook::format::is_player_faction(f)));
+        if !npc.enemy && (npc.fighter() || h.damage > 0.0 && !corvo_side) && !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats | HitKind::Assassinate | HitKind::Fatality | HitKind::Choke | HitKind::SleepDart | HitKind::WallOfLight | HitKind::StunMine) {
             npc.enemy = true;
             stances.wronged(npc.spawner);
         }
+        // struck, those whose panic has `m_AttackedMelee` / `m_AttackedRanged` (every shipped
+        // tweak both or neither) run from whoever struck them, friend or foe (0x00B61390)
+        let struck_panic = h.damage > 0.0 && may_flee(&npc) && level.as_ref().is_some_and(|l| panic_rule(Some(&l.scene), &npc, "AttackedMelee") || panic_rule(Some(&l.scene), &npc, "AttackedRanged"));
         let pos = t.translation;
         let unaware = npc.alert != Alert::Combat;
         // kept alive by the scripts: no killing blow takes it
@@ -2810,7 +2821,7 @@ fn npc_hits(
                 // then nothing is left
                 npc.health = 0.0;
                 npc.set_mode(Mode::Dead);
-                stats.killed(&npc.pawn, !npc.hostile());
+                stats.killed(&npc.pawn, npc.civilian());
                 commands.entity(e).try_insert((Ashes(-0.9), Immolated));
                 sfx.write(crate::audio::PostEvent::named("Amb_Fire_Alcohol_Immolation", Some(pos + Vec3::Y)));
                 fx.write(crate::particles::SpawnEffect { follow: Some(e), secs: 1.6, ..crate::particles::SpawnEffect::at("immolation", Vec3::ZERO) });
@@ -2819,12 +2830,12 @@ fn npc_hits(
             HitKind::Assassinate | HitKind::Fatality | HitKind::WallOfLight => {
                 npc.health = 0.0;
                 npc.set_mode(Mode::Dead);
-                stats.killed(&npc.pawn, !npc.hostile());
+                stats.killed(&npc.pawn, npc.civilian());
                 // (a wall of light electrocutes its dead, who vanish: `DisWallOfLight`'s kill)
                 if h.kind == HitKind::WallOfLight {
                     commands.entity(e).try_insert(Electrocuted::new(true));
                 }
-                noise.write(Noise { corvo: false, pos, radius: 3.0, kind: NoiseKind::DeathRattle });
+                noise.write(Noise { corvo: h.kind != HitKind::WallOfLight, pos, radius: 3.0, kind: NoiseKind::DeathRattle });
             }
             HitKind::ByOthers | HitKind::EnemyExplosion => {
                 // another NPC's blow (or the level's rats): it fights back
@@ -2835,6 +2846,9 @@ fn npc_hits(
                 npc.stagger = npc.stagger.max(0.25);
                 if npc.health <= 0.0 {
                     npc.set_mode(Mode::Dead);
+                } else if struck_panic {
+                    npc.last_seen = Some(h.from);
+                    npc.set_mode(Mode::Flee);
                 }
                 noise.write(Noise { corvo: false, pos, radius: 8.0, kind: NoiseKind::Threatening });
             }
@@ -2863,16 +2877,16 @@ fn npc_hits(
                     npc.last_seen = Some(h.from);
                     npc.set_mode(Mode::Combat);
                 }
-                // a civilian struck panics (`TweaksBehavior_Panic_Civilian`: attacked)
-                if npc.health > 0.0 && civilian_may_panic(&npc) {
+                if npc.health > 0.0 && struck_panic {
                     npc.last_seen = Some(h.from);
                     npc.set_mode(Mode::Flee);
                 }
                 if npc.health <= 0.0 {
                     npc.set_mode(Mode::Dead);
-                    stats.killed(&npc.pawn, !npc.hostile());
+                    stats.killed(&npc.pawn, npc.civilian());
                     noise.write(Noise { corvo: false, pos, radius: 8.0, kind: NoiseKind::Threatening });
-                    noise.write(Noise { corvo: false, pos, radius: 3.0, kind: NoiseKind::DeathRattle });
+                    // (a death rattle's maker is the killer: Corvo, but for the rats)
+                    noise.write(Noise { corvo: h.kind != HitKind::Rats, pos, radius: 3.0, kind: NoiseKind::DeathRattle });
                 } else {
                     noise.write(Noise { corvo: false, pos, radius: 8.0, kind: NoiseKind::Threatening });
                 }
@@ -2995,15 +3009,22 @@ fn npc_hearing(
             if his {
                 npc.heard_player += 1;
             }
-            if !npc.hostile() {
-                // a scary noise (to them) sets them running; the armed stand their ground
-                let scary = level.as_ref().and_then(|l| npc.npc_type.and_then(|t| l.scene.npc_types.get(t as usize))).and_then(|t| t.sight.as_ref()).and_then(|s| s.scary.clone());
-                if n.panics(scary.as_deref()) && !npc.fighter() && npc.may_panic() {
-                    if npc.can_flee {
-                        npc.set_mode(Mode::Flee);
-                    }
+            // a scary noise sets those whose panic has `m_HearNoise` running (0x00C58560, 0x00B616E0,
+            // 0x00B61560, 0x00B615E0, decoded for this rewrite): one its list names
+            // (`m_ScaryNoises`); a cry for help or an alarm bell whoever raised it, any other only
+            // if its maker is its enemy (Corvo, to those that take him for one)
+            let scene = level.as_ref().map(|l| &l.scene);
+            if panic_rule(scene, &npc, "HearNoise") && may_flee(&npc) {
+                let scary = npc.npc_type.and_then(|t| scene?.npc_types.get(t as usize)).and_then(|t| t.sight.as_ref()).and_then(|s| s.scary.clone());
+                let listed = scary.as_deref().map_or(SCARY_NOISES.contains(&n.kind.context()), |l| l.iter().any(|c| c.eq_ignore_ascii_case(n.kind.context())));
+                let maker = matches!(n.kind, NoiseKind::Help | NoiseKind::Alarm) || n.corvo && npc.hostile();
+                if listed && maker {
+                    npc.set_mode(Mode::Flee);
                     npc.last_seen = Some(n.pos);
+                    continue;
                 }
+            }
+            if !npc.hostile() {
                 continue;
             }
             // what it hears raises its attention (the original's increase for the noise's
@@ -3419,6 +3440,16 @@ pub(crate) fn npc_perception(
                     // (a sighting: it runs to look)
                     npc.search_run = true;
                     npc.set_mode(Mode::Investigate);
+                }
+            }
+            // it busts one it takes for an enemy: those whose panic has `m_SeeEnemy` (servants,
+            // civilians turned against him) run from where they believe he is, on the step up
+            // to busted only (`EnemyBusted`, 0x00B22DA0 / 0x00B61680, decoded for this rewrite)
+            if npc.attn_level >= 4 && was < 4 && npc.hostile() && may_flee(&npc) && panic_rule(scene, &npc, "SeeEnemy") {
+                npc.last_seen = Some(pt.translation);
+                npc.set_mode(Mode::Flee);
+                if log {
+                    info!("{} busts Corvo, its enemy: panics", npc.name);
                 }
             }
             // what it heard rises to investigating (`npc_hearing`)
@@ -5157,6 +5188,24 @@ fn last_survivor(p: &dhcook::format::PanicTweak, queue: &mut Vec<f32>, now: f32,
 
 /// A civilian that may panic now: unarmed, not barred from it, able to run, not already
 /// running, not of Corvo's own people.
+/// The noises a panic's `m_HearNoise` lists when its tweak names none (the class default).
+const SCARY_NOISES: [&str; 5] = ["AlarmBell", "Help", "Danger", "Threatening", "DeathRattle"];
+
+/// Whether a character's panic behaviour has a rule on (`DisPanicRule.m_bIsActive`).
+fn panic_rule(scene: Option<&dhcook::format::Scene>, npc: &Npc, rule: &str) -> bool {
+    npc.npc_type
+        .and_then(|t| scene?.npc_types.get(t as usize))
+        .and_then(|t| t.sight.as_ref())
+        .and_then(|s| s.panic.as_ref())
+        .is_some_and(|p| p.rules.iter().any(|r| r == rule))
+}
+
+/// One that may start panicking now: not barred from it (`Panic_Civilian_Disable`), able to run,
+/// not already running or down, not of Corvo's side.
+fn may_flee(npc: &Npc) -> bool {
+    npc.may_panic() && npc.can_flee && npc.mode != Mode::Flee && !npc.is_down() && !dhcook::format::is_player_faction(&npc.faction)
+}
+
 fn civilian_may_panic(npc: &Npc) -> bool {
     !npc.hostile() && !npc.fighter() && npc.may_panic() && npc.can_flee && npc.mode != Mode::Flee && !npc.is_down() && !dhcook::format::is_player_faction(&npc.faction)
 }

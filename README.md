@@ -2385,6 +2385,23 @@ against the install's own data where it carries them, then implemented independe
     panic but not at a body come upon; a swarm that would attack (Corvo's, or a level's grown to
     its `m_InitialRatCountToBeAggressive`) in sight sets those listing `SeeRatSwarm` running,
     Sokolov's servants and the other unarmed on the guards' side among them.
+  - The triggers' own conditions, decoded for this rewrite from the user's own Dishonored.exe
+    (the panic process's stimulus handlers, 0x00B695D0):
+    - `m_SeeEnemy`: one that takes Corvo for an enemy runs once its attention on him steps up
+      to busted, from where it believes he is (0x00B22DA0, 0x00B61680). Servants, and civilians
+      who turned on him (carrying a body before them, striking them), now flee and cry for help
+      instead of standing about in a fight they can't join.
+    - `m_HearNoise`: a cry for help or an alarm bell sets them running whoever raised it. A
+      death rattle or any other noise its list names does only if its maker is its enemy: a
+      victim's death rattle is its killer's, so a civilian neutral to Corvo no longer runs from
+      the rattle of one he killed out of its sight.
+    - `m_AttackedMelee` / `m_AttackedRanged`: struck, those with them run from whoever struck
+      them, friend or foe. One neutral to Corvo takes him for an enemy once he has done it harm
+      (0x00B23780).
+    - Which are on is each character's own (every rule is off unless its tweak sets it):
+      guards have none but the last survivors. `m_WithinDangerZone` is read by nothing.
+    - The statistics count a civilian killed by what it is, not by how it stood to Corvo when
+      it fell.
   - Guards: the last survivors. A city or lower guard (`m_LastSurvivor`) counts each of its own
     that falls to Corvo, forgetting falls older than `m_fKillCountResetTimer` (20 s); with two
     counted (`m_iKillCount`), Corvo within `m_fFearDistanceFromKiller` (25 m), it fighting him and

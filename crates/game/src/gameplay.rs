@@ -107,15 +107,6 @@ impl Noise {
     pub fn combat(&self) -> bool {
         matches!(self.kind, NoiseKind::Threatening | NoiseKind::Danger | NoiseKind::Help | NoiseKind::Alarm)
     }
-    /// What sets civilians running (the default panic behaviour's `m_ScaryNoises`: danger,
-    /// threats, an alarm bell, a cry for help, a death rattle; anything but an anomaly), or
-    /// those of their own panic behaviour (`Sight::scary`: contexts by name).
-    pub fn panics(&self, scary: Option<&[String]>) -> bool {
-        match scary {
-            Some(list) => list.iter().any(|c| c.eq_ignore_ascii_case(self.kind.context())),
-            None => self.kind != NoiseKind::Anomaly,
-        }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]

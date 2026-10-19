@@ -498,7 +498,7 @@ fn pose_ragdolls(
             if let (Some(h), Some(w)) = (hips, waters.as_ref()) {
                 if npc.mode == Mode::Unconscious && w.at(h).is_some() {
                     npc.set_mode(Mode::Dead);
-                    stats.killed(&npc.pawn, !npc.hostile());
+                    stats.killed(&npc.pawn, npc.civilian());
                     stats.knockouts = stats.knockouts.saturating_sub(1);
                 }
             }
@@ -508,7 +508,7 @@ fn pose_ragdolls(
             if npc.floored && !npc.is_down() && lost {
                 npc.floored = false;
                 npc.set_mode(Mode::Dead);
-                stats.killed(&npc.pawn, !npc.hostile());
+                stats.killed(&npc.pawn, npc.civilian());
             } else if npc.floored && !npc.is_down() && (rd.still > 0.6 || rd.t > 6.0) {
                 if let Some(h) = hips {
                     // on its back or its front: which way its chest faces (its bone's bind-pose
