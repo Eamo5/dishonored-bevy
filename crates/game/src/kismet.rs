@@ -819,6 +819,8 @@ pub struct Vm {
     npc_seen: HashMap<Entity, (Mode, Alert, f32, bool)>,
     /// how many of Corvo's noises each character had heard (`DisSeqEvent_PlayerHeard`)
     npc_heard: HashMap<Entity, u32>,
+    /// each character's attention level as last seen (its steps fire the attention events)
+    npc_attn: HashMap<Entity, u8>,
     /// those being assassinated (`DisSeqEvent_Assassinated` started for them), and whether
     /// it has finished them
     being_assassinated: HashMap<Entity, bool>,
@@ -1124,6 +1126,7 @@ impl Vm {
             hook_look: HashMap::new(),
             npc_seen: HashMap::new(),
             npc_heard: HashMap::new(),
+            npc_attn: HashMap::new(),
             being_assassinated: HashMap::new(),
             in_combat: false,
             in_rat: false,
@@ -6000,47 +6003,40 @@ fn world_events(
                 _ => {}
             }
         }
-        if npc.alert != alert0 {
-            if npc.alert == Alert::Combat {
-                vm.actor_event(actor, &["DisSeqEvent_Combat"], OutSel::Index(0), who.clone());
-            }
-            // calming down (`DisSeqEvent_AttentionDecreasedTo`: to its level, or all the way)
-            let rank = |a: Alert| match a {
-                Alert::Unaware => 0,
-                Alert::Suspicious => 1,
-                Alert::Combat => 2,
+        if npc.alert != alert0 && npc.alert == Alert::Combat {
+            vm.actor_event(actor, &["DisSeqEvent_Combat"], OutSel::Index(0), who.clone());
+        }
+        // its attention stepping up or down (`DisSeqEvent_AttentionIncreasedTo` / `DecreasedTo`):
+        // each level it passes fires its own, as the original's level stepper does them one at
+        // a time (0x00B26B30, decoded for this rewrite). Head track and turn to face too; a
+        // decrease without a level, all the way down
+        let attn0 = vm.npc_attn.insert(e, npc.attn_level).unwrap_or(npc.attn_level);
+        if npc.attn_level != attn0 && !npc.is_down() {
+            let name = |l: u8| match l {
+                1 => "DAL_HeadTrack",
+                2 => "DAL_TurnToFace",
+                3 => "DAL_Investigate",
+                4 => "DAL_Busted",
+                _ => "DAL_None",
             };
-            if rank(npc.alert) < rank(alert0) {
-                let to: &[&str] = match npc.alert {
-                    Alert::Unaware => &["DAL_Unaware", "DAL_None", "DAL_Calm"],
-                    Alert::Suspicious => &["DAL_Investigate", "DAL_Suspicious", "DAL_Curious"],
-                    Alert::Combat => &[],
-                };
+            let up = npc.attn_level > attn0;
+            let steps: Vec<u8> = if up { (attn0 + 1..=npc.attn_level).collect() } else { (npc.attn_level..attn0).rev().collect() };
+            for l in steps {
                 for ev in vm.events_of.get(&actor).cloned().unwrap_or_default() {
                     let op = &vm.g.ops[ev as usize];
-                    if op.class != "DisSeqEvent_AttentionDecreasedTo" {
+                    let mine = if up {
+                        matches!(op.class.as_str(), "DisSeqEvent_AttentionIncreasedTo" | "DisDLC06SeqEvent_AttentionIncreasedTo")
+                    } else {
+                        op.class == "DisSeqEvent_AttentionDecreasedTo"
+                    };
+                    if !mine {
                         continue;
                     }
                     let fits = match op.props.get("m_eAttentionLevel") {
-                        Some(KVal::Str(l)) => to.contains(&l.as_str()),
-                        _ => npc.alert == Alert::Unaware,
+                        Some(KVal::Str(want)) => want == name(l),
+                        _ => !up && l == 0,
                     };
                     if fits {
-                        vm.event(ev, 0, who.clone());
-                    }
-                }
-            }
-            let level = match npc.alert {
-                Alert::Combat => Some(["DAL_Busted", "DAL_Combat", "DAL_Alerted"]),
-                Alert::Suspicious => Some(["DAL_Investigate", "DAL_Suspicious", "DAL_Curious"]),
-                Alert::Unaware => None,
-            };
-            if let Some(levels) = level {
-                for ev in vm.events_of.get(&actor).cloned().unwrap_or_default() {
-                    let op = &vm.g.ops[ev as usize];
-                    if op.class == "DisSeqEvent_AttentionIncreasedTo"
-                        && matches!(op.props.get("m_eAttentionLevel"), Some(KVal::Str(l)) if levels.contains(&l.as_str()))
-                    {
                         vm.event(ev, 0, who.clone());
                     }
                 }
