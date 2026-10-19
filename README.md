@@ -1414,6 +1414,13 @@ are in the settings file, `pad_binding_set` 0-3):
   - A searcher come to its spot looks it over (its check's 10 s cooldown permitting) and tells
     those within 20 m. One investigating the same spot (within 2.5 m) gives up its own look
     and searches on, a body it went to handled all the same (`SearchReachedProxy`).
+  - One answering a search request says so (`SEARCH_FROM_ALLY`).
+- **Allies seen** (`npc.rs`; 0x00B435F0, decoded for this rewrite). A guard newly sighting one
+  of its side reacts to what that one is doing, once a sighting:
+  - fighting: it suspects and joins in (before, only those within 10 m as the fight began did);
+  - searching: its attention rises at least to turning to look, or to investigating once
+    suspecting, where the searcher thinks Corvo is;
+  - panicking: it suspects and looks there the same.
 - **Assassinations**: attacking someone unaware of Corvo (from behind, or anyone who hasn't
   noticed him) plays the original paired clips by the side he takes them from — front, back,
   left or right; slow and deliberate while sneaking, quick otherwise, and their own variants

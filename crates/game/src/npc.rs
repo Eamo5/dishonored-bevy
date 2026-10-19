@@ -306,6 +306,10 @@ pub struct Npc {
     pub witnessed_death: bool,
     /// the bodies it has found (each once), and the one it goes to look over
     pub found_bodies: Vec<Entity>,
+    /// the allies in its sight, what each was doing when it saw them (fighting 1, searching 2,
+    /// panicking 3) and when it last saw them so: a new sighting is reacted to once, one out of
+    /// its sight a second (`m_fLostContactTimeOut`) is lost (0x00B435F0)
+    pub allies_seen: Vec<(Entity, u8, f32)>,
     pub checking: Option<Entity>,
     /// the walls of light and arc pylons it saw kill an ally, rewired (`distrust`; indices in
     /// `security::Devices`)
@@ -2248,6 +2252,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         search_run: false,
         witnessed_death: false,
         found_bodies: Vec::new(),
+        allies_seen: Vec::new(),
         checking: None,
         distrust: Vec::new(),
         magic_pending: None,
@@ -3158,6 +3163,8 @@ fn npc_hearing(
                 npc.target = Some(c.spot);
                 npc.search_run = false;
                 npc.set_mode(Mode::Investigate);
+                // (answering the call: `SEARCH_FROM_ALLY`, the search's ally response)
+                npc.bark_req = (npc.bark_req.0.wrapping_add(1), "SEARCH_FROM_ALLY");
             }
         }
     }
@@ -3388,6 +3395,21 @@ pub(crate) fn npc_perception(
     let fresh: Vec<(Entity, Vec3)> = npcs.iter().filter(|(_, n, _)| n.mode == Mode::Dead && !n.corpse && n.corpse_age < 2.0).map(|(e, _, t)| (e, t.translation)).collect();
     // (for the civilians: the guards fighting, the others panicking)
     let fighting: Vec<Vec3> = npcs.iter().filter(|(_, n, _)| n.mode == Mode::Combat && n.hostile() && !n.is_down()).map(|(_, _, t)| t.translation).collect();
+    // (those about, for one seeing an ally: what each is doing, fighting 1, searching 2,
+    // panicking 3, and where it thinks Corvo is)
+    let doing: Vec<(Entity, Vec3, String, u8, Option<Vec3>)> = npcs
+        .iter()
+        .filter(|(_, n, _)| !n.is_down() && n.kind != Kind::Story)
+        .filter_map(|(e, n, t)| {
+            let what = match n.mode {
+                Mode::Combat if n.alert == Alert::Combat && n.foe.is_none() => 1,
+                Mode::Search | Mode::Investigate if n.alert != Alert::Unaware => 2,
+                Mode::Flee if !n.fighter() => 3,
+                _ => return None,
+            };
+            Some((e, t.translation, n.faction.clone(), what, n.last_seen))
+        })
+        .collect();
     let panicking: Vec<Vec3> = npcs.iter().filter(|(_, n, _)| n.mode == Mode::Flee && !n.fighter() && !n.is_down()).map(|(_, _, t)| t.translation).collect();
     let mut newly_detected = false;
     for (e, mut npc, t) in &mut npcs {
@@ -3587,6 +3609,62 @@ pub(crate) fn npc_perception(
                 }
                 npc.attn_level = if npc.alert == Alert::Combat { 4 } else if npc.awareness >= 0.35 { 3 } else if npc.awareness > 0.05 { 1 } else { 0 };
                 npc.attn_fill = npc.awareness;
+            }
+            // an ally newly in its sight, as what it is doing (0x00B435F0 / 0x00B0F5B0, decoded
+            // for this rewrite): fighting, it suspects and joins in (`AllyCombat`, +1.0);
+            // searching, its attention at least at turning to look (unsuspecting) or
+            // investigating (suspecting) where the ally thinks Corvo is; panicking, it suspects
+            // and looks there the same. Each sighting once, while the ally stays in its sight
+            // doing that
+            if npc.alert != Alert::Combat && npc.hostile() {
+                let mine: Vec<(Entity, u8)> = doing
+                    .iter()
+                    .filter(|(o, p, f, _, _)| *o != e && p.distance(eye) < 35.0 && relation(scene, &npc.faction, f) == 1)
+                    .filter(|(_, p, _, _, _)| {
+                        let to = *p + Vec3::Y * 0.7 - eye;
+                        let d = to.length();
+                        let in_view = sight.is_none_or(|s| vision_range(s, fwd, to / d.max(1e-3), d, false).is_some());
+                        in_view && ctx.cast_ray(eye, to / d.max(1e-3), (d - 0.4).max(0.0), true, QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD))).is_none()
+                    })
+                    .map(|(o, _, _, w, _)| (*o, *w))
+                    .collect();
+                let now = time.elapsed_secs();
+                for (o, what) in &mine {
+                    if let Some(seen) = npc.allies_seen.iter_mut().find(|x| x.0 == *o && x.1 == *what) {
+                        seen.2 = now;
+                        continue;
+                    }
+                    npc.allies_seen.push((*o, *what, now));
+                    let Some((_, at, _, _, proxy)) = doing.iter().find(|x| x.0 == *o) else { continue };
+                    let spot = proxy.unwrap_or(*at);
+                    let Some(att) = level.as_ref().and_then(|l| attention_of(&npc, &l.scene)) else { continue };
+                    if *what != 2 {
+                        npc.suspecting = true;
+                    }
+                    if log {
+                        info!("{} sees an ally {} (Corvo thought at {spot:.1})", npc.name, ["", "fighting", "searching", "panicking"][*what as usize]);
+                    }
+                    // (fighting: it joins in, as one seeing a fight start does)
+                    if *what == 1 {
+                        npc.alert = Alert::Combat;
+                        npc.awareness = 1.0;
+                        npc.last_seen = Some(spot);
+                        npc.set_mode(Mode::Combat);
+                        break;
+                    }
+                    let floor = if npc.suspecting { att.levels[2][0] } else { att.levels[1][0] };
+                    if npc.awareness < floor {
+                        npc.awareness = floor;
+                        npc.last_seen = Some(spot);
+                        if npc.awareness >= att.levels[2][0] && !matches!(npc.mode, Mode::Investigate | Mode::Search) {
+                            npc.alert = Alert::Suspicious;
+                            npc.target = Some(spot);
+                            npc.search_run = false;
+                            npc.set_mode(Mode::Investigate);
+                        }
+                    }
+                }
+                npc.allies_seen.retain(|x| now - x.2 < 1.0);
             }
             // a death before its eyes (fighting too): seen as a body is, at the lower mark
             // (`m_fCorpseVis_VisLevelToSeeDeath`)
