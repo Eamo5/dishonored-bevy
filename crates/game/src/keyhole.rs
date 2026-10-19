@@ -27,8 +27,6 @@ impl Plugin for KeyholePlugin {
 
 /// How long [Use] is held for the keyhole (a shorter press opens the door).
 const HOLD: f32 = 0.3;
-/// How far the eye can turn from straight through (yaw, pitch).
-const LOOK: (f32, f32) = (0.45, 0.3);
 /// The HUD movie's keyhole shape.
 const HUD_KEYHOLE: u32 = 556;
 
@@ -254,15 +252,12 @@ fn keyhole_view(
     mut player: Query<(&mut Transform, &mut Player), Without<PlayerCamera>>,
     mut cam: Query<(&mut Transform, &mut Projection), With<PlayerCamera>>,
 ) {
-    let (Some(level), Some((i, through, yaw0))) = (level, peek.at) else { return };
+    let (Some(level), Some((i, through, _))) = (level, peek.at) else { return };
     let Some(k) = level.scene.keyholes.get(i) else { return };
-    let Ok((mut pt, mut p)) = player.single_mut() else { return };
+    let Ok((mut pt, p)) = player.single_mut() else { return };
     let Ok((mut ct, mut proj)) = cam.single_mut() else { return };
-    // the look stays near straight through
-    let mut dy = p.yaw - yaw0;
-    dy = (dy + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-    p.yaw = yaw0 + dy.clamp(-LOOK.0, LOOK.0);
-    p.pitch = p.pitch.clamp(-LOOK.1, LOOK.1);
+    // (the look is free, only slowed: `player_look`'s keyhole sensitivity cap; the keyhole state
+    // sets no angle limits, 0x00AB02C0, decoded for this rewrite)
     pt.rotation = Quat::from_rotation_y(p.yaw);
     let eye = Vec3::from(k.center) + through * 0.07;
     ct.translation = Quat::from_rotation_y(-p.yaw) * (eye - pt.translation);

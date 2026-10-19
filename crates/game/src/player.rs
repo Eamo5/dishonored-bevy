@@ -18,7 +18,7 @@ pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Slide>().init_resource::<AutoCrouch>().init_resource::<MantleEdge>().init_resource::<HardLanding>();
+        app.init_resource::<Slide>().init_resource::<AutoCrouch>().init_resource::<MantleEdge>().init_resource::<HardLanding>().init_resource::<LeanView>();
         app.init_resource::<CameraShake>().add_message::<ShakeCamera>();
         app.init_resource::<VirtualInput>()
             .init_resource::<MantleSpot>()
@@ -322,6 +322,25 @@ mod look_tests {
     }
 }
 
+/// A lean's hold: the side held first, the side leant to, the time left before it lets go.
+#[derive(Default)]
+pub struct LeanHold {
+    side: f32,
+    held: f32,
+    release: f32,
+}
+
+/// Where the look was as a lean began: it stays within `LEAN_LOOK` of it while leaning
+/// (`StatePlayerMasterLeaning`'s view limits).
+#[derive(Resource, Default)]
+pub struct LeanView(pub Option<(f32, f32)>);
+
+/// The lean's break speed (`m_fBreakLean_Speed_PC` 200 uu/s, m/s), its release
+/// (`m_fLeanReleaseTime`, s), and the look's limits while leaning (yaw, pitch: 60 and 35 degrees).
+const LEAN_BREAK_SPEED: f32 = 2.0;
+const LEAN_RELEASE: f32 = 0.2;
+const LEAN_LOOK: (f32, f32) = (1.0471976, 0.6108652);
+
 /// The original's default mouse sensitivity (`DefaultInput.ini` `MouseSensitivity`), the
 /// options' 2.0, and the look's limits while peeking and sprinting.
 const MOUSE_SENSITIVITY: f32 = 13.0;
@@ -353,6 +372,7 @@ fn player_look(
     (peek, game_settings): (Option<Res<crate::keyhole::Peek>>, Option<Res<crate::settings::Settings>>),
     (data, over): (Option<Res<crate::gamedata::Data>>, Option<Res<crate::crosshair::OverEnemy>>),
     mut slowed: Local<bool>,
+    lean_view: Option<Res<LeanView>>,
 ) {
     let Ok((mut p, mut t)) = q.single_mut() else { *last = Vec2::ZERO; return };
     if p.is_added() { *last = Vec2::ZERO; }
@@ -411,6 +431,12 @@ fn player_look(
         p.yaw += pad_look.x * k * f.x;
         p.pitch = (p.pitch + pad_look.y * k * f.y).clamp(-1.5, 1.5);
     }
+    // (leaning: about where the look was as it began)
+    if let Some((y0, p0)) = lean_view.as_ref().and_then(|l| l.0) {
+        let dy = (p.yaw - y0 + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        p.yaw = y0 + dy.clamp(-LEAN_LOOK.0, LEAN_LOOK.0);
+        p.pitch = p.pitch.clamp(p0 - LEAN_LOOK.1, p0 + LEAN_LOOK.1);
+    }
     t.rotation = Quat::from_rotation_y(p.yaw);
     if let Ok(mut ct) = cam.single_mut() {
         // (a shot's kick on top: `aim`)
@@ -443,7 +469,16 @@ fn player_move(
     (attrs, zone): (Res<crate::gamedata::Attrs>, Res<crate::zones::ZonePush>),
     (swim, waters, carry, possession): (Res<crate::swim::Swim>, Option<Res<crate::swim::Waters>>, Res<crate::carry::Carry>, Res<crate::possession::Possession>),
     (mut climb, climbables, mut sfx): (ResMut<crate::climb::Climb>, Option<Res<crate::climb::Climbables>>, MessageWriter<crate::audio::PostEvent>),
-    (cine, settings, paused, tc, mut slide, mut auto, mut hard): (Res<crate::script_world::Cinematic>, Res<crate::settings::Settings>, Res<Paused>, Res<crate::gameplay::TimeControl>, ResMut<Slide>, ResMut<AutoCrouch>, ResMut<HardLanding>),
+    (cine, settings, paused, tc, mut slide, mut auto, mut hard, mut lean_view): (
+        Res<crate::script_world::Cinematic>,
+        Res<crate::settings::Settings>,
+        Res<Paused>,
+        Res<crate::gameplay::TimeControl>,
+        ResMut<Slide>,
+        ResMut<AutoCrouch>,
+        ResMut<HardLanding>,
+        ResMut<LeanView>,
+    ),
     pad: Option<Res<crate::pad::Pad>>,
     mut q: Query<(
         Entity,
@@ -454,6 +489,7 @@ fn player_move(
         Option<&KinematicCharacterControllerOutput>,
     )>,
     mut fall: Local<FallStart>,
+    mut lean_hold: Local<LeanHold>,
 ) {
     let Ok((entity, mut p, mut t, mut kcc, mut col, out)) = q.single_mut() else { return };
     if paused.0 {
@@ -786,15 +822,37 @@ fn player_move(
         p.velocity.y = p.velocity.y.max(-40.0);
     }
 
-    // lean (Q/E) only when stationary-ish, like the original
-    let lean_target = if keys.pressed(bind.key(crate::bindings::Act::LeanLeft)) {
-        -1.0
-    } else if keys.pressed(bind.key(crate::bindings::Act::LeanRight)) {
-        1.0
-    } else {
-        0.0
+    // lean (Q/E), held: asked for only while his whole velocity (falling too) is under
+    // `m_fBreakLean_Speed_PC` (200 uu/s), so walking lets it go and it comes back once he slows
+    // with the key still down; the side held first wins (left if both went down together); let
+    // go, it holds `m_fLeanReleaseTime` (0.2 s) before it eases back (the input's tick
+    // 0x00AB3FF0 and `StatePlayerMasterLeaning` 0x00A76590, decoded for this rewrite; no lean
+    // forward on PC as shipped)
+    let (left, right) = (keys.pressed(bind.key(crate::bindings::Act::LeanLeft)), keys.pressed(bind.key(crate::bindings::Act::LeanRight)));
+    lean_hold.side = match (left, right) {
+        (false, false) => 0.0,
+        (true, false) => -1.0,
+        (false, true) => 1.0,
+        (true, true) if lean_hold.side == 0.0 => -1.0,
+        (true, true) => lean_hold.side,
     };
+    let asked = if p.velocity.length() < LEAN_BREAK_SPEED { lean_hold.side } else { 0.0 };
+    if asked != 0.0 {
+        lean_hold.release = LEAN_RELEASE;
+        lean_hold.held = asked;
+    } else {
+        lean_hold.release = (lean_hold.release - dt).max(0.0);
+    }
+    let lean_target = if lean_hold.release > 0.0 { lean_hold.held } else { 0.0 };
     p.lean += (lean_target - p.lean) * (10.0 * dt).min(1.0);
+    // (the look held about where it was as the lean began)
+    if lean_target != 0.0 {
+        if lean_view.0.is_none() {
+            lean_view.0 = Some((p.yaw, p.pitch));
+        }
+    } else if p.lean.abs() < 0.02 {
+        lean_view.0 = None;
+    }
 
     // a physics volume's push (`ZoneVelocity`): all of it falling, a little walking
     let push = if p.grounded { zone.0.with_y(0.0) * 25.0 * dt } else { zone.0 };

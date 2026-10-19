@@ -1086,12 +1086,13 @@ fn use_power(
     mut marker: Query<(Entity, &mut Transform, &mut Visibility), (With<BlinkMarker>, Without<Player>)>,
     npcs: Query<(Entity, &Transform, &Npc), (Without<Player>, Without<BlinkMarker>)>,
     mut possession: ResMut<crate::possession::Possession>,
-    (mut swarm, mut gadget, mut blast, mut kill_cams, mut decals): (
+    (mut swarm, mut gadget, mut blast, mut kill_cams, mut decals, mut gunshots): (
         MessageWriter<crate::swarm::SummonSwarm>,
         MessageWriter<crate::gadgets::UseGadget>,
         MessageWriter<crate::gadgets::Explosion>,
         MessageWriter<crate::killcam::StartKillCam>,
         MessageWriter<crate::decals::SpawnDecal>,
+        MessageWriter<crate::gadgets::Gunshot>,
     ),
     (mut aim, held, paused, keys, bind, mut fx, muzzles, mut tagged): (
         ResMut<crate::aim::Aim>,
@@ -1444,6 +1445,8 @@ fn use_power(
             // (`Ps_PlayerPistol_StdMuzzle_01`, `Ps_Pistol_StdTracer_01`)
             let filter = QueryFilter::default().exclude_collider(pe).groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_NPC | GROUP_PROP));
             let shot = crate::footsteps::ray_surface_normal(&ctx, &surfaces, eye, dir, 80.0, filter);
+            // (its path, for a grenade it passes)
+            gunshots.write(crate::gadgets::Gunshot { from: eye, to: eye + dir * shot.map_or(80.0, |s| s.1) });
             if let Some((m, mt, _)) = muzzles.iter().find(|(_, _, m)| m.0 == Power::Pistol) {
                 fx.write(crate::particles::SpawnEffect { follow: Some(m), turn: true, view: true, secs: 2.5, ..crate::particles::SpawnEffect::at("pistol_muzzle", Vec3::ZERO) });
                 // (the tracer's beam: from the muzzle to where the shot ends)
@@ -1777,6 +1780,13 @@ fn blink_travel(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// A tallboy's stilt (the bodies of `Skm_TallBoy_Physics` with `Phm_Tallboy_Legs`: its ankles,
+/// knees, feet and claws, not the rider's own legs).
+fn is_stilt(bone: &str) -> bool {
+    let b = bone.to_ascii_lowercase();
+    b.contains("stilt") || b.contains("ankle") || b.contains("claw_slide")
+}
+
 pub(crate) fn update_projectiles(
     mut commands: Commands,
     time: Res<Time>,
@@ -1792,7 +1802,7 @@ pub(crate) fn update_projectiles(
     mut blasts: MessageWriter<crate::gadgets::Explosion>,
     (mut fx, level): (MessageWriter<crate::particles::SpawnEffect>, Option<Res<crate::level::LevelInfo>>),
 ) {
-    let dt = time.delta_secs() * tc.world_scale();
+    let dt = time.delta_secs() * tc.projectile_scale();
     let Ok(ctx) = rapier.single() else { return };
     let pe = player.single().ok();
     for (e, mut pr, mut t) in &mut q {
@@ -1854,7 +1864,21 @@ pub(crate) fn update_projectiles(
             t.translation += step / len * toi;
             pr.stuck = true;
             pr.life = pr.life.min(5.0);
-            let what = if npcs.get(hit).is_ok() { "Body" } else { impact_surface(surface) };
+            // a tallboy's stilts take nothing (its AdjustDamage 0x00B83D60: hits on its legs'
+            // `Phm_Tallboy_Legs` bodies zeroed, no flinch; metal to a bolt, which vanishes there,
+            // decoded for this rewrite)
+            let stilt = npcs.get(hit).is_ok_and(|(n, _, rig)| {
+                n.pawn.to_ascii_lowercase().contains("tallboy")
+                    && rig
+                        .and_then(|r| {
+                            (0..r.len())
+                                .filter_map(|i| Some((i, globals.get(r.joint_at(i)?).ok()?.translation())))
+                                .min_by(|a, b| a.1.distance_squared(t.translation).total_cmp(&b.1.distance_squared(t.translation)))
+                                .and_then(|(i, _)| r.name_of(i))
+                        })
+                        .is_some_and(is_stilt)
+            });
+            let what = if npcs.get(hit).is_ok() && !stilt { "Body" } else { impact_surface(surface) };
             // what it strikes shows it (`Dis_ContactSystem`: a bolt's, a dart's, a burning one's)
             if let Some(level) = level.as_ref() {
                 let striker = match pr.kind {
@@ -1862,9 +1886,13 @@ pub(crate) fn update_projectiles(
                     HitKind::Fire => crate::impacts::ARROW_FLARE,
                     _ => crate::impacts::ARROW,
                 };
-                let body = npcs.get(hit).is_ok();
-                let struck = if body { "Body" } else { crate::impacts::struck(surface) };
+                let body = npcs.get(hit).is_ok() && !stilt;
+                let struck = if body { "Body" } else if stilt { "Metal" } else { crate::impacts::struck(surface) };
                 crate::impacts::spawn(&mut fx, &level.scene, striker, struck, t.translation, if body { -step / len } else { normal });
+            }
+            if stilt {
+                commands.entity(e).despawn();
+                continue;
             }
             if pr.kind == HitKind::Bolt {
                 pr.recoverable = data.pawn("arrow.m_bCanRecoverAmmoInEnvironment", 1.0) > 0.0;

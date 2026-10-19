@@ -648,7 +648,10 @@ are in the settings file, `pad_binding_set` 0-3):
   them (the divisor is our reading of "divides the query's radius"). Script: `equipcharm NAME` equips a specific cooked charm for checks.
   Full elixir inventories disable the shop's purchase action without spending coins.
   Bolt movement, gravity and lifetime now stop during full Bend Time and advance at
-  the world's slowed rate during partial Bend Time.
+  the world's slowed rate during partial Bend Time. In its last
+  `m_fProjectileEarlyWakeupTime` (0.25 s, real time) every projectile, whoever's (bolts, grenades,
+  tallboy arrows, thrown things), wakes to Corvo's own pace as the world comes back (0x00BF36F0,
+  decoded for this rewrite).
   Ordinary bolts can be recovered from surfaces, bodies, and the air. Reinforced Bolts
   reduces the original 70% body-impact break chance to 20%; intact embedded bolts
   follow the struck character's skeleton. Recovering a bolt respects the quiver's
@@ -1644,11 +1647,29 @@ are in the settings file, `pad_binding_set` 0-3):
   scripts hear of it (`DisSeqEvent_Distracted`) and run the props' scenes.
 - **Keyholes**: a shut door whose mesh has a keyhole (`KeyHole` socket) shows "Hold [Use]
   Keyhole": a tap opens the door, a hold puts Corvo's eye to the keyhole (the view from the
-  far side through the HUD movie's keyhole shape, at `m_fKeyHoleFOV`, the look held near
-  straight through, its sensitivity held down as `DisTweaks_PlayerInput` limits it:
+  far side through the HUD movie's keyhole shape, at `m_fKeyHoleFOV`, the look free (the keyhole
+  state sets no angle limits, 0x00AB02C0), its sensitivity held down as `DisTweaks_PlayerInput` limits it:
   `m_fLimitedMouseSensitivity_Keyhole` 7 against the mouse's 13, the pad's 0.5; sprinting, the
   look is held down the same way, to 10 and 0.85) until [Use] again; the level scripts'
   `DisSeqEvent_KeyHoleUsed` fire.
+- **Leaning** (Q / E held), as the user's own Dishonored.exe has it (the input's tick 0x00AB3FF0,
+  `StatePlayerMasterLeaning` 0x00A76590, decoded for this rewrite):
+  - Asked for only while Corvo's whole velocity (falling too) is under `m_fBreakLean_Speed_PC`,
+    200 uu/s. Walking (400) and sneaking (275) let it go; sneaking sideways (137) doesn't. With the
+    key still down it comes back once he slows.
+  - The side held first wins (left if both went down together). Let go, it holds
+    `m_fLeanReleaseTime` (0.2 s) before easing back.
+  - While leaning the look stays within 60 degrees of yaw and 35 of pitch of where it was as the
+    lean began. There is no forward lean on PC as shipped (`Dis_Lean_Toggle` does nothing
+    without `m_bUseLeanToggle`).
+- **Tallboys' stilts take nothing** (the tallboy's AdjustDamage 0x00B83D60): a bolt, dart or
+  flare striking the stilts (`Phm_Tallboy_Legs`: the ankles, knees, feet and claws, not the rider's
+  own legs) does no damage and makes it flinch not at all. It strikes them as metal and vanishes
+  there, no sticking.
+- **Grenades set off**: a live grenade that takes a bullet (Corvo's or a character's) or a
+  blast's damage goes off `m_fExplosionDelayOnTakeDamage` (0.2 s) later, its fuse set to that,
+  longer or shorter (`m_bExplodesGrenades` damage, 0x00C584F0 / 0x00C582B0). A bolt, dart or the
+  sword doesn't set one off.
 - **Mask optics**: [Zoom] (Alt) magnifies the view through the mask's lens once Corvo has the
   first optics upgrade, as the post-process graph's zoom lens draws it: `PPG_LensVectors` blurs
   and bends the lens's outer ring into the motion blur's field, `PPG_LensCompose` darkens the

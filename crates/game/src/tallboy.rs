@@ -114,7 +114,7 @@ fn fly(
     mut blasts: MessageWriter<crate::gadgets::Explosion>,
     mut zones: ResMut<crate::danger::DangerZones>,
 ) {
-    let dt = time.delta_secs() * tc.world_scale();
+    let dt = time.delta_secs() * tc.projectile_scale();
     let Ok(ctx) = rapier.single() else { return };
     let walls = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     let pp = player.single().ok().map(|(t, p)| (t.translation, p.crouched));

@@ -810,6 +810,9 @@ pub struct TimeControl {
 /// a short hop leaves it near 0.94). Corvo's own pace stays (the layer's player rate is 1).
 pub const BLINK_FLOOR: f32 = 0.05;
 
+/// How long before bent time ends its projectiles wake (`m_fProjectileEarlyWakeupTime`, s).
+pub const PROJECTILE_WAKE: f32 = 0.25;
+
 impl Default for TimeControl {
     fn default() -> Self {
         Self { bend_remaining: 0.0, world_dilation: 0.0, wheel: 1.0, scripted: None, finisher: 1.0, aim_freeze: 1.0, player_dilation: 1.0, bend_lag: 0.0, bend_on: false, ramp_in: 0.15, ramp_out: 0.25, blink_layer: 1.0, blink_rate: 0.0 }
@@ -848,6 +851,16 @@ impl TimeControl {
     }
     /// The time scale of what goes on through bent time (Corvo's own: his pace in it, a
     /// finisher's and the wheel's slow motion).
+    /// Projectiles' time scale: the world's, but in bent time's last `m_fProjectileEarlyWakeupTime`
+    /// (0.25 s, real time) they wake to Corvo's own pace, coming in with the cool-down (0x00BF36F0,
+    /// decoded for this rewrite: every projectile, whoever's).
+    pub fn projectile_scale(&self) -> f32 {
+        if self.bend_remaining > 0.0 && self.bend_remaining <= PROJECTILE_WAKE {
+            self.own_scale().max(self.world_scale())
+        } else {
+            self.world_scale()
+        }
+    }
     pub fn own_scale(&self) -> f32 {
         self.finisher.min(1.0) * self.wheel * self.player_rate()
     }

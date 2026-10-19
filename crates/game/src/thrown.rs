@@ -87,7 +87,7 @@ fn fly_thrown(
     level: Option<Res<LevelInfo>>,
     (mut hits, mut sfx): (MessageWriter<PlayerHit>, MessageWriter<PostEvent>),
 ) {
-    let dt = time.delta_secs() * tc.world_scale();
+    let dt = time.delta_secs() * tc.projectile_scale();
     if dt <= 0.0 {
         return;
     }

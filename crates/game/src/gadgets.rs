@@ -25,10 +25,11 @@ impl Plugin for GadgetsPlugin {
             .add_message::<Explosion>()
             .add_message::<NpcGrenade>()
             .add_message::<ChokeDust>()
+            .add_message::<Gunshot>()
             .add_systems(Update, grenade_focus.after(crate::interact::FocusSet).before(crate::props::prop_focus).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
             .add_systems(Update, mine_focus.after(grenade_focus).before(crate::props::prop_focus).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
             .add_systems(Update, restore_gadgets.after(crate::save::restore_npcs).before(grenade_focus).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (use_gadget, npc_grenades, fly_grenades, razors, mines, choke_clouds, explode).chain().after(grenade_focus).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (use_gadget, npc_grenades, grenades_struck, fly_grenades, razors, mines, choke_clouds, explode).chain().after(grenade_focus).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -705,6 +706,46 @@ fn npc_grenades(mut commands: Commands, mut throws: MessageReader<NpcGrenade>, a
     }
 }
 
+/// A shot's path (Corvo's pistol; a character's comes as `NpcShot`), for what it passes.
+#[derive(Message, Clone, Copy)]
+pub struct Gunshot {
+    pub from: Vec3,
+    pub to: Vec3,
+}
+
+/// How long a grenade struck lasts before it goes off (`m_fExplosionDelayOnTakeDamage`, 0.2 s
+/// on every grenade), and how near a shot passes to strike one (m).
+const STRUCK_FUSE: f32 = 0.2;
+const GRENADE_RADIUS: f32 = 0.12;
+
+/// A grenade that takes damage of a kind that sets grenades off (`m_bExplodesGrenades`: a
+/// bullet, a blast, a spring razor; not a bolt, a dart, the sword or a whiskey bottle) goes off
+/// 0.2 s later, its fuse set to that, longer or shorter (0x00C584F0 / 0x00C582B0, decoded for
+/// this rewrite).
+fn grenades_struck(
+    mut q: Query<(&mut Grenade, &Transform)>,
+    (mut blasts, mut shots, mut gun): (MessageReader<Explosion>, MessageReader<crate::npc::NpcShot>, MessageReader<Gunshot>),
+) {
+    let mut paths: Vec<(Vec3, Vec3)> = shots.read().filter(|s| !s.bow).map(|s| (s.from, s.to)).collect();
+    paths.extend(gun.read().map(|g| (g.from, g.to)));
+    let blasts: Vec<(Vec3, f32)> = blasts.read().filter(|b| b.effect != "whiskey" && b.radius > 0.0).map(|b| (b.at, b.radius)).collect();
+    if paths.is_empty() && blasts.is_empty() {
+        return;
+    }
+    for (mut g, t) in &mut q {
+        let p = t.translation;
+        let shot = paths.iter().any(|(a, b)| {
+            let ab = *b - *a;
+            let k = ((p - *a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
+            (*a + ab * k).distance(p) < GRENADE_RADIUS
+        });
+        let blasted = blasts.iter().any(|(at, r)| at.distance(p) < *r && at.distance(p) > 0.05);
+        if shot || blasted {
+            g.fuse = STRUCK_FUSE;
+        }
+    }
+}
+
 fn fly_grenades(
     mut commands: Commands,
     time: Res<Time>,
@@ -719,7 +760,7 @@ fn fly_grenades(
     cam: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
     (mut clouds, mut hits, mut zones): (MessageWriter<ChokeDust>, MessageWriter<NpcHit>, ResMut<crate::danger::DangerZones>),
 ) {
-    let dt = time.delta_secs() * tc.world_scale();
+    let dt = time.delta_secs() * tc.projectile_scale();
     let Ok(ctx) = rapier.single() else { return };
     let pe = player.single().ok();
     let all = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP | GROUP_NPC | crate::level::GROUP_PLAYER));
