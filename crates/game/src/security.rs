@@ -1213,6 +1213,8 @@ fn alarms(
                     if let Some(e) = pick {
                         if let Ok((_, mut n, _)) = npcs.get_mut(e) {
                             n.alarm_run = Some(pos);
+                            // (sent to ring it: it suspects, `ForceRingAlarm`)
+                            n.suspecting = true;
                             n.bark_req = (n.bark_req.0.wrapping_add(1), "ALARM_GO_TO_RING_ALARM");
                             info!("alarm: {} runs to ring the bell", n.name);
                         }

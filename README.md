@@ -1385,6 +1385,35 @@ are in the settings file, `pad_binding_set` 0-3):
     spot. Otherwise it stands 0.5-1 s, then searches on.
   - The watch points and the random spots about where he was lost that it went to before are
     gone. `DH_SEARCH_LOG` logs the crumbs and the searchers' picks.
+- **Suspicion, as the original's brain keeps it** (`npc.rs`; decoded from `Dishonored.exe` for
+  this rewrite: the brain tick 0x00B24340, the attention reactions 0x00B36680):
+  - Two levels, unsuspecting and suspecting, apart from what a character is doing. Its
+    attention profile against Corvo is its level's. Suspecting, a guard's attention leaks
+    slower (0.015 a second, not 0.025), it investigates from 0.5 (not 0.6) and keeps on to
+    0.1 (not 0.3), and it walks its rounds with its sword out in its patrol stance. It says
+    `ESCALATE_SUSPICION_LEVEL` as it steps up.
+  - What makes it suspect: a body found, Corvo seen carrying one, an alarm heard or being
+    sent to ring one, being struck, an ally seen fighting, Corvo seen or touched once its
+    attention is at investigating, arriving after him from another level, a scripted search,
+    `DisSeqAct_AISetSuspicionLevel`, its spawner's `m_SpawnAtSuspicionLevel`.
+  - Nothing brings it back down but the level scripts (`DisSeqAct_AISetSuspicionLevel` set to
+    unsuspecting): no timer, not a search's end. Saved with the game.
+  - A search heard of keeps the unsuspecting profile: it ends sooner (about 12 s).
+  - Bark and conversation branches on suspicion read this level.
+- **Lines that call the others** (the dialog hooks' flags, 0x01471D0C and 0x00C9BB50, decoded
+  for this rewrite). A line said carries a call to the others of the speaker's side (or
+  neutrals it protects); no line, no call:
+  - The combat lines (threats, attacks, cries, begging, panic, going to ring an alarm,
+    taunts out of reach, the Overseers' and thugs' calls, `SEARCH_FIND_ENEMY`) carry a cry for
+    help heard 25 m off (`m_BattleLoudness`).
+  - The search lines (`SEARCH`, `SEARCH_GROUP`, `ATTENTION_INVESTIGATE`,
+    `ATTENTION_TRACKTARGET_BEGIN`) carry a search request to 25 m (`m_SearchLoudness`): those
+    who hear it look into where the caller thinks Corvo is, at a walk, their attention at
+    least at investigating. One already looking there passes it by.
+  - `ATTENTION_NOTICE_BEGIN` carries a notice to 8 m: they turn to look there.
+  - A searcher come to its spot looks it over (its check's 10 s cooldown permitting) and tells
+    those within 20 m. One investigating the same spot (within 2.5 m) gives up its own look
+    and searches on, a body it went to handled all the same (`SearchReachedProxy`).
 - **Assassinations**: attacking someone unaware of Corvo (from behind, or anyone who hasn't
   noticed him) plays the original paired clips by the side he takes them from — front, back,
   left or right; slow and deliberate while sneaking, quick otherwise, and their own variants

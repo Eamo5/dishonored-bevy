@@ -508,16 +508,12 @@ fn apply_ai_fx(
                 }
             }
             AiFx::Suspicion { targets, suspecting } => {
+                // (the brain's suspicion level, either way: the only way back to unsuspecting,
+                // 0x00B4E770)
                 let sp = spawners(&targets);
                 for (mut n, from, _) in &mut npcs {
-                    if sp.contains(&from.0) && !n.is_down() && n.mode != Mode::Combat {
-                        if suspecting {
-                            n.alert = crate::npc::Alert::Suspicious;
-                            n.awareness = n.awareness.max(0.5);
-                        } else {
-                            n.alert = crate::npc::Alert::Unaware;
-                            n.awareness = n.awareness.min(0.2);
-                        }
+                    if sp.contains(&from.0) && !n.is_down() {
+                        n.suspecting = suspecting;
                     }
                 }
             }
@@ -535,6 +531,8 @@ fn apply_ai_fx(
                     } else {
                         n.last_seen = Some(at.or(n.last_seen).unwrap_or(t.translation));
                         n.alert = crate::npc::Alert::Suspicious;
+                        // (a scripted search makes it suspect, 0x00B63770)
+                        n.suspecting = true;
                         n.set_mode(Mode::Search);
                     }
                 }
@@ -1038,11 +1036,11 @@ fn spawn_props(
             npc.awareness = 1.0;
             npc.last_seen = pos;
         } else if npc.alert == crate::npc::Alert::Unaware && !npc.is_down() {
-            // the suspicion it starts with (`m_SpawnAtSuspicionLevel`, at most Suspecting)
+            // the suspicion level it starts with (`m_SpawnAtSuspicionLevel`, at most Suspecting:
+            // its brain's, not its attention, travel_decode)
             let start = level.as_ref().and_then(|l| l.scene.spawners.get(from.0 as usize)).and_then(|s| s.spawn_at.clone()).unwrap_or_default().to_ascii_lowercase();
             if start.contains("curious") || start.contains("suspect") || start.contains("search") || start.contains("alert") || start.contains("investig") || start.contains("combat") || start.contains("busted") {
-                npc.alert = crate::npc::Alert::Suspicious;
-                npc.awareness = npc.awareness.max(0.4);
+                npc.suspecting = true;
             }
         }
     }

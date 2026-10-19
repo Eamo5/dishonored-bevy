@@ -73,8 +73,9 @@ pub struct BarkState {
     /// projectile last struck it
     falling: bool,
     aiming: bool,
-    /// a body found, a death seen (as last seen)
+    /// a body found, a death seen, suspecting (as last seen)
     saw_body: bool,
+    suspecting: bool,
     witnessed_death: bool,
     /// since it last stood easy: it has seen Corvo (it hunts him), it has gone to look
     hunted: bool,
@@ -148,13 +149,26 @@ const WEEP_BARK: [f32; 2] = [2.0, 5.0];
 /// `SEARCH_STOPHUNTING_GROUP`), as far as a fight spreads.
 const GROUP_REACH: f32 = 10.0;
 
+/// The hooks whose lines carry a cry for help to the others of the speaker's side (25 m,
+/// `m_BattleLoudness`), and those that carry a search request (25 m, `m_SearchLoudness`): the
+/// native dialog-hook table's flags 8 and 0x20 (0x01471D0C, decoded for this rewrite).
+const HELP_HOOKS: [&str; 44] = [
+    "SEARCH_FIND_ENEMY", "COMBAT_THREAT", "COMBAT_THREAT_VERSUS", "COMBAT_THREAT_GROUP", "COMBAT_THREAT_OFFSCREEN", "COMBAT_RANGED_BEGIN", "COMBAT_HELP", "COMBAT_TAUNT_WITH_GESTURE",
+    "COMBAT_ATTACK", "COMBAT_BIG_ATTACK", "COMBAT_ATTACK_RATSWARM", "COMBAT_BLIND_ATTACK", "COMBAT_DYING", "COMBAT_OUCH_SMALL", "COMBAT_OUCH_BIG", "COMBAT_IMMOLATED", "COMBAT_BEGGING",
+    "COMBAT_HELP_FOUND", "PANIC_START", "PANIC_START_RATSWARM", "FLEEING", "PANIC_NOWHERE_TO_HIDE", "ALARM_GO_TO_RING_ALARM", "ALARM_GO_TO_RING_ALARM_OTHER", "FALLING", "UNREACH_TAUNT",
+    "UNREACH_BELOW", "UNREACH_GIVEUP", "UNREACH_GIVEUP_WITHGROUP", "UNREACH_SEEK_ALLIES", "UNREACH_THROW_STONE", "UNREACH_RANGED_THREAT", "WEEP_NOTICED_TARGET", "WEEP_FOLLOWING",
+    "WEEP_STAND_STILL_WEEPING", "COMBAT_OVS_MELEE_RUSH", "COMBAT_OVS_GRENADE_FLUSH", "COMBAT_OVS_GRENADE_COLLATERAL", "COMBAT_OVS_GRENADE_ALLIES", "COMBAT_OVS_GRENADE_JUMPAWAY",
+    "COMBAT_OVS_COORDCHARGE_ANNOUNCE", "COMBAT_OVS_COORDCHARGE_TRIGGER", "COMBAT_THUG_SCRAMBLE", "ATTENTION_SAW_OTHER_ATTACK",
+];
+const SEARCH_HOOKS: [&str; 4] = ["SEARCH", "SEARCH_GROUP", "ATTENTION_INVESTIGATE", "ATTENTION_TRACKTARGET_BEGIN"];
+
 /// The output a hook node takes for what its speaker knows (`DisConv_Hook_<class>`, as roshan's
 /// r614/blink research decoded them): a suspicion level's (`SuspicionLevel`, `SuspicionDist`)
 /// by whether it suspects anything, a notice's (`Notice`) by whether it saw or heard; others
 /// all their lines.
 fn hook_output(class: &str, npc: &Npc) -> Option<usize> {
     match class {
-        "SuspicionLevel" | "SuspicionDist" => Some((npc.alert != Alert::Unaware) as usize),
+        "SuspicionLevel" | "SuspicionDist" => Some(npc.suspecting as usize),
         "Notice" => Some(if npc.sees_player { 0 } else { 1 }),
         _ => None,
     }
@@ -248,7 +262,7 @@ fn npc_barks(
     data: Res<crate::gamedata::Data>,
     burning: Query<(), With<crate::powers::Ignite>>,
     mut hits: MessageReader<crate::gameplay::NpcHit>,
-    (mut memory, vm): (ResMut<BarkMemory>, Option<Res<crate::kismet::Vm>>),
+    (mut memory, vm, mut calls): (ResMut<BarkMemory>, Option<Res<crate::kismet::Vm>>, MessageWriter<crate::npc::AllyCall>),
 ) {
     let Some(level) = level else { return };
     let Ok(pt) = player.single() else { return };
@@ -303,6 +317,7 @@ fn npc_barks(
                 falling: false,
                 aiming: false,
                 saw_body: npc.saw_body,
+                suspecting: npc.suspecting,
                 witnessed_death: npc.witnessed_death,
                 hunted: false,
                 looked: false,
@@ -429,6 +444,9 @@ fn npc_barks(
         } else if !down && npc.hostile() && !st.grenade && npc.escape.is_some() {
             // a grenade by it, making off (`ESCAPE_IMPENDING_EXPLOSION`)
             want = Some(&["ESCAPE_IMPENDING_EXPLOSION"]);
+        } else if !down && npc.suspecting && !st.suspecting && npc.hostile() {
+            // come to suspect (`DDH_ESCALATE_SUSPICION_LEVEL`, as its brain steps up)
+            want = Some(&["ESCALATE_SUSPICION_LEVEL"]);
         } else if !down && npc.carry_bark.is_some() {
             // Corvo seen carrying a body, by one not his enemy (`DDH_NOTICE_CARRYING_*_CORPSE`,
             // as its relation to the body: none of the shipped voices has lines for them)
@@ -555,6 +573,7 @@ fn npc_barks(
         st.grenade = npc.escape.is_some();
         st.falling = !npc.grounded && npc.velocity.y < FALL_SPEED;
         st.saw_body = npc.saw_body;
+        st.suspecting = npc.suspecting;
         st.witnessed_death = npc.witnessed_death;
         if npc.mode != Mode::Combat {
             st.was_stuck = false;
@@ -644,7 +663,7 @@ fn npc_barks(
                     };
                     (!pool.is_empty()).then(|| pool[rand::random_range(0..pool.len())])
                 } else {
-                    walk_bark(bark, (npc.voice.unwrap_or(0), r.hook), out_k.unwrap_or(0), (e, npc.alert != Alert::Unaware, &npc.story_group), vm.as_deref(), &mut memory, now)
+                    walk_bark(bark, (npc.voice.unwrap_or(0), r.hook), out_k.unwrap_or(0), (e, npc.suspecting, &npc.story_group), vm.as_deref(), &mut memory, now)
                 };
                 let Some((i, (event, text))) = line.and_then(|i| bark.lines.get(i).map(|l| (i, l))) else {
                     if log {
@@ -669,6 +688,20 @@ fn npc_barks(
                 let [lo, hi] = r.refire;
                 man.next.insert((e, bark.hook.clone()), now + lo + rand::random::<f32>() * (hi - lo).max(0.0));
                 fired.push((e, bark.hook.clone()));
+                // the call its line carries to the others of its side (the dialog hooks' flags,
+                // 0x00C9BB50): a cry for help, a search request, a notice; no line, no call
+                let kind = if HELP_HOOKS.contains(&bark.hook.as_str()) {
+                    Some(crate::npc::CallKind::Help)
+                } else if SEARCH_HOOKS.contains(&bark.hook.as_str()) {
+                    Some(crate::npc::CallKind::Search)
+                } else if bark.hook == "ATTENTION_NOTICE_BEGIN" {
+                    Some(crate::npc::CallKind::Notice)
+                } else {
+                    None
+                };
+                if let Some(kind) = kind {
+                    calls.write(crate::npc::AllyCall { from: t.translation, spot: npc.last_seen.or(npc.target).unwrap_or(t.translation), faction: npc.faction.clone(), kind });
+                }
                 if !ignore {
                     slots[quiet as usize] -= 1;
                     if slots[quiet as usize] < 1 {

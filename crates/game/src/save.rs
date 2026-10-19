@@ -163,6 +163,8 @@ pub struct NpcSave {
     yaw: f32,
     mode: Mode,
     alert: Alert,
+    #[serde(default)]
+    suspecting: bool,
     health: f32,
     awareness: f32,
     down_t: f32,
@@ -617,6 +619,7 @@ pub(crate) fn save_game(
                 yaw: n.yaw,
                 mode: n.mode,
                 alert: n.alert,
+                suspecting: n.suspecting,
                 health: n.health,
                 awareness: n.awareness,
                 down_t: n.down_t,
@@ -1041,6 +1044,7 @@ pub(crate) fn restore_npcs(mut commands: Commands, mut q: Query<(Entity, &Restor
         // (saves from before health was the original's keep no more than it)
         n.health = s.health.min(n.max_health);
         n.alert = s.alert;
+        n.suspecting = s.suspecting;
         n.awareness = s.awareness;
         if let Some(p) = s.patrol.clone() {
             n.patrol = p;

@@ -288,6 +288,7 @@ fn arrived(mut commands: Commands, mut npcs: Query<(Entity, &mut Npc, &mut Trans
         n.health = a.health.min(n.max_health).max(1.0);
         n.alert = Alert::Combat;
         n.awareness = 1.0;
+        n.suspecting = true;
         n.last_seen = Some(a.corvo);
         n.set_mode(Mode::Combat);
         // (visiting: where it came in is where it goes back to, `ReturnTravelRequest`)

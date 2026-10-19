@@ -32,6 +32,7 @@ impl Plugin for NpcPlugin {
             .add_message::<NpcFinisher>()
             .add_message::<NpcSpawned>()
             .add_message::<NpcShot>()
+            .add_message::<AllyCall>()
             .add_systems(OnEnter(GameState::InGame), spawn_npcs.after(LevelSpawnSet))
             .init_resource::<HandledBodies>()
             .add_systems(OnEnter(GameState::InGame), |mut h: ResMut<HandledBodies>| h.0.clear())
@@ -317,6 +318,13 @@ pub struct Npc {
     /// what it says this frame of a body Corvo carries (busted, not his enemy: the body one of
     /// its side's 0, neutral to it 1, its enemy's 2)
     pub carry_bark: Option<u8>,
+    /// its brain's suspicion level (`m_SuspicionLevel`): Suspecting once a body, a fight, an
+    /// alarm, a blow or Corvo seen up close has set it; nothing but the level scripts takes it
+    /// back (decoded for this rewrite: no timer, no search's end)
+    pub suspecting: bool,
+    /// its search's check clip's cooldown (10 s: a searcher come to a spot looks it over, and
+    /// tells the others there, only so often)
+    pub check_cd: f32,
     /// Corvo dealt its last blow (else another character or the world did)
     pub hit_by_player: bool,
     /// its panic behaviour's last-survivor count (`DisAIBrainProcessPanic.m_KillQueue`: when
@@ -2246,6 +2254,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         magic_react: None,
         magic_bark: None,
         carry_bark: None,
+        suspecting: false,
+        check_cd: 0.0,
         hit_by_player: false,
         kill_queue: Vec::new(),
         panics: 0,
@@ -2748,6 +2758,10 @@ fn npc_hits(
             npc.enemy = true;
             stances.wronged(npc.spawner);
         }
+        // (struck by Corvo or another: it suspects, its attention reactions' `AttackedBy`)
+        if !matches!(h.kind, HitKind::Rats | HitKind::WallOfLight) {
+            npc.suspecting = true;
+        }
         // struck, those whose panic has `m_AttackedMelee` / `m_AttackedRanged` (every shipped
         // tweak both or neither) run from whoever struck them, friend or foe (0x00B61390)
         let struck_panic = h.damage > 0.0 && may_flee(&npc) && level.as_ref().is_some_and(|l| panic_rule(Some(&l.scene), &npc, "AttackedMelee") || panic_rule(Some(&l.scene), &npc, "AttackedRanged"));
@@ -2985,13 +2999,25 @@ fn npc_hits(
 
 fn npc_hearing(
     mut noises: MessageReader<Noise>,
+    mut calls: MessageReader<AllyCall>,
     mut npcs: Query<(&mut Npc, &Transform)>,
     level: Option<Res<LevelInfo>>,
     player: Query<&Transform, (With<Player>, Without<Npc>)>,
     rooms: Res<crate::audiorooms::AudioRooms>,
 ) {
     let corvo = player.single().ok().map(|t| t.translation);
-    for n in noises.read() {
+    let scene = level.as_ref().map(|l| &l.scene);
+    let calls: Vec<AllyCall> = calls.read().cloned().collect();
+    // (one of the caller's side, or a neutral it protects, hears a call as one: 0x00B0F0F0)
+    let heeds = |npc: &Npc, c: &AllyCall| {
+        let rel = relation(scene, &npc.faction, &c.faction);
+        rel == 1 || rel == 0 && npc.npc_type.and_then(|t| scene?.npc_types.get(t as usize)).and_then(|t| t.sight.as_ref()).is_some_and(|s| s.protect_neutrals)
+    };
+    // (a cry for help a line carries is heard as any other, but taken up only by those of its
+    // side)
+    let mut heard: Vec<(Noise, Option<&AllyCall>)> = noises.read().map(|n| (*n, None)).collect();
+    heard.extend(calls.iter().filter(|c| c.kind == CallKind::Help).map(|c| (Noise { corvo: false, pos: c.from, radius: 25.0, kind: NoiseKind::Help }, Some(c))));
+    for (n, call) in &heard {
         // (his own noises: where he is)
         let his = corvo.is_some_and(|p| p.distance(n.pos) < 2.0);
         for (mut npc, t) in &mut npcs {
@@ -3024,7 +3050,7 @@ fn npc_hearing(
                     continue;
                 }
             }
-            if !npc.hostile() {
+            if !npc.hostile() || call.is_some_and(|c| !heeds(&npc, c)) {
                 continue;
             }
             // what it hears raises its attention (the original's increase for the noise's
@@ -3038,6 +3064,10 @@ fn npc_hearing(
             if let Some(att) = level.as_ref().and_then(|l| attention_of(&npc, &l.scene)) {
                 if npc.alert == Alert::Combat {
                     continue;
+                }
+                // (an alarm makes it suspect, its attention reactions' `Alarm`)
+                if n.kind == NoiseKind::Alarm {
+                    npc.suspecting = true;
                 }
                 let (amount, lvl) = att.heard[n.kind.slot()];
                 let reason = match n.kind {
@@ -3092,6 +3122,45 @@ fn npc_hearing(
             }
         }
     }
+    // a search request (to 25 m) or a notice (to 8 m) from one of its side: its attention at
+    // least at investigating (searching itself, at a walk, where the caller thinks Corvo is) or
+    // at turning to look there (0x00B438C0, 0x00B3F7F0, decoded for this rewrite)
+    for c in calls.iter().filter(|c| c.kind != CallKind::Help) {
+        let reach = if c.kind == CallKind::Search { 25.0 } else { 8.0 };
+        for (mut npc, t) in &mut npcs {
+            if npc.is_down() || !npc.hostile() || npc.kind == Kind::Story || npc.deaf || npc.alert == Alert::Combat || t.translation.distance(c.from) < 0.05 || !heeds(&npc, c) {
+                continue;
+            }
+            let (d, through) = match rooms.route(t.translation, c.from, true) {
+                Some(r) => (r.dist, r.gain),
+                None => (t.translation.distance(c.from), 1.0),
+            };
+            if d > reach * through {
+                continue;
+            }
+            // (one already looking there, within 2.5 m of the spot, is on it: as a searcher come
+            // to a spot others look into is, `SearchReachedProxy`)
+            if matches!(npc.mode, Mode::Search | Mode::Investigate) && npc.last_seen.is_some_and(|l| (l - c.spot).abs().max_element() < 2.5) {
+                continue;
+            }
+            let Some(att) = scene.and_then(|s| attention_of(&npc, s)) else { continue };
+            let floor = att.levels[if c.kind == CallKind::Search { 2 } else { 1 }][0];
+            if npc.awareness >= floor {
+                continue;
+            }
+            npc.awareness = floor;
+            npc.last_seen = Some(c.spot);
+            if c.kind == CallKind::Search && !matches!(npc.mode, Mode::Investigate | Mode::Flee) {
+                if std::env::var("DH_NPC_LOG").is_ok() {
+                    info!("{}: joins a search at {:.1} (called {d:.1} m off)", npc.name, c.spot);
+                }
+                npc.alert = Alert::Suspicious;
+                npc.target = Some(c.spot);
+                npc.search_run = false;
+                npc.set_mode(Mode::Investigate);
+            }
+        }
+    }
 }
 
 /// The attention level (0 unaware, 1 head track, 2 turn to face, 3 investigate, 4 busted) an
@@ -3127,9 +3196,11 @@ pub(crate) fn raise_attention(npc: &mut Npc, att: &dhcook::format::Attention, (a
 
 pub fn attention_of<'a>(npc: &Npc, scene: &'a dhcook::format::Scene) -> Option<&'a dhcook::format::Attention> {
     let s = npc.npc_type.and_then(|t| scene.npc_types.get(t as usize)).and_then(|t| t.sight.as_ref())?;
+    // (its suspicion level picks the profile against an enemy, `m_pAttentionTweaks_Enemy_
+    // Unsuspecting` / `_Suspecting`: a search heard of keeps the unsuspecting one)
     Some(if !npc.hostile() {
         &s.neutral
-    } else if npc.alert != Alert::Unaware {
+    } else if npc.suspecting {
         &s.suspecting
     } else {
         &s.unsuspecting
@@ -3155,6 +3226,25 @@ fn relation(scene: Option<&dhcook::format::Scene>, me: &str, them: &str) -> u8 {
     } else {
         0
     }
+}
+
+/// A call a character's line carries to the others of its side (the dialog hooks' flags,
+/// decoded for this rewrite: 0x00C9BB50): a cry for help (the combat lines', 25 m), a search
+/// request (the search lines', 25 m: they search where it thinks Corvo is), a notice (8 m:
+/// they look there).
+#[derive(Message, Clone)]
+pub struct AllyCall {
+    pub from: Vec3,
+    pub spot: Vec3,
+    pub faction: String,
+    pub kind: CallKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CallKind {
+    Help,
+    Search,
+    Notice,
 }
 
 /// The marks a body is seen at (`Twk_Attn_Simple_*`): a body, a death as it happens.
@@ -3371,8 +3461,8 @@ pub(crate) fn npc_perception(
         let corvo_side = dhcook::format::is_player_faction(&npc.faction) || scene.and_then(|s| s.allies.get(&npc.faction)).is_some_and(|a| a.iter().any(|f| dhcook::format::is_player_faction(f)));
         if visible && !npc.sees_player && carried.is_some() {
             let flags = sight.map(|s| s.corpses).unwrap_or_default();
-            if flags.escalate && npc.hostile() && npc.alert == Alert::Unaware {
-                npc.alert = Alert::Suspicious;
+            if flags.escalate {
+                npc.suspecting = true;
             }
             if flags.enemy_if_carried && !npc.hostile() && !corvo_side {
                 npc.enemy = true;
@@ -3410,6 +3500,11 @@ pub(crate) fn npc_perception(
             npc.attn_fill = (npc.awareness / att.levels[3][0].max(0.05)).clamp(0.0, 1.0);
             if log && npc.attn_level != was {
                 info!("attention: {} {:.2} level {} -> {} (sees {visible} at {:.1} m of {:.0}, vis {:.2})", npc.name, npc.awareness, was, npc.attn_level, dist.min(99.0), range, pvis.value);
+            }
+            // (its attention reactions, `DART_EscalateSuspicion`, while unsuspecting: its enemy
+            // seen or touched at investigating or more makes it suspect, 0x00B36680)
+            if npc.hostile() && !npc.suspecting && (visible || touching) && npc.attn_level >= 3 {
+                npc.suspecting = true;
             }
             // busted with a body on his shoulder, by one neither his enemy nor of his side
             // (`CarryingCorpseOrBodyPart`, 0x00B42610..0x00B42730): a body of its side, or a
@@ -3542,6 +3637,9 @@ pub(crate) fn npc_perception(
                                 info!("{} finds a body {d:.1} m away (light {light:.2})", npc.name);
                             }
                             npc.saw_body = true;
+                            if flags.escalate {
+                                npc.suspecting = true;
+                            }
                             // (one it saw die, not one it came upon)
                             npc.witnessed_death |= fresh.iter().any(|f| f.0 == *body);
                             // the mission statistics count each body found once
@@ -3601,6 +3699,9 @@ pub(crate) fn npc_perception(
             if let Some((be, b, victim, dying)) = body {
                 npc.found_bodies.push(be);
                 came_upon = Some((b, dying));
+                if flags.escalate {
+                    npc.suspecting = true;
+                }
                 let rel = relation(scene, &npc.faction, &victim);
                 if rel == 1 || rel == 0 && sight.is_some_and(|s| s.protect_neutrals) {
                     if !corvo_side {
@@ -3764,6 +3865,7 @@ pub(crate) fn npc_brain(
         Local<f32>,
     ),
     (mut grenades, mut bottles, mut whiskey_fx, mut throws): (MessageWriter<crate::gadgets::NpcGrenade>, MessageWriter<crate::whiskey::NpcBottle>, MessageWriter<crate::particles::SpawnEffect>, MessageWriter<crate::thrown::NpcThrow>),
+    mut looked_over: Local<Vec<Vec3>>,
     (finishing, mut finishers, mut tallboy_shots, devices, mut patrols, mut handled, mut crumbs): (
         Query<(), With<FinisherClip>>,
         MessageWriter<NpcFinisher>,
@@ -3775,6 +3877,9 @@ pub(crate) fn npc_brain(
     ),
 ) {
     let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
+    // (the spots searchers looked over last frame, and those this frame)
+    let spots_looked_over = std::mem::take(&mut *looked_over);
+    let mut looked_now: Vec<Vec3> = Vec::new();
     let max_attackers = INNER_SKIRMISH_CAPS[(settings.difficulty as usize).min(3)];
     if dt_world <= 0.0 && (dt_own <= 0.0 || !npcs.iter().any(|(_, n, _)| n.out_of_bend)) {
         return;
@@ -3832,6 +3937,7 @@ pub(crate) fn npc_brain(
         }
         npc.mode_timer += dt;
         npc.attack_cd = (npc.attack_cd - dt).max(0.0);
+        npc.check_cd = (npc.check_cd - dt).max(0.0);
         for c in npc.leap_cd.iter_mut() {
             *c = (*c - dt).max(0.0);
         }
@@ -4098,12 +4204,30 @@ pub(crate) fn npc_brain(
             Mode::Investigate => {
                 let goal = npc.target.or(npc.last_seen).unwrap_or(npc.home);
                 npc.target = Some(goal);
+                // another searcher has looked this very spot over (`SearchReachedProxy`, to
+                // those within 20 m of it; the two spots within 2.5 m on every axis): it gives
+                // up its own look, stands a moment and searches on, a body it went to handled
+                // all the same (0x00AFE1C0, 0x00B2E180, decoded for this rewrite)
+                if spots_looked_over.iter().any(|r| r.with_y(0.0).distance(pos.with_y(0.0)) < 20.0 && (*r - goal).abs().max_element() < 2.5) {
+                    if let Some(b) = npc.checking.take() {
+                        handled.0.insert(b);
+                    }
+                    npc.body_check = false;
+                    npc.hold = Some((0.5 + rand::random::<f32>() * 0.5, false));
+                    npc.set_mode(Mode::Search);
+                    continue;
+                }
                 if pos.distance(goal) < 1.6 || npc.mode_timer > 14.0 || npc.stuck > 1.5 {
                     // (not come to it, 0x00AFEB00: where Corvo is out of reach more than 5 m
                     // above, it stares up there, `StareAtUnreachable`, 5 s at most; else it
                     // stands a moment, 0.5-1 s; then it searches on)
                     if pos.distance(goal) >= 1.6 {
                         npc.hold = Some(if goal.y - pos.y > 5.0 { (5.0, true) } else { (0.5 + rand::random::<f32>() * 0.5, false) });
+                    } else if npc.check_cd <= 0.0 {
+                        // (come to it, it looks it over, its check clip's 10 s cooldown
+                        // permitting, and tells those about)
+                        npc.check_cd = 10.0;
+                        looked_now.push(goal);
                     }
                     // (come to a body it found: it looks it over, `Sword_CorpseCheck`, and from then
                     // on the others pass it by, `m_bCorpseHandled`)
@@ -5099,6 +5223,7 @@ pub(crate) fn npc_brain(
             Mode::Choked | Mode::Unconscious | Mode::Dead => {}
         }
     }
+    *looked_over = looked_now;
     if !alerts.is_empty() {
         // an ally starting to fight, within the group distance
         // (`DishonoredGlobalAIManager.m_fGroupDistance` 1000 uu): one that sees it joins the
@@ -5118,6 +5243,8 @@ pub(crate) fn npc_brain(
             let d = to.length();
             let in_view = sight.as_ref().is_none_or(|s| vision_range(s, npc.forward(), to / d.max(1e-3), d, false).is_some());
             let clear = ctx.as_ref().is_some_and(|c| c.cast_ray(eye, to / d.max(1e-3), (d - 0.4).max(0.0), true, world).is_none());
+            // (an ally seen fighting makes it suspect, `SeeAllyCombat`)
+            npc.suspecting |= in_view && clear;
             if in_view && clear {
                 npc.alert = Alert::Combat;
                 npc.awareness = 1.0;
@@ -6622,7 +6749,10 @@ fn npc_select_anim(
 
         // sword: drawn when alerted, holstered otherwise
         let mut drew = false;
+        // (suspecting, a guard walks its rounds with its sword out, its patrol stance:
+        // `EquippedPatrol` with `m_SuspectingEquippedPrimaryItemClass`, the sword)
         let drawn = npc.alert != Alert::Unaware
+            || npc.suspecting && npc.hostile() && npc.has_sword && npc.mode != Mode::Flee
             || matches!(npc.mode, Mode::Combat | Mode::Search | Mode::Investigate)
             || npc.is_down()
             || npc.mode == Mode::Choked;
@@ -7601,7 +7731,7 @@ fn npc_select_anim(
         let alert = npc.alert != Alert::Unaware || matches!(npc.mode, Mode::Combat | Mode::Search | Mode::Investigate);
         // (searching or looking into something, it keeps its patrol stance, its sword in hand: the
         // original's search stance is its patrol's, `DisNPCAnim_EquipToSearch` drawing into it)
-        let search_stance = matches!(npc.mode, Mode::Search | Mode::Investigate) && st.drawn;
+        let search_stance = (matches!(npc.mode, Mode::Search | Mode::Investigate) || npc.suspecting && npc.alert == Alert::Unaware) && st.drawn;
         // a patrolling or guarding character's ambient idles (`DisTweaks_AISubProcess_AmbientAnims`
         // of the patrol and guard behaviours: every 30-60 s, `m_fMin/MaxAmbientAnimFrequency`, on
         // the upper body and walking too, `m_bCheckForMovement` false, as roshan's r614/blink
