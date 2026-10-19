@@ -1346,6 +1346,10 @@ are in the settings file, `pad_binding_set` 0-3):
     knocked out alike, never one Corvo carries.
   - Guards take a body of their own side, or a civilian's (`m_bProtectNeutrals`). Civilians
     panic at any body.
+  - Anyone finds bodies, whether or not it may panic at them. A body of the finder's side (a
+    civilian's, to a civilian) makes Corvo its enemy, counts as found in the statistics and
+    tells the level scripts (0x00B40740). A servant finding one runs from it
+    (`m_WitnessCorpse`) instead of looking it over.
   - The guard who looks a body over marks it handled (`m_bCorpseHandled`), with the bodies of
     its side it sees then. Others pass them by, but those with `m_bReactToHandledCorpses`
     (the civilians) don't.

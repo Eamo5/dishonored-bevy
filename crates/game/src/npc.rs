@@ -3561,7 +3561,59 @@ pub(crate) fn npc_perception(
                             npc.search_run = true;
                             npc.body_check = true;
                             npc.set_mode(Mode::Investigate);
+                            // (one that can't fight, a servant, runs from it instead, its panic's
+                            // `m_WitnessCorpse`)
+                            if !npc.fighter() && may_flee(&npc) && panic_rule(scene, &npc, "WitnessCorpse") {
+                                npc.body_check = false;
+                                npc.checking = None;
+                                npc.set_mode(Mode::Flee);
+                            }
                             break;
+                        }
+                    }
+                }
+            }
+        }
+        // a body found by one not against Corvo, as a guard finds one (each its own record of
+        // each body, 0x00B4BFC0: seen in its cones by its nearness and the body's light; a death
+        // as it happens at the lower mark; those looked over too for the civilians'
+        // `m_bReactToHandledCorpses`; none for those that ignore bodies), whether or not it may
+        // panic at it: one of its side, or a neutral it protects, makes the culprit, Corvo, its
+        // enemy and counts as found (0x00B40740)
+        let mut came_upon: Option<(Vec3, bool)> = None;
+        if !npc.hostile() {
+            let flags = sight.map(|s| s.corpses).unwrap_or_default();
+            let seen_body = |b: Vec3, light: f32, mark: f32| {
+                (match sight {
+                    Some(s) => body_seen(s, eye, fwd, b, light, mark),
+                    None => b.distance(eye) < 14.0 && (b - eye).normalize_or_zero().dot(fwd) > 0.5,
+                }) && {
+                    let d = b.distance(eye);
+                    let dir = (b + Vec3::Y * 0.2 - eye).normalize_or_zero();
+                    let filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+                    ctx.cast_ray(eye, dir, d - 0.3, true, filter).is_none()
+                }
+            };
+            let body = bodies.iter().filter(|x| !flags.ignore && !npc.found_bodies.contains(&x.0) && (!x.4 || flags.handled_too)).find_map(|(be, b, light, victim, _)| {
+                let dying = fresh.iter().any(|f| f.0 == *be);
+                (seen_body(*b, *light, SEE_CORPSE) || dying && seen_body(*b, *light, SEE_DEATH)).then_some((*be, *b, victim.clone(), dying))
+            });
+            if let Some((be, b, victim, dying)) = body {
+                npc.found_bodies.push(be);
+                came_upon = Some((b, dying));
+                let rel = relation(scene, &npc.faction, &victim);
+                if rel == 1 || rel == 0 && sight.is_some_and(|s| s.protect_neutrals) {
+                    if !corvo_side {
+                        npc.enemy = true;
+                    }
+                    if log {
+                        info!("{} finds a body of its side: Corvo its enemy now", npc.name);
+                    }
+                    if found.insert(be) {
+                        stats.bodies_found += 1;
+                        stats.deeds_pending.push(("ePlayerStat_NumCorpsesDiscovered", String::new()));
+                        if let Ok(f) = froms.get(be) {
+                            events.write(crate::interact::Interaction::Corpse { spawner: f.0, what: 2 });
                         }
                     }
                 }
@@ -3569,7 +3621,7 @@ pub(crate) fn npc_perception(
         }
         // (an unarmed one on the guards' side, a servant, panics only at a swarm: what else it
         // sees it reports to them)
-        let civilian = civilian_may_panic(&npc);
+        let civilian = civilian_may_panic(&npc) || came_upon.is_some() && may_flee(&npc) && !npc.fighter();
         let servant = npc.hostile() && !npc.fighter() && npc.may_panic() && npc.can_flee && npc.mode != Mode::Flee && !npc.is_down();
         if civilian || servant {
             // a civilian panics (`TweaksBehavior_Panic_Civilian`, as roshan's r614/blink research
@@ -3589,31 +3641,11 @@ pub(crate) fn npc_perception(
             // in sight, `SeeRatSwarm`, only where it does)
             let rules = level.as_ref().and_then(|l| npc.npc_type.and_then(|i| l.scene.npc_types.get(i as usize))).and_then(|ty| ty.sight.as_ref()).and_then(|s| s.panic.as_ref()).map(|p| p.rules.clone()).filter(|r| !r.is_empty());
             let on = |r: &str| rules.as_ref().is_none_or(|rs| rs.iter().any(|x| x == r));
-            // (a body: any, `WitnessCorpse`; one dying before its eyes, `WitnessDeath`. Seen as
-            // the guards see one, by its nearness in a cone and its light, each once; those
-            // looked over too, for the civilians' `m_bReactToHandledCorpses`; none for those
-            // that ignore bodies)
-            let flags = sight.map(|s| s.corpses).unwrap_or_default();
-            let seen_body = |b: Vec3, light: f32, mark: f32| {
-                (match sight {
-                    Some(s) => body_seen(s, eye, fwd, b, light, mark),
-                    None => b.distance(eye) < 14.0 && (b - eye).normalize_or_zero().dot(fwd) > 0.5,
-                }) && {
-                    let d = b.distance(eye);
-                    let dir = (b + Vec3::Y * 0.2 - eye).normalize_or_zero();
-                    let filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
-                    ctx.cast_ray(eye, dir, d - 0.3, true, filter).is_none()
-                }
-            };
-            let body = bodies.iter().filter(|x| civilian && !flags.ignore && !npc.found_bodies.contains(&x.0) && (!x.4 || flags.handled_too)).find(|(be, b, light, ..)| {
-                let dying = fresh.iter().any(|f| f.0 == *be);
-                (on("WitnessCorpse") && seen_body(*b, *light, SEE_CORPSE)) || (dying && on("WitnessDeath") && seen_body(*b, *light, SEE_DEATH))
-            });
-            if let Some((be, ..)) = body {
-                npc.found_bodies.push(*be);
-            }
-            let why = body
-                .map(|(_, b, ..)| (*b, "a body"))
+            // (a body come upon just now: any, `WitnessCorpse`; one dying before its eyes,
+            // `WitnessDeath`)
+            let why = came_upon
+                .filter(|(_, dying)| civilian && (on("WitnessCorpse") || *dying && on("WitnessDeath")))
+                .map(|(b, _)| (b, "a body"))
                 .or_else(|| fighting.iter().copied().find(|f| civilian && on("WitnessAllyCombat") && f.distance(pos) < GROUP_DISTANCE && in_sight(*f + Vec3::Y * 0.5)).map(|f| (f, "a fight")))
                 .or_else(|| panicking.iter().copied().find(|f| civilian && on("WitnessAllyPanic") && f.distance(pos) < GROUP_DISTANCE && f.distance(pos) > 0.05).map(|f| (f, "another panicking")))
                 .or_else(|| rules.as_ref().filter(|rs| rs.iter().any(|x| x == "SeeRatSwarm")).and_then(|_| swarm_at.iter().copied().find(|s| in_sight(*s))).map(|s| (s, "a swarm")));
