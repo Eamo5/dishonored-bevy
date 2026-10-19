@@ -303,7 +303,7 @@ fn apply_ai_fx(
     player: Query<&Transform, With<crate::player::Player>>,
     colliders: Query<(&LevelInstance, &InstanceCollider)>,
     mut commands: Commands,
-    mut devices: ResMut<crate::security::Devices>,
+    (mut devices, mut patrols): (ResMut<crate::security::Devices>, ResMut<crate::patrol::Patrols>),
     (mut stats, mut sfx, attrs): (ResMut<PlayerStats>, MessageWriter<crate::audio::PostEvent>, Res<crate::gamedata::Attrs>),
     (mut noise, mut effects, mut plog): (MessageWriter<crate::gameplay::Noise>, MessageWriter<crate::particles::SpawnEffect>, ResMut<crate::pickuplog::PickupLog>),
     mut instances: Query<(Entity, &LevelInstance, &mut Transform, &mut Visibility), (Without<Npc>, Without<crate::player::Player>)>,
@@ -349,37 +349,37 @@ fn apply_ai_fx(
                     if !sp.contains(&from.0) || n.is_down() {
                         continue;
                     }
+                    // (Stop: an idle request, its patrol and route let go)
                     if stop {
+                        n.patrol.stop(&mut patrols);
                         if n.mode == Mode::Patrol {
                             n.home = t.translation;
                             n.set_mode(Mode::Idle);
                         }
                         continue;
                     }
-                    // the route the start point lies on (a route actor by its name)
-                    if let (Some(s), Some(level)) = (start, level.as_ref()) {
-                        let at = Vec3::from(s.position);
-                        let found = level.scene.routes.iter().find(|r| r.name == s.name).map(|r| (r, nearest(&r.points, at))).or_else(|| {
-                            level
+                    // a patrol request: from the start point if any (one of a route's, by its
+                    // actor's name, else where it stands), then the nearest route it may take
+                    let first = match (start, level.as_ref()) {
+                        (Some(s), Some(level)) => {
+                            let at = Vec3::from(s.position);
+                            let on_route = level
                                 .scene
                                 .routes
                                 .iter()
-                                .filter_map(|r| r.points.iter().position(|p| Vec3::from(*p).distance(at) < 0.5).map(|i| (r, i)))
-                                .next()
-                        });
-                        if let Some((r, i)) = found {
-                            n.route = r.points.iter().map(|p| Vec3::from(*p)).collect();
-                            n.route_idx = i;
-                            n.route_dir = 1;
-                            n.route_pingpong = r.kind == "ERT_Linear";
-                        } else {
-                            // a lone point: go and stand there
-                            n.target = Some(at);
-                            n.home = at;
-                            continue;
+                                .enumerate()
+                                .find_map(|(ri, r)| r.point_names.iter().position(|p| *p == s.name).map(|i| (ri, i)))
+                                .or_else(|| level.scene.routes.iter().enumerate().find(|(_, r)| r.name == s.name).map(|(ri, r)| (ri, nearest(&r.points, at))))
+                                .or_else(|| level.scene.routes.iter().enumerate().find_map(|(ri, r)| r.points.iter().position(|p| Vec3::from(*p).distance(at) < 0.5).map(|i| (ri, i))));
+                            Some(match on_route {
+                                Some((ri, i)) => crate::patrol::First::OnRoute(ri, i),
+                                None => crate::patrol::First::At(at.to_array()),
+                            })
                         }
-                    }
-                    if n.route.len() >= 2 && matches!(n.mode, Mode::Idle | Mode::Return | Mode::Patrol) {
+                        _ => None,
+                    };
+                    n.patrol.begin(&mut patrols, first);
+                    if matches!(n.mode, Mode::Idle | Mode::Return | Mode::Patrol) {
                         n.set_mode(Mode::Patrol);
                     }
                 }
@@ -598,10 +598,10 @@ fn apply_ai_fx(
                         continue;
                     }
                     if stop {
-                        if n.route.len() >= 2 && n.mode == Mode::Idle {
-                            n.set_mode(Mode::Patrol);
-                        }
+                        // (a guard order ended: idle, its patrol gone with it)
                     } else if let Some(h) = at {
+                        // (a guard order takes the patrol's place: its route let go)
+                        n.patrol.stop(&mut patrols);
                         n.home = h;
                         if matches!(n.mode, Mode::Patrol | Mode::Idle | Mode::Return) {
                             n.set_mode(Mode::Idle);

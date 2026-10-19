@@ -2136,9 +2136,13 @@ pub struct Spawner {
     /// what it makes knows of Corvo from the start (`m_bAwareOfPlayerUponStartup`)
     #[serde(default)]
     pub aware: bool,
-    /// its squad (`m_Squad`: whose flee points it uses, who it calls for help)
+    /// its squad (`m_Squad`: whose flee points it uses, who it calls for help, which routes it
+    /// may walk)
     #[serde(default)]
     pub squad: String,
+    /// what it makes sets out on patrol (`m_bPatrolUponStartup`)
+    #[serde(default)]
+    pub patrol: bool,
     /// what it makes can flee (`m_bCapableOfFleeing`)
     #[serde(default = "yes")]
     pub can_flee: bool,
@@ -2170,8 +2174,47 @@ fn yes() -> bool {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Route {
     pub name: String,
+    /// `RouteType`: `ERT_Linear`, `ERT_PingPong`, `ERT_Circle` (the class's default), `ERT_Random`
     pub kind: String,
     pub points: Vec<[f32; 3]>,
+    /// each point's stop: how long a guard stands there (`m_fGuardDuration`, s; 0 passes it
+    /// by; -1 for ever, `m_bGuardForever`)
+    #[serde(default)]
+    pub stops: Vec<f32>,
+    /// each point's facing for a guard there (its `Rotation`'s yaw, Bevy radians; none where
+    /// `m_bDirectionMatters` is off)
+    #[serde(default)]
+    pub yaws: Vec<Option<f32>>,
+    /// what a guard at each point watches in turn (`m_WatchPoints`: `DisGuardWatchPoint`s,
+    /// their places and `m_fMinWatchTime` / `m_fMaxWatchTime`), and in what order
+    /// (`m_WatchPointOrdering`: 0 in turn, 1 back and forth, 2 at random)
+    #[serde(default)]
+    pub watch: Vec<Vec<([f32; 3], [f32; 2])>>,
+    #[serde(default)]
+    pub watch_order: Vec<u8>,
+    /// its points' actors (the scripts name them)
+    #[serde(default)]
+    pub point_names: Vec<String>,
+    /// where the route actor itself stands (its adoption range is from here)
+    #[serde(default)]
+    pub at: [f32; 3],
+    /// how many times round before a guard looks for a neglected route (`m_PatrolAttentionSpan`)
+    #[serde(default)]
+    pub span: Option<i32>,
+    /// who may take it: at most so many at once (`m_Capacity`; none: any number), of these
+    /// squads (`m_SupportedSquads`; none: any), within so far of it (`m_AdoptionRange`, m)
+    #[serde(default)]
+    pub capacity: Option<u32>,
+    #[serde(default)]
+    pub squads: Vec<String>,
+    #[serde(default)]
+    pub range: Option<f32>,
+    /// not to be taken until the scripts make it so (`m_bIsActive` false)
+    #[serde(default)]
+    pub inactive: bool,
+    /// how long it may go unwalked before it draws a guard (`m_NeglectThreshold`, s)
+    #[serde(default)]
+    pub neglect: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

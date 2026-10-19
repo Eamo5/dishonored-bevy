@@ -166,7 +166,11 @@ pub struct NpcSave {
     health: f32,
     awareness: f32,
     down_t: f32,
+    #[serde(default)]
     route_idx: usize,
+    /// its patrol (older saves: none, so the scripts or its spawner set it again)
+    #[serde(default)]
+    patrol: Option<crate::patrol::Patrol>,
     /// the bones lost to a beheading (`gore::Severed`)
     #[serde(default)]
     severed: Vec<usize>,
@@ -616,7 +620,8 @@ pub(crate) fn save_game(
                 health: n.health,
                 awareness: n.awareness,
                 down_t: n.down_t,
-                route_idx: n.route_idx,
+                route_idx: n.patrol.idx,
+                patrol: Some(n.patrol.clone()),
                 severed: sev.map(|s| s.0.clone()).unwrap_or_default(),
                 falling: falling.cloned(),
                 consumed,
@@ -1037,7 +1042,9 @@ pub(crate) fn restore_npcs(mut commands: Commands, mut q: Query<(Entity, &Restor
         n.health = s.health.min(n.max_health);
         n.alert = s.alert;
         n.awareness = s.awareness;
-        n.route_idx = s.route_idx;
+        if let Some(p) = s.patrol.clone() {
+            n.patrol = p;
+        }
         n.down_t = s.down_t;
         if matches!(s.mode, Mode::Dead | Mode::Unconscious) {
             n.set_mode(s.mode);

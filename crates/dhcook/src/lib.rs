@@ -2668,6 +2668,7 @@ impl<'a> Cooker<'a> {
                 Some(Value::Name(n)) if n != "None" => n.clone(),
                 _ => String::new(),
             },
+            patrol: ch.bool("m_bPatrolUponStartup").unwrap_or(false),
             // (`Default__DishonoredSpawner`: able to flee; not spawning in Corvo's sight or near him)
             can_flee: ch.bool("m_bCapableOfFleeing").unwrap_or(true),
             spawn_at: ch.get("m_SpawnAtSuspicionLevel").and_then(|v| if let Value::Enum(e) = v { Some(e.clone()) } else { None }).filter(|e| !e.ends_with("None")),
@@ -2739,6 +2740,7 @@ impl<'a> Cooker<'a> {
                 faction: None,
                 aware: false,
                 squad: String::new(),
+                patrol: false,
                 can_flee: false,
                 spawn_at: None,
                 spawn_on_help: false,
@@ -4716,8 +4718,10 @@ impl<'a> Cooker<'a> {
 
     fn route(&mut self, actor: &Obj) -> Result<()> {
         let ch = self.chain(actor);
-        let kind = ch.name("RouteType").unwrap_or("ERT_Linear").to_string();
+        // (`DishonoredRoute`'s default is a circle)
+        let kind = ch.name("RouteType").unwrap_or("ERT_Circle").to_string();
         let mut points = Vec::new();
+        let (mut stops, mut yaws, mut watch, mut watch_order, mut point_names) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
         if let Some((rpkg, Value::Array { count, offset, size })) = ch.get_pkg("RouteList") {
             let rpkg = rpkg.clone();
             let elem = if *count > 0 { size / count } else { 0 };
@@ -4729,12 +4733,59 @@ impl<'a> Cooker<'a> {
                     let pch = self.chain(&o);
                     if let Some(l) = pch.vector("Location") {
                         points.push(ue_point(l));
+                        stops.push(if pch.bool("m_bGuardForever") == Some(true) { -1.0 } else { pch.float("m_fGuardDuration").unwrap_or(0.0).max(0.0) });
+                        yaws.push((pch.bool("m_bDirectionMatters") != Some(false)).then(|| ue_yaw_to_bevy(pch.rotator("Rotation").unwrap_or([0; 3])[1])));
+                        let mut looks = Vec::new();
+                        if let Some((wpkg, Value::Array { count, offset, .. })) = pch.get_pkg("m_WatchPoints") {
+                            let mut wr = Reader::at(&wpkg.data, *offset);
+                            for _ in 0..*count {
+                                let Ok(w) = wr.i32() else { break };
+                                if let Some(wo) = self.assets.resolve(wpkg, w) {
+                                    let wch = self.chain(&wo);
+                                    if let Some(at) = wch.vector("Location") {
+                                        looks.push((ue_point(at), [wch.float("m_fMinWatchTime").unwrap_or(1.0), wch.float("m_fMaxWatchTime").unwrap_or(1.0)]));
+                                    }
+                                }
+                            }
+                        }
+                        watch.push(looks);
+                        watch_order.push(match pch.name("m_WatchPointOrdering") {
+                            Some(o) if o.ends_with("PingPong") => 1,
+                            Some(o) if o.ends_with("Random") => 2,
+                            _ => 0,
+                        });
+                        point_names.push(o.name().to_string());
                     }
                 }
             }
         }
         if !points.is_empty() {
-            self.scene.routes.push(Route { name: actor.name().to_string(), kind, points });
+            let squads = match ch.get_pkg("m_SupportedSquads") {
+                Some((spkg, Value::Array { count, offset, size })) => parse_struct_array(spkg, *offset, *size, *count)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|s| s.name("m_SquadName").filter(|n| *n != "None").map(str::to_string))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let range = ch.float("m_AdoptionRange").filter(|r| *r >= 0.0).map(|r| r * UNIT);
+            self.scene.routes.push(Route {
+                name: actor.name().to_string(),
+                kind,
+                points,
+                stops,
+                yaws,
+                watch,
+                watch_order,
+                point_names,
+                at: ue_point(ch.vector("Location").unwrap_or([0.0; 3])),
+                span: ch.get("m_PatrolAttentionSpan").and_then(|v| if let Value::Int(i) = v { Some(*i) } else { None }),
+                capacity: ch.get("m_Capacity").and_then(|v| if let Value::Int(i) = v { Some(*i) } else { None }).filter(|c| *c >= 0).map(|c| c as u32),
+                squads,
+                range,
+                inactive: ch.bool("m_bIsActive") == Some(false),
+                neglect: ch.float("m_NeglectThreshold"),
+            });
         }
         Ok(())
     }

@@ -207,10 +207,8 @@ pub struct Npc {
     pub grounded: bool,
     pub home: Vec3,
     pub home_yaw: f32,
-    pub route: Vec<Vec3>,
-    pub route_idx: usize,
-    pub route_dir: i32,
-    pub route_pingpong: bool,
+    /// its patrol (`patrol`): the route it walks, where on it, what it guards
+    pub patrol: crate::patrol::Patrol,
     pub wait: f32,
     pub target: Option<Vec3>,
     pub last_seen: Option<Vec3>,
@@ -2093,16 +2091,6 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
     let Some(Some(vis)) = assets.npc_types.get(tid as usize) else { return None };
     let kind = kind_of(&vis.kind);
     let pos = Vec3::from(sp.position) + Vec3::Y * (NPC_CENTER + 0.05);
-    let route: Vec<Vec3> = sp
-        .route
-        .and_then(|r| scene.routes.get(r as usize))
-        .map(|r| r.points.iter().map(|p| Vec3::from(*p)).collect())
-        .unwrap_or_default();
-    let pingpong = sp
-        .route
-        .and_then(|r| scene.routes.get(r as usize))
-        .map(|r| r.kind.contains("PingPong"))
-        .unwrap_or(true);
     let slot = wl.as_mut().map(|w| w.alloc_slot()).unwrap_or(0);
     // its health and arms: its type's attributes and weapons (types without them: the
     // default NPC's 40, an elite's 50, a tallboy's)
@@ -2143,11 +2131,12 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
     };
     let arms = stats.map(|s| Arms::of(s, difficulty, si as u64)).unwrap_or_default();
     let corpse = crate::level::is_corpse_type(&vis.name);
+    // (its spawner sets it out on patrol, `m_bPatrolUponStartup`: it takes up a route as it
+    // starts; the others wait for the scripts)
+    let patrol = crate::patrol::Patrol { on: sp.patrol && !corpse, dir: 1, ..Default::default() };
     let mode = if corpse {
         Mode::Dead
-    } else if kind == Kind::Story {
-        Mode::Idle
-    } else if route.len() >= 2 {
+    } else if patrol.on {
         Mode::Patrol
     } else {
         Mode::Idle
@@ -2184,10 +2173,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         grounded: false,
         home: pos,
         home_yaw: sp.yaw,
-        route,
-        route_idx: 0,
-        route_dir: 1,
-        route_pingpong: pingpong,
+        patrol,
         wait: rand::random::<f32>() * 2.0,
         target: None,
         last_seen: None,
@@ -3529,7 +3515,13 @@ pub(crate) fn npc_brain(
         Local<f32>,
     ),
     (mut grenades, mut bottles, mut whiskey_fx, mut throws): (MessageWriter<crate::gadgets::NpcGrenade>, MessageWriter<crate::whiskey::NpcBottle>, MessageWriter<crate::particles::SpawnEffect>, MessageWriter<crate::thrown::NpcThrow>),
-    (finishing, mut finishers, mut tallboy_shots, devices): (Query<(), With<FinisherClip>>, MessageWriter<NpcFinisher>, MessageWriter<crate::tallboy::TallboyShot>, Res<crate::security::Devices>),
+    (finishing, mut finishers, mut tallboy_shots, devices, mut patrols): (
+        Query<(), With<FinisherClip>>,
+        MessageWriter<NpcFinisher>,
+        MessageWriter<crate::tallboy::TallboyShot>,
+        Res<crate::security::Devices>,
+        ResMut<crate::patrol::Patrols>,
+    ),
 ) {
     let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
     let max_attackers = INNER_SKIRMISH_CAPS[(settings.difficulty as usize).min(3)];
@@ -3827,34 +3819,28 @@ pub(crate) fn npc_brain(
                 }
             }
             Mode::Patrol => {
-                if npc.route.is_empty() {
+                // its route walked as the original walks it (`patrol`); stopped short with its
+                // stop's clip, it is there
+                let Some(level) = level.as_ref() else { continue };
+                if !npc.patrol.on {
                     npc.set_mode(Mode::Idle);
                     continue;
                 }
-                let goal = npc.route[npc.route_idx];
-                let away = Vec2::new(pos.x - goal.x, pos.z - goal.z).length();
-                if away < 0.6 || (npc.halted && away < UNACCURACY) {
-                    npc.target = None;
-                    npc.wait -= dt;
-                    if npc.wait <= 0.0 {
-                        npc.wait = 1.0 + rand::random::<f32>() * 2.5;
-                        let n = npc.route.len() as i32;
-                        let mut next = npc.route_idx as i32 + npc.route_dir;
-                        if next >= n || next < 0 {
-                            if npc.route_pingpong {
-                                npc.route_dir = -npc.route_dir;
-                                next = npc.route_idx as i32 + npc.route_dir;
-                            } else {
-                                next = next.rem_euclid(n);
-                            }
-                        }
-                        npc.route_idx = next.clamp(0, n - 1) as usize;
-                        // (on to the next: not there till it gets there)
-                        npc.halted = false;
-                    }
-                } else {
-                    npc.target = Some(goal);
+                let squad = level.scene.spawners.get(npc.spawner as usize).map(|s| s.squad.as_str()).unwrap_or("");
+                let mut patrol = std::mem::take(&mut npc.patrol);
+                let at = if npc.halted { patrol.point(&level.scene.routes).filter(|g| (*g - pos).with_y(0.0).length() < UNACCURACY).unwrap_or(pos) } else { pos };
+                let was = (patrol.route, patrol.idx, patrol.guard.is_some());
+                let order = patrol.step(&level.scene.routes, &mut patrols, squad, at, dt);
+                if std::env::var("DH_PATROL_LOG").is_ok() && was != (patrol.route, patrol.idx, patrol.guard.is_some()) {
+                    let route = patrol.route.and_then(|r| level.scene.routes.get(r)).map_or("none", |r| r.name.as_str());
+                    info!("patrol: {} ({squad}) {route} point {}{}", npc.name, patrol.idx, if patrol.guard.is_some() { ", guarding" } else { "" });
                 }
+                npc.patrol = patrol;
+                if order.goal != npc.target {
+                    // (on to the next: not there till it gets there)
+                    npc.halted = false;
+                }
+                npc.target = order.goal;
             }
             Mode::Investigate => {
                 let goal = npc.target.or(npc.last_seen).unwrap_or(npc.home);
@@ -3915,11 +3901,12 @@ pub(crate) fn npc_brain(
                 }
             }
             Mode::Return => {
-                let goal = if npc.route.len() >= 2 { npc.route[npc.route_idx] } else { npc.home };
+                // back to its patrol where it left it, else home
+                let on_patrol = npc.patrol.on;
+                let goal = level.as_ref().and_then(|l| npc.patrol.point(&l.scene.routes)).filter(|_| on_patrol).unwrap_or(npc.home);
                 npc.target = Some(goal);
-                if pos.distance(goal) < 1.0 {
-                    let m = if npc.route.len() >= 2 { Mode::Patrol } else { Mode::Idle };
-                    npc.set_mode(m);
+                if pos.distance(goal) < 1.0 || (on_patrol && npc.patrol.route.is_none() && npc.patrol.first.is_none()) {
+                    npc.set_mode(if on_patrol { Mode::Patrol } else { Mode::Idle });
                 }
             }
             Mode::Flee => {
@@ -5215,6 +5202,8 @@ pub(crate) fn npc_move(
                 Quat::from_rotation_y(h + PI + FRAC_PI_2.copysign(side)) * Vec3::NEG_Z
             }),
             (Mode::Idle, _) if npc.target.is_none() => Some(Quat::from_rotation_y(npc.home_yaw) * Vec3::NEG_Z),
+            // (guarding a point of its route: the point's way)
+            (Mode::Patrol, _) if npc.target.is_none() => npc.patrol.face.map(|y| Quat::from_rotation_y(y) * Vec3::NEG_Z),
             _ => None,
         };
         // (turning with its clip: faced the new way already, shown turning: `npc_select_anim`)

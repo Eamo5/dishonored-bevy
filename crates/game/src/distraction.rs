@@ -100,7 +100,7 @@ fn distract(
                 commands.entity(e).try_remove::<(Distracted, ScriptedAnim)>();
                 // back to its rounds
                 npc.home = dz.home_was;
-                if !alarmed && !npc.route.is_empty() {
+                if !alarmed && npc.patrol.on {
                     npc.set_mode(Mode::Patrol);
                 }
                 used.write(Interaction::Distracted { distractor: d.name.clone(), at: Vec3::from(d.position), spawner: npc.spawner, start: false });
@@ -191,7 +191,7 @@ fn distract(
         if scripted || npc.is_down() || npc.mode != Mode::Patrol || npc.kind == Kind::Story || npc.alert == Alert::Combat {
             continue;
         }
-        let route = scene.spawners.get(npc.spawner as usize).and_then(|sp| sp.route).and_then(|r| scene.routes.get(r as usize)).map(|r| r.name.as_str());
+        let route = npc.patrol.route.and_then(|r| scene.routes.get(r)).map(|r| r.name.as_str());
         let pos = tf.translation;
         for (di, d) in scene.distractors.iter().enumerate() {
             let at = Vec3::from(d.position);

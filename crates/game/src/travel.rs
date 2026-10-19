@@ -293,7 +293,7 @@ fn arrived(mut commands: Commands, mut npcs: Query<(Entity, &mut Npc, &mut Trans
         // (visiting: where it came in is where it goes back to, `ReturnTravelRequest`)
         if a.visiting {
             n.home = a.at;
-            n.route.clear();
+            n.patrol = Default::default();
         }
         commands.entity(e).remove::<Arrived>();
     }

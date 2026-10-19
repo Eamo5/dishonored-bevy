@@ -1201,7 +1201,7 @@ fn run_script(
                 let home = nt.translation;
                 commands.queue(move |w: &mut World| {
                     if let Some(mut n) = w.get_mut::<Npc>(e) {
-                        n.route.clear();
+                        n.patrol = Default::default();
                         n.home = home;
                         n.home_yaw = yaw;
                         n.yaw = yaw;

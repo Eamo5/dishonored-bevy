@@ -6446,13 +6446,14 @@ pub fn apply_effects(
     pickups: Query<(Entity, &Pickup)>,
     (mut sounds, mut ambients, mut travel, mut store): (MessageWriter<crate::audio::PostEvent>, ResMut<crate::audio::Ambients>, MessageWriter<crate::mission::TravelRequest>, MessageWriter<crate::store::OpenStore>),
     level: Option<Res<LevelInfo>>,
-    (stream_cols, mut fog, mut autosave, mut choice, mut emitters, mut plog): (
+    (stream_cols, mut fog, mut autosave, mut choice, mut emitters, mut plog, mut patrols): (
         Query<(&LevelInstance, &crate::level::InstanceCollider)>,
         ResMut<crate::fog::FogState>,
         MessageWriter<crate::save::SaveRequest>,
         ResMut<crate::choice::Choice>,
         Query<&mut crate::particles::ParticleEmitter>,
         ResMut<crate::pickuplog::PickupLog>,
+        ResMut<crate::patrol::Patrols>,
     ),
 ) {
     if vm.effects.is_empty() {
@@ -6659,6 +6660,11 @@ pub fn apply_effects(
             }
             Effect::Light(v, on) => {
                 let Some(a) = actor(&v) else { continue };
+                // a route switched on or off (`DishonoredRoute.OnToggle`: `m_bIsActive`)
+                if let Some(ri) = level.as_ref().and_then(|l| l.scene.routes.iter().position(|r| r.name == a.name)) {
+                    patrols.toggle(ri, on);
+                    continue;
+                }
                 // fog layers switch too (`DisFog.OnToggle`)
                 if let Some(f) = a.fog.and_then(|f| fog.enabled.get_mut(f as usize)) {
                     *f = on.unwrap_or(!*f);
