@@ -2319,7 +2319,25 @@ against the install's own data where it carries them, then implemented independe
     fighter facing Corvo steps back from danger ahead of it or aside from one at its side, the
     way it is pushed, as its steps' cooldowns allow (ManageAttacks 0x00B3A300). So guards keep
     out of a tower's fire and give a tallboy's arrows room.
-  - Not yet: burning characters, the zones about rewired walls and pylons that killed an ally.
+  - Not yet: burning characters (their zone lasts about a frame).
+- **Walls and pylons no one trusts** (`distrust.rs`), as the original's AI keeps whale oil
+  devices in mind (`AIKnowledgeRecord_WhaleOilDevice`, decoded for this rewrite from the user's
+  own Dishonored.exe):
+  - A character who sees an ally (by its faction's allies) killed by a wall of light or an arc
+    pylon Corvo rewired stops trusting that device for as long as it lives. It must be fighting
+    or searching to take it so. It then finds its way again.
+  - While anyone distrusts it and it runs, the device lays a zone: its meshes' box grown on every
+    side by half its half size's length. The zone pushes only those who distrust it, as a sphere
+    about its middle. They don't strike at Corvo in that box or across it.
+  - Walls of light bar paths (each wall's path cost is the original's blocked 10,000,000, which
+    its search refuses). This holds only for a wall that weighs paths (`m_bWoLAffectPathFinding`,
+    off on a few) and is switched on, with a charged tank. By the brain's
+    `m_eWallsOfLightConfidence`:
+    - civilians, assassins and the like (Fear) never path into one unless they panic;
+    - guards, officers and overseers (Confident) path through their own faction's walls (rewired
+      or not) until they see one kill. Where the only way runs through a wall, they wait.
+  - So the first guard to chase Corvo through his rewired wall dies in it, and those who saw it
+    stop at the wall. Pylons weigh no paths (`m_bAffectPathFinding` is off on all 14 placed).
 - **Pursuers through the door.** Guards hunting Corvo follow him into the next map, as the
   original's travel manager has them (`UDisNPCTravelManager`, decoded for this rewrite from the
   user's own Dishonored.exe: leaving 0x00AE2300, arriving 0x00AE2C90, the delay 0x00AE3760, going

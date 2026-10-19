@@ -302,6 +302,9 @@ pub struct Npc {
     pub search_run: bool,
     /// it saw one of its own die (the alarm's `m_fAlarmChanceUponWitnessDeath`)
     pub witnessed_death: bool,
+    /// the walls of light and arc pylons it saw kill an ally, rewired (`distrust`; indices in
+    /// `security::Devices`)
+    pub distrust: Vec<usize>,
     /// Corvo's magic seen (`magic`): the while after it (seconds left, busted when it began),
     /// its reaction to come (seconds, he vanished), and the line it says this frame (he vanished)
     pub magic_pending: Option<(f32, bool)>,
@@ -2237,6 +2240,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         taunt_hold: 0.0,
         search_run: false,
         witnessed_death: false,
+        distrust: Vec::new(),
         magic_pending: None,
         magic_react: None,
         magic_bark: None,
@@ -3525,7 +3529,7 @@ pub(crate) fn npc_brain(
         Local<f32>,
     ),
     (mut grenades, mut bottles, mut whiskey_fx, mut throws): (MessageWriter<crate::gadgets::NpcGrenade>, MessageWriter<crate::whiskey::NpcBottle>, MessageWriter<crate::particles::SpawnEffect>, MessageWriter<crate::thrown::NpcThrow>),
-    (finishing, mut finishers, mut tallboy_shots): (Query<(), With<FinisherClip>>, MessageWriter<NpcFinisher>, MessageWriter<crate::tallboy::TallboyShot>),
+    (finishing, mut finishers, mut tallboy_shots, devices): (Query<(), With<FinisherClip>>, MessageWriter<NpcFinisher>, MessageWriter<crate::tallboy::TallboyShot>, Res<crate::security::Devices>),
 ) {
     let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
     let max_attackers = INNER_SKIRMISH_CAPS[(settings.difficulty as usize).min(3)];
@@ -4490,7 +4494,7 @@ pub(crate) fn npc_brain(
                     // its parry's counter (`DisTweaks_NPCRiposte`): a quick blow straight after
                     if npc.riposte > 0.0 {
                         npc.riposte -= dt;
-                        if npc.riposte <= 0.0 && npc.attack_t.is_none() && npc.stagger <= 0.0 && d < 2.6 {
+                        if npc.riposte <= 0.0 && npc.attack_t.is_none() && npc.stagger <= 0.0 && d < 2.6 && !crate::distrust::strike_barred(&npc, &devices, pos, ppos) {
                             npc.attack_t = Some(0.0);
                             npc.swing = Some(Swing { kind: MoveKind::Short, big: false, len: 0.85, hit: 0.4, reach: 2.6, lunge: 0.0, no_versus: false, more: Vec::new() });
                         }
@@ -4715,7 +4719,15 @@ pub(crate) fn npc_brain(
                         if npc.attack_t.is_none() {
                             npc.swing = None;
                         }
-                    } else if npc.attack_cd <= 0.0 && npc.stagger <= 0.0 && npc.sees_player && (attackers < max_attackers || (!npc.arms.outer_only.is_empty() && (!ring.contains(&e) || (ppos.y - pos.y).abs() > 1.6))) && npc.may_melee() && pace_ready(&npc) {
+                    } else if npc.attack_cd <= 0.0
+                        && npc.stagger <= 0.0
+                        && npc.sees_player
+                        && (attackers < max_attackers || (!npc.arms.outer_only.is_empty() && (!ring.contains(&e) || (ppos.y - pos.y).abs() > 1.6)))
+                        && npc.may_melee()
+                        && pace_ready(&npc)
+                        // (not at Corvo in or across a device it no longer trusts)
+                        && !crate::distrust::strike_barred(&npc, &devices, pos, ppos)
+                    {
                         // (outside the ring of those at Corvo, or with him out of reach, only the
                         // moves for there)
                         let outer = !ring.contains(&e) || (!npc.arms.outer_only.is_empty() && (ppos.y - pos.y).abs() > 1.6 && (ppos - pos).with_y(0.0).length() > 2.5);
@@ -4985,7 +4997,7 @@ pub(crate) fn npc_move(
         (Without<Player>, Without<ScriptedAnim>, Without<crate::possession::Possessed>, Without<crate::carry::Falling>),
     >,
     mut steps: MessageWriter<crate::footsteps::Footfall>,
-    (grid, mut budget, level): (Option<Res<crate::navmesh::NavGrid>>, ResMut<crate::navmesh::PathBudget>, Option<Res<LevelInfo>>),
+    (grid, mut budget, level, devices): (Option<Res<crate::navmesh::NavGrid>>, ResMut<crate::navmesh::PathBudget>, Option<Res<LevelInfo>>, Res<crate::security::Devices>),
 ) {
     let (dt_world, dt_own) = (time.delta_secs().min(0.05) * tc.world_scale(), time.delta_secs().min(0.05) * tc.own_scale());
     // (fallen out of the world: below the level's kill height, `WorldInfo.KillZ`)
@@ -5068,7 +5080,13 @@ pub(crate) fn npc_move(
             if let Some(goal) = npc.target {
                 // along its path over the navigation mesh (straight at it off the mesh)
                 let mut nav = std::mem::take(&mut npc.nav);
-                let steer = crate::navmesh::steer(grid.as_deref(), &mut budget, &mut nav, pos - Vec3::Y * NPC_CENTER, goal, dt);
+                // (kept out of the walls of light it shuns)
+                let barred = devices.walls_barring(npc.arms.danger.walls, &npc.faction, npc.mode == Mode::Flee, &npc.distrust);
+                let was = nav.barred;
+                let steer = crate::navmesh::steer_barred(grid.as_deref(), &mut budget, &mut nav, pos - Vec3::Y * NPC_CENTER, goal, dt, &barred);
+                if nav.barred && !was {
+                    info!("{} waits: its only way runs through a wall of light it shuns", npc.name);
+                }
                 npc.nav = nav;
                 let left = (goal - pos).with_y(0.0).length();
                 let to = (steer - pos).with_y(0.0);

@@ -66,12 +66,29 @@ pub struct Device {
     pub off: bool,
     /// walls of light: seconds to its next spark
     spark_t: f32,
+    /// its actor's meshes' box in the world (min, max)
+    bounds: Option<(Vec3, Vec3)>,
 }
 
 impl Device {
     /// A receptacle's tank's place (where its tank sits).
     fn tank_seat(&self) -> Option<Vec3> {
         self.tank.map(|_| Vec3::from(self.def.position))
+    }
+
+    /// Who lays its zones (its actor's first mesh).
+    pub fn requestor(&self) -> Option<Entity> {
+        self.instances.first().copied()
+    }
+
+    /// The zone a wall or pylon no one trusts any more lays (`AddWhaleOilShape` 0x005683E0):
+    /// its actor's colliding meshes' box grown on every side by half its half size's length,
+    /// and that grown box's half size's length, the radius its push takes about its middle.
+    pub fn distrust_box(&self) -> Option<(Vec3, Vec3, f32)> {
+        let (lo, hi) = self.bounds?;
+        let h = 0.5 * ((hi - lo) * 0.5).length();
+        let (lo, hi) = (lo - Vec3::splat(h), hi + Vec3::splat(h));
+        Some((lo, hi, ((hi - lo) * 0.5).length()))
     }
 
     /// A wall of light's middle and the way through it.
@@ -181,6 +198,32 @@ impl Devices {
     }
 
     /// Is a device fed: its receptacle holds a tank (devices without one always run).
+    /// A wall or pylon running: powered and switched on (what a whale oil device's record and
+    /// path cost ask, 0x00A19470 / 0x00A25A00).
+    pub fn live(&self, i: usize) -> bool {
+        self.list.get(i).is_some_and(|d| matches!(d.def.kind.as_str(), "WallOfLight" | "ArcPylon") && self.powered(d))
+    }
+
+    /// The walls of light a character's path may not enter (each wall's `CostFor` 0x00A30D90:
+    /// 10,000,000, which the search refuses, unless 0x00A29650 lets it by). Only a wall that
+    /// weighs paths (`m_bWoLAffectPathFinding`), switched on, with a charged tank in its
+    /// receptacle, bars anyone; none bars one heedless of them (`m_eWallsOfLightConfidence`
+    /// 0) or panicking. One fearing them is barred by all; one confident, by those not of its
+    /// friends (`m_FriendlyFactions`, rewired or not) and those it saw kill an ally.
+    pub fn walls_barring(&self, walls: u8, faction: &str, panicking: bool, distrust: &[usize]) -> Vec<(Mat4, Vec3, Vec3)> {
+        if walls == 0 || panicking {
+            return Vec::new();
+        }
+        self.list
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.def.params.get("m_bWoLAffectPathFinding").is_none_or(|v| *v != 0.0) && !d.off)
+            .filter(|(_, d)| d.receptacle_idx.is_some_and(|r| self.list[r].has_tank && self.list[r].tank.is_none_or(|t| self.charged(t))))
+            .filter(|(i, d)| walls == 1 || !d.def.friendly.iter().any(|f| f == faction) || distrust.contains(i))
+            .filter_map(|(_, d)| d.wall)
+            .collect()
+    }
+
     fn powered(&self, d: &Device) -> bool {
         if d.off {
             return false;
@@ -609,6 +652,16 @@ fn setup(
         let mut d = Device { def: s.clone(), has_tank: !s.battery.is_empty(), ..Default::default() };
         let insts = by_inst.get(s.actor.as_str()).cloned().unwrap_or_default();
         d.instances = insts.iter().map(|x| x.0).collect();
+        // (its meshes' box in the world)
+        for inst in insts.iter().filter_map(|x| scene.instances.get(x.1 as usize)) {
+            let Some(m) = scene.meshes.get(inst.mesh as usize) else { continue };
+            let world = Mat4::from_cols_array(&inst.transform);
+            let (min, max) = (Vec3::from(m.min), Vec3::from(m.max));
+            for c in 0..8 {
+                let p = world.transform_point3(Vec3::new(if c & 1 == 0 { min.x } else { max.x }, if c & 2 == 0 { min.y } else { max.y }, if c & 4 == 0 { min.z } else { max.z }));
+                d.bounds = Some(d.bounds.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p))));
+            }
+        }
         if s.kind == "WallOfLight" {
             // the wall: its (editor-only, never drawn) mesh's box
             if let Some(inst) = insts.first().and_then(|x| scene.instances.get(x.1 as usize)) {
@@ -863,6 +916,10 @@ fn walls(
             }
             if dies && inside(w, t.translation) {
                 hits.write(NpcHit { npc: e, damage: 999.0, kind: HitKind::WallOfLight, from: t.translation });
+                // (one turned against its own: those who see it no longer trust it)
+                if rewired {
+                    commands.entity(e).try_insert(crate::distrust::DeviceKill(i));
+                }
                 strike(&mut fx, d, t.translation + Vec3::Y * 0.3, true);
                 struck.insert(e);
                 killed.push(d.def.actor.clone());
@@ -977,6 +1034,7 @@ fn pylons(
     mut gizmos: Gizmos,
     player: Query<&Transform, With<Player>>,
     npcs: Query<(Entity, &Npc, &Transform), Without<Player>>,
+    mut commands: Commands,
 ) {
     let dt = time.delta_secs();
     let ppos = player.single().map(|t| t.translation).ok();
@@ -1024,6 +1082,11 @@ fn pylons(
                     match who {
                         Some(e) => {
                             hits.write(NpcHit { npc: e, damage, kind: HitKind::Bullet, from: base });
+                            // (one it kills, turned against its own: those who see it no longer
+                            // trust it)
+                            if npcs.get(e).is_ok_and(|(_, n, _)| n.health <= damage) {
+                                commands.entity(e).try_insert(crate::distrust::DeviceKill(i));
+                            }
                         }
                         None => {
                             stats.take_damage(damage);

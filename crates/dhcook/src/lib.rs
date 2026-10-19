@@ -3017,6 +3017,8 @@ impl<'a> Cooker<'a> {
                 d.beams.push((sys, ue_to_bevy(m).to_cols_array()));
             }
             self.pending_wall_sparks.push((self.scene.security.len(), keys));
+            // (whether characters' paths weigh it: `m_bWoLAffectPathFinding`, on by default)
+            d.params.insert("m_bWoLAffectPathFinding".into(), if ch.bool("m_bWoLAffectPathFinding").unwrap_or(true) { 1.0 } else { 0.0 });
             if let Some(t) = &tweak {
                 let tc = self.chain(t);
                 let cross = ch.obj(self.assets, "m_CrossSparkEffect").and_then(|c| self.chain(&c).obj(self.assets, "Template")).or_else(|| tc.obj(self.assets, "m_CrossSparkEffectTemplate"));
@@ -3742,6 +3744,11 @@ impl<'a> Cooker<'a> {
     fn danger_steering(&mut self, pawn: &Obj) -> NpcDanger {
         let mut out = NpcDanger::default();
         let Some(brain) = self.tweak_obj(pawn, "m_pBrainTweak") else { return out };
+        out.walls = match self.tweak_prop(&brain, "m_eWallsOfLightConfidence", 0, 0) {
+            Some((_, Value::Enum(e) | Value::Name(e))) if e.ends_with("_Confident") => 2,
+            Some((_, Value::Enum(e) | Value::Name(e))) if e.ends_with("_Fear") => 1,
+            _ => 0,
+        };
         if let Some(st) = self.tweak_obj(&brain, "m_pSteeringTweaks") {
             if let Some((_, Value::Struct(_, s))) = self.tweak_prop(&st, "m_DangerSteeringSettings", 0, 0) {
                 let p = Props(s);

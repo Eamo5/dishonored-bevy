@@ -1152,18 +1152,22 @@ pub struct NpcStats {
 /// How the AI's danger zones steer a character (its brain's `m_pSteeringTweaks`:
 /// `m_DangerSteeringSettings` `{m_bTickAllowed, m_fInfluenceSmoothSpeed}` and
 /// `m_fInfluenceFadeSpeed`, a second each), and the zone its aim lays about its target (a
-/// tallboy's combat behaviour, `m_fAimingDangerSphereRadius`, m; 0: none).
+/// tallboy's combat behaviour, `m_fAimingDangerSphereRadius`, m; 0: none). And how its paths
+/// take running walls of light (its brain's `m_eWallsOfLightConfidence`: 0 heedless, 1 fearing
+/// them, 2 confident through its friends' walls it hasn't seen kill).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct NpcDanger {
     pub steered: bool,
     pub smooth: f32,
     pub fade: f32,
     pub aim_radius: f32,
+    #[serde(default)]
+    pub walls: u8,
 }
 
 impl Default for NpcDanger {
     fn default() -> Self {
-        NpcDanger { steered: true, smooth: 2.0, fade: 2.0, aim_radius: 0.0 }
+        NpcDanger { steered: true, smooth: 2.0, fade: 2.0, aim_radius: 0.0, walls: 0 }
     }
 }
 

@@ -47,6 +47,9 @@ pub struct Zone {
     pub radius: f32,
     /// seconds left; below 0, for ever
     pub life: f32,
+    /// a whale oil device's that someone no longer trusts (its index in `Devices`): it pushes
+    /// only those who distrust it (0x00C516D0)
+    pub device: Option<usize>,
 }
 
 #[derive(Resource, Default)]
@@ -57,12 +60,17 @@ pub struct DangerZones {
 impl DangerZones {
     /// A sphere laid by `requestor`, in place of its last shape.
     pub fn sphere(&mut self, requestor: Entity, life: f32, at: Vec3, radius: f32) {
-        self.put(Zone { requestor, shape: Shape::Sphere(at), radius, life });
+        self.put(Zone { requestor, shape: Shape::Sphere(at), radius, life, device: None });
+    }
+
+    /// A distrusted whale oil device's zone (`distrust`), for ever until taken away.
+    pub fn device(&mut self, requestor: Entity, device: usize, at: Vec3, radius: f32) {
+        self.put(Zone { requestor, shape: Shape::Sphere(at), radius, life: -1.0, device: Some(device) });
     }
 
     /// A capsule laid by `requestor`, in place of its last shape.
     pub fn capsule(&mut self, requestor: Entity, life: f32, from: Vec3, to: Vec3, radius: f32) {
-        self.put(Zone { requestor, shape: Shape::Capsule(from, to), radius, life });
+        self.put(Zone { requestor, shape: Shape::Capsule(from, to), radius, life, device: None });
     }
 
     fn put(&mut self, z: Zone) {
@@ -75,10 +83,15 @@ impl DangerZones {
         }
     }
 
-    /// The zones' push on a character at `pos` (`who`: its own zone doesn't push it), facing
-    /// `facing`: summed, at most 1.
-    pub fn push(&self, who: Entity, pos: Vec3, facing: Vec3) -> Vec3 {
-        let sum: Vec3 = self.zones.iter().filter(|z| z.requestor != who).map(|z| push_of(z.shape, z.radius, pos, facing)).sum();
+    /// The zones' push on a character at `pos` (`who`: its own zone doesn't push it, nor a
+    /// device's it doesn't distrust), facing `facing`: summed, at most 1.
+    pub fn push(&self, who: Entity, distrust: &[usize], pos: Vec3, facing: Vec3) -> Vec3 {
+        let sum: Vec3 = self
+            .zones
+            .iter()
+            .filter(|z| z.requestor != who && z.device.is_none_or(|d| distrust.contains(&d)))
+            .map(|z| push_of(z.shape, z.radius, pos, facing))
+            .sum();
         sum.clamp_length_max(1.0)
     }
 }
@@ -197,7 +210,7 @@ fn throws(mut zones: ResMut<DangerZones>, mut thrown: MessageReader<crate::gadge
 
 /// Each character's push, eased and faded as its brain steers it (`DH_DANGER_LOG`: the zones
 /// and who they push, every second).
-fn steer(time: Res<Time>, tc: Res<TimeControl>, zones: Res<DangerZones>, mut npcs: Query<(Entity, &mut Npc, &Transform), Without<Player>>, mut logged: Local<f32>) {
+pub(crate) fn steer(time: Res<Time>, tc: Res<TimeControl>, zones: Res<DangerZones>, mut npcs: Query<(Entity, &mut Npc, &Transform), Without<Player>>, mut logged: Local<f32>) {
     let log = std::env::var("DH_DANGER_LOG").is_ok() && time.elapsed_secs() - *logged >= 1.0;
     if log {
         *logged = time.elapsed_secs();
@@ -221,7 +234,7 @@ fn steer(time: Res<Time>, tc: Res<TimeControl>, zones: Res<DangerZones>, mut npc
             npc.danger_fade = l;
             continue;
         }
-        let want = zones.push(e, t.translation, npc.forward());
+        let want = zones.push(e, &npc.distrust, t.translation, npc.forward());
         npc.danger_fade = (npc.danger_fade + tw.fade * dt).min(1.0);
         let diff = want - npc.danger_smooth;
         let len = diff.length();
@@ -263,23 +276,23 @@ mod tests {
         let guard = Entity::from_raw_u32(2).unwrap();
         // the tower's 30 m sphere about Corvo
         z.sphere(tower, 2.0, Vec3::ZERO, 30.0);
-        let near = z.push(guard, Vec3::new(1.5, 0.0, 0.0), Vec3::Z);
+        let near = z.push(guard, &[], Vec3::new(1.5, 0.0, 0.0), Vec3::Z);
         assert!((near - Vec3::X * (1.0 - 1.5f32.powi(2) / 900.0)).length() < 1e-5, "{near}");
-        let far = z.push(guard, Vec3::new(0.0, 0.0, 29.0), Vec3::X);
+        let far = z.push(guard, &[], Vec3::new(0.0, 0.0, 29.0), Vec3::X);
         assert!(far.z > 0.0 && far.z < 0.07, "{far}");
-        assert_eq!(z.push(guard, Vec3::new(31.0, 0.0, 0.0), Vec3::Z), Vec3::ZERO);
+        assert_eq!(z.push(guard, &[], Vec3::new(31.0, 0.0, 0.0), Vec3::Z), Vec3::ZERO);
         // at its middle: along its facing; and the one that laid it isn't pushed
-        assert_eq!(z.push(guard, Vec3::ZERO, Vec3::Z), Vec3::Z);
+        assert_eq!(z.push(guard, &[], Vec3::ZERO, Vec3::Z), Vec3::Z);
         z.sphere(guard, 2.0, Vec3::new(1.0, 0.0, 0.0), 5.0);
         assert_eq!(z.zones.len(), 2);
-        assert!((z.push(guard, Vec3::new(1.5, 0.0, 0.0), Vec3::Z) - near).length() < 1e-5);
+        assert!((z.push(guard, &[], Vec3::new(1.5, 0.0, 0.0), Vec3::Z) - near).length() < 1e-5);
         // a new shape of a requestor's takes its last one's place; two pushes at most 1
         z.capsule(guard, 1.0, Vec3::new(0.0, 0.0, -10.0), Vec3::new(0.0, 0.0, 10.0), 5.0);
         assert_eq!(z.zones.len(), 2);
-        let both = z.push(tower, Vec3::new(1.0, 0.0, 3.0), Vec3::Z);
+        let both = z.push(tower, &[], Vec3::new(1.0, 0.0, 3.0), Vec3::Z);
         assert!((both - Vec3::X * (1.0 - 1.0 / 25.0)).length() < 1e-5, "{both}");
         z.sphere(Entity::from_raw_u32(3).unwrap(), 1.0, Vec3::new(0.5, 0.0, 3.0), 5.0);
-        assert!(z.push(tower, Vec3::new(1.0, 0.0, 3.0), Vec3::Z).length() <= 1.0 + 1e-6);
+        assert!(z.push(tower, &[], Vec3::new(1.0, 0.0, 3.0), Vec3::Z).length() <= 1.0 + 1e-6);
     }
 
     #[test]

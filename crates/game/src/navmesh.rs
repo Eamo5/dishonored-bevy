@@ -55,6 +55,38 @@ pub struct NavState {
     pub points: Vec<Vec3>,
     pub next: usize,
     pub age: f32,
+    /// the way there runs only through walls it may not enter: it waits
+    pub barred: bool,
+}
+
+/// A wall of light a path may not enter: world -> local matrix and local bounds.
+pub type Barrier = (Mat4, Vec3, Vec3);
+
+/// Whether a step from `a` to `b` enters a barrier (leaving one, or within it, is free: the
+/// wall's costly edges lead into its strip, 0x00A29470).
+fn enters(barred: &[Barrier], a: Vec3, b: Vec3) -> bool {
+    barred.iter().any(|(m, lo, hi)| {
+        let (la, lb) = (m.transform_point3(a), m.transform_point3(b));
+        // (the strip as tall as a character)
+        let (lo, hi) = (*lo - Vec3::new(0.05, 1.0, 0.05), *hi + Vec3::new(0.05, 1.0, 0.05));
+        if la.cmpge(lo).all() && la.cmple(hi).all() {
+            return false;
+        }
+        let d = lb - la;
+        let (mut t0, mut t1) = (0.0f32, 1.0f32);
+        for k in 0..3 {
+            if d[k].abs() < 1e-8 {
+                if la[k] < lo[k] || la[k] > hi[k] {
+                    return false;
+                }
+                continue;
+            }
+            let (u, v) = ((lo[k] - la[k]) / d[k], (hi[k] - la[k]) / d[k]);
+            t0 = t0.max(u.min(v));
+            t1 = t1.min(u.max(v));
+        }
+        t0 <= t1
+    })
 }
 
 fn cell(x: f32, z: f32) -> (i32, i32) {
@@ -237,6 +269,12 @@ impl NavGrid {
     /// The corners from feet at `from` to `to` (ending at `to`), or none when either is off the
     /// mesh or they don't connect.
     pub fn path(&self, from: Vec3, to: Vec3) -> Option<Vec<Vec3>> {
+        self.path_barred(from, to, &[])
+    }
+
+    /// As `path`, never entering the `barred` walls (their edges cost the original's
+    /// 10,000,000, which its search refuses: 0x006829C5).
+    pub fn path_barred(&self, from: Vec3, to: Vec3, barred: &[Barrier]) -> Option<Vec<Vec3>> {
         let (start, end) = (self.locate(from)?, self.locate(to)?);
         if start == end {
             return Some(vec![to]);
@@ -266,6 +304,9 @@ impl NavGrid {
                     continue;
                 }
                 let mid = (a + b) * 0.5;
+                if !barred.is_empty() && (enters(barred, cp.center, mid) || enters(barred, mid, self.polys[nb as usize].center)) {
+                    continue;
+                }
                 let cost = g[cur as usize] + cp.center.distance(mid) + mid.distance(self.polys[nb as usize].center);
                 if cost < g[nb as usize] {
                     g[nb as usize] = cost;
@@ -356,7 +397,9 @@ fn funnel(from: Vec3, portals: &[(Vec3, Vec3)]) -> Vec<Vec3> {
 
 /// Where a character heading for `goal` should walk now (feet at `feet`): the next corner of
 /// its path, searched again when the goal moves or the path is stale.
-pub fn steer(grid: Option<&NavGrid>, budget: &mut PathBudget, nav: &mut NavState, feet: Vec3, goal: Vec3, dt: f32) -> Vec3 {
+/// Its paths are kept out of the `barred` walls; where they are the only way, it waits where
+/// it is.
+pub fn steer_barred(grid: Option<&NavGrid>, budget: &mut PathBudget, nav: &mut NavState, feet: Vec3, goal: Vec3, dt: f32, barred: &[Barrier]) -> Vec3 {
     let Some(grid) = grid else { return goal };
     nav.age += dt;
     let moved = nav.goal.is_none_or(|g| g.distance(goal) > 0.75);
@@ -365,7 +408,12 @@ pub fn steer(grid: Option<&NavGrid>, budget: &mut PathBudget, nav: &mut NavState
         nav.goal = Some(goal);
         nav.age = 0.0;
         nav.next = 0;
-        nav.points = grid.path(feet, goal).unwrap_or_default();
+        let path = grid.path_barred(feet, goal, barred);
+        nav.barred = path.is_none() && !barred.is_empty() && grid.path(feet, goal).is_some();
+        nav.points = path.unwrap_or_default();
+    }
+    if nav.barred {
+        return feet;
     }
     if nav.points.is_empty() {
         return goal;
