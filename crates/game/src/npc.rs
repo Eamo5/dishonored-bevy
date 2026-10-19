@@ -329,6 +329,9 @@ pub struct Npc {
     /// its search's check clip's cooldown (10 s: a searcher come to a spot looks it over, and
     /// tells the others there, only so often)
     pub check_cd: f32,
+    /// before setting off to look into something, its search's reaction (`m_SearchReactionDelay`,
+    /// 0-1 s: it turns to it first)
+    pub react: f32,
     /// Corvo dealt its last blow (else another character or the world did)
     pub hit_by_player: bool,
     /// its panic behaviour's last-survivor count (`DisAIBrainProcessPanic.m_KillQueue`: when
@@ -771,6 +774,9 @@ impl Npc {
             self.aggression = -1.0;
         }
         if self.mode != m {
+            if m == Mode::Investigate {
+                self.react = rand::random::<f32>();
+            }
             self.mode = m;
             self.mode_timer = 0.0;
             self.stuck = 0.0;
@@ -2261,6 +2267,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         carry_bark: None,
         suspecting: false,
         check_cd: 0.0,
+        react: 0.0,
         hit_by_player: false,
         kill_queue: Vec::new(),
         panics: 0,
@@ -3070,6 +3077,11 @@ fn npc_hearing(
                 if npc.alert == Alert::Combat {
                     continue;
                 }
+                // (a death heard, unsuspecting, its attention at investigating at most: taken
+                // aback, `DART_Surprise`'s `DDH_COMBAT_SURPRISED`)
+                if n.kind == NoiseKind::DeathRattle && !npc.suspecting && npc.attn_level <= 3 && npc.alert != Alert::Combat {
+                    npc.bark_req = (npc.bark_req.0.wrapping_add(1), "COMBAT_SURPRISED");
+                }
                 // (an alarm makes it suspect, its attention reactions' `Alarm`)
                 if n.kind == NoiseKind::Alarm {
                     npc.suspecting = true;
@@ -3527,6 +3539,11 @@ pub(crate) fn npc_perception(
             // seen or touched at investigating or more makes it suspect, 0x00B36680)
             if npc.hostile() && !npc.suspecting && (visible || touching) && npc.attn_level >= 3 {
                 npc.suspecting = true;
+                // (touched by him, it is taken aback too, `DART_Surprise`'s
+                // `DDH_COMBAT_SURPRISED`)
+                if touching && npc.alert != Alert::Combat {
+                    npc.bark_req = (npc.bark_req.0.wrapping_add(1), "COMBAT_SURPRISED");
+                }
             }
             // busted with a body on his shoulder, by one neither his enemy nor of his side
             // (`CarryingCorpseOrBodyPart`, 0x00B42610..0x00B42730): a body of its side, or a
@@ -3677,6 +3694,11 @@ pub(crate) fn npc_perception(
                         let filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
                         if ctx.cast_ray(eye, dir, d - 0.3, true, filter).is_none() {
                             npc.witnessed_death = true;
+                            // (unsuspecting, its attention at investigating at most: taken
+                            // aback, `DART_Surprise`)
+                            if !npc.suspecting && npc.attn_level <= 3 {
+                                npc.bark_req = (npc.bark_req.0.wrapping_add(1), "COMBAT_SURPRISED");
+                            }
                             break;
                         }
                     }
@@ -4295,11 +4317,25 @@ pub(crate) fn npc_brain(
                     npc.set_mode(Mode::Search);
                     continue;
                 }
-                if pos.distance(goal) < 1.6 || npc.mode_timer > 14.0 || npc.stuck > 1.5 {
+                // (its search's reaction first: turned to it, a moment)
+                if npc.mode_timer < npc.react && pos.distance(goal) > 2.5 {
+                    npc.target = None;
+                    let to = (goal - pos).with_y(0.0);
+                    if to.length() > 0.1 {
+                        let want = (-to.x).atan2(-to.z);
+                        let turn = (want - npc.yaw + PI).rem_euclid(TAU) - PI;
+                        npc.yaw += turn.clamp(-4.0 * dt, 4.0 * dt);
+                    }
+                    continue;
+                }
+                // (come to it within 2.5 m, `m_fProximityThresholds`' 250 uu; to a body closer,
+                // its 100 uu taken as 1.6 m, a body lying in the way)
+                let reach = if npc.body_check { 1.6 } else { 2.5 };
+                if pos.distance(goal) < reach || npc.mode_timer > 14.0 || npc.stuck > 1.5 {
                     // (not come to it, 0x00AFEB00: where Corvo is out of reach more than 5 m
                     // above, it stares up there, `StareAtUnreachable`, 5 s at most; else it
                     // stands a moment, 0.5-1 s; then it searches on)
-                    if pos.distance(goal) >= 1.6 {
+                    if pos.distance(goal) >= reach {
                         npc.hold = Some(if goal.y - pos.y > 5.0 { (5.0, true) } else { (0.5 + rand::random::<f32>() * 0.5, false) });
                     } else if npc.check_cd <= 0.0 {
                         // (come to it, it looks it over, its check clip's 10 s cooldown
@@ -4309,7 +4345,7 @@ pub(crate) fn npc_brain(
                     }
                     // (come to a body it found: it looks it over, `Sword_CorpseCheck`, and from then
                     // on the others pass it by, `m_bCorpseHandled`)
-                    if std::mem::take(&mut npc.body_check) && pos.distance(goal) < 1.6 {
+                    if std::mem::take(&mut npc.body_check) && pos.distance(goal) < reach {
                         npc.gesture(19);
                         if let Some(b) = npc.checking.take() {
                             handled.0.insert(b);

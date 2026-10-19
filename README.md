@@ -1400,6 +1400,13 @@ are in the settings file, `pad_binding_set` 0-3):
     unsuspecting): no timer, not a search's end. Saved with the game, as are the bodies guards
     have looked over (`m_bCorpseHandled`), so a reload doesn't send them to find those again.
   - A search heard of keeps the unsuspecting profile: it ends sooner (about 12 s).
+  - Taken aback (`DART_Surprise`), while unsuspecting: one that sees or hears a death with its
+    attention at investigating at most, or that Corvo bumps into once its attention is at
+    investigating, says `COMBAT_SURPRISED` ("What the...!"). Bumped into, it also suspects.
+  - Looking into something, it turns to it and waits its search's reaction
+    (`m_SearchReactionDelay`, 0-1 s) before setting off. It counts as come to it within 2.5 m
+    (`m_fProximityThresholds`, 250 uu). A body is 1.6 m: the original's 100 uu can't be
+    reached with the body lying in the way.
   - Bark and conversation branches on suspicion (`DisConv_CheckSpeakerSuspicionLevel`) read
     this level, not whether the speaker is busy looking or fighting.
 - **Lines that call the others** (the dialog hooks' flags, 0x01471D0C and 0x00C9BB50, decoded
