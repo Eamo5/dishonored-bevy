@@ -1186,6 +1186,14 @@ pub struct NpcPacing {
     pub ranged_threat: f32,
     pub side_step_after: [f32; 2],
     pub aggression: [f32; 3],
+    /// the danger zone it lays along its line of fire to Corvo while that line is clear (its
+    /// `m_bManageProjectileDanger`, `m_SecondaryUsageInfo`'s `m_AllyCheckDimensions`: the
+    /// sweep's half width and height, m), and whether that line starts at its head (else its
+    /// left arm: `m_AttackOrigin`)
+    #[serde(default)]
+    pub line_of_fire: Option<[f32; 2]>,
+    #[serde(default)]
+    pub fire_from_head: bool,
 }
 
 /// A plague carrier's (a weeper's pawn: `m_bHasPlague`). The cloud its cough starts deals
@@ -1223,6 +1231,21 @@ pub struct FireContext {
     pub angle: f32,
     pub cooldown: [f32; 2],
     pub cooldown_unreachable: [f32; 2],
+    /// a taunt's: broken off once its conditions fail (`m_bAbortIfConditionsInvalidate`)
+    #[serde(default)]
+    pub abort: Option<TauntAbort>,
+}
+
+/// When a taunt is broken off (its check 0x00C27B70): once it has gone on `after` s
+/// (`m_fAbortMinCommitTime`), Corvo out of its `range` (m, `m_AbortContextRange`), more than
+/// `height` m above or below (`m_fAbortMaxContextHeightDifference`, none if negative), or out of
+/// its `angle` (degrees, `m_fAbortAllowedAngle`), or a danger zone pushing it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct TauntAbort {
+    pub after: f32,
+    pub range: [f32; 2],
+    pub height: f32,
+    pub angle: f32,
 }
 
 /// One of a character's blade moves (its weapon's NPC contexts: `DisTweaks_NPCAttackShort`,

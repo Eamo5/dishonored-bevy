@@ -525,6 +525,7 @@ fn fire_context(npc: &Npc) -> dhcook::format::FireContext {
         angle: 25.0,
         cooldown: if npc.ranged == 3 { [3.0, 6.0] } else { [10.0, 20.0] },
         cooldown_unreachable: if npc.ranged == 3 { [2.0, 5.0] } else { [1.0, 2.0] },
+        abort: None,
     })
 }
 
@@ -4212,7 +4213,22 @@ pub(crate) fn npc_brain(
                 npc.taunt_cd -= dt;
                 if npc.taunt_hold > 0.0 {
                     npc.taunt_hold -= dt;
-                    if d > 2.5 && npc.stagger <= 0.0 && npc.hit_react <= 0.0 {
+                    // (one whose taunt breaks off when its conditions fail stops it once it has
+                    // gone on long enough: Corvo out of its reach, height or angle, or a danger zone
+                    // pushing it, the taunt's check 0x00C27B70)
+                    let broken = npc.arms.taunt.as_ref().and_then(|t| t.abort).is_some_and(|a| {
+                        let to = (ppos - pos).with_y(0.0);
+                        TAUNT_HOLD - npc.taunt_hold >= a.after
+                            && (npc.danger.abs().max_element() >= 1e-4
+                                || d < a.range[0]
+                                || d > a.range[1]
+                                || a.height >= 0.0 && (ppos.y - pos.y).abs() > a.height
+                                || to.normalize_or_zero().dot(npc.forward()) < a.angle.to_radians().cos())
+                    });
+                    if broken {
+                        info!("{} breaks off its taunt", npc.name);
+                    }
+                    if d > 2.5 && npc.stagger <= 0.0 && npc.hit_react <= 0.0 && !broken {
                         npc.target = None;
                         let to = (ppos - pos).with_y(0.0);
                         if to.length() > 0.1 {
@@ -4498,6 +4514,8 @@ pub(crate) fn npc_brain(
                         ranged_threat: 10.0,
                         side_step_after: [2.0, 3.0],
                         aggression: [-0.5, 0.1, 1.0],
+                        line_of_fire: None,
+                        fire_from_head: false,
                     });
                     npc.dodging = (npc.dodging - dt).max(0.0);
                     npc.incoming.1 += dt;

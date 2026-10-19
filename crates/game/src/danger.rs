@@ -9,8 +9,9 @@
 //!   target to be, `m_fAimingDangerSphereRadius`, 2 s, while its aim is clear), a grenade (a
 //!   sphere about it as it is thrown and where it strikes, its reach x `m_fAIDangerRatio`, for
 //!   what is left of its fuse), a character's grenade throw (a capsule from it to its target,
-//!   `m_fGrenadeDangerZone`, 1 s), and a tallboy's arrow in flight (a capsule along the next
-//!   2 s of its path, `TallboyExplosiveArrow_twk`'s 2000 uu).
+//!   `m_fGrenadeDangerZone`, 1 s), a tallboy's arrow in flight (a capsule along the next 2 s of
+//!   its path, `TallboyExplosiveArrow_twk`'s 2000 uu), and a fighter's line of fire to Corvo
+//!   while no ally stands in it (a capsule as wide as its ally check, 1.5 s).
 //! - Each pushes a character within it (not the one that laid it) away from it, `1 - d²/r²`
 //!   strong; a character's pushes are summed (at most 1), eased towards at
 //!   `m_fInfluenceSmoothSpeed` a second and faded in at `m_fInfluenceFadeSpeed` (none for
@@ -29,7 +30,7 @@ impl Plugin for DangerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DangerZones>()
             .add_systems(OnEnter(GameState::Loading), |mut z: ResMut<DangerZones>| z.zones.clear())
-            .add_systems(Update, (tick, (aims, throws), steer).chain().before(crate::npc::npc_move).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (tick, (aims, throws, lines_of_fire), steer).chain().before(crate::npc::npc_move).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -140,6 +141,52 @@ fn aims(mut zones: ResMut<DangerZones>, npcs: Query<(Entity, &Npc), Without<Play
     }
 }
 
+/// A fighter's line of fire (ManageAttacks' think 0x00B47880, its line updated 0x00B47180):
+/// while its secondary line to Corvo is clear of its allies, a capsule from its left arm (a
+/// thug's head) to where it knows him to be, as wide as its ally check, lasting 1.5 s, its start
+/// moved on by its width (none when he is within twice that). The others keep out of it.
+fn lines_of_fire(mut zones: ResMut<DangerZones>, npcs: Query<(Entity, &Npc, &Transform), Without<Player>>, player: Query<&Transform, With<Player>>) {
+    let Ok(corvo) = player.single().map(|t| t.translation) else { return };
+    let fighters: Vec<(Entity, Vec3)> = npcs.iter().filter(|(_, n, _)| !n.is_down()).map(|(e, _, t)| (e, t.translation)).collect();
+    for (e, npc, t) in &npcs {
+        let Some([width, _]) = npc.arms.pacing.as_ref().and_then(|p| p.line_of_fire) else { continue };
+        if npc.is_down() || npc.mode != Mode::Combat || !npc.sees_player || npc.retreat.is_some() {
+            continue;
+        }
+        let fwd = npc.forward();
+        let left = Vec3::new(fwd.z, 0.0, -fwd.x);
+        let head = npc.arms.pacing.as_ref().is_some_and(|p| p.fire_from_head);
+        let from = t.translation + if head { Vec3::Y * 0.75 } else { Vec3::Y * 0.45 + left * 0.2 };
+        let r = width.max(crate::npc::NPC_RADIUS);
+        let allies = fighters.iter().filter(|(o, _)| *o != e).map(|(_, p)| *p);
+        if let Some(start) = line_of_fire(from, corvo, r, allies) {
+            zones.capsule(e, LINE_LIFE, start, corvo, r);
+        }
+    }
+}
+
+/// Where a line of fire `r` wide from `from` to `to` starts its zone (moved on by `r`), if it is
+/// longer than twice that and clear of the `allies` (where they stand), swept as wide from a
+/// step behind it.
+fn line_of_fire(from: Vec3, to: Vec3, r: f32, mut allies: impl Iterator<Item = Vec3>) -> Option<Vec3> {
+    let along = to - from;
+    let len = along.length();
+    if 2.0 * r > len {
+        return None;
+    }
+    let dir = along / len;
+    let back = from - dir * r;
+    let blocked = allies.any(|p| {
+        let w = p + Vec3::Y * 0.45 - back;
+        let s = w.dot(dir).clamp(0.0, len + r);
+        (w - dir * s).length() < r + crate::npc::NPC_RADIUS
+    });
+    (!blocked).then_some(from + dir * r)
+}
+
+/// How long a line of fire's zone lasts (0x0103074C).
+const LINE_LIFE: f32 = 1.5;
+
 /// A character's grenade throw: a capsule from it to its target.
 fn throws(mut zones: ResMut<DangerZones>, mut thrown: MessageReader<crate::gadgets::NpcGrenade>, npcs: Query<&Transform, With<Npc>>) {
     for g in thrown.read() {
@@ -192,6 +239,22 @@ fn steer(time: Res<Time>, tc: Res<TimeControl>, zones: Res<DangerZones>, mut npc
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_of_fire_starts_a_width_on_and_is_laid_only_long_and_clear() {
+        let from = Vec3::new(0.0, 0.45, 0.0);
+        let corvo = Vec3::new(0.0, 0.45, -10.0);
+        // a guard's 0.8 m: its zone begins 0.8 m ahead of its arm
+        let start = line_of_fire(from, corvo, 0.8, std::iter::empty()).unwrap();
+        assert!((start - Vec3::new(0.0, 0.45, -0.8)).length() < 1e-5, "{start}");
+        // Corvo within twice its width: none
+        assert!(line_of_fire(from, Vec3::new(0.0, 0.45, -1.5), 0.8, std::iter::empty()).is_none());
+        // an ally between them, or just off the line: none; one well aside or behind Corvo: laid
+        assert!(line_of_fire(from, corvo, 0.8, [Vec3::new(0.0, 0.0, -5.0)].into_iter()).is_none());
+        assert!(line_of_fire(from, corvo, 0.8, [Vec3::new(1.0, 0.0, -5.0)].into_iter()).is_none());
+        assert!(line_of_fire(from, corvo, 0.8, [Vec3::new(3.0, 0.0, -5.0)].into_iter()).is_some());
+        assert!(line_of_fire(from, corvo, 0.8, [Vec3::new(0.0, 0.0, -14.0)].into_iter()).is_some());
+    }
 
     #[test]
     fn a_zone_pushes_out_of_it_weaker_towards_its_edge_and_not_its_own_requestor() {

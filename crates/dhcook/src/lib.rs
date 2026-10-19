@@ -3724,6 +3724,14 @@ impl<'a> Cooker<'a> {
                 ranged_threat: f(self, "m_fAngleOfPerceivedRangedThreat", 10.0),
                 side_step_after: ranged(self, "m_TimeForThreatToCauseSideStep", [2.0, 3.0]),
                 aggression: [f(self, "m_fAggressionDeltaPerDamage", -0.5), f(self, "m_fAggressionRegenRate", 0.1), f(self, "m_fCooldownFactorAtMinAggression", 1.0)],
+                line_of_fire: match (self.tweak_prop(&m, "m_bManageProjectileDanger", 0, 0), self.tweak_prop(&m, "m_SecondaryUsageInfo", 0, 0)) {
+                    (Some((_, Value::Bool(true))), Some((_, Value::Struct(_, u)))) => match Props(u).get("m_AllyCheckDimensions") {
+                        Some(Value::Vec2([x, y])) => Some([x * UNIT, y * UNIT]),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                fire_from_head: matches!(self.tweak_prop(&m, "m_SecondaryUsageInfo", 0, 0), Some((_, Value::Struct(_, u))) if Props(u.clone()).name("m_AttackOrigin") == Some("DHR_HEAD")),
             });
         }
         None
@@ -3882,6 +3890,7 @@ impl<'a> Cooker<'a> {
             angle: f(self, "m_fAllowedAngle", 25.0),
             cooldown,
             cooldown_unreachable: ranged(self, "m_ContextCooldownWhenUnreachable", cooldown),
+            abort: None,
         };
         log::debug!("npc fire {}: {fire:?}", w.name());
         Some(fire)
@@ -3903,11 +3912,21 @@ impl<'a> Cooker<'a> {
             _ => d,
         };
         let cooldown = ranged(self, "m_ContextCooldown", [45.0, 60.0]);
+        let abort = matches!(self.tweak_prop(&c, "m_bAbortIfConditionsInvalidate", 0, 0), Some((_, Value::Bool(true)))).then(|| {
+            let height = f(self, "m_fAbortMaxContextHeightDifference", -1.0);
+            TauntAbort {
+                after: f(self, "m_fAbortMinCommitTime", 0.5),
+                range: ranged(self, "m_AbortContextRange", [400.0, 3200.0]).map(|v| v * UNIT),
+                height: if height < 0.0 { -1.0 } else { height * UNIT },
+                angle: f(self, "m_fAbortAllowedAngle", 90.0),
+            }
+        });
         Some(FireContext {
             range: [f(self, "m_fMinContextRange", 650.0) * UNIT, f(self, "m_fMaxContextRange", 3000.0) * UNIT, f(self, "m_fIdealContextRange", 1250.0) * UNIT],
             angle: f(self, "m_fAllowedAngle", 45.0),
             cooldown,
             cooldown_unreachable: ranged(self, "m_ContextCooldownWhenUnreachable", cooldown),
+            abort,
         })
     }
 

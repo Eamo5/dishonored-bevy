@@ -2304,8 +2304,14 @@ against the install's own data where it carries them, then implemented independe
     tallboy fighting (a sphere about where it knows Corvo to be, 20 m), a grenade (about it as
     it leaves the hand and where it strikes, its reach x `m_fAIDangerRatio`: an overseer's three
     times its blast, for the rest of its fuse), an overseer's throw (a capsule to its target,
-    `m_fGrenadeDangerZone`, 1 s), and a tallboy's arrow in flight (a capsule 20 m across along
-    the next 2 s of its path).
+    `m_fGrenadeDangerZone`, 1 s), a tallboy's arrow in flight (a capsule 20 m across along the
+    next 2 s of its path), and a fighter's line of fire. A fighter whose combat behaviour manages
+    projectile danger (`m_bManageProjectileDanger`: guards, officers, assassins, the Bottle
+    Street thugs; not plain overseers, tallboys or wolfhounds) lays a capsule from its left arm
+    (a thug's head: its `m_SecondaryUsageInfo`'s `m_AttackOrigin`) to Corvo while no ally stands
+    in it. The capsule is as wide as its ally check (`m_AllyCheckDimensions`: 0.8 m, a thug's
+    1 m), starts that far on, and lasts 1.5 s; there is none with him within twice that
+    (ManageAttacks' think 0x00B47880). So the others keep out of each other's line.
   - Each pushes a character in it away (`1 - d²/r²`; not the one that laid it); the pushes
     summed, at most 1, eased towards and faded in at its brain's `m_DangerSteeringSettings`
     (2 a second; none for Brisby, Samuel, the weepers, the Outsider, and fading out while it
@@ -2313,8 +2319,7 @@ against the install's own data where it carries them, then implemented independe
     fighter facing Corvo steps back from danger ahead of it or aside from one at its side, the
     way it is pushed, as its steps' cooldowns allow (ManageAttacks 0x00B3A300). So guards keep
     out of a tower's fire and give a tallboy's arrows room.
-  - Not yet: the line of fire's capsule, burning characters, the zones about rewired walls and
-    pylons that killed an ally.
+  - Not yet: burning characters, the zones about rewired walls and pylons that killed an ally.
 - **Pursuers through the door.** Guards hunting Corvo follow him into the next map, as the
   original's travel manager has them (`UDisNPCTravelManager`, decoded for this rewrite from the
   user's own Dishonored.exe: leaving 0x00AE2300, arriving 0x00AE2C90, the delay 0x00AE3760, going
@@ -2471,7 +2476,11 @@ against the install's own data where it carries them, then implemented independe
   within 45 degrees, every 45-60 s and 20-30 s with Corvo out of reach) plays one of its
   `Sword_TauntA/B/C` gestures at him and stands for it; the clip cues its line
   (`COMBAT_TAUNT_WITH_GESTURE`), so that line no longer comes as a random bark. A taunt due waits
-  for the pistol to be put away.
+  for the pistol to be put away. One whose taunt breaks off when its conditions fail
+  (`m_bAbortIfConditionsInvalidate`, as most fighters' weapons have it) stops it
+  once it has gone on half a second (`m_fAbortMinCommitTime`). It stops if Corvo comes within
+  4 m or goes beyond 32 m (`m_AbortContextRange`), leaves its 90 degrees, or a danger zone pushes
+  it (the check 0x00C27B70).
 - **Striking under a hideout.** With Corvo under a table or a bed (`DisHideoutVolume`), a guard who
   saw him go there comes to its way in (`DisHideoutAccessPoint`) and strikes under it. With the
   blade it plays `Sword_Attack_UnderTable` (`DisTweaks_NPCAttackUnder`): every stab its clip
