@@ -182,6 +182,17 @@ pub fn light_value(lights: &[Light], baked: f32, p: Vec3, ctx: Option<&RapierCon
     if x > 1e-4 { x.powf(1.0 / 2.2) } else { 0.0 }
 }
 
+/// A body's light (0..1), as the original reads it for a corpse's visibility
+/// (`Modifier_CorpseVisibility`, 0x00A99F60: the player's light function over the body's light
+/// sample, normalised by the map's vis settings, else the game's).
+pub fn body_light(level: &LevelInfo, wl: Option<&crate::world_light::WorldLighting>, at: Vec3, ctx: Option<&RapierContext>) -> f32 {
+    let Some(pv) = level.scene.player_vis.as_ref() else { return 0.0 };
+    let range = pv.map.unwrap_or(pv.global);
+    let baked = wl.and_then(|w| w.volume.sample(at)).map(|v| lum(v.ambient) + lum(v.directional)).unwrap_or(0.0);
+    let raw = light_value(&level.scene.lights, baked, at, ctx);
+    ((raw - range[0]) / (range[1] - range[0]).max(1e-3)).clamp(0.0, 1.0)
+}
+
 fn lum(c: Vec3) -> f32 {
     c.dot(Vec3::new(0.3, 0.59, 0.11))
 }

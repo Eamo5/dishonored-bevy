@@ -33,6 +33,9 @@ impl Plugin for NpcPlugin {
             .add_message::<NpcSpawned>()
             .add_message::<NpcShot>()
             .add_systems(OnEnter(GameState::InGame), spawn_npcs.after(LevelSpawnSet))
+            .init_resource::<HandledBodies>()
+            .add_systems(OnEnter(GameState::InGame), |mut h: ResMut<HandledBodies>| h.0.clear())
+            .add_systems(Update, body_lights.before(npc_perception).run_if(in_state(GameState::InGame)))
             .add_systems(First, log_jumps.run_if(in_state(GameState::InGame)))
             .add_systems(Update, sticky_struck.before(npc_select_anim).run_if(in_state(GameState::InGame)))
             .add_systems(Update, npc_faces.after(npc_select_anim).before(npc_animate).run_if(in_state(GameState::InGame)))
@@ -300,6 +303,9 @@ pub struct Npc {
     pub search_run: bool,
     /// it saw one of its own die (the alarm's `m_fAlarmChanceUponWitnessDeath`)
     pub witnessed_death: bool,
+    /// the bodies it has found (each once), and the one it goes to look over
+    pub found_bodies: Vec<Entity>,
+    pub checking: Option<Entity>,
     /// the walls of light and arc pylons it saw kill an ally, rewired (`distrust`; indices in
     /// `security::Devices`)
     pub distrust: Vec<usize>,
@@ -2226,6 +2232,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         taunt_hold: 0.0,
         search_run: false,
         witnessed_death: false,
+        found_bodies: Vec::new(),
+        checking: None,
         distrust: Vec::new(),
         magic_pending: None,
         magic_react: None,
@@ -3105,6 +3113,76 @@ pub fn attention_of<'a>(npc: &Npc, scene: &'a dhcook::format::Scene) -> Option<&
     })
 }
 
+/// A body's light (0..1), sampled now and then as it lies (`stealth::body_light`).
+#[derive(Component)]
+pub struct BodyLight(pub f32, f32);
+
+/// The bodies someone has looked over (`m_bCorpseHandled`): the others pass them by, but those
+/// that react to handled bodies (`m_bReactToHandledCorpses`, the civilians).
+#[derive(Resource, Default)]
+pub struct HandledBodies(pub std::collections::HashSet<Entity>);
+
+/// The marks a body is seen at (`Twk_Attn_Simple_*`): a body, a death as it happens.
+const SEE_CORPSE: f32 = 0.35;
+const SEE_DEATH: f32 = 0.025;
+
+/// What nearness in a cone gives a body's visibility (`m_CorpseVisTuning`: (0.55, 0),
+/// (0.875, 0.8), (0.96, 2.0) over 1 - distance / the cone's range).
+fn corpse_tuning(x: f32) -> f32 {
+    const P: [(f32, f32); 3] = [(0.55, 0.0), (0.875, 0.8), (0.96, 2.0)];
+    if x <= P[0].0 {
+        return P[0].1;
+    }
+    for w in P.windows(2) {
+        if x <= w[1].0 {
+            return w[0].1 + (w[1].1 - w[0].1) * (x - w[0].0) / (w[1].0 - w[0].0);
+        }
+    }
+    P[2].1
+}
+
+/// Whether a body at `at` (its light `light`) is seen from the eyes: in a vision cone, its
+/// nearness's tuning plus its light at `mark` or more (0x00B50030).
+fn body_seen(s: &dhcook::format::Sight, eye: Vec3, fwd: Vec3, at: Vec3, light: f32, mark: f32) -> bool {
+    let to = at + Vec3::Y * 0.2 - eye;
+    let d = to.length();
+    let Some(range) = vision_range(s, fwd, to / d.max(1e-3), d, false) else { return false };
+    corpse_tuning(1.0 - d / range.max(1e-3)) + light >= mark
+}
+
+/// The bodies' light, each sampled every second or so as it lies.
+fn body_lights(
+    mut commands: Commands,
+    time: Res<Time>,
+    level: Option<Res<LevelInfo>>,
+    wl: Option<Res<crate::world_light::WorldLighting>>,
+    rapier: ReadRapierContext,
+    mut bodies: Query<(Entity, &Npc, &Transform, Option<&mut BodyLight>)>,
+) {
+    let Some(level) = level else { return };
+    let ctx = rapier.single().ok();
+    let now = time.elapsed_secs();
+    for (e, n, t, l) in &mut bodies {
+        if !n.is_down() {
+            if l.is_some() {
+                commands.entity(e).try_remove::<BodyLight>();
+            }
+            continue;
+        }
+        if l.as_ref().is_some_and(|l| now < l.1) {
+            continue;
+        }
+        let v = crate::stealth::body_light(&level, wl.as_deref(), t.translation + Vec3::Y * 0.3, ctx.as_ref());
+        let next = now + 0.8 + rand::random::<f32>() * 0.4;
+        match l {
+            Some(mut l) => *l = BodyLight(v, next),
+            None => {
+                commands.entity(e).try_insert(BodyLight(v, next));
+            }
+        }
+    }
+}
+
 /// Whether a direction from the eyes falls in the character's focused or peripheral vision
 /// (`DisTweaks_Vision`: horizontal angle, the vertical one a share of it up and down, and range):
 /// that cone's range. Fighting, it follows Corvo all around close by and up and down.
@@ -3144,6 +3222,7 @@ pub(crate) fn npc_perception(
     mut found: Local<std::collections::HashSet<Entity>>,
     (froms, mut events, swarms): (Query<&FromSpawner>, MessageWriter<crate::interact::Interaction>, Query<(&Transform, &crate::swarm::Swarm), Without<Npc>>),
     (level, pvis, settings, notarget): (Option<Res<LevelInfo>>, Res<crate::stealth::PlayerVisibility>, Res<crate::settings::Settings>, Option<Res<crate::script::NoTarget>>),
+    (body_lights, carry, handled): (Query<&BodyLight>, Res<crate::carry::Carry>, Res<HandledBodies>),
 ) {
     // (rat swarms about that would attack: Corvo's, or a level's grown to its
     // `m_InitialRatCountToBeAggressive`; a stray rat or two only scurries off)
@@ -3171,7 +3250,13 @@ pub(crate) fn npc_perception(
     let stance = if p.crouched { 0.55 } else if p.sprinting { 1.35 } else { 1.0 };
     let difficulty = settings.difficulty.min(3) as usize;
     let log = std::env::var("DH_ATTN_LOG").is_ok();
-    let body_positions: Vec<(Entity, Vec3)> = npcs.iter().filter(|(_, n, _)| n.is_down() && !n.corpse).map(|(e, _, t)| (e, t.translation)).collect();
+    // (the bodies to be found: the dead and the knocked out alike, not one Corvo carries; their
+    // light, their faction, whether one has looked them over)
+    let bodies: Vec<(Entity, Vec3, f32, String, bool)> = npcs
+        .iter()
+        .filter(|(e, n, _)| n.is_down() && !n.corpse && carry.body != Some(*e))
+        .map(|(e, n, t)| (e, t.translation, body_lights.get(e).map_or(0.0, |l| l.0), n.faction.clone(), handled.0.contains(&e)))
+        .collect();
     // (deaths just now: the bodies of the last two seconds)
     let fresh: Vec<(Entity, Vec3)> = npcs.iter().filter(|(_, n, _)| n.mode == Mode::Dead && !n.corpse && n.corpse_age < 2.0).map(|(e, _, t)| (e, t.translation)).collect();
     // (for the civilians: the guards fighting, the others panicking)
@@ -3179,7 +3264,7 @@ pub(crate) fn npc_perception(
     let panicking: Vec<Vec3> = npcs.iter().filter(|(_, n, _)| n.mode == Mode::Flee && !n.fighter() && !n.is_down()).map(|(_, _, t)| t.translation).collect();
     let mut newly_detected = false;
     for (e, mut npc, t) in &mut npcs {
-        if npc.is_down() || npc.kind == Kind::Story || npc.mode == Mode::Choked || stats.dead || hidden || Some(e) == possession.host || npc.blind {
+        if npc.is_down() || npc.kind == Kind::Story || npc.mode == Mode::Choked || stats.dead || Some(e) == possession.host || npc.blind {
             npc.sees_player = false;
             continue;
         }
@@ -3195,7 +3280,9 @@ pub(crate) fn npc_perception(
         let mut visible = false;
         let mut dist = f32::MAX;
         let mut range = 30.0 * light_factor;
-        for target in [head, chest] {
+        // (Corvo unseen, in a host or for tests: what they think of him only leaks away, but
+        // the bodies about are seen as ever)
+        for target in [head, chest].into_iter().filter(|_| !hidden) {
             let to = target - eye;
             let d = to.length();
             let dir = to / d.max(1e-3);
@@ -3230,7 +3317,7 @@ pub(crate) fn npc_perception(
         // (an enemy he is in sight of keeps him there without a clear line while he stays within
         // its attention's `m_fDistanceToLoseSight`, 3 m: round a corner, behind a crate, as
         // roshan's r614/blink research decoded it)
-        if !visible && npc.sees_player && npc.hostile() {
+        if !visible && !hidden && npc.sees_player && npc.hostile() {
             let keep = level.as_ref().and_then(|l| attention_of(&npc, &l.scene)).map_or(0.0, |a| a.lose_sight);
             let off = pt.translation - t.translation;
             if off.with_y(0.0).length() <= keep && off.y.abs() <= keep {
@@ -3242,7 +3329,7 @@ pub(crate) fn npc_perception(
         if visible {
             npc.last_seen = Some(pt.translation);
         }
-        let touching = (pt.translation - t.translation).with_y(0.0).length() < 0.9 && (pt.translation.y - t.translation.y).abs() < 1.5;
+        let touching = !hidden && (pt.translation - t.translation).with_y(0.0).length() < 0.9 && (pt.translation.y - t.translation.y).abs() < 1.5;
         let att = level.as_ref().and_then(|l| attention_of(&npc, &l.scene));
         if let Some(att) = att {
             // the original's attention: what he gives away plus what nearness adds, by
@@ -3322,11 +3409,13 @@ pub(crate) fn npc_perception(
                 npc.attn_level = if npc.alert == Alert::Combat { 4 } else if npc.awareness >= 0.35 { 3 } else if npc.awareness > 0.05 { 1 } else { 0 };
                 npc.attn_fill = npc.awareness;
             }
-            // a death before its eyes (fighting too)
+            // a death before its eyes (fighting too): seen as a body is, at the lower mark
+            // (`m_fCorpseVis_VisLevelToSeeDeath`)
             if !npc.witnessed_death {
-                for (_, b) in &fresh {
-                    let d = b.distance(eye);
-                    if d < 14.0 && (*b - eye).normalize_or_zero().dot(fwd) > 0.3 {
+                for (f, b) in &fresh {
+                    let light = bodies.iter().find(|x| x.0 == *f).map_or(0.0, |x| x.2);
+                    if sight.is_some_and(|s| body_seen(s, eye, fwd, *b, light, SEE_DEATH)) || sight.is_none() && b.distance(eye) < 14.0 && (*b - eye).normalize_or_zero().dot(fwd) > 0.3 {
+                        let d = b.distance(eye);
                         let dir = (*b + Vec3::Y * 0.2 - eye).normalize_or_zero();
                         let filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
                         if ctx.cast_ray(eye, dir, d - 0.3, true, filter).is_none() {
@@ -3336,14 +3425,48 @@ pub(crate) fn npc_perception(
                     }
                 }
             }
-            // discover bodies
-            if !npc.saw_body && npc.alert != Alert::Combat {
-                for (body, b) in &body_positions {
+            // discover bodies, as the original's simple attention to a body has it (0x00B50030,
+            // 0x00B4BFC0, decoded for this rewrite): in its vision cones with a clear line, seen
+            // once the curve of its nearness in that cone plus the body's own light reaches
+            // `m_fCorpseVis_VisLevelToSeeCorpse` (0.35: in the dark within 10.8 m ahead, 5.2 m
+            // aside; lit, as far as it sees), found at once. A body of an ally (or a neutral's,
+            // protecting them), each once; not one already looked over, nor any with
+            // `m_bIgnoreAllCorpses`; the knocked out as the dead
+            let flags = sight.map(|s| s.corpses).unwrap_or_default();
+            let protects = sight.is_some_and(|s| s.protect_neutrals);
+            let relation = |victim: &str| -> u8 {
+                let scene = level.as_ref().map(|l| &l.scene);
+                if !npc.faction.is_empty() && (npc.faction == victim || scene.and_then(|s| s.allies.get(&npc.faction)).is_some_and(|a| a.iter().any(|f| f == victim))) {
+                    1
+                } else if scene.and_then(|s| s.factions.get(&npc.faction)).is_some_and(|en| en.iter().any(|f| f == victim)) {
+                    2
+                } else {
+                    0
+                }
+            };
+            if !npc.saw_body && npc.alert != Alert::Combat && !flags.ignore {
+                for (body, b, light, faction, was_handled) in &bodies {
+                    if npc.found_bodies.contains(body) || *was_handled && !flags.handled_too {
+                        continue;
+                    }
+                    let rel = relation(faction);
+                    if !(rel == 1 || rel == 0 && protects) {
+                        continue;
+                    }
+                    let seen = match sight {
+                        Some(s) => body_seen(s, eye, fwd, *b, *light, SEE_CORPSE),
+                        None => b.distance(eye) < 14.0 && (*b - eye).normalize_or_zero().dot(fwd) > 0.5,
+                    };
                     let d = b.distance(eye);
-                    if d < 14.0 && (*b - eye).normalize_or_zero().dot(fwd) > 0.5 {
+                    if seen {
                         let dir = (*b + Vec3::Y * 0.2 - eye).normalize_or_zero();
                         let filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
                         if ctx.cast_ray(eye, dir, d - 0.3, true, filter).is_none() {
+                            npc.found_bodies.push(*body);
+                            npc.checking = Some(*body);
+                            if log {
+                                info!("{} finds a body {d:.1} m away (light {light:.2})", npc.name);
+                            }
                             npc.saw_body = true;
                             // (one it saw die, not one it came upon)
                             npc.witnessed_death |= fresh.iter().any(|f| f.0 == *body);
@@ -3392,11 +3515,31 @@ pub(crate) fn npc_perception(
             // in sight, `SeeRatSwarm`, only where it does)
             let rules = level.as_ref().and_then(|l| npc.npc_type.and_then(|i| l.scene.npc_types.get(i as usize))).and_then(|ty| ty.sight.as_ref()).and_then(|s| s.panic.as_ref()).map(|p| p.rules.clone()).filter(|r| !r.is_empty());
             let on = |r: &str| rules.as_ref().is_none_or(|rs| rs.iter().any(|x| x == r));
-            // (a body: any, `WitnessCorpse`; one dying before its eyes, `WitnessDeath`)
-            let why = body_positions
-                .iter()
-                .find(|(be, b)| civilian && (on("WitnessCorpse") || (on("WitnessDeath") && fresh.iter().any(|f| f.0 == *be))) && in_sight(*b))
-                .map(|(_, b)| (*b, "a body"))
+            // (a body: any, `WitnessCorpse`; one dying before its eyes, `WitnessDeath`. Seen as
+            // the guards see one, by its nearness in a cone and its light, each once; those
+            // looked over too, for the civilians' `m_bReactToHandledCorpses`; none for those
+            // that ignore bodies)
+            let flags = sight.map(|s| s.corpses).unwrap_or_default();
+            let seen_body = |b: Vec3, light: f32, mark: f32| {
+                (match sight {
+                    Some(s) => body_seen(s, eye, fwd, b, light, mark),
+                    None => b.distance(eye) < 14.0 && (b - eye).normalize_or_zero().dot(fwd) > 0.5,
+                }) && {
+                    let d = b.distance(eye);
+                    let dir = (b + Vec3::Y * 0.2 - eye).normalize_or_zero();
+                    let filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+                    ctx.cast_ray(eye, dir, d - 0.3, true, filter).is_none()
+                }
+            };
+            let body = bodies.iter().filter(|x| civilian && !flags.ignore && !npc.found_bodies.contains(&x.0) && (!x.4 || flags.handled_too)).find(|(be, b, light, ..)| {
+                let dying = fresh.iter().any(|f| f.0 == *be);
+                (on("WitnessCorpse") && seen_body(*b, *light, SEE_CORPSE)) || (dying && on("WitnessDeath") && seen_body(*b, *light, SEE_DEATH))
+            });
+            if let Some((be, ..)) = body {
+                npc.found_bodies.push(*be);
+            }
+            let why = body
+                .map(|(_, b, ..)| (*b, "a body"))
                 .or_else(|| fighting.iter().copied().find(|f| civilian && on("WitnessAllyCombat") && f.distance(pos) < GROUP_DISTANCE && in_sight(*f + Vec3::Y * 0.5)).map(|f| (f, "a fight")))
                 .or_else(|| panicking.iter().copied().find(|f| civilian && on("WitnessAllyPanic") && f.distance(pos) < GROUP_DISTANCE && f.distance(pos) > 0.05).map(|f| (f, "another panicking")))
                 .or_else(|| rules.as_ref().filter(|rs| rs.iter().any(|x| x == "SeeRatSwarm")).and_then(|_| swarm_at.iter().copied().find(|s| in_sight(*s))).map(|s| (s, "a swarm")));
@@ -3515,12 +3658,13 @@ pub(crate) fn npc_brain(
         Local<f32>,
     ),
     (mut grenades, mut bottles, mut whiskey_fx, mut throws): (MessageWriter<crate::gadgets::NpcGrenade>, MessageWriter<crate::whiskey::NpcBottle>, MessageWriter<crate::particles::SpawnEffect>, MessageWriter<crate::thrown::NpcThrow>),
-    (finishing, mut finishers, mut tallboy_shots, devices, mut patrols): (
+    (finishing, mut finishers, mut tallboy_shots, devices, mut patrols, mut handled): (
         Query<(), With<FinisherClip>>,
         MessageWriter<NpcFinisher>,
         MessageWriter<crate::tallboy::TallboyShot>,
         Res<crate::security::Devices>,
         ResMut<crate::patrol::Patrols>,
+        ResMut<HandledBodies>,
     ),
 ) {
     let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
@@ -3540,6 +3684,8 @@ pub(crate) fn npc_brain(
     let Ok(ctx) = rapier.single() else { return };
     // the others, for feuds between factions
     let others: Vec<(Entity, Vec3, String, bool, u32, f32)> = npcs.iter().map(|(e, n, t)| (e, t.translation, n.faction.clone(), n.is_down() || n.kind == Kind::Story, n.spawner, n.health)).collect();
+    // (the bodies lying about, for a searcher done looking one over)
+    let downed: Vec<(Entity, Vec3, String)> = npcs.iter().filter(|(_, n, _)| n.is_down() && !n.corpse).map(|(e, n, t)| (e, t.translation, n.faction.clone())).collect();
     let factions = level.as_ref().map(|l| &l.scene.factions);
     let wall_filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
     // NPCs that just entered combat alert their neighbours
@@ -3846,9 +3992,23 @@ pub(crate) fn npc_brain(
                 let goal = npc.target.or(npc.last_seen).unwrap_or(npc.home);
                 npc.target = Some(goal);
                 if pos.distance(goal) < 1.6 || npc.mode_timer > 14.0 {
-                    // (come to a body it found: it looks it over, `Sword_CorpseCheck`)
+                    // (come to a body it found: it looks it over, `Sword_CorpseCheck`, and from then
+                    // on the others pass it by, `m_bCorpseHandled`)
                     if std::mem::take(&mut npc.body_check) && pos.distance(goal) < 1.6 {
                         npc.gesture(19);
+                        if let Some(b) = npc.checking.take() {
+                            handled.0.insert(b);
+                            // (and every other body of its side it sees then, 0x00B3B6E0: here
+                            // those within the dark's sight, 10.8 m, with a clear line)
+                            let eye = pos + Vec3::Y * 0.72;
+                            for o in downed.iter().filter(|o| o.0 != b && o.1.distance(eye) < 10.8) {
+                                let ally = o.2 == npc.faction || level.as_ref().and_then(|l| l.scene.allies.get(&npc.faction)).is_some_and(|a| a.contains(&o.2));
+                                let dir = (o.1 + Vec3::Y * 0.2 - eye).normalize_or_zero();
+                                if ally && ctx.cast_ray(eye, dir, o.1.distance(eye) - 0.3, true, wall_filter).is_none() {
+                                    handled.0.insert(o.0);
+                                }
+                            }
+                        }
                     }
                     npc.set_mode(Mode::Search);
                 }
@@ -7615,5 +7775,28 @@ mod wear_tests {
         let half = [att(10, 0.5, 1.0)];
         let n = (0..200).filter(|s| worn_attachments(&half, *s)[0]).count();
         assert!((60..140).contains(&n), "{n}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_body_is_seen_by_its_nearness_in_a_cone_and_its_light() {
+        // (the tuning's points, and between them)
+        assert_eq!(corpse_tuning(0.3), 0.0);
+        assert!((corpse_tuning(0.875) - 0.8).abs() < 1e-6);
+        assert!((corpse_tuning(0.7125) - 0.4).abs() < 1e-6);
+        assert_eq!(corpse_tuning(1.0), 2.0);
+        let s = dhcook::format::Sight { inner: [45.0, 35.0, 0.25, 0.7], outer: [160.0, 17.0, 0.1, 0.7], ..Default::default() };
+        let eye = Vec3::new(0.0, 0.7, 0.0);
+        let ahead = |d: f32| Vec3::new(0.0, 0.0, -d);
+        // in the dark: ahead within about 10.8 m, not beyond; lit, as far as it sees
+        assert!(body_seen(&s, eye, Vec3::NEG_Z, ahead(10.0), 0.0, SEE_CORPSE));
+        assert!(!body_seen(&s, eye, Vec3::NEG_Z, ahead(12.0), 0.0, SEE_CORPSE));
+        assert!(body_seen(&s, eye, Vec3::NEG_Z, ahead(30.0), 0.4, SEE_CORPSE));
+        // behind: never
+        assert!(!body_seen(&s, eye, Vec3::NEG_Z, Vec3::new(0.0, 0.0, 3.0), 1.0, SEE_CORPSE));
     }
 }

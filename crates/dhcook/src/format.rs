@@ -1464,6 +1464,27 @@ pub struct Sight {
     /// the attention level it acts on as aware of Corvo (`m_MinAttentionForAwareness`:
     /// 1 head track, 2 turn to face, 3 investigate, 4 busted)
     pub aware_level: u8,
+    /// how it takes bodies (its attention process's corpse flags)
+    #[serde(default)]
+    pub corpses: CorpseFlags,
+}
+
+/// How a character takes bodies (`DisTweaks_AIBrainProcess_Attention`): none at all
+/// (`m_bIgnoreAllCorpses`), those already looked over too (`m_bReactToHandledCorpses`), Corvo an
+/// enemy once seen carrying one (`m_bBecomeEnemyIfSeeCorpseCarry`), suspecting once it sees any
+/// (`m_bEscalateSuspicionIfSeeAnyCorpse`, on by default).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct CorpseFlags {
+    pub ignore: bool,
+    pub handled_too: bool,
+    pub enemy_if_carried: bool,
+    pub escalate: bool,
+}
+
+impl Default for CorpseFlags {
+    fn default() -> Self {
+        CorpseFlags { ignore: false, handled_too: false, enemy_if_carried: false, escalate: true }
+    }
 }
 
 /// A panic behaviour's rules (`DisTweaks_AIBehavior_Panic`): which are on (by name, `m_` off:

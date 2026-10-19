@@ -1333,6 +1333,26 @@ are in the settings file, `pad_binding_set` 0-3):
   (`DisSeqEvent_Corpse`: picked up, dropped, discovered by a guard; the guard who finds it runs
   to it and looks it over, `Sword_CorpseCheck`, before searching about), and an unconscious body
   that ends up in water drowns (a kill).
+- **Bodies found as the original finds them** (`npc.rs`; decoded from `Dishonored.exe` for this
+  rewrite, the attention's simple record of a body, 0x00B50030 and 0x00B4BFC0):
+  - A body is seen in the character's vision cones with a clear line, once the curve of its
+    nearness in that cone (`m_CorpseVisTuning`) plus the body's own light reaches
+    `m_fCorpseVis_VisLevelToSeeCorpse` (0.35). In the dark that is within 10.8 m ahead and
+    5.2 m aside. A lit body is seen as far as the cones reach (35 m and 17 m).
+  - The body's light is Corvo's own light measure taken where it lies, normalised by the map's
+    vis settings (`Modifier_CorpseVisibility`). A death as it happens is seen at the lower
+    `m_fCorpseVis_VisLevelToSeeDeath` (0.025).
+  - Found at once, with no build-up. Each character finds each body once: the dead and the
+    knocked out alike, never one Corvo carries.
+  - Guards take a body of their own side, or a civilian's (`m_bProtectNeutrals`). Civilians
+    panic at any body.
+  - The guard who looks a body over marks it handled (`m_bCorpseHandled`), with the bodies of
+    its side it sees then. Others pass them by, but those with `m_bReactToHandledCorpses`
+    (the civilians) don't.
+  - Those with `m_bIgnoreAllCorpses` (Daud's assassins, Granny Rags, Griff, Samuel and others)
+    take no notice of any.
+  - Corvo unseen (in a host, or `notarget` in tests) only stops them seeing him. Bodies are
+    found as ever.
 - **Assassinations**: attacking someone unaware of Corvo (from behind, or anyone who hasn't
   noticed him) plays the original paired clips by the side he takes them from — front, back,
   left or right; slow and deliberate while sneaking, quick otherwise, and their own variants

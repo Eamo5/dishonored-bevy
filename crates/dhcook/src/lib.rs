@@ -4284,7 +4284,17 @@ impl<'a> Cooker<'a> {
         let protect_neutrals = matches!(self.tweak_prop(&brain, "m_bProtectNeutrals", 0, 0), Some((_, Value::Bool(true))));
         let scary = self.scary_noises(&brain);
         let panic = self.panic_tweak(&brain);
-        Some(Sight { inner, outer, unsuspecting, suspecting, neutral, aware_level, protect_neutrals, scary, panic })
+        let flag = |s: &mut Self, n: &str, d: bool| match s.tweak_prop(&process, n, 0, 0) {
+            Some((_, Value::Bool(b))) => b,
+            _ => d,
+        };
+        let corpses = CorpseFlags {
+            ignore: flag(self, "m_bIgnoreAllCorpses", false),
+            handled_too: flag(self, "m_bReactToHandledCorpses", false),
+            enemy_if_carried: flag(self, "m_bBecomeEnemyIfSeeCorpseCarry", false),
+            escalate: flag(self, "m_bEscalateSuspicionIfSeeAnyCorpse", true),
+        };
+        Some(Sight { inner, outer, unsuspecting, suspecting, neutral, aware_level, protect_neutrals, scary, panic, corpses })
     }
 
     /// The noises that panic a brain's character: its panic behaviour (`m_BehaviorTweak`'s
