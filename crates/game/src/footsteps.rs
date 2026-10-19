@@ -68,6 +68,8 @@ pub struct Footfall {
     pub pos: Vec3,
     pub gait: Gait,
     pub who: Walker,
+    /// whose foot (its game object, for the sound's playback limit)
+    pub by: Option<Entity>,
 }
 
 /// The surface below a point (within `reach` metres).
@@ -146,14 +148,14 @@ fn play_footfalls(
             Walker::Guard => "Guard",
             Walker::Wolfhound => "Wolfhound",
             Walker::Rat => {
-                out.write(PostEvent::named("FS_Rat_Walk", Some(f.pos)));
+                out.write(with_by(PostEvent::named("FS_Rat_Walk", Some(f.pos)), f.by));
                 continue;
             }
             Walker::Tallboy => {
                 // a stilt coming down (the contact system's `Footfall_Tallboy`: its thump, wet on
                 // wet ground, and its dust)
                 let wet = surface_below(&ctx, &surfaces, f.pos, 2.5).is_some_and(|s| SURFACES.get(s as usize) == Some(&"Water"));
-                out.write(PostEvent::named(if wet { "FS_TBoy_Base_Wet" } else { "FS_TBoy_Base" }, Some(f.pos)));
+                out.write(with_by(PostEvent::named(if wet { "FS_TBoy_Base_Wet" } else { "FS_TBoy_Base" }, Some(f.pos)), f.by));
                 fx.write(crate::particles::SpawnEffect { secs: 2.0, ..crate::particles::SpawnEffect::at("tallboy_step", f.pos) });
                 crate::rumble::play_near("contact.Footfall_Tallboy.Environment.radius", f.pos);
                 continue;
@@ -178,6 +180,13 @@ fn play_footfalls(
         if log {
             info!("footfall {name}");
         }
-        out.write(PostEvent::named(&name, Some(f.pos)));
+        out.write(with_by(PostEvent::named(&name, Some(f.pos)), f.by));
+    }
+}
+
+fn with_by(p: PostEvent, by: Option<Entity>) -> PostEvent {
+    match by {
+        Some(e) => p.from_object(e),
+        None => p,
     }
 }

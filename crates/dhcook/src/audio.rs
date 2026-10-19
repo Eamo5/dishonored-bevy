@@ -53,6 +53,9 @@ struct Node {
     set_state: Option<(u32, u32)>,
     /// its RTPC curves (`InitialRTPC`)
     rtpcs: Vec<RtpcCurve>,
+    /// its playback limit (`AdvSettingsParams`), and whether it sets its own (else its parent's
+    /// holds)
+    limit: Option<(Limit, bool)>,
     /// raw data, for reference scans
     data: Vec<u8>,
 }
@@ -176,6 +179,20 @@ pub struct PlayDef {
     /// the RTPC curves on it, its ancestors and what it plays
     #[serde(default)]
     pub rtpcs: Vec<RtpcCurve>,
+    /// how many of it may sound at once (its own playback limit or the nearest ancestor's that
+    /// sets one)
+    #[serde(default)]
+    pub limit: Option<Limit>,
+}
+
+/// A Wwise playback limit (`u16MaxNumInstance`): so many instances at most, counted over every
+/// game object (`bIsGlobalLimit`) or each one's own; past it the newest is refused
+/// (`bKillNewest`), else the oldest stopped.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq)]
+pub struct Limit {
+    pub max: u16,
+    pub global: bool,
+    pub kill_newest: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -413,7 +430,7 @@ fn state_chunk(d: &[u8], mut p: usize) -> Option<usize> {
 /// (overridden: whether it's 3D, a 2D one's panner, a 3D one's type, attenuation and
 /// spatialization, a user-defined path's vertices and playlist, a game-defined one's dynamic
 /// flag); the advanced settings (`adv` bytes); the states; then the curves. With where they end.
-fn node_rtpcs_with(d: &[u8], mut p: usize, adv: usize) -> Option<(Vec<RtpcCurve>, usize)> {
+fn node_rtpcs_with(d: &[u8], mut p: usize, adv: usize) -> Option<(Vec<RtpcCurve>, usize, usize)> {
     let num_fx = *d.get(p + 1)? as usize;
     p += 2;
     if num_fx > 0 {
@@ -447,9 +464,19 @@ fn node_rtpcs_with(d: &[u8], mut p: usize, adv: usize) -> Option<(Vec<RtpcCurve>
             }
         }
     }
+    let adv_at = p;
     p += adv;
     let p = state_chunk(d, p)?;
-    rtpc_block(d, p)
+    rtpc_block(d, p).map(|(c, end)| (c, end, adv_at))
+}
+
+/// The playback limit in the advanced settings at `p` (`adv` bytes: the virtual voice queue,
+/// kill newest, (9: use virtual behaviour,) the max instances (u16), global, below threshold,
+/// whether it overrides its parent's): the limit and that override.
+fn adv_limit(d: &[u8], p: usize, adv: usize) -> Option<(Limit, bool)> {
+    let m = if adv == 9 { p + 3 } else { p + 2 };
+    let max = u16::from_le_bytes([*d.get(m)?, *d.get(m + 1)?]);
+    Some((Limit { max, global: *d.get(m + 2)? != 0, kill_newest: *d.get(p + 1)? != 0 }, *d.get(m + 4)? != 0))
 }
 
 /// Whether a children list (a count, then known ids) is at `p`.
@@ -462,14 +489,14 @@ fn children_at(d: &[u8], p: usize, ids: &HashSet<u32>) -> bool {
 /// else 8, whichever leaves what follows them where it should be (a sound: the end; a random /
 /// sequence container: its 24 bytes of settings, then its children; an actor-mixer or layer
 /// container: its children).
-fn node_rtpcs(kind: u8, d: &[u8], p: usize, ids: &HashSet<u32>) -> Option<Vec<RtpcCurve>> {
+fn node_rtpcs(kind: u8, d: &[u8], p: usize, ids: &HashSet<u32>) -> Option<(Vec<RtpcCurve>, Option<(Limit, bool)>)> {
     let fits = |end: usize| match kind {
         2 => end == d.len(),
         5 => children_at(d, end + 24, ids),
         6 => true,
         _ => children_at(d, end, ids),
     };
-    [9, 8].iter().find_map(|&adv| node_rtpcs_with(d, p, adv).filter(|(_, end)| fits(*end))).map(|r| r.0)
+    [9, 8].iter().find_map(|&adv| node_rtpcs_with(d, p, adv).filter(|(_, end, _)| fits(*end)).map(|(c, _, at)| (c, adv_limit(d, at, adv))))
 }
 
 /// Where a sound object's NodeBaseParams start (a sound's follow its source).
@@ -570,7 +597,9 @@ impl Wwise {
                 _ => None,
             };
             if matches!(n.kind, 2 | 5 | 6 | 7 | 9) {
-                n.rtpcs = node_rtpcs(n.kind, &n.data, base_start(n.kind, &n.data), &ids).unwrap_or_default();
+                let (rtpcs, limit) = node_rtpcs(n.kind, &n.data, base_start(n.kind, &n.data), &ids).unwrap_or_default();
+                n.rtpcs = rtpcs;
+                n.limit = limit;
             }
         }
         log::info!("wwise: {} packages, {} objects, {} media", w.files.len(), w.nodes.len(), w.media.len());
@@ -772,6 +801,18 @@ impl Wwise {
                     let music = self.nodes.get(&target).is_some_and(|n| matches!(n.kind, 10 | 12 | 13));
                     let mut p = PlayDef { music, ..Default::default() };
                     p.tree = self.collect(target, 0, music, &mut p);
+                    // its playback limit: its own, else the nearest ancestor's that sets one
+                    let mut at = target;
+                    for _ in 0..16 {
+                        let Some(n) = self.nodes.get(&at).filter(|_| at != 0) else { break };
+                        if let Some((l, own)) = n.limit {
+                            if own || n.parent == 0 {
+                                p.limit = (l.max > 0).then_some(l);
+                                break;
+                            }
+                        }
+                        at = n.parent;
+                    }
                     // the curves of its ancestors (actor-mixers, containers) apply to it too
                     let mut up = self.nodes.get(&target).map(|n| n.parent).unwrap_or(0);
                     for _ in 0..16 {
@@ -820,7 +861,7 @@ impl Wwise {
         for n in self.nodes.values().filter(|n| matches!(n.kind, 2 | 5 | 6 | 7 | 9)) {
             let p = base_start(n.kind, &n.data);
             let fits = |adv: usize| {
-                node_rtpcs_with(&n.data, p, adv).is_some_and(|(_, end)| match n.kind {
+                node_rtpcs_with(&n.data, p, adv).is_some_and(|(_, end, _)| match n.kind {
                     2 => end == n.data.len(),
                     5 => children_at(&n.data, end + 24, &ids),
                     6 => true,

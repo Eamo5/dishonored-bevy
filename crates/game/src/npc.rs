@@ -4980,7 +4980,7 @@ pub(crate) fn npc_move(
     rapier: ReadRapierContext,
     player: Query<&Transform, With<Player>>,
     mut npcs: Query<
-        (&mut Npc, &mut Transform, Option<&mut KinematicCharacterController>, Option<&KinematicCharacterControllerOutput>),
+        (Entity, &mut Npc, &mut Transform, Option<&mut KinematicCharacterController>, Option<&KinematicCharacterControllerOutput>),
         (Without<Player>, Without<ScriptedAnim>, Without<crate::possession::Possessed>, Without<crate::carry::Falling>),
     >,
     mut steps: MessageWriter<crate::footsteps::Footfall>,
@@ -4992,7 +4992,7 @@ pub(crate) fn npc_move(
     let ppos = player.single().map(|t| t.translation).ok();
     let ctx = rapier.single().ok();
     let ground_filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, crate::level::GROUP_WORLD));
-    for (mut npc, mut t, kcc, out) in &mut npcs {
+    for (me, mut npc, mut t, kcc, out) in &mut npcs {
         let dt = if npc.out_of_bend { dt_own } else { dt_world };
         // falling over (bodies lose their controller, so this comes first)
         if npc.is_down() {
@@ -5242,7 +5242,7 @@ pub(crate) fn npc_move(
                 Walker::Guard
             };
             let gait = if npc.anim_speed > 3.0 { Gait::Sprint } else { Gait::Walk };
-            steps.write(Footfall { pos: t.translation, gait, who });
+            steps.write(Footfall { pos: t.translation, gait, who, by: Some(me) });
         }
         if t.translation.y < kill_y {
             npc.set_mode(Mode::Dead);

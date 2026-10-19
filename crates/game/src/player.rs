@@ -654,7 +654,7 @@ fn player_move(
             fall.airborne = false;
             if landing {
                 let gait = if fell > 2.1 { Gait::LandHigh } else { Gait::LandSmall };
-                steps.write(Footfall { pos: t.translation, gait, who: Walker::Player });
+                steps.write(Footfall { pos: t.translation, gait, who: Walker::Player, by: Some(entity) });
                 // the original ignores footfalls for a moment after landing
                 p.step_timer = 0.8;
                 let radius = if v > FALL_STUN { Some(8.0) } else if fall.sneaking { None } else { Some(4.0) };
@@ -871,7 +871,7 @@ fn player_move(
         if p.step_timer <= 0.0 {
             p.step_timer = if p.sprinting { 0.32 } else if p.crouched { 0.6 } else { 0.5 };
             let gait = if p.crouched { Gait::Sneak } else if p.sprinting { Gait::Sprint } else { Gait::Walk };
-            steps.write(Footfall { pos: t.translation, gait, who: Walker::Player });
+            steps.write(Footfall { pos: t.translation, gait, who: Walker::Player, by: Some(entity) });
             let radius = if p.crouched || (p.sprinting && attrs.silent_sprinting) || (!p.sprinting && attrs.silent_running) {
                 0.0
             } else if p.sprinting {

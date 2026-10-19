@@ -690,12 +690,12 @@ fn mix(rot: &mut [Quat], trans: &mut [Vec3], rot_b: &[Quat], trans_b: &[Vec3], w
 
 fn pose_animators(
     time: Res<Time>,
-    mut animators: Query<(&mut Animator, &GlobalTransform)>,
+    mut animators: Query<(Entity, &mut Animator, &GlobalTransform)>,
     mut transforms: Query<&mut Transform, Without<Animator>>,
     mut sounds: MessageWriter<crate::audio::PostEvent>,
 ) {
     let dt = time.delta_secs();
-    for (mut a, gt) in &mut animators {
+    for (e, mut a, gt) in &mut animators {
         let scale = a.time_scale;
         a.advance(dt * scale);
         if a.sounds {
@@ -704,7 +704,7 @@ fn pose_animators(
                     crate::rumble::play_anim(i.parse().unwrap_or(usize::MAX));
                     continue;
                 }
-                sounds.write(crate::audio::PostEvent::named(ev, Some(gt.translation())));
+                sounds.write(crate::audio::PostEvent::named(ev, Some(gt.translation())).from_object(e));
             }
         }
         if a.frozen {

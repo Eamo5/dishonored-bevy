@@ -24,6 +24,7 @@ impl Plugin for GameAudioPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<PostEvent>().add_message::<StopEvent>()
             .init_resource::<AudioHandles>()
+            .init_resource::<Instances>()
             .init_resource::<Ambients>()
             .init_resource::<WwiseStates>()
             .init_resource::<TimedSounds>()
@@ -145,6 +146,9 @@ pub struct PostEvent {
     pub voice: bool,
     /// carried by this entity (it follows it, and fades once it's gone)
     pub follow: Option<Entity>,
+    /// the game object it sounds from, for its playback limit (else what it follows or who
+    /// says it)
+    pub object: Option<Entity>,
 }
 
 impl PostEvent {
@@ -153,12 +157,18 @@ impl PostEvent {
         if log_enabled() {
             NAMES.lock().unwrap().get_or_insert_with(HashMap::new).entry(event).or_insert_with(|| name.to_string());
         }
-        PostEvent { event, at, speaker: None, voice: false, follow: None }
+        PostEvent { event, at, speaker: None, voice: false, follow: None, object: None }
     }
 
     /// Carried by `e` (a weeper's buzzing flies).
     pub fn following(mut self, e: Entity) -> Self {
         self.follow = Some(e);
+        self
+    }
+
+    /// Sounding from `e` (its game object: a clip's sound, a footstep), for the limits.
+    pub fn from_object(mut self, e: Entity) -> Self {
+        self.object = Some(e);
         self
     }
 
@@ -197,7 +207,18 @@ impl AudioHandles {
 #[derive(Component)]
 struct OneShot;
 
-fn finish_voices(mut commands: Commands, q: Query<(Entity, &Voice), With<OneShot>>, all: Query<&Voice>, time: Res<Time>, mut log_t: Local<f32>) {
+/// A loop out of earshot, paused so its file isn't read for nothing; it goes on once heard.
+#[derive(Component)]
+struct Hushed;
+
+fn finish_voices(
+    mut commands: Commands,
+    q: Query<(Entity, &Voice), With<OneShot>>,
+    all: Query<(&Voice, Has<Hushed>, &Emitter)>,
+    time: Res<Time>,
+    mut log_t: Local<f32>,
+    out: Option<Res<Output>>,
+) {
     for (e, v) in &q {
         if v.player.empty() {
             commands.entity(e).despawn();
@@ -207,8 +228,19 @@ fn finish_voices(mut commands: Commands, q: Query<(Entity, &Voice), With<OneShot
     *log_t += time.delta_secs();
     if *log_t > 1.0 && log_enabled() {
         *log_t = 0.0;
-        let far = all.iter().map(|v| v.player.get_pos().as_secs_f32()).fold(0.0, f32::max);
-        info!("audio: {} voices, furthest {far:.1}s", all.iter().len());
+        let far = all.iter().map(|(v, ..)| v.player.get_pos().as_secs_f32()).fold(0.0, f32::max);
+        let hushed = all.iter().filter(|(_, h, _)| *h).count();
+        // (the events sounding most)
+        let mut by: HashMap<u32, usize> = HashMap::new();
+        for (_, _, em) in &all {
+            *by.entry(em.event).or_default() += 1;
+        }
+        let mut top: Vec<(u32, usize)> = by.into_iter().collect();
+        top.sort_by(|a, b| b.1.cmp(&a.1));
+        let top: Vec<String> = top.iter().take(4).map(|(e, n)| format!("{} x{n}", event_name(*e))).collect();
+        info!("audio: most: {}", top.join(", "));
+        let (rate, ch) = out.as_ref().map_or((48000, 2), |o| o.format());
+        info!("audio: {} voices ({hushed} out of earshot), furthest {far:.1}s, mixing {:.0}% of real time", all.iter().len(), crate::speakers::mix_load(rate, ch) * 100.0);
     }
 }
 
@@ -237,8 +269,9 @@ fn pause_voices(time: Res<Time<Virtual>>, mut held: Local<Option<Vec<Entity>>>, 
     }
 }
 
-/// A new Speaker Configuration: the output opened again for it, and what was sounding started on
-/// it (the ambient emitters in reach, the music).
+/// A new Speaker Configuration, or the device lost (unplugged, switched, reset): the output opened
+/// again, and what was sounding started on it (the ambient emitters in reach, the music). With
+/// no device to open, it tries again every few seconds.
 #[allow(clippy::too_many_arguments)]
 fn apply_speakers(
     mut commands: Commands,
@@ -248,12 +281,20 @@ fn apply_speakers(
     mut ambients: ResMut<Ambients>,
     music: Res<Music>,
     mut posts: MessageWriter<PostEvent>,
+    (time, mut retry): (Res<Time<Real>>, Local<Option<f32>>),
 ) {
     let Some(mut out) = out else { return };
-    if out.config == settings.speaker_config {
+    let lost = crate::speakers::OUTPUT_LOST.swap(false, std::sync::atomic::Ordering::Relaxed);
+    if lost {
+        // (a moment for the system to settle on its new device)
+        *retry = Some(time.elapsed_secs() + 0.5);
+    }
+    let due = retry.is_some_and(|t| time.elapsed_secs() >= t);
+    if out.config == settings.speaker_config && !due {
         return;
     }
     *out = Output::open(settings.speaker_config);
+    *retry = (!out.live() && std::env::var("DH_MUTE").is_err()).then(|| time.elapsed_secs() + 3.0);
     for e in &emitters {
         commands.entity(e).despawn();
     }
@@ -262,7 +303,7 @@ fn apply_speakers(
         a.retrigger = 0.0;
     }
     if let Some((event, _, _)) = music.current {
-        posts.write(PostEvent { event, at: None, speaker: None, voice: false, follow: None });
+        posts.write(PostEvent { event, at: None, speaker: None, voice: false, follow: None, object: None });
     }
 }
 
@@ -428,6 +469,11 @@ fn attach_listener(mut commands: Commands, cams: Query<Entity, (With<PlayerCamer
     }
 }
 
+/// The sounds playing under a playback limit, by event and the game object they sound from
+/// (none: a global limit), oldest first: their voices and the frame they started.
+#[derive(Resource, Default)]
+struct Instances(HashMap<(u32, Option<Entity>), Vec<(Entity, u32)>>);
+
 /// What starts a play entry.
 struct Start {
     event: u32,
@@ -437,6 +483,30 @@ struct Start {
     speaker: Option<Entity>,
     voice: bool,
     follow: Option<Entity>,
+    /// its game object (`PostEvent::object`, a swarm's for its rats)
+    object: Option<Entity>,
+}
+
+/// Room for one more of a play entry under its playback limit (`PlayDef::limit`, the banks'
+/// `u16MaxNumInstance`): within it, or the oldest stopped for it; none with `bKillNewest`. Counted
+/// per game object, or over all with `bIsGlobalLimit`; a sound from no object is its own.
+fn make_room(commands: &mut Commands, inst: &mut Instances, play: &PlayDef, s: &Start, alive: &dyn Fn(Entity) -> bool, frame: u32) -> Result<Option<(u32, Option<Entity>)>, ()> {
+    let Some(l) = play.limit.filter(|l| l.max > 0) else { return Ok(None) };
+    let obj = s.object.or(s.follow).or(s.speaker);
+    if !l.global && obj.is_none() {
+        return Ok(None);
+    }
+    let key = (s.event, if l.global { None } else { obj });
+    let list = inst.0.entry(key).or_default();
+    list.retain(|(e, f)| *f == frame || alive(*e));
+    if list.len() >= l.max as usize {
+        if l.kill_newest {
+            return Err(());
+        }
+        let (old, _) = list.remove(0);
+        commands.entity(old).try_despawn();
+    }
+    Ok(Some(key))
 }
 
 /// Start one "play" entry of an event; returns the state cases it depends on.
@@ -450,8 +520,17 @@ fn start_play(
     states: &HashMap<u32, u32>,
     play: &PlayDef,
     s: Start,
+    (inst, alive, frame): (&mut Instances, &dyn Fn(Entity) -> bool, u32),
 ) -> Vec<(u32, u32)> {
     let mut used = Vec::new();
+    // (a one-shot beyond its reach is silent: not started; Wwise's below-threshold voices)
+    if let (Some(at), Some(l)) = (s.at, ear) {
+        let reach = if play.max_distance > 0.5 { play.max_distance } else { DEFAULT_REACH };
+        if !play.music && !play.looping && at.distance(l.translation()) > reach {
+            return used;
+        }
+    }
+    let Ok(limited) = make_room(commands, inst, play, &s, alive, frame) else { return used };
     // older indices: the flat media list
     let legacy;
     let root = match &play.tree {
@@ -523,6 +602,9 @@ fn start_play(
         if let Some(f) = s.follow {
             ec.insert(Following(f));
         }
+        if let Some(key) = limited {
+            inst.0.entry(key).or_default().push((ec.id(), frame));
+        }
     }
     used
 }
@@ -551,11 +633,16 @@ fn play_events(
     mut emitters: Query<&mut Emitter>,
     mut ambients: ResMut<Ambients>,
     (mut states, mut music): (ResMut<WwiseStates>, ResMut<Music>),
+    (mut inst, voices, swarms, frames): (ResMut<Instances>, Query<(), With<Voice>>, Query<(Entity, &crate::swarm::Swarm)>, Res<bevy::diagnostic::FrameCount>),
 ) {
     let Some(lib) = library() else {
         msgs.clear();
         return;
     };
+    // (a swarm's rats sound from the swarm, one game object, as its own actor's)
+    let swarm_of: HashMap<Entity, Entity> = swarms.iter().flat_map(|(s, sw)| sw.rats.iter().map(move |r| (*r, s))).collect();
+    let alive = |e: Entity| voices.contains(e);
+    let frame = frames.0;
     let mut posts: Vec<(PostEvent, Option<usize>)> = msgs.read().cloned().map(|m| (m, None)).collect();
     posts.extend(std::mem::take(&mut ambients.requests).into_iter().map(|(m, a)| (m, Some(a))));
     let log = std::env::var("DH_AUDIO_LOG").is_ok();
@@ -585,7 +672,18 @@ fn play_events(
                 // one music at a time
                 fade_out_music(&mut emitters);
             }
-            let used = start_play(&mut commands, &lib, &mut handles, &out, listener.single().ok(), &states.0, play, Start { event: m.event, at: m.at, ambient, fade_in, speaker: m.speaker, voice: m.voice, follow: m.follow });
+            let object = m.object.map(|o| swarm_of.get(&o).copied().unwrap_or(o));
+            let used = start_play(
+                &mut commands,
+                &lib,
+                &mut handles,
+                &out,
+                listener.single().ok(),
+                &states.0,
+                play,
+                Start { event: m.event, at: m.at, ambient, fade_in, speaker: m.speaker, voice: m.voice, follow: m.follow, object },
+                (&mut inst, &alive, frame),
+            );
             if play.music {
                 music.current = Some((m.event, k, used));
             }
@@ -604,7 +702,17 @@ fn play_events(
                         info!("audio: music {event:#x} switches {used:x?} -> {now:x?}");
                     }
                     fade_out_music(&mut emitters);
-                    let used = start_play(&mut commands, &lib, &mut handles, &out, listener.single().ok(), &states.0, play, Start { event, at: None, ambient: None, fade_in: true, speaker: None, voice: false, follow: None });
+                    let used = start_play(
+                        &mut commands,
+                        &lib,
+                        &mut handles,
+                        &out,
+                        listener.single().ok(),
+                        &states.0,
+                        play,
+                        Start { event, at: None, ambient: None, fade_in: true, speaker: None, voice: false, follow: None, object: None },
+                        (&mut inst, &alive, frame),
+                    );
                     music.current = Some((event, k, used));
                 }
             }
@@ -694,9 +802,10 @@ fn attenuate(
     tc: Res<crate::gameplay::TimeControl>,
     out: Res<Output>,
     listener: Query<&GlobalTransform, With<SpatialListener>>,
-    voices: Query<(Entity, &Transform, &Emitter, &Voice)>,
+    voices: Query<(Entity, &Transform, &Emitter, &Voice, Has<OneShot>, Has<Hushed>)>,
     (time, mut log_t, mut ducks): (Res<Time>, Local<f32>, Local<HashMap<Entity, f32>>),
     (rooms, movies, mut dominant_speaker): (Res<crate::audiorooms::AudioRooms>, Res<crate::movie::Movies>, ResMut<DominantSpeaker>),
+    (mut commands, virt): (Commands, Res<Time<Virtual>>),
 ) {
     let Ok(l) = listener.single() else { return };
     // (a movie's own soundtrack over the music: the trials' credits over their menu's)
@@ -724,14 +833,14 @@ fn attenuate(
     // (`DisConvGlobalMan`'s `m_fDominantMaxDistance_Percent`, `m_fNonDominantVolumeScale`,
     // `m_fAudioDuckBlendSpeed`, as roshan's r614/blink research decoded them)
     let dominance = |t: &Transform, em: &Emitter| if em.positional { 1.0 - t.translation.distance(ear) / (DOMINANT_REACH * em.reach).max(0.1) } else { 1.0 };
-    let dominant = voices.iter().filter(|(_, _, em, _)| em.voice).map(|(e, t, em, _)| (e, dominance(t, em))).filter(|(_, d)| *d > 1e-8).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(e, _)| e);
-    let speaker = dominant.and_then(|d| voices.get(d).ok()).and_then(|(_, _, em, _)| em.speaker);
+    let dominant = voices.iter().filter(|(_, _, em, ..)| em.voice).map(|(e, t, em, ..)| (e, dominance(t, em))).filter(|(_, d)| *d > 1e-8).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(e, _)| e);
+    let speaker = dominant.and_then(|d| voices.get(d).ok()).and_then(|(_, _, em, ..)| em.speaker);
     if dominant_speaker.0 != speaker {
         dominant_speaker.0 = speaker;
     }
     ducks.retain(|e, _| voices.contains(*e));
     let blend = DUCK_BLEND * time.delta_secs();
-    for (e, t, em, voice) in &voices {
+    for (e, t, em, voice, one_shot, hushed) in &voices {
         let cat = if em.music { music_volume } else if em.voice { settings.voice_volume } else { settings.sfx_volume };
         let (g, speed) = mods(em);
         if log && ((g - 1.0).abs() > 1e-3 || (speed - 1.0).abs() > 1e-3) {
@@ -757,6 +866,16 @@ fn attenuate(
         }
         if (voice.player.volume() - v).abs() > 1e-4 {
             voice.player.set_volume(v);
+        }
+        // (a loop out of earshot pauses, its file no longer read for nothing, and goes on once
+        // heard again; not while the game is paused, which holds every sound)
+        let quiet = em.positional && !one_shot && v <= 1e-5;
+        if quiet && !hushed && !voice.player.is_paused() {
+            voice.player.pause();
+            commands.entity(e).try_insert(Hushed);
+        } else if !quiet && hushed && !virt.is_paused() {
+            voice.player.play();
+            commands.entity(e).try_remove::<Hushed>();
         }
         if (voice.player.speed() - speed).abs() > 1e-3 {
             voice.player.set_speed(speed);
@@ -864,7 +983,7 @@ fn run_ambients(
         }
         if near && !a.playing && a.retrigger <= 0.0 {
             a.playing = true;
-            requests.push((PostEvent { event: a.event, at: Some(a.position), speaker: None, voice: false, follow: None }, i));
+            requests.push((PostEvent { event: a.event, at: Some(a.position), speaker: None, voice: false, follow: None, object: None }, i));
         } else if !near && a.playing {
             a.playing = false;
             stop.push(i);

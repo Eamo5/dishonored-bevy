@@ -453,6 +453,26 @@ are in the settings file, `pad_binding_set` 0-3):
   pauses what was sounding (the original's `Pause_All` / `Resume_All`), and so does the
   window going into the background: the world stands still until it comes back
   (`BaseEngine.ini` `bPauseOnLossOfFocus`; not in the scripted test runs).
+- **Voices kept in hand** (`audio.rs`, `speakers.rs`):
+  - **Playback limits.** Each sound object's Wwise playback limit (`AdvSettingsParams`:
+    `u16MaxNumInstance`, `bIsGlobalLimit`, `bKillNewest`; its own, else the nearest ancestor's
+    that sets one) is cooked and kept. Past it, the newest is refused or the oldest stopped,
+    counted per game object or over all.
+  - A clip's sound or a footstep sounds from whoever makes it, and a swarm's rats from the swarm,
+    one object as their own actor's.
+  - Without the limits a rat swarm piled up thousands of screams and steps (4,000 voices in a
+    minute on Kaldwin's Bridge, the sound breaking up). Now about 40-75 voices sound there, the
+    mixing taking an eighth of real time.
+  - A one-shot beyond its reach isn't started, and a loop out of earshot pauses until heard
+    again.
+  - Short sounds (12 s at most) are decoded into memory once, off the main thread, so the audio
+    thread no longer decodes Vorbis as they play.
+  - Lost output device: when the device goes away (unplugged, switched, reset by Windows) the
+    output opens again on the default device and restarts what was sounding, retrying every few
+    seconds without one.
+  - `DH_MUTE` plays nothing to the device (unattended test runs: the sounds still run, drained at
+    their pace). `DH_AUDIO_LOG` reports the voices, the events sounding most and the mixing's
+    share of real time.
 - **The painterly debug branch** (`kuwahara.rs`): the post-process graph's `KOKuwa` /
   `KuwaHalfRes` / `KuwaFullRes` nodes, which the original shows only on its debug exec `KUWA`
   (`KuwaSwitch` off by default): on F4, the scene at half size through the original's 5 x 5
