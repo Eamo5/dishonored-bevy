@@ -165,6 +165,9 @@ pub struct NpcSave {
     alert: Alert,
     #[serde(default)]
     suspecting: bool,
+    /// its body looked over by a guard (`m_bCorpseHandled`: the others pass it by)
+    #[serde(default)]
+    handled: bool,
     health: f32,
     awareness: f32,
     down_t: f32,
@@ -521,7 +524,7 @@ pub(crate) fn save_game(
         Query<(Entity, &crate::fish::Fish, &Transform, Option<&crate::anim::Animator>)>, Query<(Entity, &crate::krust::Krust, Option<&crate::anim::Animator>)>, Res<crate::fish::FishMeals>,
     ),
     (cine, script_ui, mut campaign, powers, tc, carry, matinee, krust_spit, trap_parts, darts, tower_arrows, tower_state, ragdolls, globals): (Res<crate::script_world::Cinematic>, Option<Res<crate::kismet::ScriptUi>>, ResMut<crate::gameplay::Campaign>, Res<crate::powers::Powers>, Res<crate::gameplay::TimeControl>, Res<crate::carry::Carry>, Res<crate::matinee::MatineeState>, Query<(&crate::krust::Spit, &Transform)>, Query<(&crate::traps::TrapPart, Option<&crate::anim::Animator>)>, Query<(&crate::traps::Dart, &Transform)>, Query<(&crate::watchtower::Arrow, &Transform)>, Query<&crate::watchtower::Tower>, Query<(&crate::ragdoll::Ragdoll, &crate::npc::NpcRig, &GlobalTransform)>, Query<&GlobalTransform>),
-    (mut saving, mut waiting): (MessageWriter<crate::globalui::ShowSaving>, Local<Option<(usize, f32)>>),
+    (mut saving, mut waiting, handled_bodies): (MessageWriter<crate::globalui::ShowSaving>, Local<Option<(usize, f32)>>, Res<crate::npc::HandledBodies>),
 ) {
     // the scripts keeping the map's state for a return (`DisSeqAct_SaveLevelState`; a partial
     // one, the Hound Pits': only its pickups, `Campaign::hub_taken`)
@@ -620,6 +623,7 @@ pub(crate) fn save_game(
                 mode: n.mode,
                 alert: n.alert,
                 suspecting: n.suspecting,
+                handled: handled_bodies.0.contains(&entity),
                 health: n.health,
                 awareness: n.awareness,
                 down_t: n.down_t,
@@ -1021,9 +1025,12 @@ fn apply_pending(
     info!("save: restored {} ({} NPCs)", s.map, s.npcs.len());
 }
 
-pub(crate) fn restore_npcs(mut commands: Commands, mut q: Query<(Entity, &RestoreNpc, &mut Npc, &mut Transform)>, mut matinee: ResMut<crate::matinee::MatineeState>, parts: Query<(Entity, &crate::npcparts::NpcAttached)>) {
+pub(crate) fn restore_npcs(mut commands: Commands, mut q: Query<(Entity, &RestoreNpc, &mut Npc, &mut Transform)>, mut matinee: ResMut<crate::matinee::MatineeState>, parts: Query<(Entity, &crate::npcparts::NpcAttached)>, mut handled: ResMut<crate::npc::HandledBodies>) {
     for (e, r, mut n, mut t) in &mut q {
         let s = &r.0;
+        if s.handled {
+            handled.0.insert(e);
+        }
         // (the armour it had lost stays off)
         n.bare = s.bare.clone();
         for (pe, part) in &parts {

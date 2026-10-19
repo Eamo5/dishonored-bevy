@@ -1397,9 +1397,11 @@ are in the settings file, `pad_binding_set` 0-3):
     attention is at investigating, arriving after him from another level, a scripted search,
     `DisSeqAct_AISetSuspicionLevel`, its spawner's `m_SpawnAtSuspicionLevel`.
   - Nothing brings it back down but the level scripts (`DisSeqAct_AISetSuspicionLevel` set to
-    unsuspecting): no timer, not a search's end. Saved with the game.
+    unsuspecting): no timer, not a search's end. Saved with the game, as are the bodies guards
+    have looked over (`m_bCorpseHandled`), so a reload doesn't send them to find those again.
   - A search heard of keeps the unsuspecting profile: it ends sooner (about 12 s).
-  - Bark and conversation branches on suspicion read this level.
+  - Bark and conversation branches on suspicion (`DisConv_CheckSpeakerSuspicionLevel`) read
+    this level, not whether the speaker is busy looking or fighting.
 - **Lines that call the others** (the dialog hooks' flags, 0x01471D0C and 0x00C9BB50, decoded
   for this rewrite). A line said carries a call to the others of the speaker's side (or
   neutrals it protects); no line, no call:

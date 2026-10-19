@@ -794,6 +794,9 @@ pub struct Vm {
     /// (a rat, a character), as the one setting hooks off
     pub speaker_group: HashMap<u32, String>,
     pub speaker_possessed: HashSet<u32>,
+    /// the speakers whose brains suspect (the conversations' suspicion checks read it,
+    /// `DisConv_CheckSpeakerSuspicionLevel`, 0x00CAB4B0)
+    pub speaker_suspecting: HashSet<u32>,
     pub player_group: Option<String>,
     conv_busy: HashMap<u32, Option<Busy>>,
     conv_ending: HashSet<u32>,
@@ -1105,6 +1108,7 @@ impl Vm {
             speaker_busy: HashMap::new(),
             speaker_group: HashMap::new(),
             speaker_possessed: HashSet::new(),
+            speaker_suspecting: HashSet::new(),
             player_group: None,
             conv_busy: HashMap::new(),
             conv_ending: HashSet::new(),
@@ -4479,7 +4483,7 @@ impl Vm {
             KBranch::HasObjective(o) => self.objectives.contains(o) as usize,
             // (the speaker: its character, or those answering for a one-shot; the one who set it
             // off is Corvo, or what he possesses)
-            KBranch::Suspicion => speaker.and_then(|a| self.busy(a)).is_some() as usize,
+            KBranch::Suspicion => speaker.is_some_and(|a| self.speaker_suspecting.contains(&a) || self.pawn_oneshot.iter().any(|(p, o)| *o == a && self.speaker_suspecting.contains(p))) as usize,
             KBranch::StoryGroup { initiator, groups } => {
                 let who = if *initiator { self.player_group.clone().unwrap_or_default() } else { speaker.map(|a| self.group_of(a)).unwrap_or_default() };
                 groups.iter().position(|g| !who.is_empty() && *g == who).unwrap_or(groups.len())
@@ -5786,6 +5790,11 @@ fn world_events(
                 vm.speaker_possessed.insert(a);
             } else {
                 vm.speaker_possessed.remove(&a);
+            }
+            if n.suspecting {
+                vm.speaker_suspecting.insert(a);
+            } else {
+                vm.speaker_suspecting.remove(&a);
             }
             let busy = match n.mode {
                 Mode::Combat | Mode::Flee | Mode::Choked => Some(Busy::Fighting),
