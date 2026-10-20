@@ -2741,6 +2741,9 @@ pub struct Movable {
     pub surface: String,
     /// what happens when it breaks (its last `m_Steps`)
     pub breaks: Option<BreakStep>,
+    /// all its steps, the break last (`m_Steps`: the plank cracked, then in pieces)
+    #[serde(default)]
+    pub steps: Vec<BreakStep>,
     /// what its knocks sound like, against the world and against a body (the contact system,
     /// `Dis_ContactSystem`, for its contact type)
     #[serde(default)]
@@ -2813,6 +2816,12 @@ pub struct BreakStep {
     /// it bursts (`m_pExplosion`: a whale oil tank)
     #[serde(default)]
     pub blast: Option<TrapBlast>,
+    /// taken once its health falls to this (`m_HealthThreshold`), and what it looks like from
+    /// then on (`m_pStaticMesh`: cracked boards; none, as it was)
+    #[serde(default)]
+    pub threshold: f32,
+    #[serde(default)]
+    pub mesh: Option<(u32, Vec<u32>)>,
 }
 
 /// A door's keyhole (its mesh's `KeyHole` socket) as the closed door stands, and the view

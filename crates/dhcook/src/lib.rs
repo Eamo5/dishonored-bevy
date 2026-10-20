@@ -6591,10 +6591,20 @@ impl<'a> Cooker<'a> {
     /// The last of a breakable's steps (a prop's `m_Steps`, a door's `m_DoorBreakSteps`): its
     /// sound, AI noise, effect and pieces.
     fn last_break_step(&mut self, tc: &Chain, prop: &str) -> Option<BreakStep> {
-        let Some((pkg, Value::Array { count, offset, size })) = tc.get_pkg(prop) else { return None };
+        self.break_steps(tc, prop).pop()
+    }
+
+    /// A breakable's steps, in order: each one's health threshold, mesh, sound, AI noise,
+    /// effect, pieces and blast.
+    fn break_steps(&mut self, tc: &Chain, prop: &str) -> Vec<BreakStep> {
+        let Some((pkg, Value::Array { count, offset, size })) = tc.get_pkg(prop) else { return Vec::new() };
         let pkg = pkg.clone();
         let steps = parse_struct_array(&pkg, *offset, *size, *count).unwrap_or_default();
-        let st = steps.last()?;
+        steps.iter().map(|st| self.break_step(&pkg, st)).collect()
+    }
+
+    fn break_step(&mut self, pkg: &std::sync::Arc<upk::Package>, st: &Props) -> BreakStep {
+        let pkg = pkg.clone();
         let res = |o: Option<i32>| o.filter(|o| *o != 0).and_then(|o| self.assets.resolve(&pkg, o));
         let sound = res(st.object("m_pSoundEvent")).map(|o| o.name().to_string()).unwrap_or_default();
         let noise = noise_meters(&self.assets.cooked_dir, st.name("m_AINoiseLoudness").unwrap_or(""));
@@ -6612,7 +6622,9 @@ impl<'a> Cooker<'a> {
             }
         }
         let blast = res(st.object("m_pExplosion")).map(|x| self.blast(&x));
-        Some(BreakStep { sound, noise, threatening, particle, particle_offset, chunks, blast })
+        let threshold = st.int("m_HealthThreshold").map(|v| v as f32).or_else(|| st.float("m_HealthThreshold")).unwrap_or(0.0);
+        let mesh = res(st.object("m_pStaticMesh")).and_then(|m| self.cook_mesh(&m).ok().flatten());
+        BreakStep { sound, noise, threatening, particle, particle_offset, chunks, blast, threshold, mesh }
     }
 
     /// A physics prop's or breakable's tweak (`m_pMovableTweaks` / `m_pBreakableTweaks`).
@@ -6649,8 +6661,9 @@ impl<'a> Cooker<'a> {
             .and_then(|it| self.chain(&it).name("m_Name").map(str::to_string))
             .unwrap_or_default();
         let surface = obj_name(&tc, "m_pContactTypeOverride").trim_start_matches("DisContactType_").trim_start_matches("Env_").to_string();
-        // the last step: what's left of it
-        let breaks = self.last_break_step(&tc, "m_Steps");
+        // its steps, the last what's left of it
+        let steps = self.break_steps(&tc, "m_Steps");
+        let breaks = steps.last().cloned();
         let striker = tc.obj_path("m_pContactTypeOverride").map(|p| p.rsplit('.').next().unwrap_or(&p).to_string()).unwrap_or_else(|| "DisContactType_Env_Wood".into());
         let impacts = self.impacts(&striker);
         let tweaks = self.tweak_lineage(tweak);
@@ -6672,6 +6685,7 @@ impl<'a> Cooker<'a> {
             grab_sound: obj_name(&tc, "m_pGrabSound"),
             surface,
             breaks,
+            steps,
             joints: Vec::new(),
             charges: is_tank.then(|| {
                 let f = |k: &str, d: f32| tc.float(k).unwrap_or(d);

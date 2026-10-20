@@ -6180,6 +6180,11 @@ fn world_events(
                     }
                 }
             }
+            Interaction::BrokenStep { instance, out } => {
+                for a in vm.instance_actor.get(instance).cloned().unwrap_or_default() {
+                    vm.actor_event(a, &["DisSeqEvent_BreakableBroken"], OutSel::Index(*out), Some(Val::Player));
+                }
+            }
             Interaction::Movable { instance, broken } => {
                 for a in vm.instance_actor.get(instance).cloned().unwrap_or_default() {
                     if *broken {

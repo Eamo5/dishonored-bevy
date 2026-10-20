@@ -1690,7 +1690,14 @@ fn spawn_level(
             game_assets.textures.insert(name.clone(), h);
         }
     }
-    for (mesh, mats) in scene.movables.iter().filter_map(|m| m.breaks.as_ref()).chain(scene.doors.values().filter_map(|d| d.breaks.as_ref())).flat_map(|b| b.chunks.iter()) {
+    for (mesh, mats) in scene
+        .movables
+        .iter()
+        .filter_map(|m| m.breaks.as_ref())
+        .chain(scene.doors.values().filter_map(|d| d.breaks.as_ref()))
+        .chain(scene.movables.iter().flat_map(|m| m.steps.iter()))
+        .flat_map(|b| b.chunks.iter().chain(b.mesh.iter()))
+    {
         if !game_assets.prop_chunks.contains_key(mesh) {
             let parts = build_parts(Some(*mesh), mats, &mut mb, &mut mesh_assets, &mut image_assets, &mut mat_assets, &mut sky_assets);
             game_assets.prop_chunks.insert(*mesh, parts);

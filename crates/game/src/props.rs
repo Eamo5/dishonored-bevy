@@ -38,7 +38,7 @@ impl Plugin for PropsPlugin {
             .add_systems(PostUpdate, unscale_prop_physics.after(PhysicsSet::Writeback).run_if(in_state(GameState::InGame)))
             .add_systems(OnEnter(GameState::InGame), ((|mut h: ResMut<Held>| *h = Held::default()), setup_props.after(crate::level::LevelSpawnSet)))
             .add_systems(Update, prop_focus.after(crate::interact::FocusSet).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (restore_props, restore_prop_states, restore_held_prop, hold_prop, make_tanks, prop_impacts, prop_hits, tank_misses, sync_props, burst_tanks, prop_events, script_physics, prop_gusts).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (restore_props, restore_prop_states, restore_held_prop, hold_prop, make_tanks, prop_impacts, prop_hits, prop_step_meshes, tank_misses, sync_props, burst_tanks, prop_events, script_physics, prop_gusts).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -179,6 +179,8 @@ pub struct Prop {
     hung: bool,
     /// a factory's tank (`Movable::pool`): seconds since it was made, while out
     live: Option<f32>,
+    /// how many of its steps it has taken (`Movable::steps`: the last is its break)
+    steps: usize,
 }
 
 impl Prop {
@@ -196,7 +198,7 @@ impl Prop {
 /// Props bursting (a whale oil tank's `m_pExplosion`): where, and the blast; and the props
 /// broken (their instances, for the level scripts).
 #[derive(Resource, Default)]
-pub struct TankBlasts(pub Vec<(Vec3, dhcook::format::TrapBlast)>, pub Vec<u32>);
+pub struct TankBlasts(pub Vec<(Vec3, dhcook::format::TrapBlast)>, pub Vec<u32>, pub Vec<(u32, usize)>);
 
 /// Props Corvo picked up (their instances), for the level scripts.
 #[derive(Resource, Default)]
@@ -292,6 +294,9 @@ fn prop_events(mut taken: ResMut<PropsTaken>, mut blasts: ResMut<TankBlasts>, mu
     }
     for instance in blasts.1.drain(..) {
         used.write(crate::interact::Interaction::Movable { instance, broken: true });
+    }
+    for (instance, out) in blasts.2.drain(..) {
+        used.write(crate::interact::Interaction::BrokenStep { instance, out });
     }
 }
 
@@ -410,7 +415,7 @@ mod held_save_tests {
             Collider::ball(0.2), GravityScale(1.0), Velocity::linear(Vec3::X * 10.0))).id();
         let prop = app.world_mut().spawn(Prop { index: 0, health: 10.0, body: Some(body),
             last_vel: Vec3::X * 10.0, thrown: true, quiet: 0.0, released: 0.2, offset: Vec3::ZERO,
-            settling: false, hung: false, live: None }).id();
+            settling: false, hung: false, live: None, steps: 0 }).id();
         for _ in 0..4 { app.update(); }
         assert_eq!(app.world().get::<Transform>(body).unwrap().translation, Vec3::new(0.0, 10.0, 0.0));
         assert_eq!(app.world().get::<Velocity>(body).unwrap().linear, Vec3::X * 10.0);
@@ -450,7 +455,7 @@ mod held_save_tests {
         let mut app = App::new();
         app.init_resource::<PropRestore>().add_systems(Update, restore_prop_states);
         let mut prop = Prop { index: 8, health: 3.0, body: None, last_vel: Vec3::X * 12.0,
-            thrown: true, quiet: 0.4, released: 0.2, offset: Vec3::ZERO, settling: false, hung: false, live: None };
+            thrown: true, quiet: 0.4, released: 0.2, offset: Vec3::ZERO, settling: false, hung: false, live: None, steps: 0 };
         let velocity = Velocity { linear: Vec3::new(10.0, 2.0, 0.0), angular: Vec3::Y * 3.0 };
         let saved = prop.save_state(Some((&velocity, &GravityScale(1.0), &RigidBody::Dynamic)));
         let saved = serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
@@ -491,7 +496,7 @@ mod held_save_tests {
         let body = app.world_mut().spawn((GravityScale(1.0), CollisionGroups::new(GROUP_PROP, LOOSE), Velocity::linear(Vec3::X), RigidBody::Fixed)).id();
         let prop = app.world_mut().spawn(Prop {
             index: 7, health: 10.0, body: Some(body), last_vel: Vec3::ZERO,
-            thrown: true, quiet: 0.0, released: 0.5, offset: Vec3::ZERO, settling: false, hung: false, live: None,
+            thrown: true, quiet: 0.0, released: 0.5, offset: Vec3::ZERO, settling: false, hung: false, live: None, steps: 0,
         }).id();
         app.update();
         assert_eq!(app.world().resource::<Held>().0, Some(prop));
@@ -552,7 +557,7 @@ fn setup_props(
     for (i, m) in scene.movables.iter().enumerate() {
         let Some(&(e, t, col)) = by_index.get(&m.instance) else { continue };
         // (settling at the start makes no sound)
-        let mut prop = Prop { index: i, health: m.health.max(1.0), body: None, last_vel: Vec3::ZERO, thrown: false, quiet: 1.0, released: 0.0, offset: Vec3::ZERO, settling: true, hung: !m.joints.is_empty(), live: None };
+        let mut prop = Prop { index: i, health: m.health.max(1.0), body: None, last_vel: Vec3::ZERO, thrown: false, quiet: 1.0, released: 0.0, offset: Vec3::ZERO, settling: true, hung: !m.joints.is_empty(), live: None, steps: 0 };
         if m.fixed {
             // a breakable in the way: weapons wear it down (its collider goes with it)
             // (the scripts may remove it as the level starts: `try_`)
@@ -1016,8 +1021,27 @@ fn prop_hits(
         }
         // (broken once: several blasts in one frame, a volley's arrows, hit it only once more)
         let was = prop.health;
-        prop.health -= dmg;
-        if was > 0.0 && prop.health <= 0.0 {
+        prop.health = (prop.health - dmg).max(0.0);
+        // its steps: every one whose health threshold it has fallen to, each heard by the
+        // scripts in turn ("Broken 100%" for the last, "Broken 50%" for the one before it:
+        // the steps after it, 0x00A34460), its last its break (0x00A284B0, decoded for this
+        // rewrite)
+        let taken = steps_taken(m, prop.health).max(prop.steps);
+        let last = m.steps.len().saturating_sub(1);
+        let breaks = if m.steps.is_empty() { was > 0.0 && prop.health <= 0.0 } else { taken > last && prop.steps <= last };
+        for i in prop.steps..taken.min(last) {
+            let st = &m.steps[i];
+            break_pieces(&mut commands, &assets, st, t, &mut sfx, &mut noise, &mut fx);
+            if let Some(bl) = &st.blast {
+                tank_blasts.0.push((t.translation, bl.clone()));
+            }
+            tank_blasts.2.push((m.instance, last - i));
+            if std::env::var("DH_PROP_LOG").is_ok() {
+                info!("prop {} takes step {i} ({} health left)", m.name, prop.health);
+            }
+        }
+        prop.steps = taken;
+        if breaks {
             let t = *t;
             if let Some(pool) = m.pool {
                 // a factory's tank: burst, and back to its pool
@@ -1038,6 +1062,62 @@ fn prop_hits(
             }
             break_prop(&mut commands, &assets, m, e, &t, prop.body, &mut sfx, &mut noise, &mut fx, &mut tank_blasts);
         }
+    }
+}
+
+/// How many of a breakable's steps its health has taken it through (`m_HealthThreshold`s).
+fn steps_taken(m: &Movable, health: f32) -> usize {
+    m.steps.iter().rposition(|s| health <= s.threshold).map_or(0, |i| i + 1)
+}
+
+/// The mesh of the last step taken that has one (`m_pStaticMesh`: the cracked boards).
+#[derive(Component)]
+struct StepShown(usize);
+
+/// A step's mesh, in place of the level's.
+#[derive(Component)]
+struct StepPart;
+
+/// A breakable shows the mesh of its last step taken (a loaded save's too, its steps caught up
+/// with its health quietly).
+fn prop_step_meshes(
+    mut commands: Commands,
+    level: Option<Res<LevelInfo>>,
+    assets: Option<Res<GameAssets>>,
+    mut props: Query<(Entity, &mut Prop, Option<&StepShown>, Option<&Children>)>,
+    meshes: Query<(), (With<Mesh3d>, Without<StepPart>)>,
+    parts: Query<(), With<StepPart>>,
+) {
+    let (Some(level), Some(assets)) = (level, assets) else { return };
+    for (e, mut prop, shown, kids) in &mut props {
+        let Some(m) = level.scene.movables.get(prop.index).filter(|m| m.steps.len() > 1) else { continue };
+        let taken = steps_taken(m, prop.health).min(m.steps.len() - 1);
+        if taken > prop.steps {
+            prop.steps = taken;
+        }
+        let Some(want) = (0..prop.steps.min(m.steps.len() - 1)).rev().find(|&i| m.steps[i].mesh.is_some()) else { continue };
+        if shown.is_some_and(|s| s.0 == want) {
+            continue;
+        }
+        let Some((mesh, _)) = &m.steps[want].mesh else { continue };
+        let Some(vis) = assets.prop_chunks.get(mesh) else { continue };
+        // the level's mesh gives way to the step's
+        if meshes.get(e).is_ok() {
+            commands.entity(e).remove::<Mesh3d>();
+        }
+        for k in kids.into_iter().flatten() {
+            if parts.get(*k).is_ok() {
+                commands.entity(*k).despawn();
+            } else if meshes.get(*k).is_ok() {
+                commands.entity(*k).insert(Visibility::Hidden);
+            }
+        }
+        commands.entity(e).insert(StepShown(want)).with_children(|c| {
+            for (mh, mat) in &vis.parts {
+                let mut p = c.spawn((StepPart, Mesh3d(mh.clone()), bevy::mesh::MeshTag(0)));
+                mat.apply(&mut p);
+            }
+        });
     }
 }
 

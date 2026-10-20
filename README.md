@@ -1260,7 +1260,9 @@ are in the settings file, `pad_binding_set` 0-3):
   gauge's red ring fills at the screen's middle (drawn with a small radial-wipe UI material
   standing in for the movie's `_mask_mc` wipe).
 - **Security**: walls of light, arc pylons and the whale oil tanks that power them; rewire
-  tools turn them on their owners. Watch towers (`watchtower.rs`, `DisTweaks_WatchTower`)
+  tools turn them on their owners. The scripts hear a tank's charge spent
+  (`DisSeqEvent_WhaleOilBattery` "Charge Used", and "All Charges Used" as it runs dry: the
+  Flooded District's refill theirs). Watch towers (`watchtower.rs`, `DisTweaks_WatchTower`)
   sweep the ground with their searchlight (the original `Regent_Light_Cone` beam from the
   head's `BeamOrigin_Socket`, the head and its gun and generator turning on the pole), alert
   on Corvo caught in it (chirp, the scripts' `DisSeqEvent_WatchTower` Activated /
@@ -1729,11 +1731,17 @@ are in the settings file, `pad_binding_set` 0-3):
   against the world or a body; a hard enough knock (`m_fMinSpeedToBeDamaged`, or `...OnDrop`)
   breaks them (`m_Steps`: the sound, the AI noise, the effect, the pieces), and so do blades
   and bullets. The breakables in the way (`DishonoredBreakableNavBlock`: crates, planks) stay
-  put until blades, bolts, bullets or blasts wear down their `m_Health`. Moved and broken
-  props are kept in saves.
+  put until blades, bolts, bullets or blasts wear down their `m_Health`. Each of their steps
+  is taken as their health falls to its `m_HealthThreshold`, as the original's breakables
+  choose them (0x00A284B0, decoded from the user's Dishonored.exe for this rewrite): a plank
+  cracks at 20 of its 30 (its cracked mesh in place, its sound and alarm) and breaks at 10.
+  The scripts hear each step (`DisSeqEvent_BreakableBroken`: "Broken 100%" for the last,
+  "Broken 50%" for the one before it, as 0x00A34460 numbers them: Granny Rags' trap door's
+  boards cracking). Moved and broken props, and how far the breakables are through their
+  steps, are kept in saves.
 - **Breaking doors down** (`DisTweaks_Door`'s `m_Health`, `m_DamageThreshold` and
   `m_pBreakSteps`): Wind Blast and blasts wear down the wooden and glass doors (a blow under
-  the threshold leaves no mark); at no health left the door's last `m_DoorBreakSteps` plays
+  the threshold leaves no mark); at its last step's health threshold the door's last `m_DoorBreakSteps` plays
   (the wood's or glass's sound, the AI's alarm, the splinters at its `brk` socket, the pieces
   flying) and the doorway is open. Broken doors stay broken in saves. The doors that don't
   break that way (metal, sewer and cell doors, the window doors) Wind Blast slams open instead,

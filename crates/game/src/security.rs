@@ -438,6 +438,7 @@ fn tank_seats(
     for (e, p, _) in tanks.iter().filter(|(_, p, _)| is_tank(p)) {
         devices.charges.entry(e).or_insert_with(|| full(p));
     }
+    let mut vm = vm;
     for (at, kind) in std::mem::take(&mut devices.drains) {
         let Some((e, p, _)) = tanks.iter().filter(|(_, p, t)| is_tank(p) && t.translation.distance(at) < 2.5).min_by(|a, b| a.2.translation.distance(at).total_cmp(&b.2.translation.distance(at))) else { continue };
         let cost = level.scene.movables.get(p.index).and_then(|m| m.charges).map(|c| c[kind.min(3)]).unwrap_or(1.0);
@@ -446,6 +447,17 @@ fn tank_seats(
             *c = (*c - cost).max(0.0);
             if std::env::var("DH_TANK_LOG").is_ok() {
                 info!("tank {e:?}: {was:.0} -> {:.0}", *c);
+            }
+            // the scripts hear it spent ("Charge Used"; "All Charges Used" as it runs dry: the
+            // Flooded District's refill theirs at once)
+            let name = level.scene.movables.get(p.index).and_then(|m| m.tank.clone());
+            if let (Some(vm), Some(name)) = (vm.as_mut(), name) {
+                if let Some(a) = vm.g.actors.iter().position(|a| a.name == name) {
+                    vm.actor_event(a as u32, &["DisSeqEvent_WhaleOilBattery"], crate::kismet::OutSel::Desc("Charge Used"), None);
+                    if was > 0.0 && *c <= 0.0 {
+                        vm.actor_event(a as u32, &["DisSeqEvent_WhaleOilBattery"], crate::kismet::OutSel::Desc("All Charges Used"), None);
+                    }
+                }
             }
         }
     }

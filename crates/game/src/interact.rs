@@ -271,6 +271,9 @@ pub enum Interaction {
     UsableOut { actor: u32, out: usize },
     /// a prop (its instance) picked up, or broken
     Movable { instance: u32, broken: bool },
+    /// a breakable (its instance) through one of its steps short of breaking: its
+    /// `DisSeqEvent_BreakableBroken` output (1, "Broken 50%", for the step before the last)
+    BrokenStep { instance: u32, out: usize },
     /// a prop (its instance) knocked against something, at this speed (m/s)
     Knocked { instance: u32, speed: f32 },
     /// a usable object (its actor) locked or unlocked
@@ -1089,8 +1092,8 @@ fn animate_doors(
 }
 
 /// Breakable doors (`DisTweaks_Door`'s `m_pBreakSteps`) worn down by Wind Blast and blasts:
-/// a blow under `m_DamageThreshold` leaves no mark; at no `m_Health` left the door breaks (its
-/// last step: the wood's sound, the AI's alarm, the splinters, the pieces) and is gone (saved
+/// a blow under `m_DamageThreshold` leaves no mark; at its last step's `m_HealthThreshold` the
+/// door breaks (that step: the wood's sound, the AI's alarm, the splinters, the pieces) and is gone (saved
 /// so: `save.rs`'s `broken_doors`).
 #[allow(clippy::too_many_arguments)]
 fn break_doors(
@@ -1126,8 +1129,9 @@ fn break_doors(
         if dmg <= 0.0 || dmg < def.threshold {
             continue;
         }
-        door.health -= dmg;
-        if door.health > 0.0 {
+        // (its last step's at its health threshold: broken short of nothing left, 0x00A284B0)
+        door.health = (door.health - dmg).max(0.0);
+        if door.health > def.breaks.as_ref().map_or(0.0, |b| b.threshold) {
             continue;
         }
         door.broken = true;
