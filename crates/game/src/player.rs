@@ -22,6 +22,7 @@ impl Plugin for PlayerPlugin {
         app.init_resource::<CameraShake>().add_message::<ShakeCamera>();
         app.init_resource::<VirtualInput>()
             .init_resource::<MantleSpot>()
+            .init_resource::<MantleRequest>()
             .add_systems(OnEnter(GameState::InGame), spawn_player.after(LevelSpawnSet))
             .add_systems(
                 Update,
@@ -901,6 +902,11 @@ fn player_move(
 #[derive(Resource, Default)]
 pub struct MantleSpot(pub bool);
 
+/// A mantle asked for without the jump, from an edge this low (a Blink's end: its own finder
+/// with no least edge, `pMantleBlinkTweaks`).
+#[derive(Resource, Default)]
+pub struct MantleRequest(pub Option<f32>);
+
 /// The mantle under way: its edge's height above his feet (m), and whether only a crouch fits
 /// on top (the finder's crouch flag, from a standing box).
 #[derive(Resource, Default)]
@@ -946,30 +952,63 @@ fn mantle_time(h: f32, crouch: bool) -> f32 {
 /// Where a mantle from `t` facing `yaw` would put Corvo (standing, or `crouched` sneaking: he
 /// stays down), the ledge's height above his feet, and whether only a crouch fits there (the
 /// finder's crouch flag, from a standing box).
-pub(crate) fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, t: &Transform, yaw: f32, fall: f32, crouched: bool) -> Option<(Vec3, f32, bool)> {
+pub(crate) fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, t: &Transform, yaw: f32, fall: f32, crouched: bool, least: Option<f32>) -> Option<(Vec3, f32, bool)> {
     let fwd = Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
-    let feet = t.translation - Vec3::Y * (if crouched { CROUCH_HALF } else { STAND_HALF } + RADIUS);
+    let half = if crouched { CROUCH_HALF } else { STAND_HALF };
+    let feet = t.translation - Vec3::Y * (half + RADIUS);
     let filter = QueryFilter::default().exclude_collider(e).exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
-    // wall in front at waist height?
-    let (_, wall) = ctx.cast_ray_and_get_normal(feet + Vec3::Y * 0.7, fwd, RADIUS + 0.6, true, filter)?;
-    if wall.normal.y.abs() > 0.5 {
-        return None;
-    }
-    // ledge top within reach (a top no steeper than 45 degrees)
-    let probe = wall.point + fwd * 0.35;
-    let probe = Vec3::new(probe.x, feet.y + MANTLE_MAX, probe.z);
-    let (top_e, top) = ctx.cast_ray_and_get_normal(probe, Vec3::NEG_Y, MANTLE_MAX, true, filter)?;
-    let h = top.point.y - feet.y;
-    let least = if fall > 20.0 {
+    // the edge finder (`DishonoredMantleEdgeFinderComponent`, as roshan's r614/blink research
+    // decoded it): the search starts a step under `m_MantleMinEdgeHeight` 55 uu (155 falling
+    // faster than 1000 uu/s, none faster than 2000)
+    let least = if let Some(l) = least {
+        l
+    } else if fall > 20.0 {
         return None;
     } else if fall > 10.0 {
         1.55
     } else {
         0.55
     };
-    if top.normal.y < 0.7 || !(least..=MANTLE_MAX).contains(&h) {
+    // (no higher than the free height above his head, `FindClearDistanceAboveOwner`)
+    let head = t.translation.y + half + RADIUS;
+    let clear = ctx.cast_ray(Vec3::new(t.translation.x, head - 0.05, t.translation.z), Vec3::Y, MANTLE_MAX, true, filter).map_or(MANTLE_MAX, |(_, toi)| toi);
+    let limit = MANTLE_MAX.min(head - 0.05 + clear - feet.y);
+    // forward searches every `m_LineCheckStepSize` 12 uu up, `m_MantleEdgeSearchDist` 50 uu out
+    // from his cylinder: the first face within 20 degrees of upright and 45 of his facing, then
+    // the next clear line above it is the edge; the search aimed along the face once found
+    const STEP: f32 = 0.12;
+    let mut dir = fwd;
+    let mut face: Option<Vec3> = None;
+    let mut edge = None;
+    let mut h = (least - STEP).max(0.0);
+    while h <= limit + 1e-3 {
+        let from = Vec3::new(t.translation.x, feet.y + h, t.translation.z);
+        match ctx.cast_ray_and_get_normal(from, dir, RADIUS + 0.5, true, filter) {
+            Some((_, hit)) if face.is_none() => {
+                let flat = hit.normal.with_y(0.0).normalize_or_zero();
+                if hit.normal.y.abs() <= 20f32.to_radians().sin() && -flat.dot(fwd) >= 45f32.to_radians().cos() {
+                    face = Some(hit.point);
+                    dir = -flat;
+                }
+            }
+            Some(_) => {}
+            None if face.is_some() => {
+                edge = Some(h);
+                break;
+            }
+            None => {}
+        }
+        h += STEP;
+    }
+    let (face, edge) = (face?, edge?);
+    // its top (no steeper than `m_MaxSlopeAngleForEdgeTop` 45 degrees), a little into it
+    let probe = Vec3::new(face.x, feet.y + edge + STEP, face.z) + dir * 0.35;
+    let (top_e, top) = ctx.cast_ray_and_get_normal(probe, Vec3::NEG_Y, STEP * 2.0 + 0.3, true, filter)?;
+    let h = top.point.y - feet.y;
+    if top.normal.y < 45f32.to_radians().cos() || !(least - STEP..=MANTLE_MAX).contains(&h) {
         return None;
     }
+    let fwd = dir;
     // room for him at the destination: standing, else crouched
     let fits = |half: f32| {
         let at = top.point + Vec3::Y * (half + RADIUS + 0.05) + fwd * 0.2;
@@ -1003,7 +1042,7 @@ fn mantle(
     stats: Res<PlayerStats>,
     attrs: Res<crate::gamedata::Attrs>,
     mut q: Query<(Entity, &mut Player, &mut Transform, &mut Collider), Without<PlayerCamera>>,
-    (mut spot, mut auto, mut edge): (ResMut<MantleSpot>, ResMut<AutoCrouch>, ResMut<MantleEdge>),
+    (mut spot, mut auto, mut edge, mut request): (ResMut<MantleSpot>, ResMut<AutoCrouch>, ResMut<MantleEdge>, ResMut<MantleRequest>),
 ) {
     spot.0 = false;
     if paused.0 { return; }
@@ -1032,10 +1071,11 @@ fn mantle(
     }
     let Ok(ctx) = rapier.single() else { return };
     let fall = if p.grounded { 0.0 } else { (-p.velocity.y).max(0.0) };
-    let found = mantle_dest(&ctx, e, &t, p.yaw, fall, p.crouched);
+    let asked = request.0.take();
+    let found = mantle_dest(&ctx, e, &t, p.yaw, fall, p.crouched, asked);
     spot.0 = found.is_some_and(|(_, h, _)| h > 0.9);
-    // (the Jump press, or Jump held while falling: no forward needed)
-    let wants = keys.just_pressed(bind.key(crate::bindings::Act::Jump)) || (!p.grounded && keys.pressed(bind.key(crate::bindings::Act::Jump)));
+    // (the Jump press, or Jump held while falling: no forward needed; or a Blink's end)
+    let wants = asked.is_some() || keys.just_pressed(bind.key(crate::bindings::Act::Jump)) || (!p.grounded && keys.pressed(bind.key(crate::bindings::Act::Jump)));
     if !wants {
         return;
     }

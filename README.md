@@ -916,13 +916,20 @@ are in the settings file, `pad_binding_set` 0-3):
   reach only. Script `rock`.
 - **Stealth as the original measures it** (`stealth.rs`): each character sees with its pawn's
   `DisTweaks_Vision` (a focused cone, 45 degrees out to 35 m, and a peripheral one, 160 degrees
-  out to 17 m, each looking far less up than down: rooftops hide) and pays attention with its
+  out to 17 m, each looking far less up than down: rooftops hide; each an elliptical cone, its
+  bounds between the across and the upright angles along an ellipse, 0x00BEC910) and pays attention with its
   brain's `DisTweaks_PawnAttention` (one for an unsuspecting enemy, one for a suspecting one, one
   for everybody else). Seeing Corvo raises attention by his visibility
   (`Twk_PlayerVisibility`: his light value normalised over the darkest and brightest of the
   scripts' `DisSeqAct_SetPlayerVisSettings`, the `DisStealthVolume` he stands in or the map's
   `m_pMapPlayerVisSettings`, plus his speed; swimming under water hides) plus what nearness
-  adds (`m_DistanceValueTuning`), scaled by difficulty; out of sight it leaks away. An enemy
+  adds (`m_DistanceValueTuning`), scaled by difficulty; out of sight it leaks away. The cones
+  and the nearness take the point where the onlooker's eye level meets Corvo's cylinder (87.5 uu
+  standing, 65 sneaking), and he's in sight when any of five points has a clear line from the
+  eye: the corners and the middle of `Twk_DefaultVisRegion`'s strip (30-150 uu above his feet
+  standing, 50-90 sneaking, 30-60 crouched by the world; 35 uu out toward the onlooker, 20 wide).
+  So a railing or a crate hides a sneaking Corvo, but a head above it doesn't make him seen (as
+  roshan's r614/blink research decoded the sight test, 0x00C669C0 and 0x00C77FC0). An enemy
   that has him in sight keeps him there without a clear line while he stays within its
   attention's `m_fDistanceToLoseSight` (3 m: round a corner, behind a crate). His light
   value is read as the original's visibility component reads his light environment, measured
@@ -2642,6 +2649,13 @@ against the install's own data where it carries them, then implemented independe
     prototype attributes.
   - Mantling: ledges from 0.55 m (1.55 m when falling faster than 10 m/s, none past 20 m/s) to
     2.3 m.
+    - The edge is found as the original's `DishonoredMantleEdgeFinderComponent` finds it (as
+      roshan's r614/blink research decoded it): lines from his middle every 12 cm up, from just
+      under the least height to the free height above his head, reaching 50 cm past his
+      cylinder. The first face within 20 degrees of upright and 45 of his facing starts it, the
+      next clear line above is the edge, and its top may slope up to 45 degrees. A low wall, a
+      lip or a ledge whose face starts above his waist is found. A single waist-high line used to
+      miss them.
     - Up to 1.2 m is an instant step-up; above that a 0.7 s climb to 1.7 m, then 1.033 s.
     - Where only a crouch fits, he mantles into a crouch.
     - He mantles only where his whole body fits on top, standing or crouched. A single ray
@@ -2653,6 +2667,13 @@ against the install's own data where it carries them, then implemented independe
     He can grab again after 0.5 s.
   - Blink moves 60 m/s and gives back his velocity at the end: a falling Blink keeps its fall. It
     accepts destinations where only a crouch fits, arriving crouched.
+  - Blink's target is found as the original's (0x00BF5520, as roshan's r614/blink research
+    decoded it). A 20 uu box is swept along the view from the camera, looking up no higher than
+    the level's vertical reach. A hit nearer than 3 m is tried again from starts a step above
+    (by the free headroom), below and to either side. From the hit it backs off half his bounds
+    (50.25 uu) at a time until a crawl-high box fits, and it is lifted to at least 87.5 uu above
+    the floor. At the end of the Blink the mantle finder runs from any height, so a Blink at a
+    ledge climbs it.
 - **Weapons.**
   - The crossbow's Range upgrade doubles its bolts' speed.
   - Bolts double on the head or torso of someone not fighting Corvo, and do at most 15 to a limb.

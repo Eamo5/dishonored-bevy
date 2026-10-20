@@ -3343,9 +3343,22 @@ fn vision_range(s: &dhcook::format::Sight, fwd: Vec3, dir: Vec3, d: f32, combat:
     if combat {
         return (d <= s.inner[1] && (h <= (s.outer[0] * 0.5).to_radians() || d < 7.0)).then_some(s.inner[1]);
     }
+    // (an elliptical cone, 0x00BEC910: its horizontal half angle across, its up or down scale of
+    // that upright, the bounds between them along the ellipse; as roshan's r614/blink research
+    // decoded it)
+    let _ = (h, v);
+    let side = fwd.cross(Vec3::Y).normalize_or(Vec3::X);
+    let (x, y, z) = (dir.dot(fwd), dir.dot(side), dir.y);
     let within = |c: &[f32; 4]| {
         let half = (c[0] * 0.5).to_radians();
-        d <= c[1] && h <= half && v <= half * c[2] && -v <= half * c[3]
+        if d > c[1] || x < half.cos() {
+            return false;
+        }
+        let vert = half * if z >= 0.0 { c[2] } else { c[3] };
+        let c2v = (2.0 * vert).cos();
+        let cfov = (2.0 * half).cos();
+        let k = (2.0 * (half.sin() * z).atan2(vert.sin() * y)).cos();
+        2.0 * x * x - 1.0 >= (c2v + k * (cfov - c2v) + cfov) * 0.5
     };
     if within(&s.inner) {
         Some(s.inner[1])
@@ -3372,7 +3385,7 @@ pub(crate) fn npc_perception(
     mut found: Local<std::collections::HashSet<Entity>>,
     (froms, mut events, swarms): (Query<&FromSpawner>, MessageWriter<crate::interact::Interaction>, Query<(&Transform, &crate::swarm::Swarm), Without<Npc>>),
     (level, pvis, settings, notarget): (Option<Res<LevelInfo>>, Res<crate::stealth::PlayerVisibility>, Res<crate::settings::Settings>, Option<Res<crate::script::NoTarget>>),
-    (body_lights, carry, handled): (Query<&BodyLight>, Res<crate::carry::Carry>, Res<HandledBodies>),
+    (body_lights, carry, handled, auto_crouch): (Query<&BodyLight>, Res<crate::carry::Carry>, Res<HandledBodies>, Res<crate::player::AutoCrouch>),
 ) {
     // (rat swarms about that would attack: Corvo's, or a level's grown to its
     // `m_InitialRatCountToBeAggressive`; a stray rat or two only scurries off)
@@ -3392,8 +3405,19 @@ pub(crate) fn npc_perception(
     if arrival.0 < ARRIVAL_GRACE {
         return;
     }
-    let head = pt.translation + Vec3::Y * p.eye_height;
-    let chest = pt.translation;
+    // his feet, his cylinder as the original's (`CollisionHeight` 87.5 uu standing, 65 sneaking),
+    // and the strip the onlookers' lines of sight go to (`Twk_DefaultVisRegion`: standing 30-150
+    // uu above the feet, sneaking 50-90, crouched by the world 30-60; 35 uu out towards the
+    // onlooker, 20 wide), as roshan's r614/blink research decoded them
+    let feet = pt.translation.y - if p.crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF } - crate::player::RADIUS;
+    let cylinder = if p.crouched { 0.65 } else { 0.875 };
+    let region = if p.crouched && auto_crouch.0 {
+        (0.3, 0.6)
+    } else if p.crouched {
+        (0.5, 0.9)
+    } else {
+        (0.3, 1.5)
+    };
     // (characters without the original's tweaks: darker = harder to see, 0.35 .. 1.0)
     let light = plit.map(|l| l.brightness).unwrap_or(0.4);
     let light_factor = (0.35 + light * 1.6).clamp(0.35, 1.0);
@@ -3450,7 +3474,11 @@ pub(crate) fn npc_perception(
         let mut range = 30.0 * light_factor;
         // (Corvo unseen, in a host or for tests: what they think of him only leaks away, but
         // the bodies about are seen as ever)
-        for target in [head, chest].into_iter().filter(|_| !hidden) {
+        // the point the cone and nearness take: where the eye's level meets his cylinder (`target
+        // vslot 0`, 0x00C669C0); seen when one of the strip's five points (its corners and middle)
+        // is in a clear line from the eye (0x00C77FC0)
+        let aim = Vec3::new(pt.translation.x, eye.y.clamp(feet, feet + 2.0 * cylinder), pt.translation.z);
+        for target in [aim].into_iter().filter(|_| !hidden) {
             let to = target - eye;
             let d = to.length();
             let dir = to / d.max(1e-3);
@@ -3475,7 +3503,17 @@ pub(crate) fn npc_perception(
                 .exclude_collider(e)
                 .exclude_collider(pe)
                 .groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
-            if ctx.cast_ray(eye, dir, d - 0.1, true, filter).is_none() {
+            let toward = (eye - pt.translation).with_y(0.0).normalize_or(Vec3::Z);
+            let across = toward.cross(Vec3::Y).normalize_or(Vec3::X) * 0.1;
+            let base = Vec3::new(pt.translation.x, feet, pt.translation.z) + toward * 0.35;
+            let (lo, hi) = region;
+            let points = [base + Vec3::Y * hi + across, base + Vec3::Y * hi - across, base + Vec3::Y * lo + across, base + Vec3::Y * lo - across, base + Vec3::Y * (lo + hi) * 0.5];
+            let clear = |p: &Vec3| {
+                let to = *p - eye;
+                let l = to.length();
+                l < 0.05 || ctx.cast_ray(eye, to / l, l, true, filter).is_none()
+            };
+            if points.iter().any(clear) {
                 visible = true;
                 dist = d;
                 range = r;
@@ -8183,6 +8221,32 @@ mod wear_tests {
 
 #[cfg(test)]
 mod tests {
+
+    /// The elliptical cones (0x00BEC910): straight ahead and across within the half angle, upward
+    /// only within its small up scale, downward further, never behind.
+    #[test]
+    fn vision_cones_are_ellipses() {
+        let s = dhcook::format::Sight { inner: [45.0, 35.0, 0.25, 0.7], outer: [160.0, 17.0, 0.1, 0.7], ..Default::default() };
+        let fwd = Vec3::NEG_Z;
+        let at = |yaw: f32, pitch: f32, d: f32| {
+            let (yaw, pitch) = (yaw.to_radians(), pitch.to_radians());
+            let dir = Vec3::new(-yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos());
+            vision_range(&s, fwd, dir, d, false)
+        };
+        assert_eq!(at(0.0, 0.0, 30.0), Some(35.0));
+        assert_eq!(at(25.0, 0.0, 30.0), None, "25 degrees across at 30 m: past the inner cone, the outer one 17 m");
+        assert_eq!(at(20.0, 0.0, 10.0), Some(35.0));
+        // up: the inner cone's 5.6 degrees, the outer's 8
+        assert_eq!(at(0.0, 5.0, 10.0), Some(35.0));
+        assert_eq!(at(0.0, 7.0, 10.0), Some(17.0));
+        assert_eq!(at(0.0, 9.0, 10.0), None);
+        // down: the inner cone's 15.75 degrees
+        assert_eq!(at(0.0, -15.0, 10.0), Some(35.0));
+        // a diagonal the old box let through: 20 across and 5 up is past the ellipse
+        assert_eq!(at(20.0, 5.0, 10.0).filter(|r| *r > 20.0), None);
+        assert_eq!(at(120.0, 0.0, 5.0), None);
+    }
+
     use super::*;
 
     #[test]

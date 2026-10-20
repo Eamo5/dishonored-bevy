@@ -989,71 +989,79 @@ impl BlinkSpot {
     }
 }
 
-fn blink_destination(ctx: &RapierContext, player: Entity, eye: Vec3, dir: Vec3, range: f32, vert: f32) -> Option<(Vec3, bool, BlinkSpot)> {
+/// Where Blink takes him (0x00BF5520, as roshan's r614/blink research decoded it): its range
+/// along the view (`m_HorizDistance`; looking up no higher than `m_VertDistance`), a 20 uu box
+/// swept from the camera (from his view point when the camera starts in something); a hit
+/// nearer than `m_fCloseCollisionDistance` 300 uu tried again from starts a step
+/// (`m_fCloseCollisionOffsetStep` 30) up by the free headroom, down and to either side, to
+/// just past it, the first clear one swept on to the end (over a railing, a low wall); then
+/// backed off along the aim by half his bounds (50.25 uu) until a crawl-height box fits, and
+/// lifted to at least his cylinder's half height (87.5) above the floor. A ledge there he
+/// climbs as the Blink ends (`MantleRequest`).
+fn blink_destination(ctx: &RapierContext, player: Entity, view: Vec3, eye: Vec3, dir: Vec3, range: f32, vert: f32) -> Option<(Vec3, bool, BlinkSpot)> {
     let filter = QueryFilter::default().exclude_collider(player).groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP | GROUP_NPC));
-    // upward blinks reach less far (the original's vertical limit)
-    let range = if dir.y > 0.0 { range.min(vert / dir.y.max(1e-3)) } else { range };
-    let mut point = eye + dir * range;
-    let mut ledge = None;
-    if let Some((_, hit)) = ctx.cast_ray_and_get_normal(eye, dir, range, true, filter) {
-        let hp = hit.point;
-        point = hp - dir * (RADIUS + 0.15);
-        if hit.normal.y.abs() < 0.5 {
-            // wall: is there a ledge just above?
-            let flat = dir.with_y(0.0).normalize_or_zero();
-            let probe = hp + flat * 0.45 + Vec3::Y * 2.0;
-            if let Some((_, g)) = ctx.cast_ray_and_get_normal(probe, Vec3::NEG_Y, 2.4, true, filter) {
-                if g.normal.y > 0.7 && g.point.y > hp.y - 0.3 {
-                    let center = g.point + Vec3::Y * (STAND_HALF + RADIUS + 0.06);
-                    if ctx.cast_ray(g.point + Vec3::Y * 0.05, Vec3::Y, 1.75, true, filter).is_none() {
-                        ledge = Some(center);
-                    }
-                }
-            }
-        } else if hit.normal.y > 0.5 {
-            // floor: stand on it
-            point = hp + Vec3::Y * (STAND_HALF + RADIUS + 0.06);
-        }
+    let mut v = if dir.y <= 0.0 { dir * range } else { dir * (vert / dir.y.max(1e-3)).min(range) };
+    v.y = v.y.min(vert);
+    let len = v.length();
+    if len < 1e-3 {
+        return None;
     }
-    let mut dest = ledge.unwrap_or(point);
-    if ledge.is_none() {
-        // settle onto the ground below if close
-        if let Some((_, g)) = ctx.cast_ray_and_get_normal(dest, Vec3::NEG_Y, STAND_HALF + RADIUS + 1.2, true, filter) {
-            if g.normal.y > 0.6 {
-                dest = g.point + Vec3::Y * (STAND_HALF + RADIUS + 0.06);
+    let aim = v / len;
+    let cube = Collider::cuboid(0.2, 0.2, 0.2);
+    let opts = ShapeCastOptions { max_time_of_impact: 1.0, target_distance: 0.0, stop_at_penetration: true, ..default() };
+    let sweep = |from: Vec3, to: Vec3| ctx.cast_shape(from, Quat::IDENTITY, to - from, cube.raw.as_ref(), opts, filter).map(|(_, h)| h.time_of_impact.clamp(0.0, 1.0));
+    let (mut start, mut hit) = (eye, sweep(eye, eye + v));
+    if hit.is_some_and(|t| t <= 1e-4) {
+        start = view;
+        hit = sweep(view, view + v);
+    }
+    let mut point = start + v * hit.unwrap_or(1.0);
+    const CLOSE: f32 = 3.0;
+    const STEP: f32 = 0.3;
+    if hit.is_some() && start.distance(point) < CLOSE {
+        let headroom = ctx.cast_ray(start, Vec3::Y, STEP, true, filter).map_or(1.0, |(_, toi)| toi / STEP);
+        let past = point + aim * STEP;
+        for off in [Vec3::Y * (STEP * headroom - 0.2), Vec3::NEG_Y * STEP, Vec3::Z * STEP, Vec3::NEG_Z * STEP] {
+            let from = start + off;
+            if sweep(from, past).is_none() {
+                point = from + v * sweep(from, from + v).unwrap_or(1.0);
+                break;
             }
         }
     }
-    // make sure the capsule fits
-    let shape = Collider::capsule_y(STAND_HALF, RADIUS * 0.95);
-    let mut blocked = false;
-    ctx.intersect_shape(dest, Quat::IDENTITY, &*shape.raw, filter, |_| {
-        blocked = true;
-        false
-    });
-    if blocked {
-        // try a little higher (stairs/edges)
-        let up = dest + Vec3::Y * 0.4;
-        let mut b2 = false;
-        ctx.intersect_shape(up, Quat::IDENTITY, &*shape.raw, filter, |_| {
-            b2 = true;
+    let crawl = Collider::cuboid(0.35, 0.33, 0.35);
+    let fits = |p: Vec3, shape: &Collider| {
+        let mut blocked = false;
+        ctx.intersect_shape(p, Quat::IDENTITY, &*shape.raw, filter, |_| {
+            blocked = true;
             false
         });
-        if b2 {
-            // (where only a crouch fits, he arrives crouched: the original asks only room for
-            // its crawl height, as roshan's r614/blink research found)
-            let low = dest - Vec3::Y * (STAND_HALF - crate::player::CROUCH_HALF);
-            let crouch = Collider::capsule_y(crate::player::CROUCH_HALF, RADIUS * 0.95);
-            let mut b3 = false;
-            ctx.intersect_shape(low, Quat::IDENTITY, &*crouch.raw, filter, |_| {
-                b3 = true;
-                false
-            });
-            return (!b3).then_some((low, true, spot_of(ctx, low, ledge.is_some(), filter)));
+        !blocked
+    };
+    let reach = start.distance(point);
+    let mut back = 0.0;
+    let mut p = point;
+    while !fits(p, &crawl) {
+        back += 0.5025;
+        if back > reach {
+            return None;
         }
-        dest = up;
+        p = point - aim * back;
     }
-    Some((dest, false, spot_of(ctx, dest, ledge.is_some(), filter)))
+    if let Some((_, toi)) = ctx.cast_ray(p, Vec3::NEG_Y, 200.0, true, filter) {
+        p.y = p.y.max(p.y - toi + 0.875);
+    }
+    // (his capsule there: standing, else crouched where only a crouch fits)
+    let feet = p.y - 0.875;
+    let stand = Vec3::new(p.x, feet + STAND_HALF + RADIUS, p.z);
+    let (dest, crouch) = if fits(stand, &Collider::capsule_y(STAND_HALF, RADIUS * 0.95)) {
+        (stand, false)
+    } else {
+        (Vec3::new(p.x, feet + crate::player::CROUCH_HALF + RADIUS, p.z), true)
+    };
+    let yaw = (-aim.x).atan2(-aim.z);
+    let ledge = crate::player::mantle_dest(ctx, player, &Transform::from_translation(dest), yaw, 0.0, crouch, Some(0.0)).is_some();
+    Some((dest, crouch, spot_of(ctx, dest, ledge, filter)))
 }
 
 /// The kind of a Blink's landing: a ledge, else ground under its feet, else the air.
@@ -1164,7 +1172,7 @@ fn use_power(
     let blink_ready = stats.mana >= Power::Blink.mana(&data) && powers.blink_lock <= 0.0;
     if sel == Power::Blink && can_act && mouse.pressed(MouseButton::Right) && (blink_ready || powers.aiming) {
         powers.aiming = true;
-        let dest = blink_destination(&ctx, pe, eye, dir, blink_range, blink_vert);
+        let dest = blink_destination(&ctx, pe, pt.translation + Vec3::Y * crate::player::STAND_EYE, eye, dir, blink_range, blink_vert);
         powers.blink_target = dest.map(|d| d.0);
         powers.blink_crouch = dest.is_some_and(|d| d.1);
         powers.blink_spot = dest.map(|d| d.2);
@@ -1741,6 +1749,7 @@ fn blink_travel(
     mut player: Query<(&mut Transform, &mut Player, &mut Collider)>,
     mut sfx: MessageWriter<PostEvent>,
     mut tc: ResMut<TimeControl>,
+    mut mantle_req: ResMut<crate::player::MantleRequest>,
 ) {
     // Blink's layer of the world's dilation, moving as it was set
     if tc.blink_rate != 0.0 {
@@ -1770,6 +1779,8 @@ fn blink_travel(
         p.locked = false;
         p.velocity = powers.blink_vel;
         p.grounded = false;
+        // (then the Blink's mantle: its finder from any height, `pMantleBlinkTweaks`)
+        mantle_req.0 = Some(0.0);
         if powers.blink_crouch && !p.crouched {
             p.crouched = true;
             *col = Collider::capsule_y(crate::player::CROUCH_HALF, RADIUS);
