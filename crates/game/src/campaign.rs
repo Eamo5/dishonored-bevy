@@ -163,7 +163,7 @@ pub fn notify_deed(dark: &DarknessDef, s: &mut PlayerStats, stat: &str, victim: 
 }
 
 /// A pawn tweak's lineage (itself and what it falls back on) in the level's characters.
-fn lineage(level: Option<&crate::level::LevelInfo>, pawn: &str) -> Vec<String> {
+pub fn lineage(level: Option<&crate::level::LevelInfo>, pawn: &str) -> Vec<String> {
     let own = || vec![pawn.rsplit('.').next().unwrap_or(pawn).to_string()];
     level.and_then(|l| l.scene.npc_types.iter().find(|t| t.name == pawn)).map(|t| if t.lineage.is_empty() { own() } else { t.lineage.clone() }).unwrap_or_else(own)
 }

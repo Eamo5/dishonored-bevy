@@ -329,6 +329,10 @@ pub struct Npc {
     /// its search's check clip's cooldown (10 s: a searcher come to a spot looks it over, and
     /// tells the others there, only so often)
     pub check_cd: f32,
+    /// a reaction under way (`DisBehaviorReact`: a Harmless response's remark), for so long yet
+    pub reacting: f32,
+    /// searching at the scripts' bidding (`DisSeqAct_AIDoSearch`'s `DisBehaviorPatrolSearch`)
+    pub scripted_search: bool,
     /// before setting off to look into something, its search's reaction (`m_SearchReactionDelay`,
     /// 0-1 s: it turns to it first)
     pub react: f32,
@@ -2267,6 +2271,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         carry_bark: None,
         suspecting: false,
         check_cd: 0.0,
+        reacting: 0.0,
+        scripted_search: false,
         react: 0.0,
         hit_by_player: false,
         kill_queue: Vec::new(),
@@ -3555,6 +3561,10 @@ pub(crate) fn npc_perception(
                     let protects = sight.is_some_and(|s| s.protect_neutrals);
                     let ally = rel == 1 || rel == 0 && protects;
                     npc.carry_bark = Some(if ally { 0 } else if rel == 0 { 1 } else { 2 });
+                    // (a remark is its reaction behaviour's, `ReactionRequest`, 0x00B3EAB0)
+                    if !ally {
+                        npc.reacting = 3.0;
+                    }
                     if ally {
                         npc.enemy = true;
                     }
@@ -4038,6 +4048,10 @@ pub(crate) fn npc_brain(
         npc.mode_timer += dt;
         npc.attack_cd = (npc.attack_cd - dt).max(0.0);
         npc.check_cd = (npc.check_cd - dt).max(0.0);
+        npc.reacting = (npc.reacting - dt).max(0.0);
+        if !matches!(npc.mode, Mode::Search | Mode::Investigate) {
+            npc.scripted_search = false;
+        }
         for c in npc.leap_cd.iter_mut() {
             *c = (*c - dt).max(0.0);
         }

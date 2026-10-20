@@ -895,8 +895,10 @@ pub struct Vm {
     rat_bites: u32,
     /// objectives plus active tasks last seen (`DisSeqEvent_TaskActivated` looks again on a change)
     active_count: usize,
-    /// where each spawner's character stands (for `SeqAct_GetDistance`)
+    /// where each spawner's character stands (for `SeqAct_GetDistance`), and whether it walks
+    /// a patrol or else where it keeps its post (whose behaviour a nav point reached is)
     pub npc_pos: HashMap<u32, Vec3>,
+    npc_duty: HashMap<u32, Option<Vec3>>,
     /// the character possessed last frame (`DisSeqEvent_Possessed` Started / Finished)
     possessed_was: Option<u32>,
     /// nav points with `DisSeqEvent_PatrolPointReached` (actor, where) and the characters at
@@ -1165,6 +1167,7 @@ impl Vm {
             rat_bites: 0,
             active_count: 0,
             npc_pos: HashMap::new(),
+            npc_duty: HashMap::new(),
             possessed_was: None,
             patrol_points: None,
             at_points: HashSet::new(),
@@ -5701,9 +5704,11 @@ fn world_events(
     }
     // where everyone is (`SeqAct_GetDistance`), and who they are
     vm.npc_pos.clear();
+    vm.npc_duty.clear();
     for (_, n, f, t) in &npcs {
         if !n.is_down() {
             vm.npc_pos.insert(f.0, t.translation);
+            vm.npc_duty.insert(f.0, (!n.patrol.on).then_some(n.home));
         }
         if !vm.npc_pawn.contains_key(&f.0) {
             vm.npc_pawn.insert(f.0, n.pawn.clone());
@@ -5734,7 +5739,25 @@ fn world_events(
         vm.at_points = now;
         for (a, s) in arrived {
             let who = vm.spawner_actor.get(&s).map(|x| Val::Actor(*x));
-            vm.actor_event(a, &["DisSeqEvent_PatrolPointReached"], OutSel::Index(0), who);
+            // "From Patrol Behavior" on its rounds, "From Guard Behavior" for one keeping its post
+            // there (the scripts' guard order); older points have only "Out", which a guard's
+            // arrival can't reach. One passing by on other business: only those older points
+            let at = pts.iter().find(|(p, _)| *p == a).map(|(_, at)| *at).unwrap_or_default();
+            let out = match vm.npc_duty.get(&s).copied().flatten() {
+                None => Some(0),
+                Some(home) if (home.xz() - at.xz()).length() < 1.2 => Some(1),
+                Some(_) => None,
+            };
+            for ev in vm.events_of.get(&a).cloned().unwrap_or_default() {
+                let op = &vm.g.ops[ev as usize];
+                if op.class != "DisSeqEvent_PatrolPointReached" {
+                    continue;
+                }
+                let older = op.outputs.len() == 1;
+                if let Some(o) = out.or(older.then_some(0)).filter(|o| *o < op.outputs.len()) {
+                    vm.event(ev, o, who.clone());
+                }
+            }
         }
     }
     // what Corvo looks at (`SeqEvent_LOS`: within its distance and so many pixels of the

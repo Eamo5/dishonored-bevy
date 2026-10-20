@@ -528,12 +528,14 @@ fn apply_ai_fx(
                         if n.mode == Mode::Search {
                             n.set_mode(Mode::Return);
                         }
+                        n.scripted_search = false;
                     } else {
                         n.last_seen = Some(at.or(n.last_seen).unwrap_or(t.translation));
                         n.alert = crate::npc::Alert::Suspicious;
                         // (a scripted search makes it suspect, 0x00B63770)
                         n.suspecting = true;
                         n.set_mode(Mode::Search);
+                        n.scripted_search = true;
                     }
                 }
             }
@@ -1143,24 +1145,128 @@ fn script_blasts(
     }
 }
 
-/// Characters' behaviours as the original names them, for `DisSeqEvent_BehaviorStarted`: a
-/// civilian's panic, a guard's patrol, search and combat.
-fn behaviors(vm: Option<ResMut<Vm>>, npcs: Query<(Entity, &Npc), Changed<Npc>>, mut last: Local<std::collections::HashMap<Entity, Mode>>) {
-    let Some(mut vm) = vm else { return };
-    for (e, n) in &npcs {
-        let prev = last.insert(e, n.mode);
-        if prev.is_none_or(|p| p == n.mode) {
-            continue;
+/// The behaviour a character's brain runs now, as the original names its classes: the one in
+/// the highest of its slots taken (`EAISlot`: Preserve 16 a blast or a plague cloud escaped,
+/// Escape 15 panic, Awe 14 Corvo's magic, Alert 13 an alarm run, Combat 11 its own combat,
+/// Engage 8 rats, React 7 a remark, Distraction 6 / Perform 4 a scene, Search 5, Notice 3 its
+/// enemy faced, Idle 0 its patrol or the scripts' search), decoded for this rewrite (0x00B17100).
+/// Searching starts on the step up to investigating, of a search or a fight of its own;
+/// noticing, on the step to turning to face, both of its enemy only (0x00B24D00).
+fn behavior_of(n: &Npc, held: bool, reacting: bool, swarmed: bool, lineage: &[String]) -> Option<&'static str> {
+    let of = |s: &str| lineage.iter().any(|l| l.to_ascii_lowercase().contains(s));
+    if n.is_down() || n.mode == Mode::Choked {
+        return None;
+    }
+    Some(if n.escape.is_some() {
+        "DisBehaviorEscapeExplosion"
+    } else if n.plague_escape.is_some() {
+        "DisBehaviorEscapePlague"
+    } else if n.mode == Mode::Flee {
+        "DisBehaviorPanic"
+    } else if n.magic_react.is_some() {
+        "DisBehaviorMagicResponse"
+    } else if n.alarm_run.is_some() {
+        "DisBehaviorTriggerAlarm"
+    } else if n.mode == Mode::Combat {
+        // (its type's own: the brain lists one combat class, matched exactly; LIKELY by lineage)
+        if of("eliteguard") {
+            "DisBehaviorCombatEliteGuard"
+        } else if of("tallboy") {
+            "DisBehaviorTallBoyCombat"
+        } else if of("hmaster") {
+            "DisBehaviorOverseerHMasterCombat"
+        } else if of("musical") {
+            "DisBehaviorMusicalCombat"
+        } else if of("overseer") {
+            "DisBehaviorOverseerCombat"
+        } else if of("assassin") {
+            "DisBehaviorAssassinCombat"
+        } else if of("wolfhound") {
+            "DisBehaviorCombatWolfhound"
+        } else if of("thug") {
+            "DisBehaviorThugCombat"
+        } else if of("guard") {
+            "DisBehaviorCombatCityGuard"
+        } else {
+            "DisBehaviorCombatMelee"
         }
-        let b = match n.mode {
-            Mode::Flee => "DisBehaviorPanic",
-            Mode::Patrol => "DisBehaviorPatrol",
-            Mode::Investigate => "DisBehaviorReact",
-            Mode::Search => "DisBehaviorSearch",
-            Mode::Combat => "DisBehaviorCombat",
-            _ => continue,
-        };
-        vm.behavior_started(n.spawner, b);
+    } else if swarmed || n.rat_help.is_some() {
+        // (the Lord Regent's and the elite guards' brains list the elite guard's)
+        if of("pwn_eliteguard_mtbase") {
+            "DisBehaviorCombatRatSwarmEliteGuard"
+        } else {
+            "DisBehaviorCombatRatSwarm"
+        }
+    } else if reacting {
+        "DisBehaviorReact"
+    } else if held {
+        "DisBehaviorSoiree"
+    } else if n.mode == Mode::Investigate || n.mode == Mode::Search && !n.scripted_search {
+        // (the people's brains list the one that searches where it stands, LIKELY)
+        if n.kind == crate::npc::Kind::Civilian {
+            "DisBehaviorStationarySearch"
+        } else {
+            "DisBehaviorSearch"
+        }
+    } else if n.hostile() && n.attn_level == 2 {
+        "DisBehaviorNotice"
+    } else if n.mode == Mode::Search {
+        "DisBehaviorPatrolSearch"
+    } else if n.patrol.on {
+        "DisBehaviorPatrol"
+    } else {
+        return None;
+    })
+}
+
+/// What each character's brain ran last, for `behaviors`: the behaviour, its lineage, when a
+/// swarm was last on it, and a reaction or a scene something more pressing cut into (let go:
+/// neither resumes, vslot 94).
+#[derive(Default)]
+struct BrainWas {
+    current: std::collections::HashMap<Entity, Option<&'static str>>,
+    lineage: std::collections::HashMap<Entity, Vec<String>>,
+    swarmed: std::collections::HashMap<Entity, f32>,
+    dropped: std::collections::HashMap<Entity, (bool, bool)>,
+}
+
+/// Characters' behaviours as the original names them, for `DisSeqEvent_BehaviorStarted`: each
+/// time one becomes its brain's current behaviour (`DishonoredAIBehavior` Start, 0x00AF7670):
+/// a fresh start, or one resumed once what cut in has ended (a patrol after each fright, a
+/// search after a fight). Once only is the event's own `MaxTriggerCount`.
+fn behaviors(
+    vm: Option<ResMut<Vm>>,
+    level: Option<Res<LevelInfo>>,
+    time: Res<Time>,
+    mut swarms: MessageReader<crate::swarm::SwarmOn>,
+    npcs: Query<(Entity, &Npc, Has<crate::npc::ScriptedAnim>)>,
+    mut was: Local<BrainWas>,
+) {
+    let now = time.elapsed_secs();
+    for s in swarms.read() {
+        was.swarmed.insert(s.0, now);
+    }
+    let Some(mut vm) = vm else { return };
+    for (e, n, held) in &npcs {
+        if !was.lineage.contains_key(&e) {
+            was.lineage.insert(e, crate::campaign::lineage(level.as_deref(), &n.pawn));
+        }
+        let swarmed = was.swarmed.get(&e).is_some_and(|t| now - t < 0.4);
+        let (react_gone, scene_gone) = was.dropped.get(&e).copied().unwrap_or_default();
+        let (mut react_gone, mut scene_gone) = (react_gone && n.reacting > 0.0, scene_gone && held);
+        let b = behavior_of(n, held && !scene_gone, n.reacting > 0.0 && !react_gone, swarmed, &was.lineage[&e]);
+        let prev = was.current.insert(e, b).flatten();
+        if prev != b {
+            react_gone |= prev == Some("DisBehaviorReact");
+            scene_gone |= prev == Some("DisBehaviorSoiree");
+            if let Some(b) = b {
+                if std::env::var("DH_NPC_LOG").is_ok() {
+                    info!("behaviour: {} starts {b}", n.name);
+                }
+                vm.behavior_started(n.spawner, b);
+            }
+        }
+        was.dropped.insert(e, (react_gone, scene_gone));
     }
 }
 
