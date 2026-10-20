@@ -1,8 +1,9 @@
 //! Usable objects (`DishonoredUsableObject`): lockers, chests, trunks, bins, hatches, levers,
 //! valves... Their moving part plays the sequence of each stage it's used into (`m_Stages`:
 //! "Open", then "Close" with its own prompt), in place of the bind pose cooked into the level;
-//! the level scripts hear it used (`DisSeqEvent_Used`) and can set a stage themselves
-//! (`DisSeqAct_ActivateUsable`, `m_TargetStageIndex`).
+//! the level scripts hear it used (`DisSeqEvent_Used`, the stage's own output) and can set a
+//! stage themselves (`DisSeqAct_ActivateUsable`, `m_TargetStageIndex`). A valve's or a wheel's
+//! stage is held to use (`m_bHoldToUse`): see `hold_usables`.
 
 use crate::anim::Animator;
 use crate::bindings::{hint, Act, Bindings};
@@ -22,8 +23,12 @@ pub struct UsablesPlugin;
 impl Plugin for UsablesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UsableLog>()
+            .init_resource::<HoldGauge>()
             .add_systems(OnEnter(GameState::InGame), spawn_usables.after(crate::level::LevelSpawnSet))
-            .add_systems(Update, (restore_usables, scripted_stages, usable_focus.after(crate::interact::FocusSet).before(crate::interact::use_focus), audiograph_cards).run_if(in_state(GameState::InGame)));
+            .add_systems(
+                Update,
+                (restore_usables, scripted_stages, (usable_focus.after(crate::interact::FocusSet).before(crate::interact::use_focus), hold_usables).chain(), audiograph_cards).run_if(in_state(GameState::InGame)),
+            );
     }
 }
 
@@ -41,6 +46,10 @@ pub struct UsableLog {
 /// How near Corvo uses one (m).
 const REACH: f32 = 2.0;
 
+/// A hold under way's progress, for the HUD's interaction gauge (0..1).
+#[derive(Resource, Default)]
+pub struct HoldGauge(pub Option<f32>);
+
 #[derive(Component)]
 pub struct UsableRig {
     index: u32,
@@ -53,6 +62,12 @@ pub struct UsableRig {
     center: Vec3,
     /// locked (`m_bLocked`; a key on Corvo's ring opens it)
     locked: bool,
+    /// a hold stage's progress (`m_fHeldTransitionProgress`), Corvo's hand on it
+    /// (`m_bIsBeingUsed`), running back once let go, and at its end without completing
+    progress: f32,
+    holding: bool,
+    rewinding: bool,
+    at_end: bool,
 }
 
 impl UsableRig {
@@ -141,7 +156,7 @@ fn spawn_usables(
             commands.entity(root).add_child(m);
         }
         let mut ec = commands.entity(root);
-        ec.insert(UsableRig { index: ui as u32, stage: 0, done: false, actor: actor_of.get(&(ui as u32)).copied(), center, locked: u.locked });
+        ec.insert(UsableRig { index: ui as u32, stage: 0, done: false, actor: actor_of.get(&(ui as u32)).copied(), center, locked: u.locked, progress: 0.0, holding: false, rewinding: false, at_end: false });
         if let Some(lib) = vis.anims.clone() {
             ec.insert(Animator::new(lib, &vis.skeleton, joints));
         }
@@ -262,6 +277,11 @@ fn usable_focus(
     data: Res<crate::gamedata::Data>,
 ) {
     let Some(level) = level else { return };
+    // (one held: its hand stays on it, `hold_usables`)
+    if rigs.iter().any(|(r, _, _)| r.holding) {
+        focus.0 = true;
+        return;
+    }
     if focus.0 || carry.carrying() || possession.host.is_some() || held.0.is_some() || player.single().is_ok_and(|p| p.locked) {
         return;
     }
@@ -328,8 +348,12 @@ fn usable_focus(
                     used.write(Interaction::UsableLock { actor, locked: false });
                 }
             }
-            // (its line is already up: nothing more)
-            None => {}
+            // (its line is already up; the scripts hear it tried: "Used But Locked")
+            None => {
+                if let Some(actor) = r.actor {
+                    used.write(Interaction::UsableOut { actor, out: u.stages.len() });
+                }
+            }
         }
         return;
     }
@@ -347,9 +371,36 @@ fn usable_focus(
         sfx.write(crate::audio::PostEvent::named("UI_Validation", Some(r.center)));
     }
     let stage = r.stage;
+    // held to use: Corvo's hand on it ("Started Holding", on every press: `hold_usables` takes
+    // it on), its loop from the start or resumed, a rewind under way stopped (0x00A5BC30)
+    if let Some(h) = &st.hold {
+        let remote_at = remote_at(&level, u, r.center);
+        let mut post = |i: usize, at: Vec3| {
+            if let Some(s) = h.sounds.get(i).filter(|s| !s.is_empty()) {
+                sfx.write(crate::audio::PostEvent::named(s, Some(at)));
+            }
+        };
+        if r.rewinding {
+            post(REVERSE_STOP, r.center);
+            post(REVERSE_STOP + REMOTE, remote_at);
+        }
+        let start = if r.progress.abs() < 1e-4 { FORWARD_START } else { FORWARD_RESUME };
+        post(start, r.center);
+        post(start + REMOTE, remote_at);
+        r.holding = true;
+        r.rewinding = false;
+        r.at_end = false;
+        if let Some(mut a) = a {
+            scrub(&mut a, &st.anim, r.progress);
+        }
+        if let Some(actor) = r.actor {
+            used.write(Interaction::UsableOut { actor, out: u.stages.len() + 1 });
+        }
+        return;
+    }
     enter(&mut r, a.map(|a| a.into_inner()), &level, stage, &mut log, false);
     if let Some(actor) = r.actor {
-        used.write(Interaction::Usable(actor));
+        used.write(Interaction::Usable(actor, stage));
     }
     // an audiograph player: "Play" plays its card, "Stopped" stops it
     if !u.audiograph.is_empty() {
@@ -360,5 +411,154 @@ fn usable_focus(
             rig: Some(r.index),
             flavor: u.flavor.clone(),
         });
+    }
+}
+
+/// A hold stage's sounds (`HoldUse::sounds`), the driven actor's seven after its own.
+const FORWARD_START: usize = 0;
+const FORWARD_STOP: usize = 1;
+const FORWARD_RESUME: usize = 2;
+const FORWARD_COMPLETE: usize = 3;
+const REVERSE_START: usize = 4;
+const REVERSE_STOP: usize = 5;
+const REVERSE_COMPLETE: usize = 6;
+const REMOTE: usize = 7;
+
+/// Where a usable's driven actor stands (else the usable).
+fn remote_at(level: &LevelInfo, u: &dhcook::format::UsableObj, or: Vec3) -> Vec3 {
+    u.remote.and_then(|a| level.scene.kismet.actors.get(a as usize)).map(|a| Vec3::from(a.position)).unwrap_or(or)
+}
+
+/// A sequence held at a share of its length (a hold's: set, not played).
+fn scrub(a: &mut Animator, clip: &str, at: f32) {
+    let Some(c) = a.lib.find(clip) else { return };
+    if a.current().map(|p| p.clip) != Some(c) {
+        a.restart(c, false, 0.0, 0.1);
+        a.sounds = false;
+    }
+    a.seek(at.clamp(0.0, 1.0) * a.lib.duration(c));
+}
+
+/// Holding [Use] on a hold stage (`m_HoldToUseData`, 0x00A574E0, decoded for this rewrite): its
+/// progress rises over its use time while held, its sequence and the driven actor's set to it
+/// (the HUD's interaction gauge showing it). Let go, out of reach or looking away: "Stopped
+/// Holding", and it runs back over its rewind time where it rewinds, else stays. At the end:
+/// the stage's output, then "Stopped Holding", and on to the next stage; one that never
+/// completes waits there until let go.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn hold_usables(
+    time: Res<Time>,
+    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<Bindings>),
+    level: Option<Res<LevelInfo>>,
+    mut rigs: Query<(&mut UsableRig, Option<&mut Animator>), Without<crate::propanim::PropRig>>,
+    mut remotes: Query<(&crate::propanim::PropRig, &mut Animator), Without<UsableRig>>,
+    player: Query<&Player>,
+    cam: Query<&GlobalTransform, With<PlayerCamera>>,
+    (carry, possession): (Res<crate::carry::Carry>, Res<crate::possession::Possession>),
+    mut used: MessageWriter<Interaction>,
+    mut sfx: MessageWriter<crate::audio::PostEvent>,
+    mut log: ResMut<UsableLog>,
+    mut gauge: ResMut<HoldGauge>,
+) {
+    gauge.0 = None;
+    let Some(level) = level else { return };
+    let dt = time.delta_secs();
+    let view = cam.single().ok().map(|c| (c.translation(), c.forward().as_vec3()));
+    let free = !carry.carrying() && possession.host.is_none() && !player.single().is_ok_and(|p| p.locked);
+    // (+1 over its time a second; at once where it has none)
+    let rate = |t: f32| if t > 0.0 { 1.0 / t } else { 1.0 };
+    for (mut r, a) in &mut rigs {
+        if !r.holding && !r.rewinding {
+            continue;
+        }
+        let Some(u) = level.scene.usables.get(r.index as usize) else { continue };
+        let Some(st) = u.stages.get(r.stage) else { continue };
+        let Some(h) = &st.hold else {
+            r.holding = false;
+            r.rewinding = false;
+            continue;
+        };
+        let n = u.stages.len();
+        let remote_at = remote_at(&level, u, r.center);
+        let mut post = |i: usize, at: Vec3| {
+            if let Some(s) = h.sounds.get(i).filter(|s| !s.is_empty()) {
+                sfx.write(crate::audio::PostEvent::named(s, Some(at)));
+            }
+        };
+        let mut shown = r.progress;
+        if r.holding {
+            // (still held: the button down, it before him and in reach)
+            let held = free
+                && keys.pressed(bind.key(Act::Use))
+                && view.is_some_and(|(eye, fwd)| {
+                    let to = r.center - eye;
+                    to.length() < REACH * 1.2 && to.normalize_or_zero().dot(fwd) > 0.7
+                });
+            if held {
+                r.progress = (r.progress + dt * rate(h.use_time)).min(1.0);
+                shown = r.progress;
+                gauge.0 = Some(r.progress);
+                if r.progress >= 1.0 && !r.at_end {
+                    post(FORWARD_STOP, r.center);
+                    post(FORWARD_STOP + REMOTE, remote_at);
+                    if h.never_complete {
+                        r.at_end = true;
+                    } else {
+                        // done: the stage's output, then "Stopped Holding" (the button still
+                        // down), and on to the next stage, the progress back to nothing
+                        post(FORWARD_COMPLETE, r.center);
+                        post(FORWARD_COMPLETE + REMOTE, remote_at);
+                        let stage = r.stage;
+                        if let Some(actor) = r.actor {
+                            used.write(Interaction::Usable(actor, stage));
+                            used.write(Interaction::UsableOut { actor, out: n + 2 });
+                        }
+                        r.holding = false;
+                        r.progress = 0.0;
+                        r.stage = (stage + 1) % n.max(1);
+                        r.done = st.once;
+                        log.entered.insert(r.index, (stage, r.done));
+                        gauge.0 = None;
+                    }
+                }
+            } else {
+                // let go: "Stopped Holding", its loop stopped; it runs back, or stays
+                if let Some(actor) = r.actor {
+                    used.write(Interaction::UsableOut { actor, out: n + 2 });
+                }
+                if !r.at_end {
+                    post(FORWARD_STOP, r.center);
+                    post(FORWARD_STOP + REMOTE, remote_at);
+                }
+                r.holding = false;
+                r.at_end = false;
+                if h.auto_rewind && r.progress > 0.0 {
+                    r.rewinding = true;
+                    post(REVERSE_START, r.center);
+                    post(REVERSE_START + REMOTE, remote_at);
+                }
+            }
+        } else {
+            r.progress = (r.progress - dt * rate(h.rewind_time)).max(0.0);
+            shown = r.progress;
+            if r.progress <= 0.0 {
+                r.rewinding = false;
+                for i in [REVERSE_STOP, REVERSE_COMPLETE] {
+                    post(i, r.center);
+                    post(i + REMOTE, remote_at);
+                }
+            }
+        }
+        // its sequence and the driven actor's, set to the progress
+        if let Some(mut a) = a {
+            scrub(&mut a, &st.anim, shown);
+        }
+        if let (Some(ra), false) = (u.remote, h.remote_anim.is_empty()) {
+            for (pr, mut a) in &mut remotes {
+                if pr.actor == ra {
+                    scrub(&mut a, &h.remote_anim, shown);
+                }
+            }
+        }
     }
 }

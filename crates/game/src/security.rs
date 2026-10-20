@@ -727,7 +727,7 @@ fn use_devices(
     usables: Query<(Entity, &Usable)>,
 ) {
     for u in used.read() {
-        let Interaction::Usable(id) = u else { continue };
+        let Interaction::Usable(id, _) = u else { continue };
         if *id < SECURITY_USABLE {
             continue;
         }

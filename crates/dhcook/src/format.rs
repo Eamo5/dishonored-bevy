@@ -1881,6 +1881,15 @@ pub struct DoorSounds {
     /// Prison cell's door, open for the interrogation
     #[serde(default)]
     pub open_start: Option<bool>,
+    /// Wind Blast can slam it open (no break steps, or a broken mesh to them: the metal, sewer
+    /// and cell doors, the window doors); with a slam stage of its own (`m_DoorSlamOpenCW`'s
+    /// sequence: else it opens as used), and that sequence's sounds (`Player_Windblast_Cw`)
+    #[serde(default)]
+    pub slams: bool,
+    #[serde(default)]
+    pub slam_stage: bool,
+    #[serde(default)]
+    pub slam: Vec<(f32, String)>,
 }
 
 /// Music director settings of a map (`DisTweaks_MusicEvents`, from the map info): the
@@ -2624,6 +2633,10 @@ pub struct UsableObj {
     /// circuitry's "Rewire Tools Remaining: `q")
     #[serde(default)]
     pub texts: std::collections::BTreeMap<String, String>,
+    /// the actor its use drives (`m_pRemoteActorToDrive`: a valve's gate or bridge), in
+    /// `kismet.actors` (animated: its `device`)
+    #[serde(default)]
+    pub remote: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -2635,6 +2648,26 @@ pub struct UsableStage {
     pub text: String,
     /// it can't be used again after this (`m_bDeactivateUsableWhenDone`)
     pub once: bool,
+    /// held to use (`m_bHoldToUse`, its `m_HoldToUseData`)
+    #[serde(default)]
+    pub hold: Option<HoldUse>,
+}
+
+/// A stage used by holding [Use] (a valve, a wheel): its sequence, and the driven actor's, follow
+/// the hold's progress.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct HoldUse {
+    /// seconds to the end held, and back let go (`m_fTimeToFullyUse`, `m_fTimeToFullyRewind`)
+    pub use_time: f32,
+    pub rewind_time: f32,
+    /// let go, it runs back (`m_bAutoRewind`); it never reaches its stage (`m_bNeverCompleteStage`)
+    pub auto_rewind: bool,
+    pub never_complete: bool,
+    /// the driven actor's sequence (`m_RemoteActorAnimName`)
+    pub remote_anim: String,
+    /// its sounds (Wwise events): forward start, stop, resume, complete; reverse start, stop,
+    /// complete; then the same seven at the driven actor (`m_pRemote...`); empty where none
+    pub sounds: Vec<String>,
 }
 
 /// The levels' navigation meshes merged: vertices (Bevy space) and convex polygons.

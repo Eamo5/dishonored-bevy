@@ -175,6 +175,9 @@ struct Cooker<'a> {
     keyhole_sockets: HashMap<String, Option<Vec3>>,
     /// usable objects by actor key (`scene.usables`)
     usable_ids: HashMap<String, u32>,
+    /// the actors usables drive (`m_pRemoteActorToDrive`), found in the scripts' actors once
+    /// they are cooked
+    usable_remotes: Vec<(u32, kismet::ActorKey)>,
     /// skeletal level instances: their mesh and their component's animation sets (for the
     /// props the matinees animate)
     skel_insts: HashMap<u32, (Obj, Vec<Obj>)>,
@@ -316,6 +319,7 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
         mesh_section_mats: HashMap::new(),
         keyhole_sockets: HashMap::new(),
         usable_ids: HashMap::new(),
+        usable_remotes: Vec::new(),
         skel_insts: HashMap::new(),
         facefx: FaceFx::default(),
         facefx_ids: HashMap::new(),
@@ -468,6 +472,18 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
         }
     }
     c.scene.kismet = kismet::cook(&levels, &c.actor_refs);
+    // the actors usables drive: among the scripts' actors (added where the scripts never name them)
+    for (u, key) in std::mem::take(&mut c.usable_remotes) {
+        let Some(r) = c.actor_refs.get(&key) else { continue };
+        let a = match c.scene.kismet.actors.iter().position(|a| a.name == r.name && a.instances == r.instances) {
+            Some(a) => a,
+            None => {
+                c.scene.kismet.actors.push(r.clone());
+                c.scene.kismet.actors.len() - 1
+            }
+        };
+        c.scene.usables[u as usize].remote = Some(a as u32);
+    }
     // the challenge's scoring rule sets the scripts name (Dunwall City Trials)
     let mut sets: Vec<String> = Vec::new();
     for op in &c.scene.kismet.ops {
@@ -1107,6 +1123,14 @@ impl<'a> Cooker<'a> {
                         put("open", ic.name("m_InteractText"));
                         put("keyhole", ic.name("m_AltInteractText"));
                     }
+                }
+                // Wind Blast slams it (0x00A2D730): unless it breaks with no broken mesh
+                if let Some(t) = tweak.as_ref() {
+                    let tc = self.chain(t);
+                    let anim = |k: &str| matches!(tc.get(k), Some(Value::Struct(_, s)) if Props(s.clone()).name("m_TransitionAnimName").is_some_and(|n| n != "None"));
+                    d.slam_stage = anim("m_DoorSlamOpenCW") || anim("m_DoorSlamOpenCCW");
+                    let broken_mesh = matches!(tc.get("m_BrokenMeshInfo"), Some(Value::Struct(_, s)) if Props(s.clone()).object("m_pMesh").is_some_and(|o| o != 0));
+                    d.slams = !d.breakable || broken_mesh;
                 }
                 d.locked_start = ch.bool("m_bLocked").unwrap_or(false);
                 d.keys = str_array(&ch, "m_MatchingKeys");
@@ -5114,6 +5138,15 @@ impl<'a> Cooker<'a> {
                 }
             }
         }
+        // (and the actors usables drive, by their own sets)
+        for u in &self.scene.usables {
+            if let Some(a) = u.remote {
+                let ka = &k.actors[a as usize];
+                if ka.spawner.is_none() && !ka.instances.is_empty() {
+                    wanted.push((a, Vec::new()));
+                }
+            }
+        }
         let mut made: HashMap<String, Option<u32>> = HashMap::new();
         let mut n = 0;
         for (a, sets) in wanted {
@@ -5817,11 +5850,31 @@ impl<'a> Cooker<'a> {
         if let Some((pkg, Value::Array { count, offset, size })) = chains.iter().find_map(|c| c.get_pkg("m_Stages")) {
             for st in parse_struct_array(pkg, *offset, *size, *count).unwrap_or_default() {
                 let name = |k: &str| st.name(k).filter(|n| *n != "None").unwrap_or_default().to_string();
+                // held to use: its times, rewind, the driven actor's sequence and its sounds
+                let hold = match (st.bool("m_bHoldToUse"), st.get("m_HoldToUseData")) {
+                    (Some(true), Some(Value::Struct(_, h))) => {
+                        let h = Props(h.clone());
+                        const SOUNDS: [&str; 7] = ["ForwardStartLoop", "ForwardStopLoop", "ForwardResumeLoop", "ForwardComplete", "ReverseStartLoop", "ReverseStopLoop", "ReverseComplete"];
+                        let sound = |k: String| h.object(&k).filter(|o| *o != 0).and_then(|o| self.assets.resolve(pkg, o)).map(|o| o.name().to_string()).unwrap_or_default();
+                        let sounds = SOUNDS.iter().map(|s| sound(format!("m_p{s}Event"))).chain(SOUNDS.iter().map(|s| sound(format!("m_pRemote{s}Event")))).collect();
+                        Some(HoldUse {
+                            use_time: h.float("m_fTimeToFullyUse").unwrap_or(1.0),
+                            rewind_time: h.float("m_fTimeToFullyRewind").unwrap_or(1.0),
+                            auto_rewind: h.bool("m_bAutoRewind").unwrap_or(false),
+                            never_complete: h.bool("m_bNeverCompleteStage").unwrap_or(false),
+                            remote_anim: h.name("m_RemoteActorAnimName").filter(|n| *n != "None").unwrap_or_default().to_string(),
+                            sounds,
+                        })
+                    }
+                    (Some(true), _) => Some(HoldUse { use_time: 1.0, rewind_time: 1.0, sounds: vec![String::new(); 14], ..Default::default() }),
+                    _ => None,
+                };
                 stages.push(UsableStage {
                     name: name("m_Name"),
                     anim: name("m_TransitionAnimName"),
                     text: st.name("m_InteractTextOverride").unwrap_or_default().to_string(),
                     once: st.bool("m_bDeactivateUsableWhenDone").unwrap_or(false),
+                    hold,
                 });
             }
         }
@@ -5890,7 +5943,11 @@ impl<'a> Cooker<'a> {
             flavor,
             playing_anim,
             texts,
+            remote: None,
         });
+        if let Some(r) = ch.obj(self.assets, "m_pRemoteActorToDrive") {
+            self.usable_remotes.push((index, (r.pkg.name.clone(), r.idx)));
+        }
         self.usable_ids.insert(actor.key(), index);
         self.actor_ref(actor).usable = Some(index);
         Ok(())
@@ -8374,6 +8431,7 @@ fn door_sounds(assets: &Assets, tweak: &Obj) -> Option<DoorSounds> {
             match so.props.name("SequenceName").unwrap_or("") {
                 "Player_Open_Cw" if d.open.is_empty() => d.open = sound_notifies(&set.pkg, &so.props),
                 "Player_Close_Cw" if d.close.is_empty() => d.close = sound_notifies(&set.pkg, &so.props),
+                "Player_Windblast_Cw" if d.slam.is_empty() => d.slam = sound_notifies(&set.pkg, &so.props),
                 _ => {}
             }
         }

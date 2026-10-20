@@ -1739,6 +1739,17 @@ impl Vm {
         })
     }
 
+    /// A usable's `DisSeqEvent_Used` on its output `out` (its stages, then "Used But Locked",
+    /// "Started Holding", "Stopped Holding", 0x00A4EB00): only where the event has it.
+    pub fn used_out(&mut self, actor: u32, out: usize) {
+        for ev in self.events_of.get(&actor).cloned().unwrap_or_default() {
+            let op = &self.g.ops[ev as usize];
+            if op.class == "DisSeqEvent_Used" && out < op.outputs.len() {
+                self.event(ev, out, Some(Val::Player));
+            }
+        }
+    }
+
     /// Fire the events of class `classes` that `actor` originates, on output `out`.
     pub fn actor_event(&mut self, actor: u32, classes: &[&str], out: OutSel, instigator: Option<Val>) {
         let evs = self.events_of.get(&actor).cloned().unwrap_or_default();
@@ -6110,6 +6121,13 @@ fn world_events(
                     vm.interacted(a);
                 }
             }
+            Interaction::DoorSlam { instance, cw } => {
+                for a in vm.instance_actor.get(instance).cloned().unwrap_or_default() {
+                    vm.door_open.insert(a, *cw);
+                    vm.actor_event(a, &["DisSeqEvent_Used"], OutSel::Desc(if *cw { "SlamOpenCW" } else { "SlamOpenCCW" }), None);
+                    vm.actor_event(a, &["DisSeqEvent_Door"], OutSel::Desc("Opened"), None);
+                }
+            }
             Interaction::Keyhole { instance, used } => {
                 for a in vm.instance_actor.get(instance).cloned().unwrap_or_default() {
                     let out = if *used { OutSel::Index(0) } else { OutSel::Desc("Unused") };
@@ -6130,12 +6148,16 @@ fn world_events(
                     vm.actor_event(a, &["DisSeqEvent_KeyHoleUsed"], OutSel::Index(0), Some(Val::Player));
                 }
             }
-            Interaction::Usable(a) => {
-                vm.actor_event(*a, &["DisSeqEvent_Used", "SeqEvent_Used", "DisSeqEvent_Interact"], OutSel::Index(0), Some(Val::Player));
+            Interaction::Usable(a, stage) => {
+                // (the stage's own output, as the original fires `m_iActiveStage`: a hatch's
+                // "Close" stage fires "Close")
+                vm.used_out(*a, *stage);
+                vm.actor_event(*a, &["SeqEvent_Used", "DisSeqEvent_Interact"], OutSel::Index(0), Some(Val::Player));
                 vm.interacted(*a);
                 // characters answer from their dialogue
                 vm.talk(*a);
             }
+            Interaction::UsableOut { actor, out } => vm.used_out(*actor, *out),
             Interaction::UsableLock { actor, locked } => {
                 vm.actor_event(*actor, &["DisSeqEvent_Lock"], OutSel::Desc(if *locked { "Locked" } else { "Unlocked" }), Some(Val::Player));
             }

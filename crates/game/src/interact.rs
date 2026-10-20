@@ -18,7 +18,7 @@ impl Plugin for InteractPlugin {
             .add_message::<Interaction>()
             .add_systems(OnEnter(GameState::InGame), setup_interactables.after(LevelSpawnSet))
             .add_message::<DoorBlast>()
-            .add_systems(Update, (sing, find_focus.in_set(FocusSet), use_focus, npc_doors, animate_doors, break_doors).chain().run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (sing, find_focus.in_set(FocusSet), use_focus, npc_doors, wind_doors, animate_doors, break_doors).chain().run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -218,6 +218,10 @@ pub struct Door {
     /// opened by a character on its way (not by Corvo or a script): who, the side it came
     /// from, and whether it has gone through
     pub npc_opened: Option<(Entity, f32, bool)>,
+    /// slammed open by Wind Blast: how long since, and whether by its own slam stage (its
+    /// output due as the swing ends); rattled, for so long yet
+    pub slam: Option<(f32, bool)>,
+    pub rattle: f32,
 }
 
 /// A blast of wind (Wind Blast) through the doors before it: from, which way, how far, its
@@ -259,7 +263,12 @@ pub enum Interaction {
     /// door instance, opened (else closed), swung clockwise
     Door { instance: u32, opened: bool, cw: bool },
     DoorLocked(u32),
-    Usable(u32),
+    /// a usable (its actor) used into a stage (its `DisSeqEvent_Used` output; 0 for one
+    /// without stages)
+    Usable(u32, usize),
+    /// a usable's other `DisSeqEvent_Used` outputs: after its stages, "Used But Locked",
+    /// "Started Holding", "Stopped Holding"
+    UsableOut { actor: u32, out: usize },
     /// a prop (its instance) picked up, or broken
     Movable { instance: u32, broken: bool },
     /// a prop (its instance) knocked against something, at this speed (m/s)
@@ -274,6 +283,9 @@ pub enum Interaction {
     Corpse { spawner: u32, what: u32 },
     /// a door's keyhole looked through (else left)
     Keyhole { instance: u32, used: bool },
+    /// a door Wind Blast slammed open, its swing over (its "SlamOpenCW" / "SlamOpenCCW",
+    /// no one's doing)
+    DoorSlam { instance: u32, cw: bool },
     /// a tripwire tripped (`scene.traps`)
     Tripwire(u32),
 }
@@ -396,6 +408,8 @@ fn setup_interactables(
                 health: def.map(|d| d.health).unwrap_or(0.0),
                 broken: false,
                 npc_opened: None,
+                slam: None,
+                rattle: 0.0,
             });
         }
     }
@@ -837,7 +851,7 @@ pub fn use_focus(
         return;
     }
     if let Ok(u) = usables.get(e) {
-        used.write(Interaction::Usable(u.actor));
+        used.write(Interaction::Usable(u.actor, 0));
         return;
     }
     if let Ok((mut door, gt, li)) = doors.get_mut(e) {
@@ -950,18 +964,121 @@ fn npc_doors(
 const TO_OPEN: f32 = 2.0;
 const NOT_CLOSE: f32 = 4.0;
 
-fn animate_doors(
-    time: Res<Time>,
-    mut doors: Query<(&mut Door, &mut Transform), Without<bevy_rapier3d::prelude::Collider>>,
-    mut colliders: Query<&mut Transform, (With<bevy_rapier3d::prelude::Collider>, Without<Door>)>,
+/// Wind Blast's slam and rattle forces (`m_fSlamWindblastForce`, `m_fRattleWindblastForce`: no
+/// shipped door has others), and how long the slam's swing and the rattle take (its
+/// `Player_Windblast_Cw`: 90 degrees in 0.2 s, back to 82, settled by 1.03 s; `Player_Rattle_Cw`).
+const SLAM: f32 = 0.5;
+const RATTLE: f32 = 0.3;
+const SLAM_LEN: f32 = 1.033;
+const RATTLE_LEN: f32 = 1.1;
+
+/// Wind Blast's factor at a point (its damage's share there): the square of how near, times
+/// the square of how near the aim within its cone.
+fn wind_factor(w: &DoorBlast, at: Vec3) -> f32 {
+    let to = at - w.from;
+    let d = to.length();
+    let (flat, bearing, cos_half) = (w.dir.with_y(0.0).normalize_or_zero(), to.with_y(0.0).normalize_or_zero(), w.half_angle.cos());
+    let along = flat.dot(bearing);
+    if d >= w.reach || along <= cos_half {
+        return 0.0;
+    }
+    let near = 1.0 - d / w.reach;
+    let a = if d > 1.0 { (along - cos_half) / (1.0 - cos_half) } else { 1.0 };
+    near * near * a * a
+}
+
+/// The slam's swing (its clip's hinge): open by 0.2 s, back to 82 degrees, settled at 90.
+fn slam_open(t: f32) -> f32 {
+    if t < 0.2 {
+        (t / 0.2).powi(2)
+    } else if t < 0.47 {
+        1.0 - 0.089 * (std::f32::consts::FRAC_PI_2 * (t - 0.2) / 0.27).sin()
+    } else {
+        let k = ((t - 0.47) / 0.53).clamp(0.0, 1.0);
+        0.911 + 0.089 * k * k * (3.0 - 2.0 * k)
+    }
+}
+
+/// Wind Blast at a closed door (0x00A2D730, decoded for this rewrite): at its slam force it
+/// slams an unlocked one open, away from the blast, with its slam stage's swing and sounds (its
+/// "SlamOpenCW" / "SlamOpenCCW" as the swing ends, `animate_doors`; one without opens as used);
+/// at its rattle force, or locked, it rattles. Wooden doors that break with no broken mesh only
+/// take the damage (`break_doors`).
+fn wind_doors(
+    level: Option<Res<LevelInfo>>,
+    mut winds: MessageReader<DoorBlast>,
+    mut doors: Query<(&mut Door, &GlobalTransform, &LevelInstance, &Visibility)>,
+    mut timed: ResMut<crate::audio::TimedSounds>,
+    mut used: MessageWriter<Interaction>,
 ) {
-    for (mut door, mut t) in &mut doors {
-        if (door.open - door.target).abs() < 1e-3 {
+    let winds: Vec<DoorBlast> = winds.read().copied().collect();
+    let Some(level) = level.filter(|_| !winds.is_empty()) else { return };
+    for (mut door, gt, li, vis) in &mut doors {
+        if door.broken || door.travel || *vis == Visibility::Hidden || door.target > 0.5 || door.open > 0.01 || door.slam.is_some() {
             continue;
         }
-        let step = time.delta_secs() * 1.6;
-        door.open = if door.target > door.open { (door.open + step).min(door.target) } else { (door.open - step).max(door.target) };
-        let r = Quat::from_rotation_y(door.dir * door.open * 1.6);
+        let Some(def) = level.scene.door(&li.actor, li.index).filter(|d| d.slams) else { continue };
+        let at = gt.translation();
+        let Some((f, w)) = winds.iter().map(|w| (wind_factor(w, at + Vec3::Y), w)).max_by(|a, b| a.0.total_cmp(&b.0)) else { continue };
+        if f >= SLAM && !door.locked {
+            // (away from the blast, as from one using it there)
+            let side = (gt.rotation() * door.normal).dot(w.from - at);
+            door.dir = if side > 0.0 { -1.0 } else { 1.0 };
+            door.target = 1.0;
+            door.npc_opened = None;
+            if def.slam_stage {
+                door.slam = Some((0.0, true));
+                timed.schedule(&def.slam, Some(at));
+            } else {
+                door.slam = Some((0.0, false));
+                timed.schedule(&def.open, Some(at));
+                used.write(Interaction::Door { instance: li.index, opened: true, cw: door.dir > 0.0 });
+            }
+            if std::env::var("DH_DOOR_LOG").is_ok() {
+                info!("door {} slammed open by Wind Blast ({f:.2})", li.actor);
+            }
+        } else if f >= RATTLE {
+            door.rattle = RATTLE_LEN;
+            if std::env::var("DH_DOOR_LOG").is_ok() {
+                info!("door {} rattles ({f:.2})", li.actor);
+            }
+        }
+    }
+}
+
+fn animate_doors(
+    time: Res<Time>,
+    mut doors: Query<(&mut Door, &mut Transform, &LevelInstance), Without<bevy_rapier3d::prelude::Collider>>,
+    mut colliders: Query<&mut Transform, (With<bevy_rapier3d::prelude::Collider>, Without<Door>)>,
+    mut used: MessageWriter<Interaction>,
+) {
+    let dt = time.delta_secs();
+    for (mut door, mut t, li) in &mut doors {
+        let mut shake = 0.0;
+        if door.rattle > 0.0 {
+            door.rattle = (door.rattle - dt).max(0.0);
+            // (a couple of degrees at the hinge, dying away)
+            shake = 0.035 * (door.rattle * 26.0).sin() * door.rattle / RATTLE_LEN;
+        }
+        if let Some((st, stage)) = door.slam {
+            let st = st + dt;
+            door.open = slam_open(st).min(1.0);
+            if st >= SLAM_LEN {
+                door.open = 1.0;
+                door.slam = None;
+                if stage {
+                    used.write(Interaction::DoorSlam { instance: li.index, cw: door.dir > 0.0 });
+                }
+            } else {
+                door.slam = Some((st, stage));
+            }
+        } else if (door.open - door.target).abs() < 1e-3 && shake == 0.0 && door.rattle == 0.0 {
+            continue;
+        } else {
+            let step = dt * 1.6;
+            door.open = if door.target > door.open { (door.open + step).min(door.target) } else { (door.open - step).max(door.target) };
+        }
+        let r = Quat::from_rotation_y(door.dir * door.open * 1.6 + shake);
         t.rotation = r * door.base_rot;
         if let Some(c) = door.collider {
             if let Ok(mut ct) = colliders.get_mut(c) {
@@ -996,18 +1113,9 @@ fn break_doors(
         let Some(def) = level.scene.door(&li.actor, li.index).filter(|d| d.health > 0.0) else { continue };
         let mid = t.translation + Vec3::Y * 1.0;
         let mut dmg = 0.0f32;
-        // (Wind Blast's damage by its factor: the square of how near, times the square of how
-        // near the aim within its cone)
+        // (Wind Blast's damage by its factor)
         for w in &winds {
-            let to = mid - w.from;
-            let d = to.length();
-            let (flat, bearing, cos_half) = (w.dir.with_y(0.0).normalize_or_zero(), to.with_y(0.0).normalize_or_zero(), w.half_angle.cos());
-            let along = flat.dot(bearing);
-            if d < w.reach && along > cos_half {
-                let near = 1.0 - d / w.reach;
-                let a = if d > 1.0 { (along - cos_half) / (1.0 - cos_half) } else { 1.0 };
-                dmg = dmg.max((w.damage * near * near * a * a).round());
-            }
+            dmg = dmg.max((w.damage * wind_factor(w, mid)).round());
         }
         for (at, radius, damage) in &blasts {
             let d = at.distance(mid);

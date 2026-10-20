@@ -19,7 +19,7 @@ impl Plugin for SkipPlugin {
         app.add_plugins(UiMaterialPlugin::<RadialFill>::default())
             .init_resource::<SkipHold>()
             .add_systems(OnEnter(GameState::InGame), spawn_gauge)
-            .add_systems(Update, ((skip_hold, show_gauge).chain(), choke_gauge).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, ((skip_hold, show_gauge).chain(), choke_gauge, hold_gauge).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -105,12 +105,22 @@ const CH_RING: u32 = 455;
 const CH_FILL: u32 = 467;
 const CH_OUTER: u32 = 469;
 
+/// The same gauge for a usable held to use (`hud_chGauge_` not actionable: its "blue" frame,
+/// LIKELY the HUD's blue fill), filling as the valve turns (`usables::HoldGauge`).
+#[derive(Component)]
+struct HoldGaugeUi;
+
 fn spawn_choke_gauge(commands: &mut Commands, ui: &mut crate::ui_images::UiImages, images: &mut Assets<Image>, mats: &mut Assets<RadialFill>) {
+    spawn_ring_gauge(commands, ui, images, mats, CH_FILL, ChokeGauge);
+    spawn_ring_gauge(commands, ui, images, mats, FILL, HoldGaugeUi);
+}
+
+fn spawn_ring_gauge(commands: &mut Commands, ui: &mut crate::ui_images::UiImages, images: &mut Assets<Image>, mats: &mut Assets<RadialFill>, fill: u32, tag: impl Component) {
     let mut img = |id: u32| ui.get(images, "HUD", id).map(|(h, _)| h);
-    let (Some(ring), Some(fill), Some(outer)) = (img(CH_RING), img(CH_FILL), img(CH_OUTER)) else { return };
+    let (Some(ring), Some(fill), Some(outer)) = (img(CH_RING), img(fill), img(CH_OUTER)) else { return };
     let pointer = img(POINTER);
     commands
-        .spawn((ChokeGauge, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden, GlobalZIndex(5), Pickable::IGNORE, DespawnOnExit(GameState::InGame)))
+        .spawn((tag, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden, GlobalZIndex(5), Pickable::IGNORE, DespawnOnExit(GameState::InGame)))
         .with_children(|c| {
             let node = || Node { position_type: PositionType::Absolute, ..default() };
             c.spawn((Part(Vec2::ZERO, Vec2::splat(77.0), false), ImageNode::new(ring).with_mode(NodeImageMode::Stretch), node()));
@@ -123,11 +133,38 @@ fn spawn_choke_gauge(commands: &mut Commands, ui: &mut crate::ui_images::UiImage
 }
 
 #[allow(clippy::type_complexity)]
+fn hold_gauge(
+    window: Query<&Window, With<PrimaryWindow>>,
+    hold: Res<crate::usables::HoldGauge>,
+    mut gauge: Query<(&mut Node, &mut Visibility, &Children), With<HoldGaugeUi>>,
+    mut parts: Query<(&Part, &mut Node, Option<&MaterialNode<RadialFill>>, Option<&mut UiTransform>, Has<Pointer>), (Without<Gauge>, Without<HoldGaugeUi>, Without<ChokeGauge>)>,
+    mut mats: ResMut<Assets<RadialFill>>,
+) {
+    let Ok((mut node, mut vis, children)) = gauge.single_mut() else { return };
+    let Ok(w) = window.single() else { return };
+    let Some(share) = hold.0 else {
+        *vis = Visibility::Hidden;
+        return;
+    };
+    *vis = Visibility::Inherited;
+    let size = Vec2::new(w.width(), w.height());
+    let s = (size.x / 1280.0).min(size.y / 720.0).max(0.01);
+    let off = (size - Vec2::new(1280.0, 720.0) * s) * 0.5;
+    let p = off + Vec2::new(640.0, 360.0) * s;
+    node.left = Val::Px(p.x);
+    node.top = Val::Px(p.y);
+    for c in children.iter() {
+        let Ok((part, mut n, mat, tf, pointer)) = parts.get_mut(c) else { continue };
+        lay_out(part, &mut n, mat, tf, pointer, share.clamp(0.0, 1.0), 1.0, s, 33.0, &mut mats);
+    }
+}
+
+#[allow(clippy::type_complexity)]
 fn choke_gauge(
     window: Query<&Window, With<PrimaryWindow>>,
     choking: Query<&crate::combat::Choking>,
     mut gauge: Query<(&mut Node, &mut Visibility, &Children), With<ChokeGauge>>,
-    mut parts: Query<(&Part, &mut Node, Option<&MaterialNode<RadialFill>>, Option<&mut UiTransform>, Has<Pointer>), (Without<Gauge>, Without<ChokeGauge>)>,
+    mut parts: Query<(&Part, &mut Node, Option<&MaterialNode<RadialFill>>, Option<&mut UiTransform>, Has<Pointer>), (Without<Gauge>, Without<ChokeGauge>, Without<HoldGaugeUi>)>,
     mut mats: ResMut<Assets<RadialFill>>,
 ) {
     let Ok((mut node, mut vis, children)) = gauge.single_mut() else { return };
