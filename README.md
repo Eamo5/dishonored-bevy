@@ -680,18 +680,38 @@ are in the settings file, `pad_binding_set` 0-3):
   tallboys on stilts with bows), sight, hearing, searching, ranged weapons, alarm bells
   that call reinforcements; feuding factions fight each other; weepers lunge and seize
   Corvo's arm (`DisTweaks_WeeperGrab`: break free with five attacks, or step out of reach).
-  Alert characters walk and run the way they go relative to where they face
-  (`AnimNodeBlendDirectional`'s four ways: `WalkN/E/S/W`, the sword sets' `_Revert` clips played
-  backwards for south and west, by root motion), the quarter held 10 degrees past its edge.
-  Standing, a turn of more than 40 degrees plays its turn's clip, for the nearest of 45, 90, 135
-  or 180 degrees to its side (`Sword_Patrol_Turn*` / `Empty_Turn*` relaxed, `Sword_Turn*` on
-  edge), the body shown turning across the clip (its facing for the game turned at once); less,
-  it glides round.
+  Characters walk and run with their stance's loops blended as the original's locomotion node
+  blends them (`ArkAnimNodeLocomotion`, as roshan's r614/blink research decoded it):
+  - Their velocity is taken in their own frame and smoothed toward the body's, at up to 20 m/s
+    a second, less for a small difference (0x0090BC00).
+  - The way they go picks the two loops either side of it (`WalkS_Revert`, `WalkW_Revert`,
+    `WalkN`, `WalkE` a quarter apart). S and W play backwards; a weight from 0.98 takes all.
+  - Their speed, stretched on a diagonal to the chord between the two loops, picks the two
+    speed modes whose blended authored speeds bracket it (idle, walk, run).
+  - Every loop plays at one phase, at the rate that keeps the feet on the ground: the sync
+    group's, the master's length times the speed over the loops' strides summed by weight. A
+    slow walk blends the walk with the idle at the walk's own cadence, rather than the walk
+    played slowly with its feet sliding.
+  - The stance picks the loops, as a body stance picks its locomotion modifier (0x00B71000). A
+    guard on its rounds walks sheathed: `Empty_Walk_Patrol`, at `EmptyPatrol`'s 0.92 of its
+    pace (116 uu/s, as the original was measured). Sheathed otherwise it walks `Empty_Walk*`.
+    With its sword drawn but not fighting it keeps its patrol stance (`Sword_Patrol_Walk*`).
+    Fighting it has `Sword_Walk*` and `Sword_Run*`, and panicking, its panic run. Before, a
+    sheathed guard walked and idled in the sword-in-hand patrol stance with nothing in its hand.
+  - Standing, a turn of more than 40 degrees plays its stance's turn clip for the nearest of
+    45, 90, 135 or 180 degrees to its side (`Empty_Turn*`, `Sword_Patrol_Turn*`, `Sword_Turn*`).
+    The body is shown turning across the clip, while its facing for the game turns at once; a
+    smaller turn glides round.
+  - Standing with its way more than 15 degrees off its facing, a character that isn't fighting
+    or fleeing turns where it stands first, with its turn clip, then sets off. This is the
+    locomotion component's static turn: below `m_fMaxSpeedForStaticTurn` 40 uu/s, over 15
+    degrees, its path's speed 0 meanwhile. Before, it set off sideways while still turning.
+  - `DH_LOCO_LOG` logs each blend's loops, weights and rate, with the facing and the way it goes.
   A relaxed walker (patrolling, or going back to its post) starts, stops and turns into its walk
   with its clips (its idle speed mode's start, stop and turn props in the
   `ArkComponentLocomotionConfig`s, by the locomotion component's rules as roshan's r614/blink
   research decoded them). From where it stands, with its path straight ahead past the props'
-  straight distance (70 uu), it starts with `Sword_Patrol_Walk_Start` / `Empty_Walk_Start`
+  straight distance (70 uu), it starts with its stance's `Empty_Walk_Start` / `Sword_Patrol_Walk_Start`
   within 15 degrees of its way, or else turns into the walk by the nearest 45, 90, 135 or 180
   degrees (`_TurnToWalkLeft90`...). Walking to where it will stand, its way ahead within 22.5
   degrees, it stops as a foot lands: `_Walk_StopLeft` half through its walk's loop,
@@ -705,9 +725,9 @@ are in the settings file, `pad_binding_set` 0-3):
   `Empty_Run_TurnRight180`: two props spanning 45 degrees each side of 180, as the decoded moving
   turn has it). It slows to a halt as the turn begins and is shown turning round across it, then
   sets off the new way.
-  A patrolling or guarding character plays an ambient idle of the set it stands in, any the set
-  has (a guard's `Sword_Patrol_Idle_01` to `_04`, empty hands' `Empty_Idle_01` to `_08`, a tall
-  thug's `Empty_Idle02`, `05`, `07`), every 30-60 s on its upper body, walking
+  A patrolling or guarding character plays an ambient idle of its stance, `AmbientIdle`'s group
+  for its hand: sheathed, `Empty_Idle_01` to `_08` (a tall thug's `Empty_Idle02`, `05`, `07`);
+  sword drawn, `Sword_Patrol_Idle_01` to `_04`. It plays every 30-60 s on its upper body, walking
   as well as standing (the patrol and guard behaviours' `DisTweaks_AISubProcess_AmbientAnims`,
   `m_bCheckForMovement` false), its legs keeping their stride (the upper body from
   `spine_0_jnt`, `NPC_Human_at`'s `UpperBodyFilter`); a blow, a fall or anything setting it on
@@ -2644,6 +2664,17 @@ against the install's own data where it carries them, then implemented independe
   - Severed limbs and dismemberment pieces keep the materials the character was given, as does a
     character the scripts undress.
 - **Movement.**
+  - Starting, stopping, turning and the air follow the original's `CalcVelocity` (0x006ACD50) and
+    `physFalling` (0x006BF0E0), as roshan's r614/blink research decoded them:
+    - On the ground his velocity turns toward the way he means by `GroundFriction` 8 without
+      losing speed. It gains `AccelRate` 2000 uu/s², less by a speed modifier under 1 (1800
+      running with the sword), up to his speed.
+    - Let go, he brakes by twice the friction in steps of at most 0.03 s and stops under
+      12.7 uu/s: from a run, about 0.2 s.
+    - In the air, `AirControl` 0.2 of that acceleration counts twice (800 uu/s²). It never pushes
+      him past `GroundSpeed` or the speed he already has. Letting go doesn't slow him; a jump
+      keeps its run-up.
+    - It used to be an invented easing toward his speed, and he slowed in the air when let go.
   - Agility's power jump is one push of `JumpZ_PowerJump` (13 m/s) at the top of a jump, when Jump
     has been held for more than 0.05 s of the rise. It used to be a steady push from unused
     prototype attributes.
@@ -2666,7 +2697,8 @@ against the install's own data where it carries them, then implemented independe
   - Climbing chains at 1.638 m/s. A jump off goes 5.25 m/s the way he looks, with a jump's lift.
     He can grab again after 0.5 s.
   - Blink moves 60 m/s and gives back his velocity at the end: a falling Blink keeps its fall. It
-    accepts destinations where only a crouch fits, arriving crouched.
+    accepts destinations where only a crouch fits, arriving crouched. A target within his bounds'
+    radius (100.5 uu) is no Blink (0x00BFC990).
   - Blink's target is found as the original's (0x00BF5520, as roshan's r614/blink research
     decoded it). A 20 uu box is swept along the view from the camera, looking up no higher than
     the level's vertical reach. A hit nearer than 3 m is tried again from starts a step above

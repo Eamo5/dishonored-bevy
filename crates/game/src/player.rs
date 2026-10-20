@@ -237,6 +237,73 @@ fn cursor_grab(
     let _ = keys;
 }
 
+/// His velocity's step as the original's (as roshan's r614/blink research decoded them). On
+/// the ground, `CalcVelocity` (0x006ACD50): the way he means (`wish`, as long as the stick is
+/// pushed) turns his velocity toward it by `GroundFriction` 8 without losing speed, and
+/// `AccelRate` 20 m/s² (times the speed modifier when under 1: his cap over `GroundSpeed`) is
+/// added, capped at his speed. Let go, he brakes by twice the friction in steps of at most 0.03 s
+/// (0x006A2AC0) and stops under 0.127 m/s. In the air (`physFalling`, 0x006BF0E0): `AirControl`
+/// 0.2 of the acceleration, counted twice by the fall's integration (8 m/s²), never pushing his
+/// speed past `GroundSpeed` or what it already is; and no braking.
+fn step_velocity(v: Vec3, wish: Vec3, cap: f32, ground: f32, grounded: bool, dt: f32) -> Vec3 {
+    const ACCEL: f32 = 20.0;
+    const FRICTION: f32 = 8.0;
+    const AIR_CONTROL: f32 = 0.2;
+    let push = wish.length().min(1.0);
+    if !grounded {
+        if push <= 0.0 {
+            return v;
+        }
+        let most = v.length().max(ground);
+        return (v + wish / push * ACCEL * AIR_CONTROL * 2.0 * dt).clamp_length_max(most);
+    }
+    if push <= 0.0 {
+        let mut v = v;
+        let mut left = dt;
+        while left > 1e-6 {
+            let s = left.min(0.03);
+            v *= (1.0 - 2.0 * s * FRICTION).max(0.0);
+            left -= s;
+        }
+        return if v.length_squared() < 0.127 * 0.127 { Vec3::ZERO } else { v };
+    }
+    let dir = wish / push;
+    let cap = cap * push;
+    let v = v - (v - dir * v.length()) * (dt * FRICTION).min(1.0);
+    (v + dir * ACCEL * (cap / ground.max(1e-3)).min(1.0) * dt).clamp_length_max(cap)
+}
+
+#[cfg(test)]
+mod move_tests {
+    use super::*;
+
+    #[test]
+    fn braking_and_running_as_the_original() {
+        // (360 uu/s braked at 60 Hz: 264, 193.6, ... 16.2, then still at the 12th tick)
+        let mut v = Vec3::X * 3.6;
+        let mut seen = Vec::new();
+        for _ in 0..12 {
+            v = step_velocity(v, Vec3::ZERO, 3.6, 4.0, true, 1.0 / 60.0);
+            seen.push(v.x);
+        }
+        assert!((seen[0] - 2.64).abs() < 1e-3 && (seen[1] - 1.936).abs() < 1e-3, "{seen:?}");
+        assert!((seen[9] - 0.162).abs() < 2e-3 && seen[10] == 0.0, "{seen:?}");
+        // (running with the sword: 18 m/s² up to 3.6 m/s, there in 0.2 s)
+        let mut v = Vec3::ZERO;
+        for _ in 0..11 {
+            v = step_velocity(v, Vec3::NEG_Z, 3.6, 4.0, true, 1.0 / 60.0);
+        }
+        assert!((v.length() - 3.3).abs() < 1e-3, "{v}");
+        v = step_velocity(v, Vec3::NEG_Z, 3.6, 4.0, true, 1.0 / 60.0);
+        assert!((v.length() - 3.6).abs() < 1e-3, "{v}");
+        // (in the air: kept when let go, never pushed past what it was over the ground speed)
+        let fast = Vec3::X * 5.4;
+        assert_eq!(step_velocity(fast, Vec3::ZERO, 3.6, 4.0, false, 0.1), fast);
+        assert!((step_velocity(fast, Vec3::X, 3.6, 4.0, false, 0.1).length() - 5.4).abs() < 1e-4);
+        assert!((step_velocity(Vec3::ZERO, Vec3::X, 3.6, 4.0, false, 0.1).length() - 0.8).abs() < 1e-4);
+    }
+}
+
 #[cfg(test)]
 mod look_tests {
     use super::*;
@@ -773,10 +840,8 @@ fn player_move(
     // (a slowing blends in at `m_fSpeedBlendDownSpeed`, a quickening at once)
     let cap = speed * weapon_factor;
     p.speed_cap = if cap < p.speed_cap { p.speed_cap + (cap - p.speed_cap) * (dt * attrs.speed_blend_down).clamp(0.0, 1.0) } else { cap };
-    let target = wish * p.speed_cap;
-    let accel = if p.grounded { 14.0 } else { 3.0 };
     let horiz = Vec3::new(p.velocity.x, 0.0, p.velocity.z);
-    let mut new_h = horiz + (target - horiz) * (accel * dt).min(1.0);
+    let mut new_h = step_velocity(horiz, wish, p.speed_cap, attrs.walk, p.grounded, dt);
     if let Some((st, way, v0)) = slide.0.as_mut() {
         // v0 + (crouch - v0)(1 - cos(pi t / 1.1)) / 2
         *st += dt;

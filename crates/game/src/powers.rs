@@ -1226,7 +1226,9 @@ fn use_power(
         powers.aiming = false;
         // (moved or not, Blink waits its cooldown after the move: `m_fCooldownTime`)
         powers.blink_lock = data.active("Blink").and_then(|a| a.params.get("m_fCooldownTime")).copied().unwrap_or(1.0) + 0.27;
-        if let Some(target) = powers.blink_target.take() {
+        // (a target within his bounds' radius, 100.5 uu, is no Blink: 0x00BFC990, as roshan's
+        // r614/blink research decoded the release)
+        if let Some(target) = powers.blink_target.take().filter(|t| t.distance(pt.translation) >= 1.005) {
             if tune.inhibited {
                 // an Overseer's music box: the Mark fails
                 sfx.write(PostEvent::named("Snd_Power_Empty", None));

@@ -225,6 +225,16 @@ pub struct Playing {
     pub looping: bool,
     /// just started: notifies at time 0 still fire
     fresh: bool,
+    /// loops weighted together with it at its phase (`clip` the heaviest, the group's master)
+    pub mix: Option<LocoMix>,
+}
+
+/// Loops played together at one phase, weighted (`ArkAnimNodeLocomotion`'s sync group): each
+/// its clip, its weight and whether it plays backwards (the `_Revert` loops). The master's
+/// phase (its time over its length) is every loop's, a backwards one's from its end.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LocoMix {
+    pub loops: [Option<(ClipId, f32, bool)>; 4],
 }
 
 /// A rumble notify among a clip's sounds: this, then its place in `anim_rumbles`.
@@ -292,21 +302,40 @@ impl Layer {
     }
 
     fn play(&mut self, clip: ClipId, looping: bool, speed: f32, blend: f32) {
+        // (a mix led by this clip crossfades into it alone)
+        if let Some(c) = self.cur.as_mut().filter(|c| c.clip == clip && c.mix.is_none()) {
+            c.speed = speed;
+            c.looping = looping;
+            return;
+        }
+        self.restart(clip, looping, speed, blend);
+    }
+
+    /// Play a mix of loops at one phase (`master` its heaviest): kept in step from the loop or
+    /// mix playing, else crossfaded into from its start.
+    fn play_mix(&mut self, lib: &CharAnims, master: ClipId, mix: LocoMix, speed: f32, blend: f32) {
         if let Some(c) = &mut self.cur {
-            if c.clip == clip {
+            let looped = c.mix.is_some() || mix.loops.iter().flatten().any(|l| l.0 == c.clip);
+            if looped && c.looping {
+                let phase = (c.t / lib.duration(c.clip)).clamp(0.0, 1.0);
+                c.clip = master;
+                c.t = phase * lib.duration(master);
                 c.speed = speed;
-                c.looping = looping;
+                c.mix = Some(mix);
                 return;
             }
         }
-        self.restart(clip, looping, speed, blend);
+        self.restart(master, true, speed, blend);
+        if let Some(c) = &mut self.cur {
+            c.mix = Some(mix);
+        }
     }
 
     fn restart(&mut self, clip: ClipId, looping: bool, speed: f32, blend: f32) {
         self.prev = if blend > 0.0 { self.cur } else { None };
         self.fade_len = blend;
         self.fade = blend;
-        self.cur = Some(Playing { clip, t: 0.0, speed, looping, fresh: true });
+        self.cur = Some(Playing { clip, t: 0.0, speed, looping, fresh: true, mix: None });
     }
 
     fn finished(&self, lib: &CharAnims) -> bool {
@@ -343,6 +372,8 @@ pub struct Animator {
     trans_a: Vec<Vec3>,
     rot_b: Vec<Quat>,
     trans_b: Vec<Vec3>,
+    rot_c: Vec<Quat>,
+    trans_c: Vec<Vec3>,
     /// play animation sound notifies (off for silent rigs)
     pub sounds: bool,
     pending: Vec<String>,
@@ -373,6 +404,8 @@ impl Animator {
             trans_a: bind_t.clone(),
             rot_b: bind_rot.clone(),
             trans_b: bind_t.clone(),
+            rot_c: bind_rot.clone(),
+            trans_c: bind_t.clone(),
             bind_rot,
             bind_t,
             base: Layer { weight: 1.0, target: 1.0, ..Default::default() },
@@ -394,6 +427,14 @@ impl Animator {
     /// Switch to `clip` (crossfading over `blend` seconds); keeps playing if it's current.
     pub fn play(&mut self, clip: ClipId, looping: bool, speed: f32, blend: f32) {
         self.base.play(clip, looping, speed, blend);
+    }
+
+    /// Play loops together at one phase (`master` the heaviest, its time advancing at `speed`),
+    /// in step with the loop or mix playing (crossfading over `blend` seconds from anything
+    /// else).
+    pub fn play_mix(&mut self, master: ClipId, mix: LocoMix, speed: f32, blend: f32) {
+        let lib = self.lib.clone();
+        self.base.play_mix(&lib, master, mix, speed, blend);
     }
 
     /// Start `clip` from the beginning even if it's already playing.
@@ -631,13 +672,9 @@ impl Animator {
             }
             let prev = layer.prev;
             let wprev = smooth((layer.fade / layer.fade_len.max(1e-4)).clamp(0.0, 1.0));
-            self.rot_a.copy_from_slice(&self.rot);
-            self.trans_a.copy_from_slice(&self.trans);
-            self.lib.sample(cur.clip, cur.t, &mut self.rot_a, &mut self.trans_a);
+            sample_playing(&self.lib, &cur, (&self.rot, &self.trans), (&mut self.rot_a, &mut self.trans_a), (&mut self.rot_c, &mut self.trans_c));
             if let Some(p) = prev {
-                self.rot_b.copy_from_slice(&self.rot);
-                self.trans_b.copy_from_slice(&self.trans);
-                self.lib.sample(p.clip, p.t, &mut self.rot_b, &mut self.trans_b);
+                sample_playing(&self.lib, &p, (&self.rot, &self.trans), (&mut self.rot_b, &mut self.trans_b), (&mut self.rot_c, &mut self.trans_c));
                 mix(&mut self.rot_a, &mut self.trans_a, &self.rot_b, &self.trans_b, wprev);
             }
             // (the layer's branch filter: the joints outside it keep the pose beneath)
@@ -664,6 +701,40 @@ impl Animator {
                 self.trans_a = ta;
             }
         }
+    }
+}
+
+/// A playing clip's pose over `base` (the joints it doesn't key keep it) into `out`: a mix's
+/// loops each at the master's phase, weighted together (`scratch` for each after the first).
+fn sample_playing(lib: &CharAnims, p: &Playing, base: (&[Quat], &[Vec3]), out: (&mut [Quat], &mut [Vec3]), scratch: (&mut [Quat], &mut [Vec3])) {
+    let (rot, trans) = out;
+    let (srot, strans) = scratch;
+    rot.copy_from_slice(base.0);
+    trans.copy_from_slice(base.1);
+    let Some(m) = p.mix else {
+        lib.sample(p.clip, p.t, rot, trans);
+        return;
+    };
+    let phase = (p.t / lib.duration(p.clip)).clamp(0.0, 1.0);
+    let mut total = 0.0;
+    for &(c, w, back) in m.loops.iter().flatten() {
+        if w <= 1e-4 {
+            continue;
+        }
+        let len = lib.duration(c);
+        let t = if back { (1.0 - phase) * len } else { phase * len };
+        if total <= 0.0 {
+            lib.sample(c, t, rot, trans);
+        } else {
+            srot.copy_from_slice(base.0);
+            strans.copy_from_slice(base.1);
+            lib.sample(c, t, srot, strans);
+            mix(rot, trans, srot, strans, w / (total + w));
+        }
+        total += w;
+    }
+    if total <= 0.0 {
+        lib.sample(p.clip, p.t, rot, trans);
     }
 }
 

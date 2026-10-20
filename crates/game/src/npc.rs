@@ -2,7 +2,7 @@
 //! animated with the pawn's original animation sets (procedural fallback for characters
 //! without them), with perception and a stealth/combat state machine.
 
-use crate::anim::{Animator, CharAnims, ClipId};
+use crate::anim::{Animator, CharAnims, ClipId, LocoMix};
 use crate::gameplay::{HitKind, Noise, NoiseKind, NpcHit, NpcStagger, PlayerHit, PlayerStats, TimeControl};
 use crate::level::{GameAssets, LevelInfo, LevelSpawnSet, GROUP_NPC, GROUP_PLAYER, GROUP_PROP, GROUP_WORLD};
 use crate::player::Player;
@@ -268,6 +268,8 @@ pub struct Npc {
     /// its walk begun or ended with its clip; what it wished to go this frame (its path's way, at
     /// its pace), and its path: how far to its goal and to the path's next point
     pub pace: Option<Pace>,
+    /// turning where it stands with its turn's clip (`npc_select_anim`): it sets off after
+    pub turning: bool,
     pub wish: Vec3,
     pub path: Option<(f32, f32)>,
     /// stopped with its stop's clip, short of its goal (reached, within `UNACCURACY`)
@@ -2242,6 +2244,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         knock: None,
         flying: false,
         pace: None,
+        turning: false,
         wish: Vec3::ZERO,
         path: None,
         halted: false,
@@ -2578,7 +2581,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         let lib: std::sync::Arc<CharAnims> = lib;
         let speed = |c: Option<ClipId>, lo: f32, hi: f32, def: f32| c.map(|c| lib.root_speed(c)).filter(|v| *v > 0.1).map(|v| v.clamp(lo, hi)).unwrap_or(def);
         npc.gait = [
-            speed(clips.walk, 0.8, 2.0, WALK),
+            // (a guard's patrol walk at `EmptyPatrol`'s `m_fSpeedMultiplier` 0.92)
+            speed(clips.walk, 0.8, 2.0, WALK) * if clips.walk.is_some_and(|c| lib.clip(c).name.eq_ignore_ascii_case("Empty_Walk_Patrol")) { 0.92 } else { 1.0 },
             speed(clips.walk_alert.or(clips.walk), 0.8, 2.6, ALERT_WALK),
             speed(clips.run, 2.5, 6.0, RUN),
         ];
@@ -2608,7 +2612,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 grab_seen: None,
                 act_seen: 0,
                 escaping: false,
-                way: 0,
+                loco_v: Vec2::ZERO,
                 marks: std::sync::Arc::new(lib.marks(scene)),
                 blade,
                 gun,
@@ -5683,6 +5687,21 @@ pub(crate) fn npc_move(
             }
         }
         npc.wish = wish;
+        // standing, its way more than 15 degrees off its facing, it turns where it stands first
+        // (faced at once, shown turning by its turn's clip, `npc_select_anim`), then sets off:
+        // the locomotion component's static turn, below `m_fMaxSpeedForStaticTurn` 40 uu/s and
+        // over 15 degrees, its path's speed 0 for an idle mode meanwhile, as roshan's r614/blink
+        // research decoded it (fighting or fleeing, it goes as it faces)
+        if matches!(npc.mode, Mode::Idle | Mode::Patrol | Mode::Investigate | Mode::Search) && npc.pace.is_none() && !frozen && lunge.is_none() && wish.length_squared() > 0.01 {
+            let way = (-wish.x).atan2(-wish.z);
+            let off = (way - npc.yaw + PI).rem_euclid(TAU) - PI;
+            if npc.turning || (npc.velocity.with_y(0.0).length() < 0.4 && off.abs() > 15f32.to_radians()) {
+                if !npc.turning {
+                    npc.yaw = way;
+                }
+                wish = Vec3::ZERO;
+            }
+        }
         // its walk begun or ended with its clip (`npc_select_anim`): the clip's pace carries it,
         // a start its path's way, a stop on its way
         if frozen {
@@ -5963,16 +5982,12 @@ fn npc_animate(
 /// The clips an NPC uses for each situation, looked up by the original sequence names.
 pub struct NpcClips {
     idle: Option<ClipId>,
-    idle_fidgets: Vec<ClipId>,
     walk: Option<ClipId>,
     idle_alert: Option<ClipId>,
     walk_alert: Option<ClipId>,
     run: Option<ClipId>,
-    /// the alert walk's and the run's other ways (`AnimNodeBlendDirectional`: east (right),
-    /// south, west), each with its rate's sign: a set without a south or west of its own plays
-    /// its `_Revert` clip backwards (the guards' sword sets)
-    walk_dirs: [Option<(ClipId, f32)>; 3],
-    run_dirs: [Option<(ClipId, f32)>; 3],
+    /// its stances' locomotion (`LOCO_EMPTY` ...)
+    loco: [LocoSet; 5],
     flee: Option<ClipId>,
     attack: Vec<ClipId>,
     /// the moves' own: a short blow (small, big), a medium and a long lunge, a kick
@@ -6116,20 +6131,6 @@ pub struct NpcClips {
     sticky: Vec<ClipId>,
     /// fighting off a swarm on it, empty-handed and sword drawn: in, its loop, out
     swarm: [[Option<ClipId>; 3]; 2],
-    /// turning where it stands, left then right, by 45, 90, 135 and 180 degrees: relaxed
-    /// (`Sword_Patrol_Turn*`, `Empty_Turn*`) and on edge (`Sword_Turn*`)
-    turn: [[[Option<ClipId>; 4]; 2]; 2],
-    /// its relaxed walk begun where it stands (`Sword_Patrol_Walk_Start`, `Empty_Walk_Start`),
-    /// ended as its left or right foot lands (`_Walk_StopLeft`, `_StopRight`), and begun turning
-    /// into it, left then right, by 45, 90, 135 and 180 degrees (`_TurnToWalkLeft45`...): its idle
-    /// speed mode's start, stop and turn props
-    walk_start: Option<ClipId>,
-    walk_stop: [Option<ClipId>; 2],
-    turn_to_walk: [[Option<ClipId>; 4]; 2],
-    /// turning round on the move, walking (its relaxed walk's) and running, left then right
-    /// (`Sword_Patrol_Walk_TurnLeft180`, `Empty_Run_TurnRight180`...: its walk and run speed
-    /// modes' turn props)
-    move_turn: [[Option<ClipId>; 2]; 2],
     trigger_alarm: Vec<ClipId>,
     corpse_check: Vec<ClipId>,
     /// striking under a table, with the blade and with the pistol
@@ -6158,21 +6159,11 @@ impl NpcClips {
     pub fn resolve(lib: &CharAnims) -> Option<NpcClips> {
         let c = NpcClips {
             // humans first, then the wolfhound's own sets (Patrol_ / Attack_)
-            idle: lib.first(&["Sword_Patrol_Idle", "Empty_Idle", "Sword_Idle", "Patrol_Idle"]),
-            // (the ambient idles of the set it stands in, all it has: a guard's patrol stance,
-            // empty hands (a tall thug's are named without the underscore), a wolfhound's)
-            idle_fidgets: {
-                let sets: [(&str, &[&str]); 3] = [
-                    ("Sword_Patrol_Idle", &["Sword_Patrol_Idle_01", "Sword_Patrol_Idle_02", "Sword_Patrol_Idle_03", "Sword_Patrol_Idle_04"]),
-                    (
-                        "Empty_Idle",
-                        &["Empty_Idle_01", "Empty_Idle_02", "Empty_Idle_03", "Empty_Idle_04", "Empty_Idle_05", "Empty_Idle_06", "Empty_Idle_07", "Empty_Idle_08", "Empty_Idle02", "Empty_Idle05", "Empty_Idle07"],
-                    ),
-                    ("Patrol_Idle", &["Patrol_Idle_01", "Patrol_Idle_02", "Patrol_Idle_03", "Patrol_Idle_04"]),
-                ];
-                sets.iter().find(|(base, _)| lib.first(&[base]).is_some()).map(|(_, all)| lib.all(all)).unwrap_or_default()
-            },
-            walk: lib.first(&["Sword_Patrol_WalkN", "Empty_Walk_Patrol", "Empty_WalkN", "Sword_WalkN", "Patrol_WalkN"]),
+            // (sheathed, as a guard patrols: its empty hands' idle and patrol walk, measured on the
+            // original by roshan's r614/blink research at `EmptyPatrol`'s pace on `Empty_Walk_Patrol`)
+            idle: lib.first(&["Empty_Idle", "Sword_Patrol_Idle", "Sword_Idle", "Patrol_Idle"]),
+            walk: lib.first(&["Empty_Walk_Patrol", "Empty_WalkN", "Sword_Patrol_WalkN", "Sword_WalkN", "Patrol_WalkN"]),
+            loco: Default::default(),
             // (a weeper weeps standing: `DisNPCAnim_Weep`)
             idle_alert: lib.first(&["Sword_Idle", "Empty_Weep_Idle", "Empty_Idle", "Sword_Patrol_Idle", "Attack_idle", "Patrol_Idle"]),
             walk_alert: lib.first(&["Sword_WalkN", "Empty_WalkN", "Attack_WalkN", "Patrol_TrotN"]),
@@ -6321,9 +6312,6 @@ impl NpcClips {
             magic: [lib.all(&["Empty_Magic_OutOfSight", "Sword_Magic_OutOfSight"]), lib.all(&["Sword_Magic_OutOfSight", "Empty_Magic_OutOfSight"])],
             sticky: lib.all(&["Generic_StickyWeapon"]),
             swarm: [["Empty_", "Sword_"], ["Sword_", "Empty_"]].map(|sets| ["In", "Loop", "Out"].map(|p| sets.iter().find_map(|s| lib.find(&format!("{s}SwarmAttack_{p}"))))),
-            turn: [["Sword_Patrol_Turn", "Empty_Turn", "Patrol_Turn"], ["Sword_Turn", "Empty_Turn", "Sword_Patrol_Turn"]].map(|sets| {
-                ["Left", "Right"].map(|side| ["45", "90", "135", "180"].map(|a| sets.iter().find_map(|s| lib.find(&format!("{s}{side}{a}")))))
-            }),
             trigger_alarm: lib.all(&["Sword_TriggerAlarm"]),
             corpse_check: lib.all(&["Sword_CorpseCheck"]),
             under: [lib.find("Sword_Attack_UnderTable"), lib.find("Sword_Gun_AttackUnderTable")],
@@ -6343,31 +6331,58 @@ impl NpcClips {
                     })
                 })
             }),
-            walk_dirs: [None; 3],
-            run_dirs: [None; 3],
-            walk_start: None,
-            walk_stop: [None; 2],
-            turn_to_walk: [[None; 4]; 2],
-            move_turn: [[None; 2]; 2],
         };
-        let dirs = |n: Option<ClipId>, base: &str| -> [Option<(ClipId, f32)>; 3] {
-            let Some(prefix) = n.and_then(|n| lib.clip(n).name.strip_suffix(&format!("{base}N")).map(str::to_string)) else { return [None; 3] };
-            let way = |d: &str| lib.find(&format!("{prefix}{base}{d}")).map(|c| (c, 1.0)).or_else(|| lib.find(&format!("{prefix}{base}{d}_Revert")).map(|c| (c, -1.0)));
-            [lib.find(&format!("{prefix}{base}E")).map(|c| (c, 1.0)), way("S"), way("W")]
+        // its stances' locomotion, as its locomotion config's speed modes list them: a gait's
+        // loops by way (S, W, N, E: the `_Revert` loops S and W, played backwards)
+        let ways = |base: &str| -> Option<[Option<(ClipId, bool)>; 4]> {
+            let n = lib.find(&format!("{base}N"))?;
+            let way = |d: &str| lib.find(&format!("{base}{d}_Revert")).map(|c| (c, true)).or_else(|| lib.find(&format!("{base}{d}")).map(|c| (c, false)));
+            Some([way("S"), way("W"), Some((n, false)), lib.find(&format!("{base}E")).map(|c| (c, false))])
         };
-        // (its relaxed walk's start, stops and turns into it, by its walk's prefix:
-        // `Sword_Patrol_`, `Empty_`)
-        let relaxed = c.walk.and_then(|w| lib.clip(w).name.strip_suffix("WalkN").map(str::to_string));
-        let relaxed = |n: &str| relaxed.as_ref().and_then(|p| lib.find(&format!("{p}{n}")));
-        let walk_start = relaxed("Walk_Start");
-        let walk_stop = ["Left", "Right"].map(|s| relaxed(&format!("Walk_Stop{s}")));
-        let turn_to_walk = ["Left", "Right"].map(|s| ["45", "90", "135", "180"].map(|a| relaxed(&format!("TurnToWalk{s}{a}"))));
-        let run_prefix = c.run.and_then(|r| lib.clip(r).name.strip_suffix("RunN").map(str::to_string));
-        let move_turn = [
-            ["Left", "Right"].map(|s| relaxed(&format!("Walk_Turn{s}180"))),
-            ["Left", "Right"].map(|s| run_prefix.as_ref().and_then(|p| lib.find(&format!("{p}Run_Turn{s}180")))),
+        let first_ways = |bases: &[&str]| bases.iter().find_map(|b| ways(b)).unwrap_or([None; 4]);
+        // (the ambient idles of its stance, `AmbientIdle`'s group for its hand: empty, holding
+        // the sword; a tall thug's are named without the underscore; a wolfhound's)
+        let fidgets: [(&str, &[&str]); 3] = [
+            ("Sword_Patrol_Idle", &["Sword_Patrol_Idle_01", "Sword_Patrol_Idle_02", "Sword_Patrol_Idle_03", "Sword_Patrol_Idle_04"]),
+            ("Empty_Idle", &["Empty_Idle_01", "Empty_Idle_02", "Empty_Idle_03", "Empty_Idle_04", "Empty_Idle_05", "Empty_Idle_06", "Empty_Idle_07", "Empty_Idle_08", "Empty_Idle02", "Empty_Idle05", "Empty_Idle07"]),
+            ("Patrol_Idle", &["Patrol_Idle_01", "Patrol_Idle_02", "Patrol_Idle_03", "Patrol_Idle_04"]),
         ];
-        let c = NpcClips { walk_dirs: dirs(c.walk_alert, "Walk"), run_dirs: dirs(c.run, "Run"), walk_start, walk_stop, turn_to_walk, move_turn, ..c };
+        // (its starts, stops and turns by its idle's prefix, `Empty_`, `Sword_Patrol_`,
+        // `Sword_`: its idle speed mode's start, stop and turn props, its walk's and run's turns
+        // round; turning where it stands, else the first of `turns` it has)
+        let set = |idle: Option<ClipId>, walk: [Option<(ClipId, bool)>; 4], run: [Option<(ClipId, bool)>; 4], turns: &[&str]| -> LocoSet {
+            let name = idle.map(|i| lib.clip(i).name.clone()).unwrap_or_default();
+            let prefix = name.strip_suffix("Idle").map(str::to_string);
+            let by = |n: &str| prefix.as_ref().and_then(|p| lib.find(&format!("{p}{n}")));
+            let run_prefix = run[2].and_then(|(r, _)| lib.clip(r).name.strip_suffix("RunN").map(str::to_string));
+            LocoSet {
+                idle,
+                modes: [walk, run],
+                fidgets: fidgets.iter().find(|(base, _)| base.eq_ignore_ascii_case(&name)).map(|(_, all)| lib.all(all)).unwrap_or_default(),
+                walk_start: by("Walk_Start"),
+                walk_stop: ["Left", "Right"].map(|s| by(&format!("Walk_Stop{s}"))),
+                turn_to_walk: ["Left", "Right"].map(|s| ["45", "90", "135", "180"].map(|a| by(&format!("TurnToWalk{s}{a}")))),
+                move_turn: [
+                    ["Left", "Right"].map(|s| by(&format!("Walk_Turn{s}180"))),
+                    ["Left", "Right"].map(|s| run_prefix.as_ref().and_then(|p| lib.find(&format!("{p}Run_Turn{s}180")))),
+                ],
+                turn: ["Left", "Right"].map(|side| ["45", "90", "135", "180"].map(|a| by(&format!("Turn{side}{a}")).or_else(|| turns.iter().find_map(|s| lib.find(&format!("{s}{side}{a}")))))),
+            }
+        };
+        let relaxed_turns = ["Empty_Turn", "Sword_Patrol_Turn", "Patrol_Turn", "Sword_Turn"];
+        let edge_turns = ["Sword_Turn", "Empty_Turn", "Sword_Patrol_Turn", "Patrol_Turn"];
+        let empty_walk = first_ways(&["Empty_Walk", "Patrol_Walk", "Sword_Patrol_Walk", "Sword_Walk"]);
+        let empty_run = first_ways(&["Empty_Run", "Patrol_Run", "Sword_Run"]);
+        let sword_run = first_ways(&["Sword_Run", "Empty_Run", "Patrol_Run"]);
+        let single = |c: Option<ClipId>| c.map(|c| [None, None, Some((c, false)), None]);
+        let loco = [
+            set(c.idle, empty_walk, empty_run, &relaxed_turns),
+            set(c.idle, single(lib.find("Empty_Walk_Patrol")).unwrap_or(empty_walk), empty_run, &relaxed_turns),
+            set(lib.find("Sword_Patrol_Idle").or(c.idle), first_ways(&["Sword_Patrol_Walk", "Empty_Walk", "Patrol_Walk", "Sword_Walk"]), sword_run, &edge_turns),
+            set(c.idle_alert, first_ways(&["Sword_Walk", "Empty_Walk", "Attack_Walk", "Patrol_Trot"]), sword_run, &edge_turns),
+            set(c.idle_alert, empty_walk, single(c.flee).unwrap_or(sword_run), &edge_turns),
+        ];
+        let c = NpcClips { loco, ..c };
         // (a musical Overseer kicks, its hands on its music box: `MusicBox_Attack_KickMedium`,
         // its music box's set alone has it)
         let c = match lib.first(&["MusicBox_Attack_KickMedium"]) {
@@ -6418,8 +6433,8 @@ pub struct NpcAnim {
     act_seen: u32,
     /// making off from an explosive (as last seen)
     escaping: bool,
-    /// the way it last went relative to its facing (0 ahead, 1 right, 2 back, 3 left)
-    way: u8,
+    /// its locomotion's smoothed velocity in its own frame (x to its right, y ahead)
+    loco_v: Vec2,
     /// what its clips' notifies mark (the blows' zones, when an attack may be broken off, when
     /// the sword falls from the hand)
     marks: std::sync::Arc<std::collections::HashMap<ClipId, dhcook::format::ClipMarks>>,
@@ -6804,6 +6819,7 @@ fn npc_select_anim(
             st.turn = None;
             st.shown_yaw = npc.yaw;
         }
+        npc.turning = st.turn.is_some();
         let lag = (st.shown_yaw - npc.yaw + PI).rem_euclid(TAU) - PI;
         // the clips carry the whole body motion (falls included)
         for c in children.iter() {
@@ -6817,6 +6833,19 @@ fn npc_select_anim(
         }
         let far = t.translation.distance_squared(ppos) > 80.0 * 80.0;
         let st = &mut *st;
+        // its locomotion's velocity, in its own frame, smoothed toward its body's at up to 20 m/s
+        // a second, less for a small difference (0x0090BC00: `m_fVelocityMaxBlendSpeed` 2000 uu/s
+        // over `m_fVelocityMaxDif` 100, at least `m_fVelocityMinBlendSpeedRatio` 0.1 of it, as
+        // roshan's r614/blink research decoded it)
+        {
+            let v = npc.velocity.with_y(0.0);
+            let right = Quat::from_rotation_y(npc.yaw) * Vec3::X;
+            let want = Vec2::new(v.dot(right), v.dot(npc.forward()));
+            let d = (want - st.loco_v).length();
+            if d > 1e-5 {
+                st.loco_v += (want - st.loco_v) * (20.0 * (d / 1.0).clamp(0.1, 1.0) * dt / d).min(1.0);
+            }
+        }
         let clips = st.clips.clone();
         let lib = anim.lib.clone();
         // (Corvo lost in the fight: kept until it is free to show it)
@@ -6872,7 +6901,7 @@ fn npc_select_anim(
         let musical = box_idle.is_some() && (npc.arms.tunes.is_some() || npc.pawn.contains("MusicOverseer"));
         // (its ambient idle given up to anything setting it on edge, any upper-body action to a
         // blow, a gesture, a swing or being caught)
-        let fidget = anim.upper_clip().is_some_and(|c| clips.idle_fidgets.contains(&c));
+        let fidget = anim.upper_clip().is_some_and(|c| clips.loco.iter().any(|s| s.fidgets.contains(&c)));
         let interrupted = npc.hit_react > st.hit_seen + 1e-3 || npc.act.1 != st.act_seen || npc.attack_t.is_some() || npc.caught.is_some();
         if anim.upper_on() && (npc.is_down() || !musical && (interrupted || fidget && npc.alert != Alert::Unaware)) {
             anim.stop_upper(0.15);
@@ -7898,6 +7927,22 @@ fn npc_select_anim(
         // (searching or looking into something, it keeps its patrol stance, its sword in hand: the
         // original's search stance is its patrol's, `DisNPCAnim_EquipToSearch` drawing into it)
         let search_stance = (matches!(npc.mode, Mode::Search | Mode::Investigate) || npc.suspecting && npc.alert == Alert::Unaware) && st.drawn;
+        // its stance's locomotion, as its body stance picks its locomotion modifier (0x00B71000,
+        // as roshan's r614/blink research decoded it): panicking; fighting; the sword drawn
+        // otherwise, its patrol stance (`SwordPatrol`, `SearchSword`); sheathed, on its rounds
+        // (`EmptyPatrol`) or not (`Empty`)
+        let stance = if npc.mode == Mode::Flee {
+            LOCO_PANIC
+        } else if alert && !search_stance {
+            LOCO_SWORD
+        } else if st.drawn && !st.sword.is_empty() {
+            LOCO_SWORD_PATROL
+        } else if npc.mode == Mode::Patrol {
+            LOCO_PATROL
+        } else {
+            LOCO_EMPTY
+        };
+        let set = &clips.loco[stance];
         // a patrolling or guarding character's ambient idles (`DisTweaks_AISubProcess_AmbientAnims`
         // of the patrol and guard behaviours: every 30-60 s, `m_fMin/MaxAmbientAnimFrequency`, on
         // the upper body and walking too, `m_bCheckForMovement` false, as roshan's r614/blink
@@ -7915,7 +7960,7 @@ fn npc_select_anim(
             st.idle_time -= dt;
             if st.idle_time <= 0.0 {
                 st.idle_time = AMBIENT_IDLE[0] + rand::random::<f32>() * (AMBIENT_IDLE[1] - AMBIENT_IDLE[0]);
-                if let Some(c) = pick(&clips.idle_fidgets) {
+                if let Some(c) = pick(&set.fidgets) {
                     anim.restart_upper(c, false, 1.0, 0.3);
                 }
             }
@@ -7946,10 +7991,10 @@ fn npc_select_anim(
             let way = (-npc.wish.x).atan2(-npc.wish.z);
             let off = (way - st.shown_yaw + PI).rem_euclid(TAU) - PI;
             let pick = if off.abs() <= 15f32.to_radians() {
-                clips.walk_start.map(|c| (c, None))
+                set.walk_start.map(|c| (c, None))
             } else {
                 let i = ((off.abs().to_degrees() / 45.0).round() as usize).clamp(1, 4) - 1;
-                clips.turn_to_walk[(off < 0.0) as usize][i].map(|c| (c, Some((st.shown_yaw, off))))
+                set.turn_to_walk[(off < 0.0) as usize][i].map(|c| (c, Some((st.shown_yaw, off))))
             };
             if let Some((c, turn)) = pick {
                 let len = lib.duration(c);
@@ -7972,7 +8017,7 @@ fn npc_select_anim(
         // the left half through its walk's loop and the right at its start (the stops'
         // `m_fMoveAnimIn`), its stop for that foot, unless the next lands nearer the stop's mark,
         // the props' straight distance short of its goal)
-        let walking = anim.current().filter(|c| relaxed && npc.pace.is_none() && sp > 0.6 && Some(c.clip) == clips.walk);
+        let walking = anim.current().filter(|c| relaxed && npc.pace.is_none() && sp > 0.6 && set.modes[0][2].is_some_and(|(n, _)| n == c.clip));
         match (walking, npc.path) {
             (Some(cur), Some((left, _))) => {
                 let ph = (cur.t / lib.duration(cur.clip)).rem_euclid(1.0);
@@ -7981,7 +8026,7 @@ fn npc_select_anim(
                 let way = (-npc.wish.x).atan2(-npc.wish.z);
                 let ahead = npc.wish.length_squared() > 0.01 && ((way - npc.yaw + PI).rem_euclid(TAU) - PI).abs() <= 22.5f32.to_radians();
                 let next = npc.stride * 0.5;
-                if let Some(c) = foot.and_then(|f| clips.walk_stop[f]).filter(|_| ahead && left < UNACCURACY && left - WALK_STRAIGHT < next * 0.5) {
+                if let Some(c) = foot.and_then(|f| set.walk_stop[f]).filter(|_| ahead && left < UNACCURACY && left - WALK_STRAIGHT < next * 0.5) {
                     let len = lib.duration(c);
                     let v0 = npc.velocity.with_y(0.0).length().max(0.3);
                     // (down from its pace to a stop as far as the clip goes)
@@ -8002,11 +8047,11 @@ fn npc_select_anim(
         // spanning 45 degrees each side of 180, as roshan's r614/blink research decoded the
         // locomotion component's moving turn). It slows to a stop over the turn's start, shown
         // turning round across the clip, then goes the new way.)
-        let fore = anim.current().and_then(|c| if Some(c.clip) == clips.walk { Some(0) } else if Some(c.clip) == clips.run { Some(1) } else { None });
-        if let Some(gait) = fore.filter(|_| npc.pace.is_none() && sp >= 0.4 && !far && st.turn.is_none() && npc.stagger <= 0.0 && npc.attack_t.is_none() && st.way == 0 && npc.wish.length_squared() > 0.01) {
+        let fore = anim.current().and_then(|c| (0..2).find(|&g| set.modes[g][2].is_some_and(|(n, _)| n == c.clip)));
+        if let Some(gait) = fore.filter(|_| npc.pace.is_none() && sp >= 0.4 && !far && st.turn.is_none() && npc.stagger <= 0.0 && npc.attack_t.is_none() && npc.wish.length_squared() > 0.01) {
             let way = (-npc.wish.x).atan2(-npc.wish.z);
             let off = (way - npc.yaw + PI).rem_euclid(TAU) - PI;
-            if let Some(c) = clips.move_turn[gait][(off < 0.0) as usize].filter(|_| off.abs() >= 135f32.to_radians()) {
+            if let Some(c) = set.move_turn[gait][(off < 0.0) as usize].filter(|_| off.abs() >= 135f32.to_radians()) {
                 let len = lib.duration(c);
                 let v0 = npc.velocity.with_y(0.0).length();
                 anim.restart(c, false, 1.0, 0.15);
@@ -8035,11 +8080,10 @@ fn npc_select_anim(
                     }
                 }
                 None if off.abs() > 40f32.to_radians() => {
-                    let edge = (npc.alert != Alert::Unaware || st.drawn) as usize;
                     let i = ((off.abs().to_degrees() / 45.0).round() as usize).clamp(1, 4) - 1;
                     // (a turn to the left is a rising yaw)
                     let side = (off < 0.0) as usize;
-                    if let Some(c) = clips.turn[edge][side][i].or(clips.turn[1 - edge][side][i]) {
+                    if let Some(c) = set.turn[side][i].or_else(|| clips.loco.iter().find_map(|s| s.turn[side][i])) {
                         let len = lib.duration(c).max(0.2);
                         anim.restart(c, false, 1.0, 0.15);
                         st.turn = Some((st.shown_yaw, off, 0.0, len));
@@ -8052,56 +8096,156 @@ fn npc_select_anim(
         }
         if sp < 0.3 {
             // (run as far as it goes, a civilian cowers there: the panic's stance)
-            let c = if npc.mode == Mode::Flee && !npc.fighter() { clips.cower.or(clips.idle_alert).or(clips.idle) } else if alert && !search_stance { clips.idle_alert.or(clips.idle) } else { clips.idle };
+            let c = if npc.mode == Mode::Flee && !npc.fighter() { clips.cower.or(set.idle).or(clips.idle) } else { set.idle.or(clips.idle) };
             if let Some(c) = c {
                 anim.play(c, true, 1.0, 0.3);
             }
-        } else {
-            let running = npc.mode != Mode::Flee && sp > (npc.gait[1] * 1.3 + npc.gait[2]) * 0.5;
-            let c = if npc.mode == Mode::Flee {
-                clips.flee.or(clips.run)
-            } else if running {
-                clips.run.or(clips.walk_alert)
-            } else if alert && !search_stance {
-                clips.walk_alert.or(clips.walk)
-            } else {
-                clips.walk
-            };
-            // alert, it goes the way it goes facing where it faces: the walk or run for that way
-            // (the quarter its going falls in, held 10 degrees past the edge, not to flicker)
-            let (c, sign) = match c {
-                Some(c) if alert && !search_stance && npc.mode != Mode::Flee => {
-                    let v = npc.velocity.with_y(0.0);
-                    let right = Quat::from_rotation_y(npc.yaw) * Vec3::X;
-                    let a = v.dot(right).atan2(v.dot(npc.forward())).to_degrees();
-                    let centre = [0.0f32, 90.0, 180.0, -90.0][st.way as usize % 4];
-                    let off = (a - centre + 540.0).rem_euclid(360.0) - 180.0;
-                    if off.abs() > 55.0 {
-                        st.way = (((a + 405.0) / 90.0).floor() as i32).rem_euclid(4) as u8;
-                        if std::env::var("DH_LOCO_LOG").is_ok() {
-                            info!("loco: {} goes {} ({a:.0} deg off its facing at {sp:.1} m/s)", npc.name, ["ahead", "right", "back", "left"][st.way as usize]);
-                        }
-                    }
-                    let dirs = if running { &clips.run_dirs } else { &clips.walk_dirs };
-                    match st.way {
-                        0 => (Some(c), 1.0),
-                        w => dirs[w as usize - 1].map(|(d, s)| (Some(d), s)).unwrap_or((Some(c), 1.0)),
-                    }
-                }
-                c => (c, 1.0),
-            };
-            if let Some(c) = c {
-                let natural = lib.root_speed(c).max(0.3);
-                anim.play(c, true, sign * (sp / natural).clamp(0.5, 1.8), 0.25);
-                let stride = lib.root_speed(c) * lib.clip(c).duration;
-                if (stride - npc.stride).abs() > 0.01 && std::env::var("DH_LOCO_LOG").is_ok() {
-                    let k = lib.clip(c);
-                    info!("loco: {} strides {stride:.2} m a loop ({} {:.2} s, {:?})", npc.name, k.name, k.duration, k.sounds);
-                }
-                npc.stride = stride;
+        } else if let Some((master, mix, rate, stride)) = loco_mix(&lib, set, st.loco_v) {
+            // moving: its stance's loops blended by its way and speed, at one phase
+            anim.play_mix(master, mix, rate, 0.25);
+            if (stride - npc.stride).abs() > 0.05 && std::env::var("DH_LOCO_LOG").is_ok() {
+                let names: Vec<String> = mix.loops.iter().flatten().map(|(c, w, back)| format!("{}{} {w:.2}", lib.clip(*c).name, if *back { " (back)" } else { "" })).collect();
+                let heading = |v: Vec3| (-v.x).atan2(-v.z).to_degrees();
+                info!(
+                    "loco: {} at {:.2} m/s strides {stride:.2} m a loop, rate {rate:.2}: {} (facing {:.0}, going {:.0}, meaning {:.0}, {:?})",
+                    npc.name,
+                    st.loco_v.length(),
+                    names.join(", "),
+                    npc.yaw.to_degrees(),
+                    heading(npc.velocity),
+                    heading(npc.wish),
+                    npc.mode
+                );
+            }
+            npc.stride = stride;
+        }
+    }
+}
+
+/// The stances' locomotion sets (`NpcClips::loco`), as a body stance picks its locomotion
+/// modifier: sheathed (`Empty`), sheathed on its rounds (`EmptyPatrol`), the sword drawn
+/// relaxed (`SwordPatrol`, searching), fighting (`Sword`), panicking (`PanicEmpty`).
+const LOCO_EMPTY: usize = 0;
+const LOCO_PATROL: usize = 1;
+const LOCO_SWORD_PATROL: usize = 2;
+const LOCO_SWORD: usize = 3;
+const LOCO_PANIC: usize = 4;
+
+/// A stance's locomotion, as its locomotion modifier's speed modes list it
+/// (`ArkComponentLocomotionConfig`): its idle loop, its walk's and its run's loops by way (S, W,
+/// N, E; S and W its `_Revert` loops, played backwards), its ambient idles, and its idle speed
+/// mode's start, stops and turns into a walk (`m_StartAnimProps`, `m_StopAnimProps`,
+/// `TurnToWalk`), its walk's and run's turns round, and its turns where it stands, left then
+/// right by 45, 90, 135 and 180 degrees.
+#[derive(Clone, Default)]
+pub struct LocoSet {
+    idle: Option<ClipId>,
+    modes: [[Option<(ClipId, bool)>; 4]; 2],
+    fidgets: Vec<ClipId>,
+    walk_start: Option<ClipId>,
+    walk_stop: [Option<ClipId>; 2],
+    turn_to_walk: [[Option<ClipId>; 4]; 2],
+    move_turn: [[Option<ClipId>; 2]; 2],
+    turn: [[Option<ClipId>; 4]; 2],
+}
+
+/// The locomotion node's blend (`ArkAnimNodeLocomotion`: 0x009331D0, 0x00910E30, 0x009105B0,
+/// 0x00910970, 0x00916950, as roshan's r614/blink research decoded them). The way it goes (`v`,
+/// its smoothed velocity in its own frame, x to its right, y ahead) weighs each moving speed
+/// mode's two loops either side of it (S, W, N, E a quarter apart; a weight from 0.98 takes
+/// all; a lone loop takes every way). Its speed, stretched on a diagonal to the chord between
+/// the two (`cos + sin` of the way past the first), weighs the two modes whose blended authored
+/// speeds bracket it, the idle's 0. S and W play backwards. All keep one phase, the heaviest
+/// leading, at the rate that matches the ground: its length times the speed over the loops'
+/// authored strides summed by weight (1 standing). Returns the master, the mix, the master's
+/// rate and the stride (the ground one loop covers).
+fn loco_mix(lib: &CharAnims, set: &LocoSet, v: Vec2) -> Option<(ClipId, LocoMix, f32, f32)> {
+    let speed = v.length();
+    // (from ahead, N, round to the right, E)
+    let angle = v.x.atan2(v.y).to_degrees();
+    let ways = |m: &[Option<(ClipId, bool)>; 4]| -> ([(usize, f32); 2], bool) {
+        if m.iter().filter(|l| l.is_some()).count() <= 1 {
+            return ([(m.iter().position(Option::is_some).unwrap_or(2), 1.0), (0, 0.0)], false);
+        }
+        // (S 0, W 1, N 2, E 3 at 180, 270, 0 and 90 degrees)
+        let q = (angle + 180.0).rem_euclid(360.0) / 90.0;
+        let a = (q.floor() as usize) % 4;
+        let f = q - q.floor();
+        let (wa, wb) = if f <= 0.02 { (1.0, 0.0) } else if f >= 0.98 { (0.0, 1.0) } else { (1.0 - f, f) };
+        // (a way the set lacks: ahead's)
+        let pick = |k: usize| if m[k].is_some() { k } else { 2 };
+        ([(pick(a), wa), (pick((a + 1) % 4), wb)], true)
+    };
+    let mut modes: Vec<(f32, Vec<(ClipId, f32, bool)>)> = Vec::new();
+    if let Some(i) = set.idle {
+        modes.push((0.0, vec![(i, 1.0, false)]));
+    }
+    let mut ratio = None;
+    for m in &set.modes {
+        if m.iter().all(Option::is_none) {
+            continue;
+        }
+        let (w, multi) = ways(m);
+        let mut s = 0.0;
+        let mut loops: Vec<(ClipId, f32, bool)> = Vec::new();
+        for (k, wk) in w {
+            let Some((c, back)) = m[k].filter(|_| wk > 0.0) else { continue };
+            s += wk * lib.root_speed(c);
+            match loops.iter_mut().find(|l| l.0 == c) {
+                Some(l) => l.1 += wk,
+                None => loops.push((c, wk, back && multi)),
+            }
+        }
+        // (the diagonal's stretch, by the first moving mode's two loops)
+        if ratio.is_none() {
+            let phi = w[1].1 * std::f32::consts::FRAC_PI_2;
+            ratio = Some(if multi && w[0].1 > 0.0 && w[1].1 > 0.0 { phi.cos() + phi.sin() } else { 1.0 });
+        }
+        // (a mode no faster than the one below it brackets nothing)
+        if modes.last().is_some_and(|(below, _)| s <= *below + 0.05) {
+            continue;
+        }
+        modes.push((s, loops));
+    }
+    if modes.is_empty() {
+        return None;
+    }
+    let sp = speed * ratio.unwrap_or(1.0);
+    let mut weights = vec![0.0f32; modes.len()];
+    match modes.iter().position(|(s, _)| *s >= sp) {
+        Some(0) => weights[0] = 1.0,
+        None => *weights.last_mut()? = 1.0,
+        Some(i) => {
+            let (lo, hi) = (modes[i - 1].0, modes[i].0);
+            let w = ((sp - lo) / (hi - lo).max(1e-3)).clamp(0.0, 1.0);
+            let w = if w >= 0.98 { 1.0 } else if w <= 0.02 { 0.0 } else { w };
+            weights[i] = w;
+            weights[i - 1] = 1.0 - w;
+        }
+    }
+    let mut mix = LocoMix::default();
+    let mut n = 0;
+    let mut sum = 0.0;
+    let mut master = None;
+    let mut heaviest = 0.0;
+    for (wm, (_, loops)) in weights.iter().zip(&modes) {
+        for &(c, wl, back) in loops {
+            let w = wm * wl;
+            if w <= 0.0 || n >= mix.loops.len() {
+                continue;
+            }
+            mix.loops[n] = Some((c, w, back));
+            n += 1;
+            sum += lib.root_speed(c) * lib.duration(c) * w;
+            if w > heaviest {
+                heaviest = w;
+                master = Some(c);
             }
         }
     }
+    let master = master?;
+    let rate = if sp < 1e-3 || sum < 1e-3 { 1.0 } else { lib.duration(master) * sp / sum };
+    Some((master, mix, rate, sum))
 }
 
 /// The joints from `spine_0_jnt` down its chain (a character's upper body), parents before
