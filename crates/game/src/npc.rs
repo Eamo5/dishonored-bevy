@@ -229,6 +229,10 @@ pub struct Npc {
     pub sidestep: f32,
     pub progress_pos: Vec3,
     pub anim_phase: f32,
+    /// its locomotion loops' sync position (0..1) and its feet's on-ground share, while they play
+    /// (`npc_select_anim`): its footfalls as its feet come down
+    pub sync: Option<(f32, f32)>,
+    foot_sync: f32,
     pub anim_speed: f32,
     /// how far its walk or run takes it in a loop of the clip, two steps (m: the clip's root
     /// motion; 0 before it plays one)
@@ -2224,6 +2228,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         sidestep: 0.0,
         progress_pos: pos,
         anim_phase: rand::random::<f32>() * TAU,
+        sync: None,
+        foot_sync: 0.0,
         stride: 0.0,
         anim_speed: 0.0,
         hit_react: 0.0,
@@ -5843,8 +5849,20 @@ pub(crate) fn npc_move(
         let stride = if npc.stride > 0.5 { npc.stride } else if npc.anim_speed > 3.0 { 2.4 } else { 1.5 };
         let before = npc.anim_phase;
         npc.anim_phase = (npc.anim_phase + npc.anim_speed * dt * TAU / stride).rem_euclid(TAU);
-        // a foot down every half cycle (near the player only)
-        let crossed = npc.anim_phase < before || (before < PI && npc.anim_phase >= PI);
+        // a foot down every half cycle (near the player only); with its loops playing, as each
+        // foot comes down on them: as the sync position enters a foot's on-ground share, around
+        // its `m_fOnGroundPct` (left 0.44, right 0.94; the locomotion node's `m_bFootOnGround`,
+        // 0x009114A0, as roshan's r614/blink research decoded it)
+        let crossed = match npc.sync {
+            Some((ph, share)) => {
+                let was = std::mem::replace(&mut npc.foot_sync, ph);
+                [0.44f32, 0.94].iter().any(|on| {
+                    let down = (on - share * 0.5).rem_euclid(1.0);
+                    if ph >= was { was < down && down <= ph } else { was < down || down <= ph }
+                })
+            }
+            None => npc.anim_phase < before || (before < PI && npc.anim_phase >= PI),
+        };
         let near = ppos.is_some_and(|p| p.distance(t.translation) < 30.0);
         if crossed && near && npc.anim_speed > 0.4 && npc.grounded && !npc.is_down() {
             use crate::footsteps::{Footfall, Gait, Walker};
@@ -6820,6 +6838,7 @@ fn npc_select_anim(
             st.shown_yaw = npc.yaw;
         }
         npc.turning = st.turn.is_some();
+        npc.sync = None;
         let lag = (st.shown_yaw - npc.yaw + PI).rem_euclid(TAU) - PI;
         // the clips carry the whole body motion (falls included)
         for c in children.iter() {
@@ -8103,6 +8122,18 @@ fn npc_select_anim(
         } else if let Some((master, mix, rate, stride)) = loco_mix(&lib, set, st.loco_v) {
             // moving: its stance's loops blended by its way and speed, at one phase
             anim.play_mix(master, mix, rate, 0.25);
+            // (its feet's on-ground share: the moving modes' `m_fFootOnGroundPct`, walk 0.4,
+            // run 0.2, by their weights)
+            let (mut walk, mut run) = (0.0, 0.0);
+            for (c, w, _) in mix.loops.iter().flatten() {
+                if set.modes[0].iter().flatten().any(|l| l.0 == *c) {
+                    walk += w;
+                } else if set.modes[1].iter().flatten().any(|l| l.0 == *c) {
+                    run += w;
+                }
+            }
+            let share = if walk + run > 1e-3 { (0.4 * walk + 0.2 * run) / (walk + run) } else { 0.4 };
+            npc.sync = anim.current().map(|p| ((p.t / lib.duration(p.clip)).rem_euclid(1.0), share));
             if (stride - npc.stride).abs() > 0.05 && std::env::var("DH_LOCO_LOG").is_ok() {
                 let names: Vec<String> = mix.loops.iter().flatten().map(|(c, w, back)| format!("{}{} {w:.2}", lib.clip(*c).name, if *back { " (back)" } else { "" })).collect();
                 let heading = |v: Vec3| (-v.x).atan2(-v.z).to_degrees();

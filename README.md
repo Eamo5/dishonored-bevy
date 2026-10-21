@@ -2077,6 +2077,10 @@ are in the settings file, `pad_binding_set` 0-3):
 - **Characters' steps in time with their feet**: a character's footfalls come twice a loop of the
   walk or run it plays, its stride the clip's root motion (a guard's run 5.4 m a loop, a tallboy's
   walk 4.3 m, its stilt sounds at 0.69 and 1.57 s of 2.03), not a man's stride for every gait.
+  With its loops blended, each foot sounds as it comes down on them. That is when the loops' sync
+  position enters the foot's on-ground share around its `m_fOnGroundPct` (left 0.44, right 0.94).
+  The share is walk 0.4 and run 0.2, weighted by the blend, as the locomotion node's
+  `m_bFootOnGround` keeps it (0x009114A0, as roshan's r614/blink research decoded it).
 - **Tallboys** carry their tanks and shields on their sockets (`m_pAttachmentsTweaks`): the
   breakable parts wear down, break at once to the blows their tweak names (a bullet or bolt in
   a tank) and shrug off others (Wind Blast); a tank bursts with its blast and kills its tallboy. Their
