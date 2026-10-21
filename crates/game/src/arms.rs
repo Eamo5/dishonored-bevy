@@ -26,8 +26,9 @@ pub struct ArmsPlugin;
 impl Plugin for ArmsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DeathFall>()
+            .init_resource::<ArmSteps>()
             .add_systems(OnEnter(GameState::InGame), spawn_arms.after(spawn_view_model))
-            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_effects.after(ArmsAnimSet), possess_hand.after(ArmsAnimSet), (animate_held, animate_sword, show_bolts).after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_steps.after(ArmsAnimSet), arm_effects.after(ArmsAnimSet), possess_hand.after(ArmsAnimSet), (animate_held, animate_sword, show_bolts).after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, (align_arms.in_set(ArmsAlign), arm_pitch).after(AnimPose).before(TransformSystems::Propagate));
     }
 }
@@ -35,6 +36,45 @@ impl Plugin for ArmsPlugin {
 /// The arms' clips are chosen.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ArmsAnimSet;
+
+/// Corvo's footfalls as his arms' locomotion loop cues them (`DishonoredNotify_Footfall`, the
+/// pawn's footfall 0x00B66ED0): whether the loop playing has any, and how many came since the
+/// player's last look (`player`).
+#[derive(Resource, Default)]
+pub struct ArmSteps {
+    pub cued: bool,
+    pub due: u32,
+}
+
+/// The footfalls the arms' loop passed since the last frame (its time wrapping as it loops).
+fn arm_steps(
+    level: Option<Res<crate::level::LevelInfo>>,
+    arms: Query<&Animator, With<ArmsRoot>>,
+    mut steps: ResMut<ArmSteps>,
+    mut marks: Local<Option<(String, std::collections::HashMap<ClipId, Vec<f32>>)>>,
+    mut was: Local<Option<(ClipId, f32)>>,
+) {
+    let (Some(level), Ok(anim)) = (level, arms.single()) else { return };
+    if marks.as_ref().is_none_or(|(n, _)| *n != level.scene.name) {
+        let by = anim.lib.marks(&level.scene).into_iter().filter(|(_, m)| !m.footfalls.is_empty()).map(|(id, m)| (id, m.footfalls)).collect();
+        *marks = Some((level.scene.name.clone(), by));
+    }
+    let now = anim.current().filter(|c| c.looping).map(|c| (c.clip, c.t));
+    let feet = now.and_then(|(clip, _)| marks.as_ref().and_then(|(_, m)| m.get(&clip)));
+    steps.cued = feet.is_some();
+    if let (Some(feet), Some((clip, t)), Some((before, t0))) = (feet, now, *was) {
+        if clip == before {
+            let len = anim.lib.duration(clip).max(1e-3);
+            let passed = |a: f32, b: f32| feet.iter().filter(|&&f| f > a && f <= b).count() as u32;
+            let n = if t >= t0 { passed(t0, t) } else { passed(t0, len) + passed(-1.0, t) };
+            if n > 0 && std::env::var_os("DH_STEP_LOG").is_some() {
+                info!("arm steps: {} at {t:.3} of {}", anim.lib.clip(clip).name, n);
+            }
+            steps.due += n;
+        }
+    }
+    *was = now;
+}
 
 /// Corvo dead and falling with his death's clip (the view on his camera bone, not sunk to the
 /// floor: `player`).

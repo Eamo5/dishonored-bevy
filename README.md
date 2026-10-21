@@ -710,6 +710,14 @@ are in the settings file, `pad_binding_set` 0-3):
     mode's, times its modifier's `m_fSpeedMultiplier`: a guard fights at its sword run's 7.7 m/s,
     faster than Corvo's 6 m/s sprint, and a wolfhound at 9.9 m/s. A panicking civilian flees at its
     panic run's 5 m/s. Runs used to be capped at 6 m/s.
+  - Walking or running, it turns at its speed mode's `m_fRotationMaxSpeed`, from its pawn
+    tweak's `m_pComponentLocomotionConfig` (the default's when unset). The turn speeds up at
+    `m_fRotationAccelMultiplier` (2) times that a second, and slows in time to arrive (the
+    locomotion's turn 0x00941330 and its integrator 0x004B2A30, decoded for this rewrite).
+    Guards and townsfolk walk round at 90 degrees a second, and run round at 550-600. On a turn
+    over `m_fMinAngleToTestWalls` (45) along its path, it turns 3 times as fast with a wall
+    1.5 m ahead (`m_fTestWallsFrontDist`), 5.5 times with one only 1.2 m to the side it turns.
+    Before, everyone turned at 344 degrees a second. Standing and fighting turns are as before.
   - `DH_LOCO_LOG` logs each blend's loops, weights and rate, with the facing and the way it goes.
   A relaxed walker (patrolling, or going back to its post) starts, stops and turns into its walk
   with its clips (its idle speed mode's start, stop and turn props in the
@@ -2465,6 +2473,10 @@ against the install's own data where it carries them, then implemented independe
 - **Noises carry the original's loudness and context.**
   - Running steps carry 6 m, sprinting 12 m, landing 4 m (a big fall 8 m); sneaking and crouched
     landings are silent, and so are running and sprinting with the Silent Movement upgrades.
+    Corvo's steps are his arms' locomotion loops' footfalls (`DishonoredNotify_Footfall`: twice
+    a loop, every 0.47 s of a run's, 0.27 s of a sprint's, 0.67 s of a walk's or sneak's, at the
+    rate the arms play them), as his pawn's footfall (0x00B66ED0) makes them; his body tweak
+    doesn't make its own (`m_bGenerateFootfalls`). Before, they were paced by a timer.
   - Blades meeting and blows carry 8 m (a threat); the pistol 60 m and its bullet's impact 30 m
     (danger); a grenade 25 m; a death rattle 3 m. The crossbow makes no noise firing.
   - A guard's attention rises by the context's own amount (anomaly, threat, danger, death rattle,

@@ -655,7 +655,7 @@ fn player_move(
         ResMut<HardLanding>,
         ResMut<LeanView>,
     ),
-    pad: Option<Res<crate::pad::Pad>>,
+    (pad, mut arm_steps): (Option<Res<crate::pad::Pad>>, ResMut<crate::arms::ArmSteps>),
     mut q: Query<(
         Entity,
         &mut Player,
@@ -1046,12 +1046,16 @@ fn player_move(
         p.air_peak = t.translation.y;
     }
 
-    // footsteps the AI can hear
+    // footsteps the AI can hear: on his arms' locomotion loops' footfalls
+    // (`DishonoredNotify_Footfall`: a run's every 0.47 s, a sprint's 0.27 s), else paced; none
+    // for a while after landing (`m_fIgnoreFootfallsAfterLand_Time`)
     let hspeed = Vec3::new(p.velocity.x, 0.0, p.velocity.z).length();
+    let cued = std::mem::take(&mut arm_steps.due);
     if p.grounded && hspeed > 0.5 {
         p.step_timer -= dt;
-        if p.step_timer <= 0.0 {
-            p.step_timer = if p.sprinting { 0.32 } else if p.crouched { 0.6 } else { 0.5 };
+        let step = if arm_steps.cued { cued > 0 && p.step_timer <= 0.0 } else { p.step_timer <= 0.0 };
+        if step {
+            p.step_timer = if arm_steps.cued { 0.0 } else if p.sprinting { 0.32 } else if p.crouched { 0.6 } else { 0.5 };
             let gait = if p.crouched { Gait::Sneak } else if p.sprinting { Gait::Sprint } else { Gait::Walk };
             steps.write(Footfall { pos: t.translation, gait, who: Walker::Player, by: Some(entity) });
             let radius = if p.crouched || (p.sprinting && attrs.silent_sprinting) || (!p.sprinting && attrs.silent_running) {

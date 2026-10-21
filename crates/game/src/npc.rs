@@ -419,6 +419,10 @@ pub struct Npc {
     pub avoid_f: f32,
     /// its speed mode a run (`npc_move`)
     pub running: bool,
+    /// its stance's locomotion (`LOCO_*`, as `npc_select_anim` last picked it), and how fast it
+    /// turns (rad/s, signed: `turn_toward`)
+    pub stance: usize,
+    pub yaw_v: f32,
     /// out of a plague carrier's cloud it's in (`DisBehaviorEscapePlague`'s `GetOuttaHere`):
     /// where it makes for, and how long yet
     pub plague_escape: Option<(Vec3, f32)>,
@@ -529,6 +533,8 @@ pub struct Arms {
     pub pacing: Option<dhcook::format::NpcPacing>,
     /// how danger zones steer it, and the one its aim lays (`danger`)
     pub danger: dhcook::format::NpcDanger,
+    /// how its locomotion turns (`LocoTurn`)
+    pub turning: LocoTurn,
     /// what it throws with its bare hand
     pub throwing: Option<dhcook::format::NpcThrowing>,
     /// the moves it uses only from outside the ring of those at Corvo (or with him out of
@@ -540,7 +546,7 @@ pub struct Arms {
 
 impl Default for Arms {
     fn default() -> Self {
-        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, pacing: None, danger: Default::default(), throwing: None, outer_only: Vec::new(), outer_place: None }
+        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, pacing: None, danger: Default::default(), turning: LocoTurn::default(), throwing: None, outer_only: Vec::new(), outer_place: None }
     }
 }
 
@@ -691,6 +697,7 @@ impl Arms {
         a.whiskey = st.whiskey.clone();
         a.pacing = st.pacing.clone();
         a.danger = st.danger.clone();
+        a.turning = LocoTurn::of(&st.loco);
         // (its outer pattern's place: the ideal reach of the move it names, a projectile's that of
         // its firearm, its bottle or its throw)
         let drawn = (seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as usize;
@@ -2334,6 +2341,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         avoid_r: -1.0,
         avoid_f: 1.0,
         running: false,
+        stance: LOCO_EMPTY,
+        yaw_v: 0.0,
         plague_escape: None,
         robbed: None,
         rising: 0.0,
@@ -5848,12 +5857,16 @@ pub(crate) fn npc_move(
             kcc.translation = Some(npc.velocity * dt);
         }
         // facing: movement direction, or the player when fighting at close range
+        let mut walking = false;
         let face = match (npc.mode, ppos) {
             (Mode::Combat, Some(p)) if npc.sees_player && p.distance(pos) < 6.0 => Some((p - pos).with_y(0.0)),
             (Mode::Combat, _) if npc.last_seen.map(|l| l.distance(pos) < 6.0).unwrap_or(false) && new_h.length() < 1.0 => {
                 npc.last_seen.map(|l| (l - pos).with_y(0.0))
             }
-            _ if new_h.length() > 0.3 => Some(new_h),
+            _ if new_h.length() > 0.3 => {
+                walking = true;
+                Some(new_h)
+            }
             _ if npc.attn_level == 2 && npc.alert == Alert::Unaware && npc.target.is_none() => npc.last_seen.map(|l| (l - pos).with_y(0.0)),
             (_, Some(p)) if npc.warn.is_some() => Some((p - pos).with_y(0.0)),
             // (paused: a quarter from the heading it walked, to the side what it watches is on)
@@ -5872,10 +5885,28 @@ pub(crate) fn npc_move(
         if let Some(f) = face {
             if f.length_squared() > 1e-4 {
                 let target_yaw = (-f.x).atan2(-f.z);
-                let mut dy = (target_yaw - npc.yaw + PI).rem_euclid(TAU) - PI;
-                let max = 6.0 * dt;
-                dy = dy.clamp(-max, max);
-                npc.yaw += dy;
+                let dy = (target_yaw - npc.yaw + PI).rem_euclid(TAU) - PI;
+                // walking, at its speed mode's turn rate (`LocoTurn`); else as before
+                let rate = if walking { npc.arms.turning.rate(npc.stance, npc.mode, npc.running, npc.arms.plague.is_some()) } else { None };
+                if let Some(rate) = rate {
+                    let tw = npc.arms.turning;
+                    // (a sharp turn on its path: faster with a wall ahead, faster still with one
+                    // only to the side it turns)
+                    let mut mult = 1.0;
+                    if npc.path.is_some() && dy.abs() > tw.wall_angle {
+                        let wall = |dir: Vec3, len: f32| ctx.as_ref().is_some_and(|c| c.cast_ray(pos, dir, len, true, ground_filter).is_some());
+                        let ahead = npc.forward();
+                        let side = Quat::from_rotation_y(dy.signum() * FRAC_PI_2) * ahead;
+                        mult = if wall(ahead, tw.wall_front) { tw.wall_mult } else if wall(side, tw.wall_side) { tw.side_mult } else { 1.0 };
+                    }
+                    let mut v = npc.yaw_v;
+                    npc.yaw += turn_toward(dy, &mut v, rate * mult, rate * mult * tw.accel_mult, dt);
+                    npc.yaw_v = v;
+                } else {
+                    let max = 6.0 * dt;
+                    npc.yaw += dy.clamp(-max, max);
+                    npc.yaw_v = 0.0;
+                }
             }
         }
         if !npc.is_down() {
@@ -7999,6 +8030,7 @@ fn npc_select_anim(
         } else {
             LOCO_EMPTY
         };
+        npc.stance = stance;
         let set = &clips.loco[stance];
         // a patrolling or guarding character's ambient idles (`DisTweaks_AISubProcess_AmbientAnims`
         // of the patrol and guard behaviours: every 30-60 s, `m_fMin/MaxAmbientAnimFrequency`, on
@@ -8199,6 +8231,87 @@ const LOCO_PATROL: usize = 1;
 const LOCO_SWORD_PATROL: usize = 2;
 const LOCO_SWORD: usize = 3;
 const LOCO_PANIC: usize = 4;
+
+/// How a character's locomotion turns as it walks (its `NpcLoco`, as 0x00941330 turns it): its
+/// rows `LOCO_*`, then searching empty-handed and a weeper's (the default config's `Search`
+/// and `Weeper` speed modes), each gait's top rate (rad/s; walk, run; 0: its config has none,
+/// and it turns as before); its acceleration over its rate; and on a sharp turn on its path
+/// (over `wall_angle`), its rate's multiplier with a wall `wall_front` ahead, and with one only
+/// `wall_side` to the side it turns.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct LocoTurn {
+    rates: [[f32; 2]; 7],
+    pub accel_mult: f32,
+    pub wall_angle: f32,
+    pub wall_front: f32,
+    pub wall_side: f32,
+    pub wall_mult: f32,
+    pub side_mult: f32,
+}
+
+const LOCO_SEARCH: usize = 5;
+const LOCO_WEEPER: usize = 6;
+
+impl LocoTurn {
+    pub fn of(l: &dhcook::format::NpcLoco) -> LocoTurn {
+        // each row's speed modes by gait, the first its config has (a wolfhound's are its own)
+        let names: [[&[&str]; 2]; 7] = [
+            [&["EmptyWalk", "WalkNormal"], &["EmptyRun", "RunNormal"]],
+            [&["EmptyWalkPatrol", "EmptyPatrolWalk", "EmptyWalk", "WalkNormal"], &["EmptyRun", "RunNormal"]],
+            [&["SwordPatrolWalk", "SearchWalk", "SwordWalk", "WalkSearch"], &["SearchRun", "SwordRun", "RunNormal"]],
+            [&["SwordWalk", "WalkAttack"], &["SwordRun", "RunAttack", "RunNormal"]],
+            [&["PanicEmptyWalk", "PanicWalk", "EmptyWalk"], &["PanicEmptyRun", "PanicRun", "PanicSwordRun", "EmptyRun"]],
+            [&["SearchWalk", "WalkSearch", "EmptyWalk"], &["SearchRun", "EmptyRun", "RunNormal"]],
+            [&["WeeperWalk", "EmptyWalk"], &["WeeperRun", "EmptyRun"]],
+        ];
+        let rate = |all: &[&str]| all.iter().find_map(|n| l.modes.iter().find(|(m, _)| m.eq_ignore_ascii_case(n))).map_or(0.0, |(_, r)| r.to_radians());
+        LocoTurn {
+            rates: names.map(|row| row.map(rate)),
+            accel_mult: l.accel_mult,
+            wall_angle: l.wall_angle.to_radians(),
+            wall_front: l.wall_front,
+            wall_side: l.wall_side,
+            wall_mult: l.wall_mult,
+            side_mult: l.side_mult,
+        }
+    }
+
+    /// Its top turn rate walking or running in `stance` (rad/s), if its config gives one.
+    pub fn rate(&self, stance: usize, mode: Mode, running: bool, weeper: bool) -> Option<f32> {
+        let row = if weeper {
+            LOCO_WEEPER
+        } else if stance == LOCO_EMPTY && matches!(mode, Mode::Search | Mode::Investigate) {
+            LOCO_SEARCH
+        } else {
+            stance
+        };
+        Some(self.rates.get(row)?[running as usize]).filter(|r| *r > 0.0 && self.accel_mult > 0.0)
+    }
+}
+
+/// A turn as the locomotion makes it (0x004B2A30): its angular speed `v` (signed) speeds up at
+/// `accel` to `rate` and slows in time to arrive; turning back, it flips at once; a step that
+/// would pass the way it wants ends there. The yaw to add this frame, `dy` being what is left.
+fn turn_toward(dy: f32, v: &mut f32, rate: f32, accel: f32, dt: f32) -> f32 {
+    if dy == 0.0 {
+        *v = 0.0;
+        return 0.0;
+    }
+    if *v * dy < 0.0 {
+        *v = -*v;
+    }
+    let left = dy.abs();
+    let braking = 0.5 * *v * *v / accel >= left;
+    let s = if braking { (v.abs() - accel * dt).max(0.0) } else { (v.abs() + accel * dt).min(rate) };
+    *v = s * dy.signum();
+    let step = *v * dt;
+    if step.abs() >= left {
+        *v = 0.0;
+        dy
+    } else {
+        step
+    }
+}
 
 /// A stance's locomotion, as its locomotion modifier's speed modes list it
 /// (`ArkComponentLocomotionConfig`): its idle loop, its walk's and its run's loops by way (S, W,
@@ -8478,5 +8591,46 @@ mod tests {
         assert!(body_seen(&s, eye, Vec3::NEG_Z, ahead(30.0), 0.4, SEE_CORPSE));
         // behind: never
         assert!(!body_seen(&s, eye, Vec3::NEG_Z, Vec3::new(0.0, 0.0, 3.0), 1.0, SEE_CORPSE));
+    }
+
+    /// A turn speeds up at its acceleration to its rate, slows to arrive and never passes it.
+    #[test]
+    fn turns_speed_up_and_arrive() {
+        let (rate, accel, dt) = (90f32.to_radians(), 180f32.to_radians(), 1.0 / 60.0);
+        let (mut left, mut v, mut t) = (FRAC_PI_2, 0.0, 0.0);
+        let mut top: f32 = 0.0;
+        while left > 1e-6 && t < 5.0 {
+            let step = turn_toward(left, &mut v, rate, accel, dt);
+            assert!(step <= left + 1e-6);
+            left -= step;
+            top = top.max(v);
+            t += dt;
+        }
+        // a quarter turn at 90 degrees a second, half a second to full speed and to stop: 1.5 s
+        assert!((t - 1.5).abs() < 0.1, "{t}");
+        assert!((top - rate).abs() < 1e-4 && v == 0.0);
+        // turning back flips at once
+        let mut v = 1.0;
+        turn_toward(-1.0, &mut v, rate, accel, dt);
+        assert!(v < 0.0);
+    }
+
+    /// A guard's config: its patrol's walk turns at 90 degrees a second, its run at 550, and a
+    /// default character searching empty-handed at its `SearchWalk`'s.
+    #[test]
+    fn turn_rates_by_stance() {
+        let l = dhcook::format::NpcLoco {
+            modes: [("EmptyWalk", 90.0), ("EmptyRun", 550.0), ("EmptyWalkPatrol", 90.0), ("SwordWalk", 360.0), ("SwordRun", 550.0), ("SearchWalk", 45.0)].map(|(n, r)| (n.to_string(), r)).to_vec(),
+            accel_mult: 2.0,
+            ..Default::default()
+        };
+        let t = LocoTurn::of(&l);
+        let deg = |r: Option<f32>| r.map(f32::to_degrees).map(|d| d.round());
+        assert_eq!(deg(t.rate(LOCO_PATROL, Mode::Patrol, false, false)), Some(90.0));
+        assert_eq!(deg(t.rate(LOCO_SWORD, Mode::Combat, true, false)), Some(550.0));
+        assert_eq!(deg(t.rate(LOCO_EMPTY, Mode::Search, false, false)), Some(45.0));
+        // a weeper without its own walks as the empty-handed; no config, no rate (the old turn)
+        assert_eq!(deg(t.rate(LOCO_EMPTY, Mode::Patrol, false, true)), Some(90.0));
+        assert_eq!(LocoTurn::of(&Default::default()).rate(LOCO_SWORD, Mode::Combat, true, false), None);
     }
 }

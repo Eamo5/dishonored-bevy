@@ -3767,6 +3767,38 @@ impl<'a> Cooker<'a> {
 
     /// How danger zones steer a character (its brain's `m_pSteeringTweaks`), and the zone a
     /// tallboy's aim lays (its combat behaviour's `m_fAimingDangerSphereRadius`).
+    fn npc_loco(&mut self, pawn: &Obj) -> NpcLoco {
+        let cfg = self.tweak_obj(pawn, "m_pComponentLocomotionConfig").or_else(|| self.assets.find("DisLocomotionConfig.DefaultLocomotionConfig"));
+        let Some(cfg) = cfg else { return NpcLoco::default() };
+        let mut out = NpcLoco::default();
+        let entries = |s: &mut Self, prop: &str| -> Vec<Props> {
+            match s.tweak_prop(&cfg, prop, 0, 0) {
+                Some((pkg, Value::Array { count, offset, size })) => parse_struct_array(&pkg, offset, size, count).unwrap_or_default(),
+                _ => Vec::new(),
+            }
+        };
+        for m in entries(self, "m_SpeedModePropDictionary") {
+            if let Some(n) = m.name("m_SpeedModeName") {
+                out.modes.push((n.to_string(), m.float("m_fRotationMaxSpeed").unwrap_or(0.0)));
+            }
+        }
+        for m in entries(self, "m_Modifiers") {
+            if let Some(n) = m.name("m_ModifierName") {
+                let f = |k: &str, d: f32| m.float(k).unwrap_or(d);
+                out.modifiers.push((n.to_string(), f("m_fAcceleration", 600.0) * UNIT, f("m_fDeceleration", 600.0) * UNIT, f("m_fSpeedMultiplier", 1.0)));
+            }
+        }
+        let mut f = |k: &str, d: f32| self.tweak_float(&cfg, k, 0).unwrap_or(d);
+        out.wall_mult = f("m_fRotationSpeedMultiplier", 3.0);
+        out.side_mult = f("m_fEmergencyRotationSpeedMultiplier", 5.5);
+        out.accel_mult = f("m_fRotationAccelMultiplier", 2.0);
+        out.wall_angle = f("m_fMinAngleToTestWalls", 45.0);
+        out.wall_front = f("m_fTestWallsFrontDist", 150.0) * UNIT;
+        out.wall_side = f("m_fTestWallsLateralDist", 120.0) * UNIT;
+        log::debug!("npc loco {}: {} modes, {} modifiers", pawn.name(), out.modes.len(), out.modifiers.len());
+        out
+    }
+
     fn danger_steering(&mut self, pawn: &Obj) -> NpcDanger {
         let mut out = NpcDanger::default();
         let Some(brain) = self.tweak_obj(pawn, "m_pBrainTweak") else { return out };
@@ -4161,6 +4193,7 @@ impl<'a> Cooker<'a> {
         st.plague = self.npc_plague(pawn);
         st.pacing = self.pacing(pawn);
         st.danger = self.danger_steering(pawn);
+        st.loco = self.npc_loco(pawn);
         log::debug!(
             "npc stats {}: health {:?}, weapons {:?}, ammo {:?}",
             pawn.name(),
@@ -6442,6 +6475,7 @@ impl<'a> Cooker<'a> {
                             m.hooks.push((t, hook.to_string()));
                         }
                     }
+                    "DishonoredNotify_Footfall" => m.footfalls.push(t),
                     "DisNotify_FootPlacement" => {
                         let on = upk::read_object(&seq.pkg, no).ok().and_then(|o| o.props.bool("m_bEnableFootPlacement")).unwrap_or(false);
                         m.feet.push((t, on));
@@ -6452,7 +6486,8 @@ impl<'a> Cooker<'a> {
             m.feet.sort_by(|a, b| a.0.total_cmp(&b.0));
             m.hooks.sort_by(|a, b| a.0.total_cmp(&b.0));
             m.fx.sort_by(|a, b| a.time.total_cmp(&b.time));
-            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() || !m.look_off.is_empty() {
+            m.footfalls.sort_by(|a, b| a.total_cmp(b));
+            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() || !m.look_off.is_empty() || !m.footfalls.is_empty() {
                 self.scene.clip_marks.push(m);
             }
         }

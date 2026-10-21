@@ -20,7 +20,7 @@ use std::path::Path;
 // 130: barks by their hooks' own names (`m_HookEnum`), with the lines of each output.
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
-pub const SCENE_VERSION: u32 = 156;
+pub const SCENE_VERSION: u32 = 157;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -924,6 +924,10 @@ pub struct ClipMarks {
     /// how much, `m_LookAtFilter`: 0 the eyes, 1 the head, 2 the torso)
     #[serde(default)]
     pub look_off: Vec<(f32, f32, u8)>,
+    /// when a foot comes down (`DishonoredNotify_Footfall`: Corvo's steps, cued by his arms'
+    /// locomotion loops)
+    #[serde(default)]
+    pub footfalls: Vec<f32>,
 }
 
 /// An effect a character's clip starts: seconds in, the particle system, the socket (or bone)
@@ -1147,6 +1151,31 @@ pub struct NpcStats {
     /// how danger zones steer it, and the one its aim lays
     #[serde(default)]
     pub danger: NpcDanger,
+    /// how its locomotion turns and speeds up
+    #[serde(default)]
+    pub loco: NpcLoco,
+}
+
+/// How a character's locomotion turns and speeds up (its pawn tweak's
+/// `m_pComponentLocomotionConfig`, an `ArkComponentLocomotionConfig`; unset, the class
+/// default's `DefaultLocomotionConfig`): each speed mode's top turn rate by name
+/// (`m_fRotationMaxSpeed`, degrees a second), each modifier's acceleration and deceleration
+/// (m/s²) and speed multiplier by name, and the turn's own: its rate's multiplier with a wall
+/// ahead and with one only beside it (`m_fRotationSpeedMultiplier`,
+/// `m_fEmergencyRotationSpeedMultiplier`), its acceleration's over its rate
+/// (`m_fRotationAccelMultiplier`), and the turn past which it looks for walls and how far ahead
+/// and aside (`m_fMinAngleToTestWalls` degrees, `m_fTestWallsFrontDist`,
+/// `m_fTestWallsLateralDist` m).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct NpcLoco {
+    pub modes: Vec<(String, f32)>,
+    pub modifiers: Vec<(String, f32, f32, f32)>,
+    pub wall_mult: f32,
+    pub side_mult: f32,
+    pub accel_mult: f32,
+    pub wall_angle: f32,
+    pub wall_front: f32,
+    pub wall_side: f32,
 }
 
 /// How the AI's danger zones steer a character (its brain's `m_pSteeringTweaks`:
