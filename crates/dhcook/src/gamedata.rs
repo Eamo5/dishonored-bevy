@@ -1710,6 +1710,21 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
             }
         }
     }
+    // the avoidance's radii and forces (`ArkAvoidable`): Corvo's class defaults under his own,
+    // and a character's (`Twk_Pawn_DefaultNPC` over its class's) as `npc.<property>`
+    for (pkg, path, prefix) in [(&game, "Default__DisTweaks_PlayerPawn", ""), (&game, "Default__DisTweaks_NPCPawn", "npc."), (&startup, "Twk_Pawn_DefaultNPC.Twk_Pawn_DefaultNPC", "npc.")] {
+        let Some(p) = pkg.find_export(path).and_then(|i| props(pkg, i)) else { continue };
+        for q in p.0.iter().filter(|q| q.name.starts_with("m_fAvoidance")) {
+            if let Value::Float(f) = q.value {
+                let key = format!("{prefix}{}", q.name);
+                if prefix.is_empty() {
+                    d.pawn.entry(key).or_insert(f);
+                } else {
+                    d.pawn.insert(key, f);
+                }
+            }
+        }
+    }
     // the game parameter his breath sets (`m_BreathlessnessRTPC`, the class's)
     if let Some(Value::Name(n)) = game.find_export("Default__DisTweaks_PlayerPawn").and_then(|i| props(&game, i)).and_then(|p| p.get("m_BreathlessnessRTPC").cloned()) {
         d.texts.insert("Pawn.m_BreathlessnessRTPC".into(), n);

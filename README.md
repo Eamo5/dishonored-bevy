@@ -2558,6 +2558,23 @@ against the install's own data where it carries them, then implemented independe
     way it is pushed, as its steps' cooldowns allow (ManageAttacks 0x00B3A300). So guards keep
     out of a tower's fire and give a tallboy's arrows room.
   - Not yet: burning characters (their zone lasts about a frame).
+- **Keeping out of each other's way** (`avoid.rs`), as the original's avoidance does (Arkane's
+  `ArkAvoidable`, decoded for this rewrite from the user's own Dishonored.exe: the manager's tick
+  0x00938440, a character's setup 0x00B7CD10, the locomotion's fold 0x0094A630):
+  - Each character, and Corvo, has a radius and a force. A character's radius is 10 uu
+    (`m_fAvoidanceDefaultRadius`), 20 while it fights or runs (`m_fAvoidanceFightingRadius`,
+    `Twk_Pawn_DefaultNPC`'s `m_fAvoidanceRunningRadius`), eased there at 100 uu a second. Its
+    force is 1, and 10 while a clip carries it (`m_fAvoidanceRootMotionForceMultiplier`), eased at
+    10 a second. Corvo's radius is 60 and his force 2 (`DisTweaks_PlayerPawn`).
+  - Each pair less than 3 m apart in height pushes apart along the line between them. The push
+    is full within their radii summed, then falls off to nothing at three times that (80 uu at
+    least: two walkers within 0.8 m, a walker within 2.1 m of Corvo). Unequal forces share it out:
+    each is pushed by twice the other's force over their sum, the one giving way at most in full.
+    So a character gives way to Corvo, and hardly moves one a clip carries.
+  - Corvo is never pushed. A character's pushes, with the danger zones', bend its way as it
+    moves, together at most a full stride (standing, it isn't moved). So a guard walking at Corvo
+    slows and steps round him, and passers-by keep apart. Before, characters walked into each
+    other and Corvo, and only a random sidestep got them unstuck.
 - **Walls and pylons no one trusts** (`distrust.rs`), as the original's AI keeps whale oil
   devices in mind (`AIKnowledgeRecord_WhaleOilDevice`, decoded for this rewrite from the user's
   own Dishonored.exe):

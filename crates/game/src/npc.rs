@@ -412,6 +412,13 @@ pub struct Npc {
     pub danger: Vec3,
     pub danger_smooth: Vec3,
     pub danger_fade: f32,
+    /// the avoidance's push on it (`avoid`): what else bends its way, and its eased radius (m:
+    /// below 0 before its first) and force
+    pub avoid: Vec3,
+    pub avoid_r: f32,
+    pub avoid_f: f32,
+    /// its speed mode a run (`npc_move`)
+    pub running: bool,
     /// out of a plague carrier's cloud it's in (`DisBehaviorEscapePlague`'s `GetOuttaHere`):
     /// where it makes for, and how long yet
     pub plague_escape: Option<(Vec3, f32)>,
@@ -2323,6 +2330,10 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         danger: Vec3::ZERO,
         danger_smooth: Vec3::ZERO,
         danger_fade: 0.0,
+        avoid: Vec3::ZERO,
+        avoid_r: -1.0,
+        avoid_f: 1.0,
+        running: false,
         plague_escape: None,
         robbed: None,
         rising: 0.0,
@@ -5683,6 +5694,8 @@ pub(crate) fn npc_move(
             }
             _ => npc.gait[0],
         };
+        // (faster than an alert walk hurried: a run, as the avoidance takes its speed mode)
+        npc.running = speed > npc.gait[1] * 1.3 + 0.01;
         let mut wish = Vec3::ZERO;
         // a lunging blow carries it at Corvo until it lands (a step back, away)
         let lunge = npc.swing.as_ref().filter(|s| s.lunge != 0.0 && npc.attack_t.is_some_and(|t| t < s.hit)).map(|s| s.lunge);
@@ -5761,9 +5774,10 @@ pub(crate) fn npc_move(
             (Some(_), _) => wish = Vec3::ZERO,
             _ => {}
         }
-        // the danger zones' push bends its way as it moves (`danger`; the locomotion 0x0094A630:
-        // its heading and the push, together at most a full stride; standing, it isn't moved)
-        let pushed = npc.danger.with_y(0.0);
+        // the danger zones' push and the avoidance's bend its way as it moves (`danger`, `avoid`;
+        // the locomotion 0x0094A630: its heading and the pushes, together at most a full stride;
+        // standing, it isn't moved)
+        let pushed = (npc.danger + npc.avoid).with_y(0.0);
         if pushed.length_squared() > 1e-8 && npc.grab.is_none() {
             let s = wish.length();
             if s > 0.05 {
@@ -5774,8 +5788,12 @@ pub(crate) fn npc_move(
         if wish.length_squared() > 0.01 && !paced {
             npc.stuck += dt;
             if npc.stuck > 0.8 {
-                if pos.distance(npc.progress_pos) < 0.3 {
+                // (one at a time: a search's count runs on, and would pick a side each frame)
+                if pos.distance(npc.progress_pos) < 0.3 && npc.sidestep == 0.0 {
                     npc.sidestep = 0.7 * if rand::random::<bool>() { 1.0 } else { -1.0 };
+                    if std::env::var_os("DH_AVOID_LOG").is_some() {
+                        info!("stuck: {} sidesteps at {pos:.1} ({:?})", npc.name, npc.mode);
+                    }
                 }
                 npc.progress_pos = pos;
                 npc.stuck = if npc.mode == Mode::Search { npc.stuck } else { 0.0 };
