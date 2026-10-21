@@ -38,7 +38,7 @@ impl Plugin for PropsPlugin {
             .add_systems(PostUpdate, unscale_prop_physics.after(PhysicsSet::Writeback).run_if(in_state(GameState::InGame)))
             .add_systems(OnEnter(GameState::InGame), ((|mut h: ResMut<Held>| *h = Held::default()), setup_props.after(crate::level::LevelSpawnSet)))
             .add_systems(Update, prop_focus.after(crate::interact::FocusSet).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (restore_props, restore_prop_states, restore_held_prop, hold_prop, make_tanks, prop_impacts, prop_hits, prop_step_meshes, tank_misses, sync_props, burst_tanks, prop_events, script_physics, prop_gusts).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (restore_props, restore_prop_states, restore_held_prop, hold_prop, make_tanks, prop_impacts, prop_hits, prop_step_meshes, tank_misses, sync_props, burst_tanks, prop_events, script_physics, prop_gusts, wake_props).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -181,6 +181,8 @@ pub struct Prop {
     live: Option<f32>,
     /// how many of its steps it has taken (`Movable::steps`: the last is its break)
     steps: usize,
+    /// still at rest where the level put it, held still (`wake_props`)
+    dormant: bool,
 }
 
 impl Prop {
@@ -264,12 +266,14 @@ fn script_physics(mut commands: Commands, vm: Option<ResMut<crate::kismet::Vm>>,
     }
     for (targets, mode) in std::mem::take(&mut vm.set_physics) {
         let insts: Vec<u32> = targets.iter().filter_map(|v| if let crate::kismet::Val::Actor(a) = v { g.actors.get(*a as usize) } else { None }).flat_map(|a| a.instances.iter().copied()).collect();
-        for p in &props {
+        for mut p in &mut props {
             let Some(m) = level.scene.movables.get(p.index) else { continue };
             if !insts.contains(&m.instance) || m.fixed {
                 continue;
             }
             let Some(b) = p.body else { continue };
+            // (the scripts' say from now on)
+            p.dormant = false;
             match mode.as_str() {
                 "PHYS_RigidBody" => {
                     commands.entity(b).try_insert((RigidBody::Dynamic, Sleeping { sleeping: false, ..default() }));
@@ -332,6 +336,8 @@ pub struct PropStateSave {
     released: f32,
     settling: bool,
     body: Option<([f32; 3], [f32; 3], f32, u8)>,
+    #[serde(default)]
+    dormant: bool,
 }
 
 impl Prop {
@@ -343,6 +349,7 @@ impl Prop {
                 RigidBody::Fixed => 0, RigidBody::Dynamic => 1,
                 RigidBody::KinematicPositionBased => 2, RigidBody::KinematicVelocityBased => 3,
             })),
+            dormant: self.dormant,
         }
     }
 }
@@ -369,6 +376,7 @@ fn restore_prop_states(
         prop.quiet = saved.quiet;
         prop.released = saved.released;
         prop.settling = saved.settling;
+        prop.dormant = saved.dormant;
         if saved.thrown && std::env::var("DH_PROP_LOG").is_ok() {
             info!("restored thrown prop {}: health {}, body {:?}", saved.index, saved.health, saved.body);
         }
@@ -415,7 +423,7 @@ mod held_save_tests {
             Collider::ball(0.2), GravityScale(1.0), Velocity::linear(Vec3::X * 10.0))).id();
         let prop = app.world_mut().spawn(Prop { index: 0, health: 10.0, body: Some(body),
             last_vel: Vec3::X * 10.0, thrown: true, quiet: 0.0, released: 0.2, offset: Vec3::ZERO,
-            settling: false, hung: false, live: None, steps: 0 }).id();
+            settling: false, hung: false, live: None, steps: 0, dormant: false }).id();
         for _ in 0..4 { app.update(); }
         assert_eq!(app.world().get::<Transform>(body).unwrap().translation, Vec3::new(0.0, 10.0, 0.0));
         assert_eq!(app.world().get::<Velocity>(body).unwrap().linear, Vec3::X * 10.0);
@@ -455,7 +463,7 @@ mod held_save_tests {
         let mut app = App::new();
         app.init_resource::<PropRestore>().add_systems(Update, restore_prop_states);
         let mut prop = Prop { index: 8, health: 3.0, body: None, last_vel: Vec3::X * 12.0,
-            thrown: true, quiet: 0.4, released: 0.2, offset: Vec3::ZERO, settling: false, hung: false, live: None, steps: 0 };
+            thrown: true, quiet: 0.4, released: 0.2, offset: Vec3::ZERO, settling: false, hung: false, live: None, steps: 0, dormant: false };
         let velocity = Velocity { linear: Vec3::new(10.0, 2.0, 0.0), angular: Vec3::Y * 3.0 };
         let saved = prop.save_state(Some((&velocity, &GravityScale(1.0), &RigidBody::Dynamic)));
         let saved = serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
@@ -496,7 +504,7 @@ mod held_save_tests {
         let body = app.world_mut().spawn((GravityScale(1.0), CollisionGroups::new(GROUP_PROP, LOOSE), Velocity::linear(Vec3::X), RigidBody::Fixed)).id();
         let prop = app.world_mut().spawn(Prop {
             index: 7, health: 10.0, body: Some(body), last_vel: Vec3::ZERO,
-            thrown: true, quiet: 0.0, released: 0.5, offset: Vec3::ZERO, settling: false, hung: false, live: None, steps: 0,
+            thrown: true, quiet: 0.0, released: 0.5, offset: Vec3::ZERO, settling: false, hung: false, live: None, steps: 0, dormant: false,
         }).id();
         app.update();
         assert_eq!(app.world().resource::<Held>().0, Some(prop));
@@ -541,6 +549,30 @@ fn restore_props(mut commands: Commands, mut restore: ResMut<PropRestore>, props
     }
 }
 
+/// Props still where the level put them wake as something moving touches them (a thrown
+/// thing, a falling body, a woken prop, a piece of something broken), as PhysX wakes a
+/// sleeping body; a blast, a blow, a gust, a hand or the scripts wake them on their own.
+fn wake_props(mut commands: Commands, rapier: ReadRapierContext, mut props: Query<&mut Prop>, bodies: Query<(&RigidBody, Option<&Velocity>)>) {
+    let Ok(ctx) = rapier.single() else { return };
+    for mut p in &mut props {
+        if !p.dormant {
+            continue;
+        }
+        let Some(b) = p.body else { continue };
+        // (moved by something else already)
+        if bodies.get(b).is_ok_and(|(rb, _)| *rb != RigidBody::Fixed) {
+            p.dormant = false;
+            continue;
+        }
+        let moving = |e: Option<Entity>| e.filter(|e| *e != b).and_then(|e| bodies.get(e).ok()).is_some_and(|(rb, v)| *rb == RigidBody::Dynamic && v.is_some_and(|v| v.linear.length() > 0.1 || v.angular.length() > 0.5));
+        let touched = ctx.contact_pairs_with(b).any(|pair| pair.has_any_active_contact() && pair.manifolds().any(|m| m.num_points() > 0 && (moving(m.rigid_body1()) || moving(m.rigid_body2()))));
+        if touched {
+            p.dormant = false;
+            commands.entity(b).try_insert((RigidBody::Dynamic, Sleeping { sleeping: false, ..default() }));
+        }
+    }
+}
+
 /// A broken prop's piece, gone after a while.
 #[derive(Component)]
 struct Chunk(f32);
@@ -557,7 +589,7 @@ fn setup_props(
     for (i, m) in scene.movables.iter().enumerate() {
         let Some(&(e, t, col)) = by_index.get(&m.instance) else { continue };
         // (settling at the start makes no sound)
-        let mut prop = Prop { index: i, health: m.health.max(1.0), body: None, last_vel: Vec3::ZERO, thrown: false, quiet: 1.0, released: 0.0, offset: Vec3::ZERO, settling: true, hung: !m.joints.is_empty(), live: None, steps: 0 };
+        let mut prop = Prop { index: i, health: m.health.max(1.0), body: None, last_vel: Vec3::ZERO, thrown: false, quiet: 1.0, released: 0.0, offset: Vec3::ZERO, settling: true, hung: !m.joints.is_empty(), live: None, steps: 0, dormant: false };
         if m.fixed {
             // a breakable in the way: weapons wear it down (its collider goes with it)
             // (the scripts may remove it as the level starts: `try_`)
@@ -581,6 +613,11 @@ fn setup_props(
             // the light ones stop no one (a thrown one striking someone is caught by
             // `prop_impacts`)
             let with = if m.weight <= 1 { LOOSE.difference(GROUP_PLAYER).difference(GROUP_NPC) } else { LOOSE };
+            // (at rest where the level put it until something disturbs it, as UE3's rigid bodies
+            // start asleep: `bWakeOnLevelStart` off. Simulated from the start, those not quite
+            // on their shelves and tables fell as the level began, some a metre to the floor,
+            // and the guards nearby went to look at the noise)
+            prop.dormant = m.tank.is_none() && !prop.hung && m.pool.is_none();
             commands
                 .entity(body)
                 .try_remove::<crate::footsteps::ColliderSurfaces>()
@@ -588,7 +625,7 @@ fn setup_props(
                     at,
                     // (a whale oil tank stays seated in its receptacle until taken, a PA speaker
                     // hangs by its joint)
-                    if m.tank.is_some() || prop.hung { RigidBody::Fixed } else { RigidBody::Dynamic },
+                    if m.tank.is_some() || prop.hung || prop.dormant { RigidBody::Fixed } else { RigidBody::Dynamic },
                     shape,
                     ColliderMassProperties::Mass(MASS[m.weight.min(3) as usize]),
                     CollisionGroups::new(GROUP_PROP, with),
@@ -804,6 +841,15 @@ fn prop_impacts(
         let Some(Ok((bt, mut v))) = prop.body.map(|b| bodies.get_mut(b)) else { continue };
         let before = prop.last_vel;
         prop.last_vel = v.linear;
+        if std::env::var_os("DH_PROP_WAKE").is_some() {
+            if v.linear.length() > 0.5 && before.length() <= 0.5 {
+                info!("prop {} wakes at {:.2} ({:.1} m/s) t {:.2}", level.scene.movables[prop.index].name, bt.translation, v.linear.length(), time.elapsed_secs());
+            }
+            if v.linear.length() < 0.05 && before.length() >= 0.05 {
+                let placed = level.scene.instances.get(level.scene.movables[prop.index].instance as usize).map(|i| Mat4::from_cols_array(&i.transform).transform_point3(prop.offset));
+                info!("prop {} rests at {:.2}, placed at {:.2?} t {:.2}", level.scene.movables[prop.index].name, bt.translation, placed, time.elapsed_secs());
+            }
+        }
         if prop.thrown && std::env::var("DH_PROP_LOG").is_ok() {
             info!("thrown {}: {:.1} -> {:.1} m/s", level.scene.movables[prop.index].name, before.length(), v.linear.length());
         }
@@ -844,6 +890,9 @@ fn prop_impacts(
                     fx.write(SpawnEffect { system: Some(ps), ..SpawnEffect::at("", at) });
                 }
                 if im.noise > 0.0 {
+                    if std::env::var_os("DH_HEAR_LOG").is_some() {
+                        info!("hearing: {} knocks at {speed:.1} m/s against {against} at {at:.1}", m.name);
+                    }
                     noise.write(Noise { corvo: prop.thrown, pos: at, radius: im.noise, kind: if im.threatening { NoiseKind::Threatening } else { NoiseKind::Anomaly } });
                 }
             }
@@ -1015,6 +1064,10 @@ fn prop_hits(
         if let Some(Ok(mut v)) = prop.body.filter(|_| !scripted.contains(&e)).map(|b| bodies.get_mut(b)) {
             let push = (t.translation - from).normalize_or(Vec3::Y);
             v.linear += (push + Vec3::Y * 0.3) * (dmg * 0.4).clamp(1.0, 8.0) / MASS[m.weight.min(3) as usize].sqrt();
+            if prop.dormant {
+                prop.dormant = false;
+                commands.entity(prop.body.unwrap()).try_insert((RigidBody::Dynamic, Sleeping { sleeping: false, ..default() }));
+            }
         }
         if dmg < m.threshold || m.breaks.is_none() {
             continue;

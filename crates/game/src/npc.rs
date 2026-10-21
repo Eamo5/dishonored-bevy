@@ -3116,7 +3116,7 @@ fn npc_hearing(
                 continue;
             }
             if log {
-                info!("hearing: {} hears {:?} {:.1} m off", npc.name, n.kind, d);
+                info!("hearing: {} hears {:?} {:.1} m off (at {:.1}, Corvo's {})", npc.name, n.kind, d, n.pos, n.corvo);
             }
             if his {
                 npc.heard_player += 1;

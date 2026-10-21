@@ -482,6 +482,46 @@ pub fn make_pickup(level: &LevelInfo, data: &crate::gamedata::Data, pi: usize, e
     }
 }
 
+/// A pickup's meshes' bounds in the world (theirs and their parts').
+fn pickup_bounds(entities: &[Entity], bounds: &Query<(&bevy::camera::primitives::Aabb, &GlobalTransform)>, kids: &Query<&Children>) -> Option<(Vec3, Vec3)> {
+    let mut out: Option<(Vec3, Vec3)> = None;
+    let mut stack: Vec<Entity> = entities.to_vec();
+    while let Some(e) = stack.pop() {
+        if let Ok((b, gt)) = bounds.get(e) {
+            let (c, h) = (Vec3::from(b.center), Vec3::from(b.half_extents));
+            let m = gt.affine();
+            for i in 0..8 {
+                let p = m.transform_point3(c + h * Vec3::new(if i & 1 == 0 { -1.0 } else { 1.0 }, if i & 2 == 0 { -1.0 } else { 1.0 }, if i & 4 == 0 { -1.0 } else { 1.0 }));
+                out = Some(out.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p))));
+            }
+        }
+        if let Ok(ch) = kids.get(e) {
+            stack.extend(ch.iter());
+        }
+    }
+    out
+}
+
+/// Where a ray from `from` along `dir` (unit) enters a box (0 from inside), if it does.
+fn ray_box(from: Vec3, dir: Vec3, lo: Vec3, hi: Vec3) -> Option<f32> {
+    let inv = dir.recip();
+    let (a, b) = ((lo - from) * inv, (hi - from) * inv);
+    let (near, far) = (a.min(b).max_element(), a.max(b).min_element());
+    (far >= near.max(0.0)).then_some(near.max(0.0))
+}
+
+/// A pickup's words for the crosshair: what can be done (`DUI_Crosshair_Pickup`) on someone, or
+/// on a body: the HUD's "Loot" (`m_InteractionTexts[30]`); lying about, its own
+/// (`m_InteractText`: "Pick up", "Eat"); and its name.
+fn pickup_words(level: Option<&LevelInfo>, p: &Pickup, pocket: bool) -> (String, String) {
+    let own = level.and_then(|l| l.scene.pickups.get(p.index as usize)).map(|d| d.verb.as_str()).filter(|v| !v.is_empty() && !pocket);
+    let text = match own {
+        Some(v) => crate::gamedata::readable(&v.replace("`GBA_Use`", &crate::bindings::hint(crate::bindings::Act::Use))),
+        None => format!("{} Loot", crate::bindings::hint(crate::bindings::Act::Use)),
+    };
+    (text, p.label.clone())
+}
+
 #[allow(clippy::type_complexity)]
 fn find_focus(
     mut focus: ResMut<InteractFocus>,
@@ -499,6 +539,7 @@ fn find_focus(
         Query<(&crate::npc::Npc, &Transform), Without<Player>>,
         Res<PlayerStats>,
     ),
+    (bounds, kids): (Query<(&bevy::camera::primitives::Aabb, &GlobalTransform)>, Query<&Children>),
 ) {
     focus.0 = false;
     focus.1 = None;
@@ -517,33 +558,63 @@ fn find_focus(
     }
     let eye = cg.translation();
     let fwd = cg.forward().as_vec3();
+    // what is behind a wall can't be used
+    let ctx = rapier.single().ok();
+    let world = bevy_rapier3d::prelude::QueryFilter::default().groups(bevy_rapier3d::prelude::CollisionGroups::new(bevy_rapier3d::prelude::Group::ALL, crate::level::GROUP_WORLD));
+    let blocked = |to: Vec3| -> bool {
+        let d = to.length();
+        ctx.as_ref().and_then(|c| c.cast_ray(eye, to / d.max(1e-3), (d - 0.35).max(0.0), true, world)).is_some()
+    };
     // (score, what, what can be done, its name)
     let mut best: Option<(f32, Entity, String, String)> = None;
     for (e, p, t, pocket) in &pickups {
         let to = t.translation - eye;
         let d = to.length();
-        if d > 2.4 {
+        if d > 2.4 + 0.5 {
             continue;
         }
         // in someone's pocket: from behind and unseen, or from the body
         if pocket.is_some_and(|pk| !pk.reachable(&owners, eye)) {
             continue;
         }
-        let c = to.normalize_or_zero().dot(fwd);
-        if c < 0.82 {
-            continue;
-        }
+        let score = if pocket.is_some() {
+            let c = to.normalize_or_zero().dot(fwd);
+            if c < 0.82 || d > 2.4 {
+                continue;
+            }
+            d * (2.0 - c) - 0.3
+        } else {
+            // lying about: the crosshair on it, as the original traces the crosshair against
+            // the item (its meshes' bounds, a little forgiving for the small ones), within reach
+            // and not behind a wall (as roshan's r614/blink research has it, U-112). (Taken
+            // within a 35-degree cone of its origin, with no line to it, the bread on a shelf
+            // was eaten while Corvo looked at the wall beside it, and things were taken
+            // through walls and cupboard doors)
+            match pickup_bounds(&p.entities, &bounds, &kids) {
+                Some((lo, hi)) => {
+                    // (the forgiveness: some 6 cm about it, the more for the smallest, up to 12)
+                    let size = (hi - lo).max_element();
+                    let pad = (0.12 - size * 0.25).clamp(0.06, 0.12);
+                    let Some(hit) = ray_box(eye, fwd, lo - Vec3::splat(pad), hi + Vec3::splat(pad)) else { continue };
+                    if hit > 2.4 || blocked(fwd * hit.max(0.36)) {
+                        continue;
+                    }
+                    hit - 0.3
+                }
+                None => {
+                    // (no meshes: its place, nearly dead ahead)
+                    let c = to.normalize_or_zero().dot(fwd);
+                    if c < 0.97 || d > 2.4 || blocked(to) {
+                        continue;
+                    }
+                    d * (2.0 - c) - 0.3
+                }
+            }
+        };
         // what can be taken comes first when it's looked at
-        let score = d * (2.0 - c) - 0.3;
         if best.as_ref().map(|b| score < b.0).unwrap_or(true) {
-            // (`DUI_Crosshair_Pickup`) on someone, or on a body: the HUD's "Loot"
-            // (`m_InteractionTexts[30]`); lying about, its own (`m_InteractText`: "Pick up", "Eat")
-            let own = level.as_ref().and_then(|l| l.scene.pickups.get(p.index as usize)).map(|d| d.verb.as_str()).filter(|v| !v.is_empty() && pocket.is_none());
-            let text = match own {
-                Some(v) => crate::gamedata::readable(&v.replace("`GBA_Use`", &crate::bindings::hint(crate::bindings::Act::Use))),
-                None => format!("{} Loot", crate::bindings::hint(crate::bindings::Act::Use)),
-            };
-            best = Some((score, e, text, p.label.clone()));
+            let (text, label) = pickup_words(level.as_deref(), p, pocket.is_some());
+            best = Some((score, e, text, label));
         }
     }
     for (e, door, gt, li) in &doors {
@@ -582,13 +653,6 @@ fn find_focus(
             best = Some((score, e, text, say("name", "")));
         }
     }
-    // what is behind a wall can't be used
-    let ctx = rapier.single().ok();
-    let world = bevy_rapier3d::prelude::QueryFilter::default().groups(bevy_rapier3d::prelude::CollisionGroups::new(bevy_rapier3d::prelude::Group::ALL, crate::level::GROUP_WORLD));
-    let blocked = |to: Vec3| -> bool {
-        let d = to.length();
-        ctx.as_ref().and_then(|c| c.cast_ray(eye, to / d.max(1e-3), (d - 0.35).max(0.0), true, world)).is_some()
-    };
     for (e, u, t) in &usables {
         let to = t.translation - eye;
         let d = to.length();

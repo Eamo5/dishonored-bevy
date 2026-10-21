@@ -1783,7 +1783,12 @@ are in the settings file, `pad_binding_set` 0-3):
   musical damage (90 every 0.3 s) tears through the rats of a swarm in the cone; it stops a
   second after he leaves the cone, five after he's out of sight.
 - **Physics props**: the levels' movables (`DishonoredMovable`: bottles, pans, cups, helmets)
-  are physical, at rest until disturbed; the light ones are picked up ([Use]), dropped
+  are physical, at rest until disturbed: held still where the level put them, as UE3's rigid
+  bodies start asleep, until something moving touches them (a thrown thing, a falling body, a
+  woken prop) or a blast, a blow, a gust, a hand or the scripts wake them. (Simulated from the
+  start, the many not quite on their shelves fell as each level began, some a metre to the
+  floor, and the guards near them went to look: Galvani's guards searched his house before
+  Corvo arrived.) The light ones are picked up ([Use]), dropped
   ([Use]) and thrown ([Attack], at `ThrowStrength`). Their knocks sound, spark and carry to
   the AI as the original contact system (`Dis_ContactSystem`) has it for their contact type
   against the world or a body; a hard enough knock (`m_fMinSpeedToBeDamaged`, or `...OnDrop`)
@@ -2009,7 +2014,11 @@ are in the settings file, `pad_binding_set` 0-3):
   steal (`DisSeqAct_SpawnStealable`: the Flooded District's elixir pouches, Granny Rags' sewer
   key).
 - **The golden rim**: what Corvo can use, in reach and looked at (a pickup, a door, a lever,
-  a valve), is drawn over with the interactables' highlight material
+  a valve), is drawn over with the interactables' highlight material. A pickup is in focus with
+  the crosshair on it (its meshes' bounds, a few centimetres more for the small ones) within
+  reach, and not behind a wall, as the original traces the crosshair against the item (U-112 in
+  roshan's r614/blink research); before, anything within 35 degrees of the view was, so the bread
+  on a shelf was eaten looking at the wall beside it, and things were taken through cupboards.
   (`vfx_interactivity.interactivity_INST`, `golden_focus_PMAT`'s fresnel glow with the
   instance's colour, power and visibility; its shader map has no vertex shader to pair the
   original pixel shader with, so `highlight.wgsl` does its math), as the original's highlight
