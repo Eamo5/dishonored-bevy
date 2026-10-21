@@ -717,7 +717,14 @@ are in the settings file, `pad_binding_set` 0-3):
     Guards and townsfolk walk round at 90 degrees a second, and run round at 550-600. On a turn
     over `m_fMinAngleToTestWalls` (45) along its path, it turns 3 times as fast with a wall
     1.5 m ahead (`m_fTestWallsFrontDist`), 5.5 times with one only 1.2 m to the side it turns.
-    Before, everyone turned at 344 degrees a second. Standing and fighting turns are as before.
+    Before, everyone turned at 344 degrees a second. A fighter facing Corvo close turns at its
+    melee engagement's face-to rate (`DisTweaks_AISubState_MeleeEngage`'s `m_fRotationSpeed`,
+    600 degrees a second) the same way; standing turns are as before.
+  - Its speed eases at its locomotion modifier's `m_fAcceleration` and `m_fDeceleration` (a city
+    guard's sword drawn 4.75 m/s² up, on its rounds 3.2; searching empty-handed 0.35, so it
+    creeps off slowly), and slows in time to stop where its path ends; its way follows its path
+    at once (the locomotion 0x0094A630). Blows, hits, holds, lunges and grabs still go and stop
+    at once. Before, every character took its speed in about an eighth of a second.
   - `DH_LOCO_LOG` logs each blend's loops, weights and rate, with the facing and the way it goes.
   A relaxed walker (patrolling, or going back to its post) starts, stops and turns into its walk
   with its clips (its idle speed mode's start, stop and turn props in the

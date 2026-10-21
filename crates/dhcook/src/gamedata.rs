@@ -1725,6 +1725,11 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
             }
         }
     }
+    // how fast a fighter faces Corvo at close range (its melee engagement's face-to,
+    // `m_fRotationSpeed` degrees a second) as `engage.<property>`
+    if let Some(Value::Float(f)) = game.find_export("Default__DisTweaks_AISubState_MeleeEngage").and_then(|i| props(&game, i)).and_then(|p| p.get("m_fRotationSpeed").cloned()) {
+        d.pawn.insert("engage.m_fRotationSpeed".into(), f);
+    }
     // the game parameter his breath sets (`m_BreathlessnessRTPC`, the class's)
     if let Some(Value::Name(n)) = game.find_export("Default__DisTweaks_PlayerPawn").and_then(|i| props(&game, i)).and_then(|p| p.get("m_BreathlessnessRTPC").cloned()) {
         d.texts.insert("Pawn.m_BreathlessnessRTPC".into(), n);

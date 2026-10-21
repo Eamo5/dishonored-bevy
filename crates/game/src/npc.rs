@@ -5632,7 +5632,9 @@ pub(crate) fn npc_move(
     >,
     mut steps: MessageWriter<crate::footsteps::Footfall>,
     (grid, mut budget, level, devices): (Option<Res<crate::navmesh::NavGrid>>, ResMut<crate::navmesh::PathBudget>, Option<Res<LevelInfo>>, Res<crate::security::Devices>),
+    data: Res<crate::gamedata::Data>,
 ) {
+    let engage_turn = data.pawn("engage.m_fRotationSpeed", 600.0).to_radians();
     let (dt_world, dt_own) = (time.delta_secs().min(0.05) * tc.world_scale(), time.delta_secs().min(0.05) * tc.own_scale());
     // (fallen out of the world: below the level's kill height, `WorldInfo.KillZ`)
     let kill_y = level.as_ref().map(|l| l.scene.kill_y).unwrap_or(-200.0);
@@ -5793,8 +5795,9 @@ pub(crate) fn npc_move(
                 wish = (wish / s + pushed.clamp_length_max(1.0)).clamp_length_max(1.0) * s;
             }
         }
-        // stuck handling: sidestep perpendicular to the desired direction
-        if wish.length_squared() > 0.01 && !paced {
+        // stuck handling: sidestep perpendicular to the desired direction (counted only while
+        // it already goes at some speed: one speeding up slowly isn't stuck)
+        if wish.length_squared() > 0.01 && !paced && npc.velocity.with_y(0.0).length() > 0.4 {
             npc.stuck += dt;
             if npc.stuck > 0.8 {
                 // (one at a time: a search's count runs on, and would pick a side each frame)
@@ -5814,7 +5817,24 @@ pub(crate) fn npc_move(
             npc.sidestep = (npc.sidestep.abs() - dt).max(0.0) * npc.sidestep.signum();
         }
         let horiz = Vec3::new(npc.velocity.x, 0.0, npc.velocity.z);
-        let new_h = if paced { wish } else { horiz + (wish - horiz) * (if npc.grab.is_some() { 20.0 } else { 8.0 } * dt).min(1.0) };
+        // (not lunging, held back by a blow, a hit or a hold, nor grabbing: those go and stop at once)
+        let speedup = npc.arms.turning.speedup(npc.stance, npc.mode).filter(|_| npc.grab.is_none() && !frozen && lunge.is_none());
+        let new_h = if paced {
+            wish
+        } else if let Some([up, down]) = speedup {
+            // its speed eases at its modifier's acceleration and deceleration (`m_fAcceleration`,
+            // `m_fDeceleration`), slowing in time to stop at its path's end; its way is its
+            // path's at once (the locomotion's, 0x0094A630)
+            let (s0, mut s1) = (horiz.length(), wish.length());
+            if let Some((left, _)) = npc.path {
+                s1 = s1.min((2.0 * down * left).sqrt());
+            }
+            let s = if s1 > s0 { (s0 + up * dt).min(s1) } else { (s0 - down * dt).max(s1) };
+            let way = if wish.length_squared() > 1e-6 { wish.normalize() } else { horiz.normalize_or_zero() };
+            way * s
+        } else {
+            horiz + (wish - horiz) * (if npc.grab.is_some() { 20.0 } else { 8.0 } * dt).min(1.0)
+        };
         if new_h.length() > 0.5 && npc.pace.is_none_or(|p| p.way.is_none()) {
             npc.halted = false;
         }
@@ -5857,9 +5877,12 @@ pub(crate) fn npc_move(
             kcc.translation = Some(npc.velocity * dt);
         }
         // facing: movement direction, or the player when fighting at close range
-        let mut walking = false;
+        let (mut walking, mut engaging) = (false, false);
         let face = match (npc.mode, ppos) {
-            (Mode::Combat, Some(p)) if npc.sees_player && p.distance(pos) < 6.0 => Some((p - pos).with_y(0.0)),
+            (Mode::Combat, Some(p)) if npc.sees_player && p.distance(pos) < 6.0 => {
+                engaging = true;
+                Some((p - pos).with_y(0.0))
+            }
             (Mode::Combat, _) if npc.last_seen.map(|l| l.distance(pos) < 6.0).unwrap_or(false) && new_h.length() < 1.0 => {
                 npc.last_seen.map(|l| (l - pos).with_y(0.0))
             }
@@ -5886,14 +5909,22 @@ pub(crate) fn npc_move(
             if f.length_squared() > 1e-4 {
                 let target_yaw = (-f.x).atan2(-f.z);
                 let dy = (target_yaw - npc.yaw + PI).rem_euclid(TAU) - PI;
-                // walking, at its speed mode's turn rate (`LocoTurn`); else as before
-                let rate = if walking { npc.arms.turning.rate(npc.stance, npc.mode, npc.running, npc.arms.plague.is_some()) } else { None };
+                // walking, at its speed mode's turn rate (`LocoTurn`); facing Corvo close, at its
+                // melee engagement's face-to rate (`DisTweaks_AISubState_MeleeEngage`'s
+                // `m_fRotationSpeed`, 600 degrees a second); else as before
+                let rate = if walking {
+                    npc.arms.turning.rate(npc.stance, npc.mode, npc.running, npc.arms.plague.is_some())
+                } else if engaging && npc.arms.turning.accel_mult > 0.0 {
+                    Some(engage_turn)
+                } else {
+                    None
+                };
                 if let Some(rate) = rate {
                     let tw = npc.arms.turning;
                     // (a sharp turn on its path: faster with a wall ahead, faster still with one
                     // only to the side it turns)
                     let mut mult = 1.0;
-                    if npc.path.is_some() && dy.abs() > tw.wall_angle {
+                    if walking && npc.path.is_some() && dy.abs() > tw.wall_angle {
                         let wall = |dir: Vec3, len: f32| ctx.as_ref().is_some_and(|c| c.cast_ray(pos, dir, len, true, ground_filter).is_some());
                         let ahead = npc.forward();
                         let side = Quat::from_rotation_y(dy.signum() * FRAC_PI_2) * ahead;
@@ -8241,6 +8272,9 @@ const LOCO_PANIC: usize = 4;
 #[derive(Clone, Copy, Default, Debug)]
 pub struct LocoTurn {
     rates: [[f32; 2]; 7],
+    /// each modifier's acceleration and deceleration (m/s²: `Empty`, `EmptyPatrol`,
+    /// `SwordPatrol`, `Sword`, `PanicEmpty`, `SearchEmpty`, `SearchSword`; 0: none of its own)
+    speedup: [[f32; 2]; 7],
     pub accel_mult: f32,
     pub wall_angle: f32,
     pub wall_front: f32,
@@ -8265,8 +8299,10 @@ impl LocoTurn {
             [&["WeeperWalk", "EmptyWalk"], &["WeeperRun", "EmptyRun"]],
         ];
         let rate = |all: &[&str]| all.iter().find_map(|n| l.modes.iter().find(|(m, _)| m.eq_ignore_ascii_case(n))).map_or(0.0, |(_, r)| r.to_radians());
+        let modifier = |n: &str| l.modifiers.iter().find(|m| m.0.eq_ignore_ascii_case(n)).map_or([0.0; 2], |m| [m.1, m.2]);
         LocoTurn {
             rates: names.map(|row| row.map(rate)),
+            speedup: ["Empty", "EmptyPatrol", "SwordPatrol", "Sword", "PanicEmpty", "SearchEmpty", "SearchSword"].map(modifier),
             accel_mult: l.accel_mult,
             wall_angle: l.wall_angle.to_radians(),
             wall_front: l.wall_front,
@@ -8274,6 +8310,18 @@ impl LocoTurn {
             wall_mult: l.wall_mult,
             side_mult: l.side_mult,
         }
+    }
+
+    /// How fast it speeds up and slows down in `stance` (m/s²), by its locomotion modifier: its
+    /// stance's, searching `SearchEmpty` / `SearchSword` (as its body stance picks it, 0x00B71000).
+    pub fn speedup(&self, stance: usize, mode: Mode) -> Option<[f32; 2]> {
+        let searching = matches!(mode, Mode::Search | Mode::Investigate);
+        let row = match stance {
+            LOCO_EMPTY if searching => 5,
+            LOCO_SWORD_PATROL if searching => 6,
+            s => s,
+        };
+        self.speedup.get(row).copied().filter(|[up, down]| *up > 0.0 && *down > 0.0)
     }
 
     /// Its top turn rate walking or running in `stance` (rad/s), if its config gives one.
