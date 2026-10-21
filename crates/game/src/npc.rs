@@ -102,6 +102,9 @@ fn skip(name: &str) -> bool {
 pub const NPC_HALF: f32 = 0.6; // capsule half segment
 pub const NPC_RADIUS: f32 = 0.34;
 pub const NPC_CENTER: f32 = 0.97; // capsule centre above the feet (UE3 Origin)
+/// How far a character's gunshot is heard (`DisTweaks_NPCFireGun.m_AINoiseLoudnessWhenFiring`,
+/// `EAINoiseLoudness4`: 6000 uu).
+const GUN_NOISE: f32 = 60.0;
 const WALK: f32 = 1.45;
 const ALERT_WALK: f32 = 2.2;
 const RUN: f32 = 4.6;
@@ -3395,7 +3398,7 @@ pub(crate) fn npc_perception(
     mut found: Local<std::collections::HashSet<Entity>>,
     (froms, mut events, swarms): (Query<&FromSpawner>, MessageWriter<crate::interact::Interaction>, Query<(&Transform, &crate::swarm::Swarm), Without<Npc>>),
     (level, pvis, settings, notarget): (Option<Res<LevelInfo>>, Res<crate::stealth::PlayerVisibility>, Res<crate::settings::Settings>, Option<Res<crate::script::NoTarget>>),
-    (body_lights, carry, handled): (Query<&BodyLight>, Res<crate::carry::Carry>, Res<HandledBodies>),
+    (body_lights, carry, handled, heads): (Query<&BodyLight>, Res<crate::carry::Carry>, Res<HandledBodies>, Query<&HeadTrack>),
 ) {
     // (rat swarms about that would attack: Corvo's, or a level's grown to its
     // `m_InitialRatCountToBeAggressive`; a stray rat or two only scurries off)
@@ -3481,7 +3484,12 @@ pub(crate) fn npc_perception(
             continue;
         }
         let eye = t.translation + Vec3::Y * 0.72;
-        let fwd = npc.forward();
+        // its sight along its head (the vision component's eye update, 0x00C676A0, as roshan's
+        // r614/blink research decoded it): its facing turned by its look-at's aim while it looks
+        // at something (Corvo it has noticed, its looks about), unless that is within
+        // `m_fVision_BoneNullzone_Deg` 5 degrees of its facing
+        let head = heads.get(e).map_or(0.0, |h| h.yaw * h.weight * h.weight * (3.0 - 2.0 * h.weight));
+        let fwd = if head.abs() > 5f32.to_radians() { Quat::from_rotation_y(npc.yaw + head) * Vec3::NEG_Z } else { npc.forward() };
         let sight = npc.npc_type.and_then(|i| level.as_ref()?.scene.npc_types.get(i as usize)?.sight.as_ref());
         let mut visible = false;
         let mut dist = f32::MAX;
@@ -4937,13 +4945,15 @@ pub(crate) fn npc_brain(
                             shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: npc.ranged >= 2, miss: !hit });
                         }
                         npc.shots += 1;
+                        // (a shot heard to `DisTweaks_NPCFireGun`'s `m_AINoiseLoudnessWhenFiring`,
+                        // `EAINoiseLoudness4`: 60 m)
                         if npc.ranged == 1 {
                             npc.gun_hold = GUN_HOLD;
                             npc.target = None;
-                            noise.write(Noise { corvo: false, pos, radius: 40.0, kind: NoiseKind::Danger });
+                            noise.write(Noise { corvo: false, pos, radius: GUN_NOISE, kind: NoiseKind::Danger });
                             continue;
                         }
-                        noise.write(Noise { corvo: false, pos, radius: 40.0, kind: NoiseKind::Danger });
+                        noise.write(Noise { corvo: false, pos, radius: GUN_NOISE, kind: NoiseKind::Danger });
                     }
                     if npc.ranged == 2 {
                         // tallboys keep their distance and shoot
@@ -5233,7 +5243,8 @@ pub(crate) fn npc_brain(
                                 }
                                 shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: true, miss: !hit });
                                 npc.shots += 1;
-                                noise.write(Noise { corvo: false, pos, radius: 40.0, kind: NoiseKind::Danger });
+                                // (a bow has no firing noise, as the crossbow: no
+                                // `m_AINoiseLoudnessWhenFiring`)
                                 continue;
                             }
                             // a thing thrown with the bare hand at him
@@ -5285,7 +5296,7 @@ pub(crate) fn npc_brain(
                             }
                             if shot {
                                 shots.write(NpcShot { from: pos + Vec3::Y * 0.2, to: ppos, bow: false, miss: !struck });
-                                noise.write(Noise { corvo: false, pos, radius: 40.0, kind: NoiseKind::Danger });
+                                noise.write(Noise { corvo: false, pos, radius: GUN_NOISE, kind: NoiseKind::Danger });
                             } else {
                                 noise.write(Noise { corvo: false, pos, radius: 8.0, kind: NoiseKind::Threatening });
                             }

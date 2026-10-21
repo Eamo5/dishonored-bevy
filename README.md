@@ -949,7 +949,11 @@ are in the settings file, `pad_binding_set` 0-3):
   eye: the corners and the middle of `Twk_DefaultVisRegion`'s strip (30-150 uu above his feet
   standing, 50-90 sneaking, 30-60 crouched by the world; 35 uu out toward the onlooker, 20 wide).
   So a railing or a crate hides a sneaking Corvo, but a head above it doesn't make him seen (as
-  roshan's r614/blink research decoded the sight test, 0x00C669C0 and 0x00C77FC0). An enemy
+  roshan's r614/blink research decoded the sight test, 0x00C669C0 and 0x00C77FC0). The cones look
+  along the onlooker's head: its facing turned by its look-at's aim while it looks at something
+  (Corvo it has noticed, its looks about), unless that is within `m_fVision_BoneNullzone_Deg`
+  5 degrees of its facing (the vision component's eye update, 0x00C676A0). A guard glancing aside
+  on its rounds sees aside. An enemy
   that has him in sight keeps him there without a clear line while he stays within its
   attention's `m_fDistanceToLoseSight` (3 m: round a corner, behind a crate). His light
   value is read as the original's visibility component reads his light environment, measured
@@ -962,7 +966,8 @@ are in the settings file, `pad_binding_set` 0-3):
   0.43 / 0.37 / 0.25 where the original reads 0.59 / 0.31 / 0.21. `DH_VIS_LOG` logs it. Its level
   follows the tweak's thresholds: the head turns to him, the body turns to face him, the
   character investigates, then he's busted. What it hears raises attention by the tweak's
-  increases (an anomaly, danger). Sneaking, the HUD effects movie's black shroud darkens the screen's edges
+  increases (an anomaly, danger). A character's gunshot is heard 60 m away (`DisTweaks_NPCFireGun`'s
+  `EAINoiseLoudness4`), as Corvo's pistol is; a bow, like the crossbow, makes none firing. Sneaking, the HUD effects movie's black shroud darkens the screen's edges
   (`BlackShroud`, tweened in 0.35 s) until someone busts him, with the entering-sneak sound.
   Crawling, brought lower than a sneak by the world (see Movement), his stance gives
   `m_fVisLevelBonus_Autocrouching` (-1) as the original's does, and sneaking's stillness too. A
