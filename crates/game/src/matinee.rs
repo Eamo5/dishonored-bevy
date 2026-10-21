@@ -67,6 +67,14 @@ pub struct MatineeState {
     player_ride: Option<u32>,
     /// carried characters: where they were when the ride began
     ride_base: HashMap<Entity, Transform>,
+    /// the player put on his group's stage mark (`InterpGroupPlayer.m_StageMarkGroup`): the
+    /// scene (op), from where and facing what (position, yaw, pitch), to where (position, yaw),
+    /// and how far through the blend
+    player_stage: Option<(u32, Vec3, f32, f32, Vec3, f32, f32)>,
+    /// the scenes that have put him on their marks (the latest started takes him)
+    player_staged: HashSet<u32>,
+    /// held by a scene of his group (`StatePlayerMasterSoiree`: movement disabled)
+    player_held: bool,
 }
 
 impl MatineeState {
@@ -306,7 +314,9 @@ fn play_matinees(
         st.npc_walk.clear();
         st.staged.clear();
         st.ride_base.clear();
-        if st.player_base.take().is_some() {
+        st.player_stage = None;
+        st.player_staged.clear();
+        if st.player_base.take().is_some() | std::mem::take(&mut st.player_held) {
             if let Ok((_, mut p)) = player.single_mut() {
                 p.locked = false;
             }
@@ -338,6 +348,7 @@ fn play_matinees(
     let dt = time.delta_secs();
     let player_pos = player.single().ok().map(|(t, _)| t.translation);
     let mut player_rides = false;
+    let mut player_scene = false;
     let npc_pos: HashMap<u32, Vec3> = npcs.iter().filter(|x| !x.4.is_down()).map(|x| (x.1 .0, x.3.translation)).collect();
     for (op, mi, t, binds) in plays {
         let Some(m): Option<&KMatinee> = g.matinees.get(mi as usize) else { continue };
@@ -635,6 +646,45 @@ fn play_matinees(
                     }
                 }
             }
+            // not riding: blended onto the group's stage mark as the scene starts, facing its
+            // way (`InterpGroupPlayer.m_fTimeToBlendToStageMark`, 0.2 s), as the original's
+            // player group does; its animation is laid out from there (Corvo handing the
+            // Empress the letter: before, he gave it from wherever he stood, behind her)
+            // (one that carries him, a boat's, puts him there itself)
+            let carried = m.groups.iter().any(|gr| gr.tracks.iter().any(|tr| matches!(tr, KTrack::Attach { target, .. } if target.eq_ignore_ascii_case(&m.groups[pg].name))));
+            // (and held there while it plays, his group's soiree state: no walking off; before,
+            // he walked on as the scene played and handed the letter from behind the Empress)
+            if !carried && !m.groups[pg].stage_mark.is_empty() {
+                player_scene = true;
+            }
+            if !carried && !st.player_staged.contains(&op) {
+                let mark = m.groups[pg].stage_mark.as_str();
+                let actor = (!mark.is_empty())
+                    .then(|| m.groups.iter().position(|gr| gr.name.eq_ignore_ascii_case(mark)))
+                    .flatten()
+                    .and_then(|mi| binds.iter().find(|b| b.0 == mi as u32))
+                    .and_then(|b| b.1.first())
+                    .and_then(|a| g.actors.get(*a as usize));
+                if let (Some(a), Ok((pt, p))) = (actor, player.single()) {
+                    let to = Vec3::from(a.position) + Vec3::Y * (crate::player::STAND_HALF + crate::player::RADIUS + 0.05);
+                    st.player_stage = Some((op, pt.translation, p.yaw, p.pitch, to, a.yaw, 0.0));
+                    st.player_staged.insert(op);
+                    if std::env::var("DH_MATINEE_LOG").is_ok() {
+                        info!("matinee #{mi} (op {op}) at {t:.2}: the player onto {} at {to:.2}, yaw {:.2}", a.name, a.yaw);
+                    }
+                }
+            }
+            if let Some((sop, from, from_yaw, from_pitch, to, to_yaw, k)) = st.player_stage.filter(|s| s.0 == op && s.6 < 1.0) {
+                let k = (k + dt / 0.2).min(1.0);
+                if let Ok((mut pt, mut p)) = player.single_mut() {
+                    let turn = (to_yaw - from_yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+                    pt.translation = from.lerp(to, k);
+                    p.yaw = from_yaw + turn * k;
+                    p.pitch = from_pitch * (1.0 - k);
+                    p.velocity = Vec3::ZERO;
+                }
+                st.player_stage = Some((sop, from, from_yaw, from_pitch, to, to_yaw, k));
+            }
             if let (Some(delta), Ok((mut pt, mut p))) = (rides.get(&(pg as u32)).copied(), player.single_mut()) {
                 st.player_ride = Some(op);
                 let base = *st.player_base.get_or_insert_with(|| {
@@ -752,7 +802,19 @@ fn play_matinees(
     }
     st.camera = cam;
     // the ride let go of the player
-    if !player_rides && st.player_base.take().is_some() {
+    if !player_rides && st.player_base.take().is_some() && !player_scene {
+        if let Ok((_, mut p)) = player.single_mut() {
+            p.locked = false;
+        }
+    }
+    // his scene held him, and let go
+    if player_scene {
+        if let Ok((_, mut p)) = player.single_mut() {
+            p.locked = true;
+            p.velocity = Vec3::ZERO;
+        }
+        st.player_held = true;
+    } else if std::mem::take(&mut st.player_held) && !player_rides {
         if let Ok((_, mut p)) = player.single_mut() {
             p.locked = false;
         }

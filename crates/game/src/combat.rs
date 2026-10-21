@@ -248,6 +248,7 @@ fn special_moves(
     grabbed: Query<(), With<crate::npc::Grabbed>>,
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
     npcs: Query<(Entity, &Npc, &Transform), Without<Player>>,
+    switches: Res<crate::kismet::ScriptSwitches>,
 ) {
     *sp = Specials::default();
     let (Ok((pt, p)), Ok(cg)) = (player.single(), cam.single()) else { return };
@@ -278,7 +279,11 @@ fn special_moves(
             sp.adrenaline = nearest_target(eye, fwd, 2.6, 0.5, npcs.iter()).is_some();
         }
     }
-    // the chokehold's: from behind, or someone off balance
+    // the chokehold's: from behind, or someone off balance (not while the scripts forbid it,
+    // `DisSeqAct_ToggleChoke`: the Tower's prologue showed the choke's line behind the Empress)
+    if switches.0.choke_off {
+        return;
+    }
     if let Some((_, npc, nt)) = nearest_target(eye, fwd, 1.7, 0.6, npcs.iter()).and_then(|(e, _)| npcs.get(e).ok()) {
         let behind = npc.forward().dot(to_player(nt)) < 0.0;
         let fighting = npc.mode == Mode::Combat && npc.sees_player;

@@ -1989,6 +1989,12 @@ are in the settings file, `pad_binding_set` 0-3):
   whole-body clip before it, the joints it leaves keeping that one's pose, as a clip on the
   original's `MatineeStackNode` does; before, they fell to the bind pose, and Emily stood in a
   T-pose as Corvo gave the Empress the letter.
+  A scene's player group with a stage mark (`InterpGroupPlayer.m_StageMarkGroup`) blends Corvo
+  onto it as it starts, facing its way, over `m_fTimeToBlendToStageMark` (0.2 s), and holds him
+  there while it plays (`StatePlayerMasterSoiree`: movement disabled); one that carries him (a
+  boat's) places him itself. Before, he stayed and walked wherever he was: the letter was
+  handed over from behind the Empress. The choke's line no longer shows while the scripts
+  forbid the chokehold (`DisSeqAct_ToggleChoke`: the Tower's prologue).
 - **Animated props**: skeletal level actors that matinees animate (the Tower's gangway
   lowering as the boat docks, machinery, doors in the Hound Pits; 29 maps) are cooked as
   animated types from their mesh and the scene group's `GroupAnimSets`, and play on the
