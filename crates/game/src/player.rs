@@ -39,6 +39,8 @@ impl Plugin for PlayerPlugin {
 pub struct PlayerMoveSet;
 
 pub const RADIUS: f32 = 0.32;
+/// The most he steps up or follows the floor down (`MaxStepHeight` 44 uu + 2.54).
+const STEP_HEIGHT: f32 = 0.4654;
 pub const STAND_HALF: f32 = 0.58; // capsule half segment => total 1.80 m
 pub const CROUCH_HALF: f32 = 0.18; // total 1.0 m
 pub const STAND_EYE: f32 = 0.72; // above capsule centre
@@ -179,14 +181,17 @@ pub fn spawn_player(mut commands: Commands, level: Option<Res<LevelInfo>>, confi
                 up: Vec3::Y,
                 offset: CharacterLength::Absolute(0.03),
                 slide: true,
+                // (his steps and floors as the original's walking physics (`stepUp`, the floor
+                // check), as roshan's r614/blink research decoded them: `MaxStepHeight` 44 uu and
+                // its 2.54 fudge up and down, floors to `WalkableFloorZ` 0.6428, 50 degrees)
                 autostep: Some(CharacterAutostep {
-                    max_height: CharacterLength::Absolute(0.42),
+                    max_height: CharacterLength::Absolute(STEP_HEIGHT),
                     min_width: CharacterLength::Absolute(0.08),
                     include_dynamic_bodies: false,
                 }),
-                max_slope_climb_angle: 52f32.to_radians(),
-                min_slope_slide_angle: 60f32.to_radians(),
-                snap_to_ground: Some(CharacterLength::Absolute(0.35)),
+                max_slope_climb_angle: 50f32.to_radians(),
+                min_slope_slide_angle: 50f32.to_radians(),
+                snap_to_ground: Some(CharacterLength::Absolute(STEP_HEIGHT)),
                 apply_impulse_to_dynamic_bodies: false,
                 filter_groups: Some(player_groups()),
                 ..default()
@@ -681,7 +686,7 @@ fn player_move(
         return;
     }
     if kcc.snap_to_ground.is_none() {
-        kcc.snap_to_ground = Some(CharacterLength::Absolute(0.35));
+        kcc.snap_to_ground = Some(CharacterLength::Absolute(STEP_HEIGHT));
     }
 
     if let Some(o) = out {
@@ -1039,21 +1044,34 @@ pub(crate) fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity
     let clear = ctx.cast_ray(Vec3::new(t.translation.x, head - 0.05, t.translation.z), Vec3::Y, MANTLE_MAX, true, filter).map_or(MANTLE_MAX, |(_, toi)| toi);
     let limit = MANTLE_MAX.min(head - 0.05 + clear - feet.y);
     // forward searches every `m_LineCheckStepSize` 12 uu up, `m_MantleEdgeSearchDist` 50 uu out
-    // from his cylinder: the first face within 20 degrees of upright and 45 of his facing, then
-    // the next clear line above it is the edge; the search aimed along the face once found
+    // from his cylinder, each a box of his radius and `Pawn.CrouchHeight` 33 uu half height (its
+    // bottom at the height searched, the box held under the free height): the first face within
+    // 20 degrees of upright and 45 of his facing, then the next clear box above it is the edge
+    // (a railing's bars stop a box where a line slips between them); the search aimed along the
+    // face once found
     const STEP: f32 = 0.12;
+    const BOX_HALF: f32 = 0.33;
+    let reach = 0.5;
+    let shape = Collider::cuboid(RADIUS - 0.01, BOX_HALF, RADIUS - 0.01);
+    let opts = bevy_rapier3d::prelude::ShapeCastOptions { max_time_of_impact: 1.0, target_distance: 0.0, stop_at_penetration: false, compute_impact_geometry_on_penetration: true };
+    let top_room = head - 0.05 + clear - feet.y;
     let mut dir = fwd;
     let mut face: Option<Vec3> = None;
     let mut edge = None;
     let mut h = (least - STEP).max(0.0);
-    while h <= limit + 1e-3 {
-        let from = Vec3::new(t.translation.x, feet.y + h, t.translation.z);
-        match ctx.cast_ray_and_get_normal(from, dir, RADIUS + 0.5, true, filter) {
+    while h <= limit.min(top_room - 2.0 * BOX_HALF) + 1e-3 {
+        let from = Vec3::new(t.translation.x, feet.y + h + BOX_HALF, t.translation.z);
+        match ctx.cast_shape(from, Quat::IDENTITY, dir * reach, shape.raw.as_ref(), opts, filter) {
             Some((_, hit)) if face.is_none() => {
-                let flat = hit.normal.with_y(0.0).normalize_or_zero();
-                if hit.normal.y.abs() <= 20f32.to_radians().sin() && -flat.dot(fwd) >= 45f32.to_radians().cos() {
-                    face = Some(hit.point);
-                    dir = -flat;
+                // (the query puts what it hit first: the box's own outward normal at the contact,
+                // the second, points into the face)
+                if let Some(d) = hit.details {
+                    let n = -d.normal2;
+                    let flat = n.with_y(0.0).normalize_or_zero();
+                    if n.y.abs() <= 20f32.to_radians().sin() && -flat.dot(fwd) >= 45f32.to_radians().cos() {
+                        face = Some(from + dir * reach * hit.time_of_impact + d.witness2);
+                        dir = -flat;
+                    }
                 }
             }
             Some(_) => {}

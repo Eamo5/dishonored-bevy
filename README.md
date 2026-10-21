@@ -2681,12 +2681,16 @@ against the install's own data where it carries them, then implemented independe
   - Mantling: ledges from 0.55 m (1.55 m when falling faster than 10 m/s, none past 20 m/s) to
     2.3 m.
     - The edge is found as the original's `DishonoredMantleEdgeFinderComponent` finds it (as
-      roshan's r614/blink research decoded it): lines from his middle every 12 cm up, from just
-      under the least height to the free height above his head, reaching 50 cm past his
-      cylinder. The first face within 20 degrees of upright and 45 of his facing starts it, the
-      next clear line above is the edge, and its top may slope up to 45 degrees. A low wall, a
-      lip or a ledge whose face starts above his waist is found. A single waist-high line used to
-      miss them.
+      roshan's r614/blink research decoded it). Boxes of his radius and `Pawn.CrouchHeight`
+      (33 uu half height) are swept every 12 cm up, from just under the least height to the free
+      height above his head, reaching 50 cm past his cylinder. The first face within 20 degrees
+      of upright and 45 of his facing starts it, the next clear box above is the edge, and its
+      top may slope up to 45 degrees. A low wall, a lip, a ledge whose face starts above his
+      waist and a railing's bars are all found. A single waist-high line used to miss them, or
+      slip between the bars.
+  - He steps up and follows the floor down by `MaxStepHeight` 44 uu plus its 2.54 fudge, and
+    walks floors up to `WalkableFloorZ`'s 50 degrees, sliding off steeper ones, as the original's
+    walking physics does (it used to be 0.42 m and 52 degrees).
     - Up to 1.2 m is an instant step-up; above that a 0.7 s climb to 1.7 m, then 1.033 s.
     - Where only a crouch fits, he mantles into a crouch.
     - He mantles only where his whole body fits on top, standing or crouched. A single ray
