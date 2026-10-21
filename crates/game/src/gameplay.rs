@@ -67,22 +67,28 @@ pub enum NoiseKind {
 }
 
 impl NoiseKind {
-    /// A Kismet noise's context (`EAINoiseContext`: `AINC_Danger`...).
-    pub fn of_context(c: &str) -> Self {
+    /// A Kismet noise's context (`EAINoiseContext`: `AINC_Danger`...), as the hearing's switch
+    /// takes it (0x00B40B70, decoded from the original for this rewrite): a rat swarm and a watch
+    /// tower's attack as danger, a Wolf-of-Light zap as a threat, a footfall as an anomaly; an
+    /// impending explosion, a flare's burning, an ally's notice or search request and the
+    /// ambient white noise raise no attention (`None`).
+    pub fn of_context(c: &str) -> Option<Self> {
         let c = c.to_ascii_lowercase();
-        if c.contains("danger") || c.contains("explosion") || c.contains("watchtower") {
+        Some(if c.contains("danger") || c.contains("ratswarm") || c.contains("watchtower") {
             NoiseKind::Danger
         } else if c.contains("threat") || c.contains("wolzap") {
             NoiseKind::Threatening
         } else if c.contains("deathrattle") {
             NoiseKind::DeathRattle
+        } else if c.contains("allysearch") || c.contains("allynotice") || c.contains("explosion") || c.contains("flare") || c.contains("whitenoise") {
+            return None;
         } else if c.contains("help") {
             NoiseKind::Help
         } else if c.contains("alarm") {
             NoiseKind::Alarm
         } else {
             NoiseKind::Anomaly
-        }
+        })
     }
     /// Its slot in an attention profile's heard reactions (`Attention::heard`).
     pub fn slot(self) -> usize {

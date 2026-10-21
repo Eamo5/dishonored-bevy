@@ -706,6 +706,10 @@ are in the settings file, `pad_binding_set` 0-3):
     or fleeing turns where it stands first, with its turn clip, then sets off. This is the
     locomotion component's static turn: below `m_fMaxSpeedForStaticTurn` 40 uu/s, over 15
     degrees, its path's speed 0 meanwhile. Before, it set off sideways while still turning.
+  - Each gait goes at its loop's authored speed, as the locomotion component asks for its speed
+    mode's, times its modifier's `m_fSpeedMultiplier`: a guard fights at its sword run's 7.7 m/s,
+    faster than Corvo's 6 m/s sprint, and a wolfhound at 9.9 m/s. A panicking civilian flees at its
+    panic run's 5 m/s. Runs used to be capped at 6 m/s.
   - `DH_LOCO_LOG` logs each blend's loops, weights and rate, with the facing and the way it goes.
   A relaxed walker (patrolling, or going back to its post) starts, stops and turns into its walk
   with its clips (its idle speed mode's start, stop and turn props in the
@@ -967,7 +971,12 @@ are in the settings file, `pad_binding_set` 0-3):
   follows the tweak's thresholds: the head turns to him, the body turns to face him, the
   character investigates, then he's busted. What it hears raises attention by the tweak's
   increases (an anomaly, danger). A character's gunshot is heard 60 m away (`DisTweaks_NPCFireGun`'s
-  `EAINoiseLoudness4`), as Corvo's pistol is; a bow, like the crossbow, makes none firing. Sneaking, the HUD effects movie's black shroud darkens the screen's edges
+  `EAINoiseLoudness4`), as Corvo's pistol is; a bow, like the crossbow, makes none firing.
+  How each noise's context raises attention follows the hearing's switch (0x00B40B70, decoded
+  from the original for this rewrite). A footfall counts as an anomaly, heard from the maker's
+  height. A rat swarm and a watch tower's attack count as danger, and a Wolf-of-Light zap as a
+  threat. An impending explosion, a flare's burning, an ally's notice or search request and
+  ambient white noise raise none. Sneaking, the HUD effects movie's black shroud darkens the screen's edges
   (`BlackShroud`, tweened in 0.35 s) until someone busts him, with the entering-sneak sound.
   Crawling, brought lower than a sneak by the world (see Movement), his stance gives
   `m_fVisLevelBonus_Autocrouching` (-1) as the original's does, and sneaking's stillness too. A

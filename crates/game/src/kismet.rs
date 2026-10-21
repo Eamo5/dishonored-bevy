@@ -2378,7 +2378,9 @@ impl Vm {
                 let loudness = self.ps(op, "m_eNoiseLoudness").unwrap_or_else(|| "EAINoiseLoudness1".into());
                 let kind = crate::gameplay::NoiseKind::of_context(&self.ps(op, "m_eNoiseContext").unwrap_or_default());
                 let (maker, at) = (self.read(op, "NoiseMaker"), self.read(op, "NoiseLocation"));
-                self.ai_fx.push(crate::script_world::AiFx::Noise { maker, at, loudness, kind });
+                if let Some(kind) = kind {
+                    self.ai_fx.push(crate::script_world::AiFx::Noise { maker, at, loudness, kind });
+                }
                 self.fire(op, 0);
             }
             "DisSeqAct_AIStartDistraction" => {

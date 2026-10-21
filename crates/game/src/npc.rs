@@ -383,8 +383,8 @@ pub struct Npc {
     pub saw_body: bool,
     /// Pre-placed corpse: lies dead from the start and doesn't alarm guards.
     pub corpse: bool,
-    /// Ground speeds: walk, alert walk, run (from the animations' root motion).
-    pub gait: [f32; 3],
+    /// Ground speeds: walk, alert walk, run, panic run (from the animations' root motion).
+    pub gait: [f32; 4],
     /// Voice (index into `scene.barks`).
     pub voice: Option<u32>,
     /// The faction (original `DisTweaks_Faction`) and whether it is Corvo's enemy.
@@ -2307,7 +2307,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         trail_idx: 0,
         saw_body: false,
         corpse,
-        gait: [WALK, ALERT_WALK, RUN],
+        gait: [WALK, ALERT_WALK, RUN, RUN],
         voice: scene.npc_types.get(tid as usize).and_then(|t| (!t.voices.is_empty()).then(|| t.voices[rand::random_range(0..t.voices.len())])),
         faction: faction.clone(),
         enemy,
@@ -2589,11 +2589,15 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
     if let Some((lib, clips)) = clips {
         let lib: std::sync::Arc<CharAnims> = lib;
         let speed = |c: Option<ClipId>, lo: f32, hi: f32, def: f32| c.map(|c| lib.root_speed(c)).filter(|v| *v > 0.1).map(|v| v.clamp(lo, hi)).unwrap_or(def);
+        // (each gait at its loop's authored speed, as the locomotion component asks its speed
+        // mode's, times its modifier's `m_fSpeedMultiplier`: a guard's sword run 7.7 m/s, a
+        // wolfhound's 9.9, a panicking civilian's own panic run 5)
         npc.gait = [
             // (a guard's patrol walk at `EmptyPatrol`'s `m_fSpeedMultiplier` 0.92)
             speed(clips.walk, 0.8, 2.0, WALK) * if clips.walk.is_some_and(|c| lib.clip(c).name.eq_ignore_ascii_case("Empty_Walk_Patrol")) { 0.92 } else { 1.0 },
             speed(clips.walk_alert.or(clips.walk), 0.8, 2.6, ALERT_WALK),
-            speed(clips.run, 2.5, 6.0, RUN),
+            speed(clips.run, 2.5, 10.0, RUN),
+            speed(clips.flee.or(clips.run), 2.5, 10.0, RUN),
         ];
         let mut animator = Animator::new(lib.clone(), &vis.skeleton, joints.clone());
         // (its upper-body actions from `spine_0_jnt` up: `NPC_Human_at`'s `UpperBodyFilter`)
@@ -5664,7 +5668,8 @@ pub(crate) fn npc_move(
             _ if npc.alarm_run.is_some() || npc.escape.is_some() || npc.plague_escape.is_some() => npc.gait[2],
             // (a weeper walks after Corvo, but for the few that run)
             Mode::Combat if npc.arms.plague.is_some() && !npc.weep_run => npc.gait[0],
-            Mode::Combat | Mode::Flee => npc.gait[2],
+            Mode::Combat => npc.gait[2],
+            Mode::Flee => npc.gait[3],
             // searching, its walk or run slowed (`SearchSword` / `SearchEmpty`: x 0.8), as roshan's
             // r614/blink research read the locomotion modifiers
             Mode::Investigate | Mode::Search => {
