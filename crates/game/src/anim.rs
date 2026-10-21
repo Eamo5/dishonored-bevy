@@ -36,6 +36,9 @@ pub struct CharAnims {
     set_names: Vec<String>,
     /// per set: file bone -> skeleton joint
     maps: Vec<Vec<Option<u16>>>,
+    /// per set: whether it keys only part of the body (its bones fewer than nine tenths of the
+    /// fullest set's: a posture's legs and spine, a gesture's arm)
+    partial: Vec<bool>,
     by_name: HashMap<String, ClipId>,
 }
 
@@ -55,7 +58,16 @@ impl CharAnims {
                 by_name.insert(c.name.to_ascii_lowercase(), ClipId { set: si as u16, clip: ci as u16 });
             }
         }
-        CharAnims { sets, set_names: Vec::new(), maps, by_name }
+        let bound: Vec<usize> = maps.iter().map(|m| m.iter().filter(|j| j.is_some()).count()).collect();
+        let most = bound.iter().copied().max().unwrap_or(0);
+        let partial = bound.iter().map(|&n| n * 10 < most * 9).collect();
+        CharAnims { sets, set_names: Vec::new(), maps, partial, by_name }
+    }
+
+    /// Whether the clip keys only part of the body: the joints it leaves keep the pose beneath
+    /// it, as a clip on the original's stacks does (a scene's `MatineeStackNode`).
+    pub fn partial(&self, id: ClipId) -> bool {
+        self.partial.get(id.set as usize).copied().unwrap_or(false)
     }
 
     /// Its sets' names (their anim sets' paths, in its sets' order).
@@ -245,6 +257,9 @@ const RUMBLE_MARK: char = '\u{1}';
 pub struct Layer {
     pub cur: Option<Playing>,
     prev: Option<Playing>,
+    /// beneath a clip keying only part of the body, the whole-body clip played before it (the
+    /// joints it leaves keep this one's pose)
+    under: Option<Playing>,
     fade: f32,
     fade_len: f32,
     weight: f32,
@@ -287,6 +302,9 @@ impl Layer {
         if let Some(p) = &mut self.prev {
             step(p);
         }
+        if let Some(u) = &mut self.under {
+            step(u);
+        }
         self.fade = (self.fade - dt).max(0.0);
         if self.fade <= 0.0 {
             self.prev = None;
@@ -298,17 +316,18 @@ impl Layer {
         if self.weight <= 0.0 && self.target <= 0.0 {
             self.cur = None;
             self.prev = None;
+            self.under = None;
         }
     }
 
-    fn play(&mut self, clip: ClipId, looping: bool, speed: f32, blend: f32) {
+    fn play(&mut self, lib: &CharAnims, clip: ClipId, looping: bool, speed: f32, blend: f32) {
         // (a mix led by this clip crossfades into it alone)
         if let Some(c) = self.cur.as_mut().filter(|c| c.clip == clip && c.mix.is_none()) {
             c.speed = speed;
             c.looping = looping;
             return;
         }
-        self.restart(clip, looping, speed, blend);
+        self.restart_over(lib, clip, looping, speed, blend);
     }
 
     /// Play a mix of loops at one phase (`master` its heaviest): kept in step from the loop or
@@ -325,10 +344,24 @@ impl Layer {
                 return;
             }
         }
-        self.restart(master, true, speed, blend);
+        self.restart_over(lib, master, true, speed, blend);
         if let Some(c) = &mut self.cur {
             c.mix = Some(mix);
         }
+    }
+
+    /// Like `restart`, but a clip keying part of the body plays over the whole-body clip
+    /// before it.
+    fn restart_over(&mut self, lib: &CharAnims, clip: ClipId, looping: bool, speed: f32, blend: f32) {
+        self.under = if !lib.partial(clip) {
+            None
+        } else {
+            match self.cur {
+                Some(c) if !lib.partial(c.clip) => Some(c),
+                _ => self.under,
+            }
+        };
+        self.restart(clip, looping, speed, blend);
     }
 
     fn restart(&mut self, clip: ClipId, looping: bool, speed: f32, blend: f32) {
@@ -426,7 +459,8 @@ impl Animator {
 
     /// Switch to `clip` (crossfading over `blend` seconds); keeps playing if it's current.
     pub fn play(&mut self, clip: ClipId, looping: bool, speed: f32, blend: f32) {
-        self.base.play(clip, looping, speed, blend);
+        let lib = self.lib.clone();
+        self.base.play(&lib, clip, looping, speed, blend);
     }
 
     /// Play loops together at one phase (`master` the heaviest, its time advancing at `speed`),
@@ -439,7 +473,8 @@ impl Animator {
 
     /// Start `clip` from the beginning even if it's already playing.
     pub fn restart(&mut self, clip: ClipId, looping: bool, speed: f32, blend: f32) {
-        self.base.restart(clip, looping, speed, blend);
+        let lib = self.lib.clone();
+        self.base.restart_over(&lib, clip, looping, speed, blend);
     }
 
     /// The overlay layer's clip and its weight (for logs).
@@ -471,7 +506,8 @@ impl Animator {
 
     /// Play `clip` on the overlay layer, fading the layer in.
     pub fn play_overlay(&mut self, clip: ClipId, looping: bool, speed: f32, blend: f32) {
-        self.overlay.play(clip, looping, speed, blend);
+        let lib = self.lib.clone();
+        self.overlay.play(&lib, clip, looping, speed, blend);
         self.overlay_in(blend);
     }
 
@@ -658,6 +694,10 @@ impl Animator {
     fn pose(&mut self) {
         self.rot.copy_from_slice(&self.bind_rot);
         self.trans.copy_from_slice(&self.bind_t);
+        // (beneath a clip keying part of the body, the whole-body one before it)
+        if let Some(u) = self.base.under {
+            sample_playing(&self.lib, &u, (&self.bind_rot, &self.bind_t), (&mut self.rot, &mut self.trans), (&mut self.rot_c, &mut self.trans_c));
+        }
         for li in 0..4 {
             let layer = match li {
                 0 => &self.base,

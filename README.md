@@ -1984,6 +1984,11 @@ are in the settings file, `pad_binding_set` 0-3):
   characters it binds, as UE3 adds them to the pawn; the player group's go to Corvo's arms,
   which play its keys while the scene runs. Characters change dress on the scripts' word
   (`DisSeqAct_NPCSetMaterials`: the Boyle sisters' red, black and white, by material slot).
+  A clip of a set keying only part of the body (fewer than nine tenths of the fullest set's
+  bones: Emily's `NPC_Emily_Postures_as`, 19 of 76, hips, legs, spine and head) plays over the
+  whole-body clip before it, the joints it leaves keeping that one's pose, as a clip on the
+  original's `MatineeStackNode` does; before, they fell to the bind pose, and Emily stood in a
+  T-pose as Corvo gave the Empress the letter.
 - **Animated props**: skeletal level actors that matinees animate (the Tower's gangway
   lowering as the boat docks, machinery, doors in the Hound Pits; 29 maps) are cooked as
   animated types from their mesh and the scene group's `GroupAnimSets`, and play on the
