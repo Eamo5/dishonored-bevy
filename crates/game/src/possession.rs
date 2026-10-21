@@ -508,7 +508,7 @@ mod charm_tests {
         let player = app.world_mut().spawn((Player {
             velocity: Vec3::Y, yaw: 0.0, pitch: 0.0, crouched: true, sprinting: false, grounded: true, lean: 0.0, noclip: false,
             eye_height: 0.6, locked: false, air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0, fall_speed: 0.0,
-            power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0, speed_cap: 0.0,
+            power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0, speed_cap: 0.0, crawl: false, rise: false,
         }, Collider::capsule_y(STAND_HALF, RADIUS), KinematicCharacterController::default())).id();
         let arms = app.world_mut().spawn((crate::arms::ArmsRoot, Visibility::Inherited)).id();
         app.update();
@@ -656,13 +656,13 @@ fn fit_controller(kcc: &mut KinematicCharacterController, body: Option<HostBody>
     kcc.autostep = Some(CharacterAutostep { max_height: CharacterLength::Absolute(step), min_width: CharacterLength::Absolute(width), include_dynamic_bodies: false });
 }
 
-/// Where Corvo can stand coming out of a creature at `feet`: there, crouched there, or the
-/// nearest free spot around (`DUET_OutFromCenter`). The centre and whether he crouches.
-fn stand_out(ctx: &RapierContext, filter: QueryFilter, feet: Vec3) -> (Vec3, bool) {
-    use crate::player::CROUCH_HALF;
-    let fits = |f: Vec3, half: f32| {
-        let c = f + Vec3::Y * (half + RADIUS + 0.03);
-        let shape = Collider::capsule_y(half, RADIUS);
+/// Where Corvo can stand coming out of a creature at `feet`: there, sneaking or crawling there,
+/// or the nearest free spot around (`DUET_OutFromCenter`). The centre and his body.
+fn stand_out(ctx: &RapierContext, filter: QueryFilter, feet: Vec3) -> (Vec3, crate::player::Body) {
+    use crate::player::Body;
+    let fits = |f: Vec3, b: Body| {
+        let c = f + Vec3::Y * (b.depth() + 0.03);
+        let shape = b.collider();
         let mut hit = false;
         ctx.intersect_shape(c, Quat::IDENTITY, &*shape.raw, filter, |_| {
             hit = true;
@@ -682,14 +682,13 @@ fn stand_out(ctx: &RapierContext, filter: QueryFilter, feet: Vec3) -> (Vec3, boo
         }
     }
     for f in &spots {
-        if fits(*f, STAND_HALF) {
-            return (*f + Vec3::Y * (STAND_HALF + RADIUS + 0.03), false);
-        }
-        if fits(*f, CROUCH_HALF) {
-            return (*f + Vec3::Y * (CROUCH_HALF + RADIUS + 0.03), true);
+        for b in [Body::Stand, Body::Sneak, Body::Crawl] {
+            if fits(*f, b) {
+                return (*f + Vec3::Y * (b.depth() + 0.03), b);
+            }
         }
     }
-    (feet + Vec3::Y * (CROUCH_HALF + RADIUS + 0.03), true)
+    (feet + Vec3::Y * (Body::Crawl.depth() + 0.03), Body::Crawl)
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -756,11 +755,13 @@ fn ride(
             Ok((h, ht)) if h.rooted => ht.translation + h.facing.with_y(0.0).normalize_or_zero() * 0.9,
             _ => pt.translation - Vec3::Y * body.center(),
         };
-        let (center, crouched) = if body.fish { (pt.translation, false) } else { stand_out(&ctx, filter, feet) };
+        let (center, out) = if body.fish { (pt.translation, crate::player::Body::Stand) } else { stand_out(&ctx, filter, feet) };
         pt.translation = center;
-        p.crouched = crouched;
+        p.crouched = out != crate::player::Body::Stand;
+        p.crawl = out == crate::player::Body::Crawl;
+        p.rise = p.crouched;
         p.velocity = Vec3::ZERO;
-        *col = Collider::capsule_y(if crouched { crate::player::CROUCH_HALF } else { STAND_HALF }, RADIUS);
+        *col = out.collider();
         fit_controller(&mut kcc, None);
         commands.entity(host).try_remove::<Possessed>().try_insert(Visibility::Inherited);
         for mut v in &mut arms {
@@ -815,10 +816,12 @@ fn ride(
     if pos.body.is_some() {
         if let Ok(ctx) = rapier.single() {
             let filter = QueryFilter::default().exclude_collider(pe).groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
-            let (c, crouched) = stand_out(&ctx, filter, pt.translation - Vec3::Y * center);
+            let (c, out) = stand_out(&ctx, filter, pt.translation - Vec3::Y * center);
             pt.translation = c;
-            p.crouched = crouched;
-            *col = Collider::capsule_y(if crouched { crate::player::CROUCH_HALF } else { STAND_HALF }, RADIUS);
+            p.crouched = out != crate::player::Body::Stand;
+            p.crawl = out == crate::player::Body::Crawl;
+            p.rise = p.crouched;
+            *col = out.collider();
             fit_controller(&mut kcc, None);
         }
     }

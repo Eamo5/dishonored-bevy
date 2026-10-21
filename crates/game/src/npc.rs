@@ -3395,7 +3395,7 @@ pub(crate) fn npc_perception(
     mut found: Local<std::collections::HashSet<Entity>>,
     (froms, mut events, swarms): (Query<&FromSpawner>, MessageWriter<crate::interact::Interaction>, Query<(&Transform, &crate::swarm::Swarm), Without<Npc>>),
     (level, pvis, settings, notarget): (Option<Res<LevelInfo>>, Res<crate::stealth::PlayerVisibility>, Res<crate::settings::Settings>, Option<Res<crate::script::NoTarget>>),
-    (body_lights, carry, handled, auto_crouch): (Query<&BodyLight>, Res<crate::carry::Carry>, Res<HandledBodies>, Res<crate::player::AutoCrouch>),
+    (body_lights, carry, handled): (Query<&BodyLight>, Res<crate::carry::Carry>, Res<HandledBodies>),
 ) {
     // (rat swarms about that would attack: Corvo's, or a level's grown to its
     // `m_InitialRatCountToBeAggressive`; a stray rat or two only scurries off)
@@ -3419,9 +3419,13 @@ pub(crate) fn npc_perception(
     // and the strip the onlookers' lines of sight go to (`Twk_DefaultVisRegion`: standing 30-150
     // uu above the feet, sneaking 50-90, crouched by the world 30-60; 35 uu out towards the
     // onlooker, 20 wide), as roshan's r614/blink research decoded them
-    let feet = pt.translation.y - if p.crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF } - crate::player::RADIUS;
-    let cylinder = if p.crouched { 0.65 } else { 0.875 };
-    let region = if p.crouched && auto_crouch.0 {
+    let feet = pt.translation.y - p.body().depth();
+    let cylinder = match p.body() {
+        crate::player::Body::Stand => 0.875,
+        crate::player::Body::Sneak => 0.65,
+        crate::player::Body::Crawl => 0.33,
+    };
+    let region = if p.crawl {
         (0.3, 0.6)
     } else if p.crouched {
         (0.5, 0.9)
@@ -4046,7 +4050,7 @@ pub(crate) fn npc_brain(
     let ppos = pt.translation;
     let space_log = std::env::var("DH_SPACE_LOG").is_ok();
     // (his feet: his capsule's centre above them, standing or crouched)
-    let pfeet = ppos.y - if pl.crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF } - crate::player::RADIUS;
+    let pfeet = ppos.y - pl.body().depth();
     let blocking = psword.is_some_and(|s| s.blocking);
     // (Corvo's swing just begun: once a blow)
     let swing_began = psword.is_some_and(|s| s.swing > 0.0 && !s.hit_done && (*last_swing <= 0.0 || s.swing < *last_swing));

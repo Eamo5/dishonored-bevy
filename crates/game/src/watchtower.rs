@@ -785,7 +785,7 @@ mod projectile_tests {
             velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
             grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
             air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
-            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0, speed_cap: 0.0,
+            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0, speed_cap: 0.0, crawl: false, rise: false,
         }));
         let tower = app.world_mut().spawn(Tower {
             index: 0, origin: Vec3::new(0.0, 10.0, 0.0), arrow: Vec3::new(0.0, 9.0, 0.0),
@@ -872,7 +872,7 @@ mod projectile_tests {
             velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
             grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
             air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
-            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0, speed_cap: 0.0,
+            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0, speed_cap: 0.0, crawl: false, rise: false,
         })).id();
         let cover = app.world_mut().spawn((Collider::cuboid(0.01, 2.0, 2.0), Transform::from_xyz(4.0, 0.0, 0.0), CollisionGroups::new(GROUP_WORLD, Group::ALL))).id();
         app.update();
@@ -885,7 +885,7 @@ mod projectile_tests {
             cursor.read(blasts).next().map(|b| b.at)
         };
         let hit = fire(&mut app, 0.0).unwrap();
-        assert!((hit.x - 1.56).abs() < 0.001, "nearer player must intercept before farther wall: {hit:?}");
+        assert!((hit.x - (2.0 - crate::player::RADIUS - 0.12)).abs() < 0.001, "nearer player must intercept before farther wall: {hit:?}");
         app.world_mut().get_mut::<Transform>(cover).unwrap().translation.x = 1.0;
         for group in [GROUP_WORLD, GROUP_PROP] {
             app.world_mut().entity_mut(cover).insert(CollisionGroups::new(group, Group::ALL));
@@ -945,8 +945,7 @@ fn fly_arrows(
                 if !n.is_down() { character(t.translation, crate::npc::NPC_HALF, crate::npc::NPC_RADIUS + 0.12); }
             }
             if let Some((t, p)) = pl {
-                let half = if p.crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF };
-                character(t.translation, half, crate::player::RADIUS + 0.12);
+                character(t.translation, p.body().half(), p.body().radius() + 0.12);
             }
             if len > 0.01 {
                 t.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, step / len);

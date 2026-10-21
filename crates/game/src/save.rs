@@ -888,6 +888,7 @@ fn apply_pending(
             pl.locked = powers.blink.is_some();
             pl.crouched = s.crouched;
             pl.eye_height = if s.crouched { crate::player::CROUCH_EYE } else { crate::player::STAND_EYE };
+            pl.crawl = false;
             // The saved position is the capsule's centre. Restore its size as
             // well, so loading in a low passage does not stand Corvo into the roof.
             *collider = bevy_rapier3d::prelude::Collider::capsule_y(if s.crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF }, crate::player::RADIUS);

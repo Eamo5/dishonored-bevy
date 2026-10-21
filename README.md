@@ -964,11 +964,9 @@ are in the settings file, `pad_binding_set` 0-3):
   character investigates, then he's busted. What it hears raises attention by the tweak's
   increases (an anomaly, danger). Sneaking, the HUD effects movie's black shroud darkens the screen's edges
   (`BlackShroud`, tweened in 0.35 s) until someone busts him, with the entering-sneak sound.
-  Crouched by the world rather than by choice (a mantle into a space too low to stand, or trying
-  to stand without room), he is auto-crouched: he stands by himself once there is room, and his
-  stance gives `m_fVisLevelBonus_Autocrouching` (-1) as the original's does, sneaking's
-  stillness too; a slide is its own stance and doesn't count as still (roshan's r614/blink
-  research). `DH_ATTN_LOG=1` logs attention levels, `DH_VIS_LOG=1` the light range, the value
+  Crawling, brought lower than a sneak by the world (see Movement), his stance gives
+  `m_fVisLevelBonus_Autocrouching` (-1) as the original's does, and sneaking's stillness too. A
+  slide is its own stance and doesn't count as still (roshan's r614/blink research). `DH_ATTN_LOG=1` logs attention levels, `DH_VIS_LOG=1` the light range, the value
   and the stance.
 - **The interface movies' animations as authored** (`flash.rs`): `dhtool cook-ui` also
   writes each Scaleform movie's timelines (`ui/<movie>/timeline.json`: every sprite's frames
@@ -2668,6 +2666,25 @@ against the install's own data where it carries them, then implemented independe
   - Severed limbs and dismemberment pieces keep the materials the character was given, as does a
     character the scripts undress.
 - **Movement.**
+  - His body is the original's cylinder, his feet kept where they are as it changes:
+    - Standing it is radius 35 uu and `CollisionHeight` 87.5, 1.75 m tall. Sneaking it is
+      `Twk_Pawn_Corvo`'s `m_fSneakHeight` 65 (1.30 m). Crawling it is `m_fCrouchHeight` 33
+      (0.66 m). It used to be a 1.80 m capsule and a single 1.00 m crouch.
+    - His eye is his first-person mesh's `camera_jnt`, which keeps its place on the cylinder: 77.5 uu
+      above its centre, 1.65 m above his feet standing (as measured on the original by roshan's
+      r614/blink research), 1.425 m sneaking. The camera is kept under what is above him, and
+      eased as his body changes (`m_fCamCollisionSmoothSpeed` 12).
+    - Sneaking, he crawls where the world brings him lower, as the original's auto-crouch does
+      (0x00A68870, decoded from the original for this rewrite). Each tick it sweeps the band
+      between a crawl's top and a sneak's 1 m the way he goes (`m_fAutoCrouchTestDistance`), by his
+      velocity or, standing, his stick. If that band is blocked, he crawls when a crawl's body gets
+      15 cm past the block (`m_fAutoCrouchMinCrawlDepth`), or does so stepped up a quarter of
+      `MaxStepHeight` at a time, three times. He keeps crawling while the band ahead stays
+      blocked or a sneak doesn't fit, then sneaks again. A slide crawls too (its start sets
+      `bWantsToCrouch`), so he slides under what a sneak can't pass. The original's measured drop
+      of 61 uu at a slide's start is this crawl.
+    - Down by the world rather than by choice (a mantle or a Blink into a space too low to stand,
+      or trying to stand without room), he stands by himself once there is room.
   - Starting, stopping, turning and the air follow the original's `CalcVelocity` (0x006ACD50) and
     `physFalling` (0x006BF0E0), as roshan's r614/blink research decoded them:
     - On the ground his velocity turns toward the way he means by `GroundFriction` 8 without
@@ -2696,16 +2713,17 @@ against the install's own data where it carries them, then implemented independe
     walks floors up to `WalkableFloorZ`'s 50 degrees, sliding off steeper ones, as the original's
     walking physics does (it used to be 0.42 m and 52 degrees).
     - Up to 1.2 m is an instant step-up; above that a 0.7 s climb to 1.7 m, then 1.033 s.
-    - Where only a crouch fits, he mantles into a crouch.
+    - Where only a sneak or a crawl fits, he mantles into it.
     - He mantles only where his whole body fits on top, standing or crouched. A single ray
       upwards used to let him climb into pipes stacked on a wall or a tree over a planter.
     - In the air, Jump alone mantles.
-  - Leaning swings the head about a pivot 3.5 m below (2.6 m crouched), up to 20 degrees: about
-    1.2 m sideways.
+  - Leaning swings the head about a pivot 3.5 m below (2.6 m sneaking, 1.32 m crawling: twice his
+    cylinder's height), up to 20 degrees: about 1.2 m sideways standing, 0.89 m and 0.16 m down
+    sneaking, as the original was measured (roshan's r614/blink research).
   - Climbing chains at 1.638 m/s. A jump off goes 5.25 m/s the way he looks, with a jump's lift.
     He can grab again after 0.5 s.
   - Blink moves 60 m/s and gives back his velocity at the end: a falling Blink keeps its fall. It
-    accepts destinations where only a crouch fits, arriving crouched. A target within his bounds'
+    accepts destinations where only a sneak or a crawl fits, arriving so. A target within his bounds'
     radius (100.5 uu) is no Blink (0x00BFC990).
   - Blink's target is found as the original's (0x00BF5520, as roshan's r614/blink research
     decoded it). A 20 uu box is swept along the view from the camera, looking up no higher than

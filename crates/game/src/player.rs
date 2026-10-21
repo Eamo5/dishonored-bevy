@@ -38,13 +38,52 @@ impl Plugin for PlayerPlugin {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PlayerMoveSet;
 
-pub const RADIUS: f32 = 0.32;
+/// His cylinder as the original's (`Default__DishonoredPlayerPawn.CollisionCylinder`: radius
+/// 35 uu, `CollisionHeight` 87.5 standing; sneaking, `Twk_Pawn_Corvo`'s `m_fSneakHeight` 65; the
+/// world's crawl, `bIsCrouched`, `m_fCrouchHeight` 33), his feet kept where they are as it
+/// changes: a capsule of his radius 1.75 m tall standing, 1.30 m sneaking, and a ball 0.66 m
+/// across crawling
+pub const RADIUS: f32 = 0.35;
 /// The most he steps up or follows the floor down (`MaxStepHeight` 44 uu + 2.54).
 const STEP_HEIGHT: f32 = 0.4654;
-pub const STAND_HALF: f32 = 0.58; // capsule half segment => total 1.80 m
-pub const CROUCH_HALF: f32 = 0.18; // total 1.0 m
-pub const STAND_EYE: f32 = 0.72; // above capsule centre
-pub const CROUCH_EYE: f32 = 0.3;
+pub const STAND_HALF: f32 = 0.525; // capsule half segment => total 1.75 m
+pub const CROUCH_HALF: f32 = 0.30; // total 1.30 m
+pub const CRAWL_HALF: f32 = 0.0;
+pub const CRAWL_RADIUS: f32 = 0.33;
+/// His eye above his cylinder's centre: his first-person mesh's `camera_jnt`, which keeps its
+/// place on the cylinder (77.5 uu, 165 above his feet standing, as roshan's r614/blink research
+/// measured the original); sneaking or crawling his centre is lower, and the camera is kept out
+/// of what is above him (`DishonoredPlayerCamera`'s collision)
+pub const STAND_EYE: f32 = 0.775;
+pub const CROUCH_EYE: f32 = 0.775;
+
+/// His body: standing, sneaking, or crawling (where the world forces him lower than a sneak).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Body {
+    Stand,
+    Sneak,
+    Crawl,
+}
+
+impl Body {
+    pub fn half(self) -> f32 {
+        match self {
+            Body::Stand => STAND_HALF,
+            Body::Sneak => CROUCH_HALF,
+            Body::Crawl => CRAWL_HALF,
+        }
+    }
+    pub fn radius(self) -> f32 {
+        if self == Body::Crawl { CRAWL_RADIUS } else { RADIUS }
+    }
+    /// From his centre down to his feet.
+    pub fn depth(self) -> f32 {
+        self.half() + self.radius()
+    }
+    pub fn collider(self) -> Collider {
+        Collider::capsule_y(self.half(), self.radius())
+    }
+}
 /// What pulls Corvo down (m/s²): the world's 1500 uu/s², doubled as the original's falling
 /// physics applies it (its 800 uu/s `JumpZ` rises 106.7 uu and lands after 0.533 s, as measured
 /// in roshan's r614/blink research).
@@ -93,6 +132,68 @@ pub struct Player {
     pub power_jump: f32,
     /// dragged along (an assassin's Attract Spell), m/s
     pub pull: Vec3,
+    /// crawling: brought lower than a sneak by the world (`bIsCrouched`)
+    pub crawl: bool,
+    /// down by the world rather than by choice: he stands by himself once there is room
+    pub rise: bool,
+}
+
+impl Player {
+    pub fn body(&self) -> Body {
+        if self.crawl {
+            Body::Crawl
+        } else if self.crouched {
+            Body::Sneak
+        } else {
+            Body::Stand
+        }
+    }
+}
+
+/// His body changed where he stands: his feet kept, the view eased from where it was (the
+/// camera smooths the pop, `m_fCamCollisionSmoothSpeed`).
+pub fn set_body(p: &mut Player, t: &mut Transform, col: &mut Collider, body: Body) {
+    let before = p.body().depth();
+    p.crouched = body != Body::Stand;
+    p.crawl = body == Body::Crawl;
+    let d = p.body().depth() - before;
+    t.translation.y += d;
+    p.eye_height -= d;
+    *col = body.collider();
+}
+
+/// Whether `body` fits with its feet at `feet`.
+pub fn body_fits(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, feet: Vec3, body: Body) -> bool {
+    let shape = body.collider();
+    let mut hit = false;
+    ctx.intersect_shape(feet + Vec3::Y * (body.depth() + 0.02), Quat::IDENTITY, &*shape.raw, QueryFilter::default().exclude_collider(e).exclude_sensors().groups(player_groups()), |_| {
+        hit = true;
+        false
+    });
+    !hit
+}
+
+/// The world's crawl (`bWantsToCrouch`, set each tick by 0x00A68870 while he sneaks, as decoded
+/// from the original for this rewrite): the band between a crawl's top and a sneak's swept
+/// `m_fAutoCrouchTestDistance` 1 m the way he goes (his velocity's, else his stick's); blocked,
+/// he crawls if a crawl's body gets `m_fAutoCrouchMinCrawlDepth` 15 cm past what blocks it, or
+/// does so stepped up (a quarter of `MaxStepHeight` at a time, three times), or already crawls.
+fn crawl_wanted(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, feet: Vec3, dir: Vec3, crawling: bool) -> bool {
+    let filter = QueryFilter::default().exclude_collider(e).exclude_sensors().groups(player_groups());
+    let opts = bevy_rapier3d::prelude::ShapeCastOptions { max_time_of_impact: 1.0, target_distance: 0.0, stop_at_penetration: false, compute_impact_geometry_on_penetration: false };
+    let (lo, hi) = (2.0 * Body::Crawl.depth(), 2.0 * Body::Sneak.depth());
+    let band = Collider::cuboid(0.01, (hi - lo) * 0.5, 0.01);
+    let reach = 1.0;
+    let Some((_, hit)) = ctx.cast_shape(feet + Vec3::Y * (lo + hi) * 0.5, Quat::IDENTITY, dir * reach, band.raw.as_ref(), opts, filter) else { return false };
+    if crawling {
+        return true;
+    }
+    let depth = reach * hit.time_of_impact + 0.15;
+    let crawl = Body::Crawl.collider();
+    (0..4).any(|k| {
+        let from = feet + Vec3::Y * (Body::Crawl.depth() + 0.02 + k as f32 * STEP_HEIGHT * 0.25);
+        ctx.cast_shape(from, Quat::IDENTITY, dir * depth, crawl.raw.as_ref(), opts, filter).is_none()
+    })
 }
 
 #[derive(Component)]
@@ -171,6 +272,8 @@ pub fn spawn_player(mut commands: Commands, level: Option<Res<LevelInfo>>, confi
                 fall_speed: 0.0, air_peak: 0.0, speed_cap: 0.0,
                 power_jump: 0.0,
                 pull: Vec3::ZERO,
+                crawl: false,
+                rise: false,
             },
             DespawnOnExit(GameState::InGame),
             Transform::from_translation(pos).with_rotation(Quat::from_rotation_y(yaw)),
@@ -354,7 +457,7 @@ mod look_tests {
             velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
             grounded: false, lean: 0.0, noclip: false, eye_height: STAND_EYE, locked: false,
             air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0, fall_speed: 0.0, air_peak: 0.0, speed_cap: 0.0,
-            power_jump: 0.0, pull: Vec3::ZERO,
+            power_jump: 0.0, pull: Vec3::ZERO, crawl: false, rise: false,
         }, Transform::IDENTITY)).id();
         for mode in 0..3 {
             app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::new(100.0, 50.0);
@@ -764,47 +867,55 @@ fn player_move(
     }
 
     // crouch toggle (Ctrl / C); a creature doesn't
-    let room = |t: &Transform| {
-        rapier.single().ok().is_none_or(|ctx| {
-            ctx.cast_ray(t.translation, Vec3::Y, STAND_HALF + RADIUS + 0.45, true, QueryFilter::default().exclude_collider(entity).groups(player_groups())).is_none()
-        })
-    };
+    let feet = t.translation - Vec3::Y * p.body().depth();
+    let fits = |b: Body| rapier.single().ok().is_none_or(|ctx| body_fits(&ctx, entity, feet, b));
     let toggled = keys.just_pressed(bind.key(crate::bindings::Act::Crouch)) && host.is_none();
     if toggled {
-        if p.crouched && !auto.0 {
-            // need headroom to stand; without it he stays down until there is (auto-crouched)
-            if room(&t) {
-                p.crouched = false;
-                *col = Collider::capsule_y(STAND_HALF, RADIUS);
-                t.translation.y += STAND_HALF - CROUCH_HALF;
+        if p.crouched && !p.rise {
+            // need room to stand; without it he stays down until there is
+            if fits(Body::Stand) {
+                set_body(&mut p, &mut t, &mut col, Body::Stand);
             } else {
-                auto.0 = true;
+                p.rise = true;
             }
         } else if p.crouched {
-            // (auto-crouched, he means to sneak after all)
-            auto.0 = false;
+            // (down by the world, he means to sneak after all)
+            p.rise = false;
         } else {
             // (from a sprint: a slide)
             let horiz = p.velocity.with_y(0.0);
             if p.sprinting && p.grounded && horiz.length() >= SLIDE_MIN_SPEED && !carry.carrying() {
                 slide.0 = Some((0.0, horiz.normalize(), horiz.length()));
             }
-            p.crouched = true;
-            auto.0 = false;
-            *col = Collider::capsule_y(CROUCH_HALF, RADIUS);
-            t.translation.y -= STAND_HALF - CROUCH_HALF;
+            p.rise = false;
+            set_body(&mut p, &mut t, &mut col, Body::Sneak);
         }
     }
-    // auto-crouched, he stands by himself once there is room
-    if !p.crouched {
-        auto.0 = false;
-    } else if auto.0 && !toggled && host.is_none() && room(&t) {
-        info!("player: room to stand again: stands up");
-        auto.0 = false;
-        p.crouched = false;
-        *col = Collider::capsule_y(STAND_HALF, RADIUS);
-        t.translation.y += STAND_HALF - CROUCH_HALF;
+    // the world's crawl while he sneaks (and through a slide, which crawls: 0x00A67FA0 sets
+    // `bWantsToCrouch`); let go of, he sneaks again once there is room
+    if p.crouched && host.is_none() {
+        let horiz = p.velocity.with_y(0.0);
+        let dir = if horiz.length() > 0.05 { horiz.normalize() } else { wish.with_y(0.0).normalize_or_zero() };
+        let want = slide.0.is_some() || (dir != Vec3::ZERO && rapier.single().ok().is_some_and(|ctx| crawl_wanted(&ctx, entity, feet, dir, p.crawl)));
+        if want && !p.crawl {
+            set_body(&mut p, &mut t, &mut col, Body::Crawl);
+        } else if !want && p.crawl && fits(Body::Sneak) {
+            set_body(&mut p, &mut t, &mut col, Body::Sneak);
+        } else if !p.crawl && !fits(Body::Sneak) && fits(Body::Crawl) {
+            // (somewhere a sneak doesn't fit: crawling)
+            set_body(&mut p, &mut t, &mut col, Body::Crawl);
+        }
     }
+    // down by the world, he stands by himself once there is room
+    let feet = t.translation - Vec3::Y * p.body().depth();
+    if !p.crouched {
+        p.rise = false;
+    } else if p.rise && !toggled && host.is_none() && rapier.single().ok().is_none_or(|ctx| body_fits(&ctx, entity, feet, Body::Stand)) {
+        info!("player: room to stand again: stands up");
+        p.rise = false;
+        set_body(&mut p, &mut t, &mut col, Body::Stand);
+    }
+    auto.0 = p.crawl;
     // a slide ends at its time, when its way turns (a wall), when let go late enough, off the
     // ground, or stood up
     if let Some((st, way, _)) = slide.0 {
@@ -1022,10 +1133,10 @@ fn mantle_time(h: f32, crouch: bool) -> f32 {
 /// Where a mantle from `t` facing `yaw` would put Corvo (standing, or `crouched` sneaking: he
 /// stays down), the ledge's height above his feet, and whether only a crouch fits there (the
 /// finder's crouch flag, from a standing box).
-pub(crate) fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, t: &Transform, yaw: f32, fall: f32, crouched: bool, least: Option<f32>) -> Option<(Vec3, f32, bool)> {
+pub(crate) fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity, t: &Transform, yaw: f32, fall: f32, body: Body, least: Option<f32>) -> Option<(Vec3, f32, Body)> {
     let fwd = Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
-    let half = if crouched { CROUCH_HALF } else { STAND_HALF };
-    let feet = t.translation - Vec3::Y * (half + RADIUS);
+    let half = body.half();
+    let feet = t.translation - Vec3::Y * body.depth();
     let filter = QueryFilter::default().exclude_collider(e).exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     // the edge finder (`DishonoredMantleEdgeFinderComponent`, as roshan's r614/blink research
     // decoded it): the search starts a step under `m_MantleMinEdgeHeight` 55 uu (155 falling
@@ -1092,11 +1203,12 @@ pub(crate) fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity
         return None;
     }
     let fwd = dir;
-    // room for him at the destination: standing, else crouched
-    let fits = |half: f32| {
-        let at = top.point + Vec3::Y * (half + RADIUS + 0.05) + fwd * 0.2;
+    // room for him at the destination: standing, else sneaking, else crawling
+    let fits = |b: Body| {
+        let (half, radius) = (b.half(), b.radius());
+        let at = top.point + Vec3::Y * (half + radius + 0.05) + fwd * 0.2;
         // (held a little clear of the top's own bumps)
-        let body = Collider::capsule_y(half, RADIUS * 0.9);
+        let body = Collider::capsule_y(half, radius * 0.9);
         let mut blocked = false;
         ctx.intersect_shape(at + Vec3::Y * 0.12, Quat::IDENTITY, &*body.raw, filter, |hit| {
             if std::env::var("DH_MANTLE_LOG").is_ok() {
@@ -1108,13 +1220,7 @@ pub(crate) fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity
         });
         (!blocked).then_some(at)
     };
-    if crouched {
-        return fits(CROUCH_HALF).map(|at| (at, h, fits(STAND_HALF).is_none()));
-    }
-    if let Some(at) = fits(STAND_HALF) {
-        return Some((at, h, false));
-    }
-    fits(CROUCH_HALF).map(|at| (at, h, true))
+    [Body::Stand, Body::Sneak, Body::Crawl].into_iter().find_map(|b| fits(b).map(|at| (at, h, b)))
 }
 
 fn mantle(
@@ -1155,21 +1261,24 @@ fn mantle(
     let Ok(ctx) = rapier.single() else { return };
     let fall = if p.grounded { 0.0 } else { (-p.velocity.y).max(0.0) };
     let asked = request.0.take();
-    let found = mantle_dest(&ctx, e, &t, p.yaw, fall, p.crouched, asked);
+    let found = mantle_dest(&ctx, e, &t, p.yaw, fall, p.body(), asked);
     spot.0 = found.is_some_and(|(_, h, _)| h > 0.9);
     // (the Jump press, or Jump held while falling: no forward needed; or a Blink's end)
     let wants = asked.is_some() || keys.just_pressed(bind.key(crate::bindings::Act::Jump)) || (!p.grounded && keys.pressed(bind.key(crate::bindings::Act::Jump)));
     if !wants {
         return;
     }
-    let Some((dest, h, crouch)) = found else { return };
+    let Some((dest, h, body)) = found else { return };
+    let crouch = body != Body::Stand;
     *edge = MantleEdge { h, crouch };
     info!("mantle: {h:.2} m edge, {:.3} s{}", mantle_time(h, crouch), if crouch { ", crouched" } else { "" });
     if crouch {
-        // (into a space too low to stand: crouched by it, not by choice)
-        auto.0 |= !p.crouched;
+        // (into a space too low to stand: down by it, not by choice)
+        p.rise |= !p.crouched;
         p.crouched = true;
-        *col = Collider::capsule_y(CROUCH_HALF, RADIUS);
+        p.crawl = body == Body::Crawl;
+        *col = body.collider();
+        auto.0 = p.crawl;
     }
     if mantle_time(h, crouch) <= 0.0 {
         // a low edge: stepped onto at once
@@ -1228,11 +1337,21 @@ fn update_camera_offset(
     } else {
         STAND_EYE
     };
+    // (the camera's collision keeps it under what is above him: a crawl's view under the pipe
+    // he crawls beneath)
+    let target_eye = match rapier.single() {
+        Ok(ctx) if p.crouched && !stats.dead && possession.body.is_none() => {
+            let filter = QueryFilter::default().exclude_collider(entity).exclude_sensors().groups(player_groups());
+            ctx.cast_ray(t.translation, Vec3::Y, target_eye + 0.15, true, filter).map_or(target_eye, |(_, toi)| target_eye.min(toi - 0.15))
+        }
+        _ => target_eye,
+    };
     p.eye_height += (target_eye - p.eye_height) * (12.0 * dt).min(1.0);
     // the lean: the head swung about a pivot below it (`m_fLeanHeightPct` 2 x the cylinder's
-    // height: 350 uu standing), to `m_fMaxLeanAngle` 15 degrees and its soften 5 (as roshan's
-    // r614/blink research decoded `DishonoredCamera_Lean`), as far as the walls let it
-    let pivot = if p.crouched { 2.6 } else { 3.5 };
+    // height: 350 uu standing, 260 sneaking, 132 crawling), to `m_fMaxLeanAngle` 15 degrees and its
+    // soften 5 (as roshan's r614/blink research decoded `DishonoredCamera_Lean`; its measurement
+    // on the original, 88.9 uu aside and 16 down, is the sneak's), as far as the walls let it
+    let pivot = 4.0 * p.body().depth();
     let mut lean_off = 0.0;
     if p.lean.abs() > 0.01 {
         let dir = t.rotation * Vec3::X * p.lean.signum();

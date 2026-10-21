@@ -1575,8 +1575,8 @@ fn run_script(
                     }
                     for k in 0..16 {
                         let yaw = k as f32 * std::f32::consts::TAU / 16.0;
-                        if let Some((_, h, crouch)) = crate::player::mantle_dest(&ctx, pe, &stand, yaw, 0.0, false, None).filter(|(_, h, c)| (lo..=hi).contains(h) && (!low_room || *c)) {
-                            found = Some((stand.translation, yaw, h, crouch));
+                        if let Some((_, h, crouch)) = crate::player::mantle_dest(&ctx, pe, &stand, yaw, 0.0, crate::player::Body::Stand, None).filter(|(_, h, c)| (lo..=hi).contains(h) && (!low_room || *c != crate::player::Body::Stand)) {
+                            found = Some((stand.translation, yaw, h, crouch != crate::player::Body::Stand));
                             break 'search;
                         }
                     }
@@ -1592,6 +1592,51 @@ fn run_script(
                     info!("script: ledge {h:.2} m{} from {at:.2}", if crouch { " (crouched)" } else { "" });
                 }
                 None => info!("script: no ledge {lo}-{hi} m"),
+            }
+        }
+        "crawlspot" => {
+            // (tests) crawlspot [D]: sneaking, D m (default 1.5) before the nearest floor where only a
+            // crawl fits (under a table, a pipe), facing it
+            let d = if cmd.len() > 1 { f(1) } else { 1.5 };
+            let (Ok(ctx), Ok(pe)) = (rapier.single(), player_ent.single()) else { return };
+            use crate::player::{body_fits, Body};
+            let world = bevy_rapier3d::prelude::QueryFilter::default().exclude_collider(pe).exclude_sensors().groups(bevy_rapier3d::prelude::CollisionGroups::new(bevy_rapier3d::prelude::Group::ALL, crate::level::GROUP_WORLD | crate::level::GROUP_PROP));
+            let feet0 = t.translation.y - p.body().depth();
+            let floor = |c: Vec3| ctx.cast_ray(c, Vec3::NEG_Y, 2.5, true, world).filter(|(_, toi)| *toi > 0.0).map(|(_, toi)| c - Vec3::Y * toi);
+            let mut found = None;
+            'search: for r in 1..160 {
+                for a in 0..32 {
+                    let dir = Quat::from_rotation_y(a as f32 * std::f32::consts::TAU / 32.0) * Vec3::NEG_Z;
+                    // (under something: the floor found from just under a crawl's top)
+                    let Some(under) = floor(Vec3::new(t.translation.x, feet0 + 0.6, t.translation.z) + dir * r as f32 * 0.4) else { continue };
+                    // (something overhead lower than a sneak, higher than a crawl)
+                    let roof = ctx.cast_ray(under + Vec3::Y * 0.05, Vec3::Y, 1.3, true, world).map(|(_, toi)| toi + 0.05);
+                    if !roof.is_some_and(|h| h > 0.75 && h < 1.25) || !body_fits(&ctx, pe, under, Body::Crawl) {
+                        continue;
+                    }
+                    // a spot before it, back the way, where a sneak fits on the same floor
+                    let Some(at) = floor(under - dir * d + Vec3::Y * 1.0).filter(|f| (f.y - under.y).abs() < 0.15) else { continue };
+                    if body_fits(&ctx, pe, at, Body::Sneak) && ctx.cast_ray(at + Vec3::Y * 0.3, dir, d, true, world).is_none() {
+                        found = Some((at, under, dir));
+                        break 'search;
+                    }
+                }
+            }
+            match found {
+                Some((at, under, dir)) => {
+                    p.crouched = true;
+                    p.crawl = false;
+                    t.translation = at + Vec3::Y * (Body::Sneak.depth() + 0.03);
+                    commands.queue(move |w: &mut World| {
+                        w.entity_mut(pe).insert(Body::Sneak.collider());
+                    });
+                    p.velocity = Vec3::ZERO;
+                    p.noclip = false;
+                    p.yaw = (-dir.x).atan2(-dir.z);
+                    p.pitch = -0.2;
+                    info!("script: crawlspot under {under:.2} from {at:.2}");
+                }
+                None => info!("script: no crawlspot"),
             }
         }
         "trap" => {
@@ -1984,7 +2029,7 @@ fn run_script(
             commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
             script.timer = 0.2;
         }
-        "pos" => info!("script: at {:.2}{} v {:.2}{}{}", t.translation, if p.crouched { " crouched" } else { "" }, p.velocity, if p.grounded { " ground" } else { "" }, if p.locked { " locked" } else { "" }),
+        "pos" => info!("script: at {:.2}{} v {:.2}{}{} eye {:.2}", t.translation, if p.crawl { " crawling" } else if p.crouched { " crouched" } else { "" }, p.velocity, if p.grounded { " ground" } else { "" }, if p.locked { " locked" } else { "" }, p.eye_height),
         "log" => {
             let fps = diag
                 .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS)

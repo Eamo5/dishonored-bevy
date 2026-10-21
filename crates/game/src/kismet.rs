@@ -5865,7 +5865,7 @@ fn world_events(
         // (Corvo's whole capsule touches, as UE3's collision cylinder does: a flat trigger on
         // the floor is walked through below his middle)
         use bevy_rapier3d::parry;
-        let capsule = parry::shape::Capsule::new_y(if p.crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF }, crate::player::RADIUS);
+        let capsule = parry::shape::Capsule::new_y(p.body().half(), p.body().radius());
         let mut inside = HashSet::new();
         for (actor, hulls) in &vm.touch {
             let at = probe - moved.get(actor).copied().unwrap_or(Vec3::ZERO);

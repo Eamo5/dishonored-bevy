@@ -1057,6 +1057,31 @@ fn main() -> Result<()> {
                 cur = od.props.object("Parent").and_then(|p| assets.resolve(&o.pkg, p));
             }
         }
+        Some("rootkeys") => {
+            // dhtool rootkeys <pkg> <AnimSet export> [sequence filter] [track index]: each
+            // sequence's first and last translation keys of one track (default the first: the
+            // root), as decoded, in uu
+            init_classes();
+            let pkg = upk::Package::open(&pkg_path(&args[2]))?;
+            let idx: i32 = match args[3].parse() { Ok(i) => i, Err(_) => pkg.find_export(&args[3]).expect("no such export") };
+            let filter = args.get(4).map(|s| s.to_ascii_lowercase()).unwrap_or_default();
+            let joint: u16 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let od = upk::read_object(&pkg, idx)?;
+            for s in upk::props::object_array(&pkg, &od.props, "Sequences") {
+                let so = upk::read_object(&pkg, s)?;
+                let name = so.props.name("SequenceName").unwrap_or("?").to_string();
+                if !name.to_ascii_lowercase().contains(&filter) {
+                    continue;
+                }
+                let mut r = so.reader;
+                let _ = r.i32()?;
+                let n = r.i32()? as usize;
+                let Ok(a) = dhcook::edge::EdgeAnim::decode(r.bytes(n)?) else { continue };
+                for t in a.translations.iter().filter(|t| t.joint == joint) {
+                    println!("{name}: joint {} keys {} first {:?} last {:?}", t.joint, t.values.len(), t.values.first(), t.values.last());
+                }
+            }
+        }
         Some("animset") => {
             // dhtool animset <pkg> <AnimSet export> <outdir>: dump every sequence's Edge blob
             init_classes();

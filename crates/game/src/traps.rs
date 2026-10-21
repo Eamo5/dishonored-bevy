@@ -317,7 +317,7 @@ fn trip_wires(
         // his body: a creature's, else his own
         let (half, radius) = match possession.body.as_ref() {
             Some(b) => (b.half, b.radius),
-            None => (if p.crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF }, crate::player::RADIUS),
+            None => (p.body().half(), p.body().radius()),
         };
         bodies.push((pt.translation - Vec3::Y * half, pt.translation + Vec3::Y * half, radius));
     }
@@ -481,7 +481,7 @@ fn fly_darts(
     let dt = time.delta_secs() * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
     let walls = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
-    let pp = player.single().ok().map(|(t, p)| (t.translation, p.crouched));
+    let pp = player.single().ok().map(|(t, p)| (t.translation, p.body()));
     for (e, mut d, mut t) in &mut darts {
         d.life -= dt;
         let Some(def) = level.scene.traps.get(d.trap as usize).filter(|_| d.life > 0.0) else {
@@ -508,9 +508,8 @@ fn fly_darts(
                 hit = Some((a + direction * distance, Some(ne), false));
             }
         }
-        if let Some((p, crouched)) = pp.filter(|_| !stats.dead) {
-            let half = if crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF };
-            if let Some(distance) = crate::krust::capsule_ray_hit(a, direction, nearest, p, half, crate::player::RADIUS + 0.05)
+        if let Some((p, body)) = pp.filter(|_| !stats.dead) {
+            if let Some(distance) = crate::krust::capsule_ray_hit(a, direction, nearest, p, body.half(), body.radius() + 0.05)
                 .filter(|d| hit.is_none() || *d < nearest) {
                 hit = Some((a + direction * distance, None, true));
             }
@@ -708,7 +707,7 @@ mod projectile_tests {
             velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, crouched: false, sprinting: false,
             grounded: true, lean: 0.0, noclip: false, eye_height: 1.0, locked: false,
             air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
-            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0, speed_cap: 0.0,
+            fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0, speed_cap: 0.0, crawl: false, rise: false,
         })).id();
         let source = app.world_mut().spawn((Collider::ball(0.8), Transform::default(), CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
         let wall = app.world_mut().spawn((Collider::cuboid(0.01, 2.0, 2.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(GROUP_WORLD, Group::ALL))).id();

@@ -117,7 +117,7 @@ fn fly(
     let dt = time.delta_secs() * tc.projectile_scale();
     let Ok(ctx) = rapier.single() else { return };
     let walls = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
-    let pp = player.single().ok().map(|(t, p)| (t.translation, p.crouched));
+    let pp = player.single().ok().map(|(t, p)| (t.translation, p.body()));
     for (e, mut a, mut t) in &mut arrows {
         a.life -= dt;
         if a.life <= 0.0 {
@@ -150,9 +150,8 @@ fn fly(
                 hit = Some(from + dir * d);
             }
         }
-        if let Some((p, crouched)) = pp.filter(|_| !stats.dead) {
-            let half = if crouched { crate::player::CROUCH_HALF } else { crate::player::STAND_HALF };
-            if let Some(d) = crate::krust::capsule_ray_hit(from, dir, nearest, p, half, crate::player::RADIUS + 0.05) {
+        if let Some((p, body)) = pp.filter(|_| !stats.dead) {
+            if let Some(d) = crate::krust::capsule_ray_hit(from, dir, nearest, p, body.half(), body.radius() + 0.05) {
                 hit = Some(from + dir * d);
             }
         }

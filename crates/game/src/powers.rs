@@ -318,9 +318,9 @@ pub struct Powers {
     pub reload_anim: (u32, &'static str),
     /// Wind Blasts under way
     pub gusts: Vec<Gust>,
-    /// Corvo's velocity as a Blink begins, his again as it ends; whether it ends crouched
+    /// Corvo's velocity as a Blink begins, his again as it ends; his body as it ends
     pub blink_vel: Vec3,
-    pub blink_crouch: bool,
+    pub blink_body: crate::player::Body,
     /// the landing's kind (its marker), and the marker shown
     pub blink_spot: Option<BlinkSpot>,
     pub blink_shown: Option<BlinkSpot>,
@@ -380,7 +380,7 @@ impl Default for Powers {
             reload_anim: (0, ""),
             gusts: Vec::new(),
             blink_vel: Vec3::ZERO,
-            blink_crouch: false,
+            blink_body: crate::player::Body::Stand,
             blink_spot: None,
             blink_shown: None,
         }
@@ -998,7 +998,7 @@ impl BlinkSpot {
 /// backed off along the aim by half his bounds (50.25 uu) until a crawl-height box fits, and
 /// lifted to at least his cylinder's half height (87.5) above the floor. A ledge there he
 /// climbs as the Blink ends (`MantleRequest`).
-fn blink_destination(ctx: &RapierContext, player: Entity, view: Vec3, eye: Vec3, dir: Vec3, range: f32, vert: f32) -> Option<(Vec3, bool, BlinkSpot)> {
+fn blink_destination(ctx: &RapierContext, player: Entity, view: Vec3, eye: Vec3, dir: Vec3, range: f32, vert: f32) -> Option<(Vec3, crate::player::Body, BlinkSpot)> {
     let filter = QueryFilter::default().exclude_collider(player).groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP | GROUP_NPC));
     let mut v = if dir.y <= 0.0 { dir * range } else { dir * (vert / dir.y.max(1e-3)).min(range) };
     v.y = v.y.min(vert);
@@ -1051,17 +1051,15 @@ fn blink_destination(ctx: &RapierContext, player: Entity, view: Vec3, eye: Vec3,
     if let Some((_, toi)) = ctx.cast_ray(p, Vec3::NEG_Y, 200.0, true, filter) {
         p.y = p.y.max(p.y - toi + 0.875);
     }
-    // (his capsule there: standing, else crouched where only a crouch fits)
+    // (his body there: standing, else sneaking, else crawling where only a crawl fits, as the
+    // crawl-high box found it room)
+    use crate::player::Body;
     let feet = p.y - 0.875;
-    let stand = Vec3::new(p.x, feet + STAND_HALF + RADIUS, p.z);
-    let (dest, crouch) = if fits(stand, &Collider::capsule_y(STAND_HALF, RADIUS * 0.95)) {
-        (stand, false)
-    } else {
-        (Vec3::new(p.x, feet + crate::player::CROUCH_HALF + RADIUS, p.z), true)
-    };
+    let body = [Body::Stand, Body::Sneak].into_iter().find(|b| fits(Vec3::new(p.x, feet + b.depth(), p.z), &Collider::capsule_y(b.half(), b.radius() * 0.95))).unwrap_or(Body::Crawl);
+    let dest = Vec3::new(p.x, feet + body.depth(), p.z);
     let yaw = (-aim.x).atan2(-aim.z);
-    let ledge = crate::player::mantle_dest(ctx, player, &Transform::from_translation(dest), yaw, 0.0, crouch, Some(0.0)).is_some();
-    Some((dest, crouch, spot_of(ctx, dest, ledge, filter)))
+    let ledge = crate::player::mantle_dest(ctx, player, &Transform::from_translation(dest), yaw, 0.0, body, Some(0.0)).is_some();
+    Some((dest, body, spot_of(ctx, dest, ledge, filter)))
 }
 
 /// The kind of a Blink's landing: a ledge, else ground under its feet, else the air.
@@ -1174,7 +1172,7 @@ fn use_power(
         powers.aiming = true;
         let dest = blink_destination(&ctx, pe, pt.translation + Vec3::Y * crate::player::STAND_EYE, eye, dir, blink_range, blink_vert);
         powers.blink_target = dest.map(|d| d.0);
-        powers.blink_crouch = dest.is_some_and(|d| d.1);
+        powers.blink_body = dest.map_or(crate::player::Body::Stand, |d| d.1);
         powers.blink_spot = dest.map(|d| d.2);
     } else if sel == Power::Blink && can_act && mouse.just_pressed(MouseButton::Right) && stats.mana < Power::Blink.mana(&data) {
         out_of_mana(&mut powers, &mut sfx);
@@ -1783,9 +1781,12 @@ fn blink_travel(
         p.grounded = false;
         // (then the Blink's mantle: its finder from any height, `pMantleBlinkTweaks`)
         mantle_req.0 = Some(0.0);
-        if powers.blink_crouch && !p.crouched {
+        if powers.blink_body != crate::player::Body::Stand && powers.blink_body != p.body() {
+            // (arrived low: down by the space he came to; the target is his body's centre)
+            p.rise |= !p.crouched;
             p.crouched = true;
-            *col = Collider::capsule_y(crate::player::CROUCH_HALF, RADIUS);
+            p.crawl = powers.blink_body == crate::player::Body::Crawl;
+            *col = powers.blink_body.collider();
         }
     } else {
         powers.blink = Some((from, to, nt));
