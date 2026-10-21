@@ -146,6 +146,8 @@ pub enum HitKind {
     SpringRazor,
     /// a wall of light's disintegration
     WallOfLight,
+    /// a wall of light Corvo hasn't rewired: not his doing
+    EnemyWallOfLight,
     /// The Knife of Dunwall: an explosive bolt's blast
     ExplosiveBolt,
     /// an arc mine's lightning

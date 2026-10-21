@@ -23,7 +23,11 @@ pub struct DistractionPlugin;
 impl Plugin for DistractionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Distractions>()
-            .add_systems(OnEnter(GameState::InGame), |mut d: ResMut<Distractions>| *d = Distractions::default())
+            .init_resource::<ScriptDistractions>()
+            .add_systems(OnEnter(GameState::InGame), |mut d: ResMut<Distractions>, mut s: ResMut<ScriptDistractions>| {
+                *d = Distractions::default();
+                s.0.clear();
+            })
             .add_systems(Update, distract.run_if(in_state(GameState::InGame)));
     }
 }
@@ -35,6 +39,12 @@ struct Distractions {
     cool: Vec<f32>,
     near: HashSet<(Entity, usize)>,
 }
+
+/// The level scripts sending characters (spawners) to distractors (`scene.distractors`)
+/// (`DisSeqAct_AIStartDistraction`, 0x00b63ed0: the distractor's animate message, its
+/// cooldown and chance ignored), as roshan's r614/blink research found.
+#[derive(Resource, Default)]
+pub struct ScriptDistractions(pub Vec<(u32, usize)>);
 
 /// A character playing a distractor's scene.
 #[derive(Component)]
@@ -51,6 +61,8 @@ pub struct Distracted {
     /// still walking there (for so long), and its home before
     walking: Option<f32>,
     home_was: Vec3,
+    /// sent by the scripts (it walks there however far)
+    sent: bool,
 }
 
 /// The character group of a scene (its `DistractedPawn`; else the first with animations).
@@ -67,6 +79,7 @@ fn distract(
     time: Res<Time>,
     level: Option<Res<LevelInfo>>,
     mut st: ResMut<Distractions>,
+    mut sent: ResMut<ScriptDistractions>,
     mut npcs: Query<(Entity, &mut Npc, &mut Transform, &mut Animator, Option<&mut Distracted>, Has<ScriptedAnim>)>,
     player: Query<&Transform, (With<Player>, Without<Npc>)>,
     mut used: MessageWriter<Interaction>,
@@ -76,6 +89,7 @@ fn distract(
     let scene = &level.scene;
     // (`DH_NO_DISTRACT`: none, for comparison)
     if scene.distractors.is_empty() || std::env::var("DH_NO_DISTRACT").is_ok() {
+        sent.0.clear();
         return;
     }
     let dt = time.delta_secs();
@@ -87,7 +101,39 @@ fn distract(
     }
     let ppos = player.single().map(|t| t.translation).ok();
     let matinees = &scene.kismet.matinees;
+    // ---- sent by the scripts: whatever it was doing (but fighting), it goes and plays it
+    let mut just_sent = HashSet::new();
+    for (spawner, di) in std::mem::take(&mut sent.0) {
+        let Some(d) = scene.distractors.get(di) else { continue };
+        for (e, mut npc, tf, _, distracted, _) in &mut npcs {
+            if npc.spawner != spawner || npc.is_down() || npc.mode == Mode::Combat {
+                continue;
+            }
+            let pos = tf.translation;
+            let mut home_was = npc.home;
+            if let Some(was) = distracted {
+                home_was = was.home_was;
+                commands.entity(e).try_remove::<ScriptedAnim>();
+                if was.walking.is_none() {
+                    used.write(Interaction::Distracted { distractor: scene.distractors[was.d].name.clone(), at: Vec3::from(scene.distractors[was.d].position), spawner, start: false });
+                }
+            }
+            st.cool[di] = d.cooldown.max(5.0);
+            let repeats = d.loops.iter().map(|(pin, lo, hi)| (pin.clone(), (lo + (rand::random::<f32>() * (hi - lo + 1) as f32) as u32).min(*hi).saturating_sub(1))).collect();
+            // (from anywhere: the spot on the distractor's own floor)
+            npc.home = Vec3::from(d.position);
+            npc.set_mode(Mode::Idle);
+            commands.entity(e).try_insert(Distracted { d: di, t: 0.0, key: None, repeats, from: pos, settle: 0.0, walking: Some(0.0), home_was, sent: true });
+            just_sent.insert(e);
+            if std::env::var("DH_DISTRACT_LOG").is_ok() {
+                info!("distraction: {} sent to {} from {pos:.2}", npc.name, d.name);
+            }
+        }
+    }
     for (e, mut npc, mut tf, mut animator, distracted, scripted) in &mut npcs {
+        if just_sent.contains(&e) {
+            continue;
+        }
         // ---- playing a scene
         if let Some(mut dz) = distracted {
             let d = &scene.distractors[dz.d];
@@ -95,7 +141,7 @@ fn distract(
             let group = m.and_then(|m| pawn_group(m).map(|g| &m.groups[g]));
             let length = m.map(|m| m.length).unwrap_or(4.0);
             let alarmed = npc.is_down() || npc.alert != Alert::Unaware || npc.mode == Mode::Combat;
-            let walked_off = dz.walking.is_some_and(|w| w > 10.0);
+            let walked_off = dz.walking.is_some_and(|w| w > if dz.sent { 60.0 } else { 10.0 });
             if alarmed || dz.t >= length || group.is_none() || walked_off {
                 commands.entity(e).try_remove::<(Distracted, ScriptedAnim)>();
                 // back to its rounds
@@ -103,7 +149,11 @@ fn distract(
                 if !alarmed && npc.patrol.on {
                     npc.set_mode(Mode::Patrol);
                 }
-                used.write(Interaction::Distracted { distractor: d.name.clone(), at: Vec3::from(d.position), spawner: npc.spawner, start: false });
+                // (End: the scene's end or the distracted state's exit, once there:
+                // 0x00b844f0 / 0x00b84810)
+                if dz.walking.is_none() {
+                    used.write(Interaction::Distracted { distractor: d.name.clone(), at: Vec3::from(d.position), spawner: npc.spawner, start: false });
+                }
                 continue;
             }
             // walking there first (its "home" for now)
@@ -116,6 +166,8 @@ fn distract(
                 dz.walking = None;
                 dz.from = tf.translation;
                 commands.entity(e).try_insert(ScriptedAnim);
+                // (Start: on arriving, 0x00b84d60 -> 0x00b84750 / 0x00b84670)
+                used.write(Interaction::Distracted { distractor: d.name.clone(), at: Vec3::from(d.position), spawner: npc.spawner, start: true });
                 if std::env::var("DH_DISTRACT_LOG").is_ok() {
                     info!("distraction: {} at {} arrives at {:.2} after {w:.1} s", npc.name, d.name, tf.translation);
                 }
@@ -227,8 +279,7 @@ fn distract(
             let home_was = npc.home;
             npc.home = Vec3::new(at.x, pos.y, at.z);
             npc.set_mode(Mode::Idle);
-            commands.entity(e).try_insert(Distracted { d: di, t: 0.0, key: None, repeats, from: pos, settle: 0.0, walking: Some(0.0), home_was });
-            used.write(Interaction::Distracted { distractor: d.name.clone(), at, spawner: npc.spawner, start: true });
+            commands.entity(e).try_insert(Distracted { d: di, t: 0.0, key: None, repeats, from: pos, settle: 0.0, walking: Some(0.0), home_was, sent: false });
             if std::env::var("DH_DISTRACT_LOG").is_ok() {
                 info!("distraction: {} stops at {} ({:.1} m) from {pos:.2}, the spot {at:.2}", npc.name, d.name, flat);
             }

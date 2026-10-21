@@ -2668,7 +2668,13 @@ impl<'a> Cooker<'a> {
         let rot = ch.rotator("Rotation").unwrap_or([0; 3]);
         let pawn = ch.obj_path("m_pPawnTweaks").unwrap_or_default();
         let pawn_obj = ch.obj(self.assets, "m_pPawnTweaks");
-        let spawn = ch.bool("m_bSpawnOnBeginPlay").unwrap_or(true);
+        // (what the instance leaves, its class's default gives: a travel spawner's
+        // `Default__DisTravelSpawner` makes nobody at the start, only pursuers coming in, and
+        // may bring them in seen or near)
+        let class = self.class_defaults(&actor.pkg.class_name(actor.idx));
+        let flag = |n: &str| ch.bool(n).or_else(|| class.as_ref()?.bool(n));
+        let spawn = flag("m_bSpawnOnBeginPlay").unwrap_or(true);
+        let (spawn_visible, spawn_near) = (flag("m_bCanSpawnWhenVisible").unwrap_or(false), flag("m_bCanSpawnWhenPlayerNear").unwrap_or(false));
         let npc_type = pawn_obj.and_then(|o| self.npc_type(&o));
         let story_group = ch.obj(self.assets, "m_pStoryGroupTweakOverride").map(|o| o.name().to_string()).unwrap_or_default();
         // (the Tower's guards are on Corvo's side: `Faction_Corvo_Default`)
@@ -2687,18 +2693,18 @@ impl<'a> Cooker<'a> {
             story_group,
             stealable: None,
             faction,
-            aware: ch.bool("m_bAwareOfPlayerUponStartup").unwrap_or(false),
+            aware: flag("m_bAwareOfPlayerUponStartup").unwrap_or(false),
             squad: match ch.get("m_Squad") {
                 Some(Value::Name(n)) if n != "None" => n.clone(),
                 _ => String::new(),
             },
-            patrol: ch.bool("m_bPatrolUponStartup").unwrap_or(false),
+            patrol: flag("m_bPatrolUponStartup").unwrap_or(false),
             // (`Default__DishonoredSpawner`: able to flee; not spawning in Corvo's sight or near him)
-            can_flee: ch.bool("m_bCapableOfFleeing").unwrap_or(true),
+            can_flee: flag("m_bCapableOfFleeing").unwrap_or(true),
             spawn_at: ch.get("m_SpawnAtSuspicionLevel").and_then(|v| if let Value::Enum(e) = v { Some(e.clone()) } else { None }).filter(|e| !e.ends_with("None")),
-            spawn_on_help: ch.bool("m_bSpawnOnHearHelpRequest").unwrap_or(false),
-            spawn_visible: ch.bool("m_bCanSpawnWhenVisible").unwrap_or(false),
-            spawn_near: ch.bool("m_bCanSpawnWhenPlayerNear").unwrap_or(false),
+            spawn_on_help: flag("m_bSpawnOnHearHelpRequest").unwrap_or(false),
+            spawn_visible,
+            spawn_near,
             tether: Vec::new(),
             travel_tags: match ch.get_pkg("m_PlayerTravelLocationTags") {
                 Some((pkg, Value::Array { count, offset, size })) if *size >= count * 8 => (0..*count)

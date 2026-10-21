@@ -987,8 +987,12 @@ are in the settings file, `pad_binding_set` 0-3):
   character investigates, then he's busted. What it hears raises attention by the tweak's
   increases (an anomaly, danger). A character's gunshot is heard 60 m away (`DisTweaks_NPCFireGun`'s
   `EAINoiseLoudness4`), as Corvo's pistol is; a bow, like the crossbow, makes none firing.
-  How each noise's context raises attention follows the hearing's switch (0x00B40B70, decoded
-  from the original for this rewrite). A footfall counts as an anomaly, heard from the maker's
+  Outside a room shared with it, a noise is heard only along a clear line past the level's
+  walls, as the noise's dispatch traces it outside the audio rooms (0x00C5A760 -> 0x00BB50D0,
+  as roshan's r614/blink research found). Before, outdoors, footsteps and blows carried through
+  walls and buildings. How each noise's context raises attention follows the hearing's switch
+  (0x00B40B70, decoded from the original for this rewrite). A footfall counts as an anomaly,
+  heard from the maker's
   height. A rat swarm and a watch tower's attack count as danger, and a Wolf-of-Light zap as a
   threat. An impending explosion, a flare's burning, an ally's notice or search request and
   ambient white noise raise none. Sneaking, the HUD effects movie's black shroud darkens the screen's edges
@@ -1855,7 +1859,13 @@ are in the settings file, `pad_binding_set` 0-3):
   their routes, by chance, with a cooldown) to play their scenes - the original soirees
   (`DistractionSoiree.*`: leaning on a railing, scavenging, a smoke, retching), their "Loop"
   repeated the distractor's count - then go on; anything alarming breaks it off. The level
-  scripts hear of it (`DisSeqEvent_Distracted`) and run the props' scenes.
+  scripts hear of it (`DisSeqEvent_Distracted`: Start on arriving, End as the scene ends or
+  breaks off) and run the props' scenes. The scripts' `DisSeqAct_AIStartDistraction` sends
+  a character to its distractor to play the same scene, from wherever it is, its cooldown and
+  chance aside (0x00b63ed0, as roshan's r614/blink research found); its brain's behaviour is
+  then `DisBehaviorInteract`. (It had sent them to look about the spot instead: the Tower's
+  servant, sent to the railing at the boat's arrival, began a citizen's stationary search, and
+  the Tower's script ended the game: "You committed a capital offense".)
 - **Keyholes**: a shut door whose mesh has a keyhole (`KeyHole` socket) shows "Hold [Use]
   Keyhole": a tap opens the door, a hold puts Corvo's eye to the keyhole (the view from the
   far side through the HUD movie's keyhole shape, at `m_fKeyHoleFOV`, the look free (the keyhole
@@ -2471,6 +2481,10 @@ against the install's own data where it carries them, then implemented independe
     found the first time. At its threshold it adds its points and starts again.
   - Corvo's deeds: each civilian (not the weepers) +6, every fourth guard, thug, overseer, assassin,
     tallboy or weeper +6, every fifth alarm or body found +6. Daud has his own 14 deeds and steps.
+  - Only kills credited to the player's side count (the kill report, 0x00B73990, as roshan's
+    r614/blink research read it): a watchtower's arrows or a wall of light kill for Corvo only
+    once he has rewired them. (The Distillery District's opening, where the tower shoots the
+    weepers at the checkpoint, had counted eight kills against him and raised his chaos.)
   - The level is the last of `m_DarknessLevels` the score reaches (0, 12, 48, 72, 96...). A mission
     is high chaos at its `m_MissionChaosThreshold` level. The scripts' `DisSeqAct_AddDarkness` adds
     points, never below 0. Mission end clears the deed counters and keeps the score.
@@ -2625,7 +2639,11 @@ against the install's own data where it carries them, then implemented independe
   - Where: the map's travel spawners (`DisTravelSpawner`, 285 of them in 25 packages) that list his
     destination's tag (`m_PlayerTravelLocationTags`) and make the same kind of character bring
     them in, one each, in turn. Only the nearest `m_MaxTravelingNPCs` (3) come; the rest stay
-    home. They come in hunting him, at their own health.
+    home. They come in hunting him, at their own health. A travel spawner makes no one else:
+    what a placed one leaves unset its class's default gives (`Default__DisTravelSpawner`:
+    `m_bSpawnOnBeginPlay` off, `m_bCanSpawnWhenVisible` and `..WhenPlayerNear` on). (The
+    cooker had read only the placed spawners' own values, so every map began with its travel
+    spawners' characters too: 54 more in the Distillery District, 36 in the Golden Cat.)
   - After: one that loses him walks back to where it came in and goes home through the door. The
     next time he is in its home map it stands where it was, its memory of him gone. One that
     dies stays where it fell, and one chased back home comes through as itself. The trips are

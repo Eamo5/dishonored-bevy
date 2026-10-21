@@ -326,6 +326,12 @@ impl Devices {
         d.rewired || d.receptacle_idx.is_some_and(|r| self.list[r].rewired)
     }
 
+    /// Whether the device (`scene.security` index) is turned to Corvo's side: what it kills is
+    /// his doing, as the stats credit the player's side only (0x00B73990).
+    pub fn rewired_at(&self, i: usize) -> bool {
+        self.list.get(i).is_some_and(|d| self.rewired(d))
+    }
+
     /// A device's state by its actor: powered (not turned off, fed), rewired (`watchtower`).
     pub fn state(&self, actor: &str) -> Option<(bool, bool)> {
         let d = self.list.iter().find(|d| d.def.actor == actor)?;
@@ -927,7 +933,7 @@ fn walls(
                 info!("wall {}: {} at {:.2} inside {} dies {dies} (rewired {rewired}, enemy {}, {})", d.def.actor, n.name, t.translation, inside(w, t.translation), n.enemy, n.faction);
             }
             if dies && inside(w, t.translation) {
-                hits.write(NpcHit { npc: e, damage: 999.0, kind: HitKind::WallOfLight, from: t.translation });
+                hits.write(NpcHit { npc: e, damage: 999.0, kind: if rewired { HitKind::WallOfLight } else { HitKind::EnemyWallOfLight }, from: t.translation });
                 // (one turned against its own: those who see it no longer trust it)
                 if rewired {
                     commands.entity(e).try_insert(crate::distrust::DeviceKill(i));

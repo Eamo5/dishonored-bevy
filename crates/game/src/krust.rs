@@ -757,7 +757,7 @@ fn damage_type(kind: HitKind) -> &'static str {
         HitKind::Bolt | HitKind::Fire | HitKind::SleepDart | HitKind::ByOthers => "DisDamageType_Arrow",
         HitKind::Impact | HitKind::Slide => "DisDamageType_Impact",
         HitKind::SpringRazor => "DisDamageType_SpringRazor",
-        HitKind::WallOfLight => "DisDamageType_WallOfLight",
+        HitKind::WallOfLight | HitKind::EnemyWallOfLight => "DisDamageType_WallOfLight",
         HitKind::ExplosiveBolt => "DisDLC06DamageType_ExplosiveBoltExplosion",
         HitKind::ArcMine => "DisDLC06DamageType_ArcMineShot",
         HitKind::StunMine => "DisDLC06DamageType_ArcMineStunShot",

@@ -309,10 +309,11 @@ fn apply_ai_fx(
     mut instances: Query<(Entity, &LevelInstance, &mut Transform, &mut Visibility), (Without<Npc>, Without<crate::player::Player>)>,
     mut spawned: Local<std::collections::HashSet<u32>>,
     (mut cine, mut shots, mut swarms, mut overrides): (ResMut<Cinematic>, ResMut<ScriptedShots>, Query<&mut crate::swarm::Swarm>, ResMut<SpawnerOverrides>),
-    (mut emitters, npc_ents, inst_ents): (
+    (mut emitters, npc_ents, inst_ents, mut sent): (
         Query<&mut crate::particles::ParticleEmitter>,
         Query<(Entity, &FromSpawner, &GlobalTransform), With<Npc>>,
         Query<(Entity, &LevelInstance, &GlobalTransform), Without<Npc>>,
+        ResMut<crate::distraction::ScriptDistractions>,
     ),
 ) {
     let Some(mut vm) = vm else { return };
@@ -498,6 +499,21 @@ fn apply_ai_fx(
             }
             AiFx::Distract { targets, to } => {
                 let sp = spawners(&targets);
+                // (a distractor: it goes and plays its scene, as a passer-by would; 0x00b63ed0)
+                let distractor = level.as_ref().and_then(|l| {
+                    let a = to.iter().find_map(|v| actor(v))?;
+                    l.scene
+                        .distractors
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, d)| d.name == a.name)
+                        .min_by(|x, y| Vec3::from(x.1.position).distance(Vec3::from(a.position)).total_cmp(&Vec3::from(y.1.position).distance(Vec3::from(a.position))))
+                        .map(|(i, _)| i)
+                });
+                if let Some(di) = distractor {
+                    sent.0.extend(sp.iter().map(|s| (*s, di)));
+                    continue;
+                }
                 let Some(at) = to.iter().find_map(|v| place(v)) else { continue };
                 for (mut n, from, _) in &mut npcs {
                     if sp.contains(&from.0) && !n.is_down() && n.mode != Mode::Combat {
@@ -1152,7 +1168,7 @@ fn script_blasts(
 /// enemy faced, Idle 0 its patrol or the scripts' search), decoded for this rewrite (0x00B17100).
 /// Searching starts on the step up to investigating, of a search or a fight of its own;
 /// noticing, on the step to turning to face, both of its enemy only (0x00B24D00).
-fn behavior_of(n: &Npc, held: bool, reacting: bool, swarmed: bool, lineage: &[String]) -> Option<&'static str> {
+fn behavior_of(n: &Npc, held: bool, distracted: bool, reacting: bool, swarmed: bool, lineage: &[String]) -> Option<&'static str> {
     let of = |s: &str| lineage.iter().any(|l| l.to_ascii_lowercase().contains(s));
     if n.is_down() || n.mode == Mode::Choked {
         return None;
@@ -1199,6 +1215,9 @@ fn behavior_of(n: &Npc, held: bool, reacting: bool, swarmed: bool, lineage: &[St
         }
     } else if reacting {
         "DisBehaviorReact"
+    } else if distracted {
+        // (a distractor's go-to and scene: `DisBehaviorInteract`, slot Distraction)
+        "DisBehaviorInteract"
     } else if held {
         "DisBehaviorSoiree"
     } else if n.mode == Mode::Investigate || n.mode == Mode::Search && !n.scripted_search {
@@ -1239,7 +1258,7 @@ fn behaviors(
     level: Option<Res<LevelInfo>>,
     time: Res<Time>,
     mut swarms: MessageReader<crate::swarm::SwarmOn>,
-    npcs: Query<(Entity, &Npc, Has<crate::npc::ScriptedAnim>)>,
+    npcs: Query<(Entity, &Npc, Has<crate::npc::ScriptedAnim>, Has<crate::distraction::Distracted>)>,
     mut was: Local<BrainWas>,
 ) {
     let now = time.elapsed_secs();
@@ -1247,14 +1266,14 @@ fn behaviors(
         was.swarmed.insert(s.0, now);
     }
     let Some(mut vm) = vm else { return };
-    for (e, n, held) in &npcs {
+    for (e, n, held, distracted) in &npcs {
         if !was.lineage.contains_key(&e) {
             was.lineage.insert(e, crate::campaign::lineage(level.as_deref(), &n.pawn));
         }
         let swarmed = was.swarmed.get(&e).is_some_and(|t| now - t < 0.4);
         let (react_gone, scene_gone) = was.dropped.get(&e).copied().unwrap_or_default();
         let (mut react_gone, mut scene_gone) = (react_gone && n.reacting > 0.0, scene_gone && held);
-        let b = behavior_of(n, held && !scene_gone, n.reacting > 0.0 && !react_gone, swarmed, &was.lineage[&e]);
+        let b = behavior_of(n, held && !scene_gone, distracted, n.reacting > 0.0 && !react_gone, swarmed, &was.lineage[&e]);
         let prev = was.current.insert(e, b).flatten();
         if prev != b {
             react_gone |= prev == Some("DisBehaviorReact");

@@ -899,6 +899,35 @@ mod projectile_tests {
         assert!(fire(&mut app, 0.6).is_none(), "head-height arrow clears a crouching player");
         assert!(fire(&mut app, -0.4).is_some());
     }
+
+    #[test]
+    fn only_a_rewired_towers_blasts_are_corvos() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy::scene::ScenePlugin, TransformPlugin, RapierPhysicsPlugin::<NoUserData>::default()))
+            .init_resource::<Assets<Mesh>>().init_resource::<crate::gameplay::TimeControl>()
+            .init_resource::<crate::settings::Settings>().add_message::<crate::gadgets::Explosion>()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
+            .insert_resource(LevelInfo { scene: dhcook::format::Scene { security: vec![dhcook::format::Security {
+                blast: Some(dhcook::format::TrapBlast::default()), ..default()
+            }], ..default() } }).add_systems(Last, fly_arrows);
+        app.world_mut().spawn((Collider::cuboid(0.01, 2.0, 2.0), Transform::from_xyz(2.0, 0.0, 0.0), CollisionGroups::new(GROUP_WORLD, Group::ALL)));
+        app.update();
+        let fire = |app: &mut App| {
+            app.world_mut().resource_mut::<Messages<crate::gadgets::Explosion>>().clear();
+            app.world_mut().spawn((Arrow { tower: 0, vel: Vec3::X * 50.0, gravity: 0.0, life: 6.0 }, Transform::from_xyz(0.0, 0.0, 0.0)));
+            app.update();
+            let blasts = app.world().resource::<Messages<crate::gadgets::Explosion>>();
+            let mut cursor = blasts.get_cursor();
+            cursor.read(blasts).next().map(|b| b.kind)
+        };
+        assert_eq!(fire(&mut app), Some(crate::gameplay::HitKind::EnemyExplosion), "no devices: the tower's own");
+        let mut devices = crate::security::Devices::default();
+        devices.list = vec![crate::security::Device::default()];
+        app.insert_resource(devices);
+        assert_eq!(fire(&mut app), Some(crate::gameplay::HitKind::EnemyExplosion), "the tower's own kills aren't Corvo's");
+        app.world_mut().resource_mut::<crate::security::Devices>().list[0].rewired = true;
+        assert_eq!(fire(&mut app), Some(crate::gameplay::HitKind::Explosion), "rewired, its kills are Corvo's");
+    }
 }
 
 /// The towers' arrows: they burst on whatever they strike.
@@ -914,6 +943,7 @@ fn fly_arrows(
     player: Query<(&Transform, &Player), Without<Arrow>>,
     npcs: Query<(&crate::npc::Npc, &Transform), Without<Arrow>>,
     mut blasts: MessageWriter<crate::gadgets::Explosion>,
+    devices: Option<Res<crate::security::Devices>>,
 ) {
     let Some(level) = level else { return };
     let Ok(ctx) = rapier.single() else { return };
@@ -955,7 +985,9 @@ fn fly_arrows(
             Some(at) => {
                 if let Some(b) = level.scene.security.get(a.tower).and_then(|d| d.blast.as_ref()) {
                     let damage = b.damage[settings.difficulty.min(3) as usize];
-                    blasts.write(crate::gadgets::Explosion { at, radius: b.radius, full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]), kind: crate::gameplay::HitKind::Explosion, silent: false });
+                    // (the tower's own kills aren't Corvo's, only those of one he rewired)
+                    let kind = if devices.as_ref().is_some_and(|d| d.rewired_at(a.tower)) { crate::gameplay::HitKind::Explosion } else { crate::gameplay::HitKind::EnemyExplosion };
+                    blasts.write(crate::gadgets::Explosion { at, radius: b.radius, full: b.full, damage, effect: "grenade", player: Some([b.player_radius, b.player_full]), kind, silent: false });
                 }
                 commands.entity(e).despawn();
             }

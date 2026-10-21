@@ -2742,7 +2742,7 @@ fn npc_hits(
             commands.entity(h.npc).try_remove::<LegHit>();
         }
         let Ok((e, mut npc, t)) = npcs.get_mut(h.npc) else { continue };
-        npc.hit_by_player = !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats);
+        npc.hit_by_player = !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats | HitKind::EnemyWallOfLight);
         npc.leg_hit = leg;
         npc.small_hit = h.kind == HitKind::Impact;
         npc.shot_hit = h.kind == HitKind::Bolt;
@@ -2809,12 +2809,12 @@ fn npc_hits(
         // neutral to him takes him for an enemy once he does it harm (`IncomingDamage`'s
         // hatred, 0x00B23780, decoded for this rewrite)
         let corvo_side = dhcook::format::is_player_faction(&npc.faction) || level.as_ref().and_then(|l| l.scene.allies.get(&npc.faction)).is_some_and(|a| a.iter().any(|f| dhcook::format::is_player_faction(f)));
-        if !npc.enemy && (npc.fighter() || h.damage > 0.0 && !corvo_side) && !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats | HitKind::Assassinate | HitKind::Fatality | HitKind::Choke | HitKind::SleepDart | HitKind::WallOfLight | HitKind::StunMine) {
+        if !npc.enemy && (npc.fighter() || h.damage > 0.0 && !corvo_side) && !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats | HitKind::Assassinate | HitKind::Fatality | HitKind::Choke | HitKind::SleepDart | HitKind::WallOfLight | HitKind::EnemyWallOfLight | HitKind::StunMine) {
             npc.enemy = true;
             stances.wronged(npc.spawner);
         }
         // (struck by Corvo or another: it suspects, its attention reactions' `AttackedBy`)
-        if !matches!(h.kind, HitKind::Rats | HitKind::WallOfLight) {
+        if !matches!(h.kind, HitKind::Rats | HitKind::WallOfLight | HitKind::EnemyWallOfLight) {
             npc.suspecting = true;
         }
         // struck, those whose panic has `m_AttackedMelee` / `m_AttackedRanged` (every shipped
@@ -2823,7 +2823,7 @@ fn npc_hits(
         let pos = t.translation;
         let unaware = npc.alert != Alert::Combat;
         // kept alive by the scripts: no killing blow takes it
-        if npc.min_health > 0.0 && matches!(h.kind, HitKind::Assassinate | HitKind::Fatality | HitKind::Fire | HitKind::WallOfLight) {
+        if npc.min_health > 0.0 && matches!(h.kind, HitKind::Assassinate | HitKind::Fatality | HitKind::Fire | HitKind::WallOfLight | HitKind::EnemyWallOfLight) {
             npc.hit_react = 0.35;
             continue;
         }
@@ -2896,15 +2896,20 @@ fn npc_hits(
                 fx.write(crate::particles::SpawnEffect { follow: Some(e), secs: 1.6, ..crate::particles::SpawnEffect::at("immolation", Vec3::ZERO) });
                 noise.write(Noise { corvo: false, pos, radius: 14.0, kind: NoiseKind::Danger });
             }
-            HitKind::Assassinate | HitKind::Fatality | HitKind::WallOfLight => {
+            HitKind::Assassinate | HitKind::Fatality | HitKind::WallOfLight | HitKind::EnemyWallOfLight => {
                 npc.health = 0.0;
                 npc.set_mode(Mode::Dead);
-                stats.killed(&npc.pawn, npc.civilian());
+                // (a wall's kill is his only if he rewired it: the stats credit the player's side,
+                // 0x00B73990)
+                if h.kind != HitKind::EnemyWallOfLight {
+                    stats.killed(&npc.pawn, npc.civilian());
+                }
                 // (a wall of light electrocutes its dead, who vanish: `DisWallOfLight`'s kill)
-                if h.kind == HitKind::WallOfLight {
+                let wall = matches!(h.kind, HitKind::WallOfLight | HitKind::EnemyWallOfLight);
+                if wall {
                     commands.entity(e).try_insert(Electrocuted::new(true));
                 }
-                noise.write(Noise { corvo: h.kind != HitKind::WallOfLight, pos, radius: 3.0, kind: NoiseKind::DeathRattle });
+                noise.write(Noise { corvo: !wall, pos, radius: 3.0, kind: NoiseKind::DeathRattle });
             }
             HitKind::ByOthers | HitKind::EnemyExplosion => {
                 // another NPC's blow (or the level's rats): it fights back
@@ -2994,7 +2999,7 @@ fn npc_hits(
             commands.entity(e).try_insert(Ashes(-0.4));
         }
         let ko = matches!(h.kind, HitKind::Choke | HitKind::SleepDart | HitKind::StunMine) && npc.mode == Mode::Unconscious;
-        if (stats.kills > kills0 || ko) && !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats) {
+        if (stats.kills > kills0 || ko) && !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats | HitKind::EnemyWallOfLight) {
             takedowns.write(crate::gameplay::PlayerTakedown {
                 npc: h.npc,
                 faction: npc.faction.clone(),
@@ -3027,7 +3032,7 @@ fn npc_hits(
         }
         // Shadow Kill: the unaware dead (every one at level 2) turn to ash
         let shadow = stats.power("ShadowKill");
-        if npc.mode == Mode::Dead && shadow > 0 && (unaware || shadow >= 2) && !matches!(h.kind, HitKind::Rats | HitKind::Fire | HitKind::ByOthers | HitKind::EnemyExplosion) {
+        if npc.mode == Mode::Dead && shadow > 0 && (unaware || shadow >= 2) && !matches!(h.kind, HitKind::Rats | HitKind::Fire | HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::EnemyWallOfLight) {
             commands.entity(e).try_insert(Ashes(0.0));
             sfx.write(crate::audio::PostEvent::named("Snd_Power_Shadow_Kill", Some(pos)));
             fx.write(crate::particles::SpawnEffect { secs: 2.0, ..crate::particles::SpawnEffect::at("shadow_kill", pos) });
@@ -3059,8 +3064,25 @@ fn npc_hearing(
     level: Option<Res<LevelInfo>>,
     player: Query<&Transform, (With<Player>, Without<Npc>)>,
     rooms: Res<crate::audiorooms::AudioRooms>,
+    rapier: ReadRapierContext,
 ) {
     let corvo = player.single().ok().map(|t| t.translation);
+    let ctx = rapier.single().ok();
+    let walls = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+    let log = std::env::var_os("DH_HEAR_LOG").is_some();
+    // (not in one room with it, heard only with a clear line from it past the level's walls, as
+    // the noise's dispatch traces outside the rooms, 0x00C5A760 -> 0x00BB50D0, as roshan's
+    // r614/blink research found; from a little way out of it, as an impact's noise lies on what
+    // was struck)
+    let walled = |at: Vec3, from: Vec3| {
+        let room = rooms.cell_at(at);
+        if room.is_some() && room == rooms.cell_at(from) {
+            return false;
+        }
+        let to = at + Vec3::Y * 0.72 - from;
+        let len = to.length();
+        len > 0.35 && ctx.as_ref().is_some_and(|c| c.cast_ray(from + to / len * 0.3, to / len, len - 0.3, true, walls).is_some())
+    };
     let scene = level.as_ref().map(|l| &l.scene);
     let calls: Vec<AllyCall> = calls.read().cloned().collect();
     // (one of the caller's side, or a neutral it protects, hears a call as one: 0x00B0F0F0)
@@ -3086,6 +3108,15 @@ fn npc_hearing(
             };
             if d > n.radius * through || npc.deaf {
                 continue;
+            }
+            if walled(t.translation, n.pos) {
+                if log {
+                    info!("hearing: {} doesn't hear {:?} {:.1} m off through the walls", npc.name, n.kind, d);
+                }
+                continue;
+            }
+            if log {
+                info!("hearing: {} hears {:?} {:.1} m off", npc.name, n.kind, d);
             }
             if his {
                 npc.heard_player += 1;
@@ -3195,7 +3226,8 @@ fn npc_hearing(
                 Some(r) => (r.dist, r.gain),
                 None => (t.translation.distance(c.from), 1.0),
             };
-            if d > reach * through {
+            // (the line's call is a noise as any other, 0x00C9BB50 -> 0x00C5A760)
+            if d > reach * through || walled(t.translation, c.from) {
                 continue;
             }
             // (one already looking there, within 2.5 m of the spot, is on it: as a searcher come
