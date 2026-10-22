@@ -56,7 +56,8 @@ Loading a cooked map takes about 0.1–0.6 s.
 
 A map started directly gives Corvo what he would have by then: Blink after the Outsider's
 dream, the pistol, crossbow and Heart from the Hound Pits, some runes, and the story flags of
-the missions before it.
+the missions before it. The dream itself comes before them: no pistol, crossbow or Heart (the
+Heart is the Outsider's to give there).
 
 ## Controls
 
