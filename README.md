@@ -1997,6 +1997,20 @@ are in the settings file, `pad_binding_set` 0-3):
   boat's) places him itself. Before, he stayed and walked wherever he was: the letter was
   handed over from behind the Empress. The choke's line no longer shows while the scripts
   forbid the chokehold (`DisSeqAct_ToggleChoke`: the Tower's prologue).
+  Stretched scene keys play as `InterpTrackStretchAnimControl` lays them out (0x00905740, as
+  roshan's r614/blink research decoded it; `KTrack::AnimStretch`, scene version 159): the
+  sequence's soiree markers (`AnimNotify_SoireeLoop`, `End`, ...) moved by the key's
+  `SoireeOffsets`, the span up to the End marker looped as many whole times as the key holds
+  it, the rest stretched, nothing past the key's end (`AnimEndOffset`). Before, a key played
+  its sequence once and held its last frame: Corvo's "last words" hold (a 2.7 s loop held for
+  13 s) froze, and the letter's bow kept his view at the Empress's waist through the scenes after
+  it. Of a group's several animation tracks the key started last that still plays is the one
+  played (the cough over the long clip, the accusation's start between its other keys). While a
+  scene plays his full-body keys the view is its camera bone's, whole, cinematic mode or not
+  (held by Daud's assassin, thrown down, the Empress dying in his arms). A teleported character
+  is turned to its destination's facing too (the scripts' `SeqAct_Teleport` set its heading, not
+  its pose: the Empress's death had played turned 80 degrees from Corvo's arms). Corvo kept on his
+  scene's mark through the scripts' teleport of him as it begins.
   A character bound with animation keys by two scenes at once plays the one started last, as
   the latest group instance registered with the pawn takes its stack. Before, both restarted
   their clips every frame: the Empress stood frozen in the first second of her death while the

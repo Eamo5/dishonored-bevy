@@ -1171,6 +1171,51 @@ pub fn cook_soiree(pkg: &Package, idx: i32) -> Option<crate::format::KMatinee> {
     Some(m)
 }
 
+/// A package's animation sequences by name (lower case): their set's path, length and soiree
+/// markers (kind as `SoireeOffsets` counts them: Accent, Apex, Loop, End, In, Out; time).
+type SeqIndex = HashMap<String, Vec<(String, f32, Vec<(usize, f32)>)>>;
+
+fn sequences(pkg: &Package) -> std::sync::Arc<SeqIndex> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, std::sync::Arc<SeqIndex>>>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(i) = cache.lock().unwrap().get(&pkg.name) {
+        return i.clone();
+    }
+    let mut index = SeqIndex::new();
+    for i in 1..=pkg.exports.len() as i32 {
+        if pkg.class_name(i) != "AnimSequence" {
+            continue;
+        }
+        let Some(p) = read_props(pkg, i) else { continue };
+        let name = str_of(&p, "SequenceName");
+        let len = p.float("SequenceLength").unwrap_or(0.0);
+        if name.is_empty() || len <= 0.0 {
+            continue;
+        }
+        let markers = struct_array(pkg, &p, "Notifies")
+            .iter()
+            .filter_map(|n| {
+                let o = n.object("Notify").filter(|o| *o != 0)?;
+                let kind = match pkg.class_name(o).as_str() {
+                    "AnimNotify_SoireeAccent" => 0,
+                    "AnimNotify_SoireeApex" => 1,
+                    "AnimNotify_SoireeLoop" => 2,
+                    "AnimNotify_SoireeEnd" => 3,
+                    "AnimNotify_SoireeIn" => 4,
+                    "AnimNotify_SoireeOut" => 5,
+                    _ => return None,
+                };
+                Some((kind, n.float("Time").unwrap_or(0.0)))
+            })
+            .collect();
+        let set = pkg.obj_path(i).rsplit_once('.').map(|(s, _)| s.to_string()).unwrap_or_default();
+        index.entry(name.to_ascii_lowercase()).or_default().push((set, len, markers));
+    }
+    let index = std::sync::Arc::new(index);
+    cache.lock().unwrap().insert(pkg.name.clone(), index.clone());
+    index
+}
+
 fn cook_matinee(pkg: &Package, idata: &Props, voices: &HashMap<[u32; 4], Vec<String>>, texts: &HashMap<[u32; 4], String>) -> Option<crate::format::KMatinee> {
     use crate::format::{KInterpGroup, KMatinee, KTrack};
     let md = idata.object("m_Data").filter(|o| *o > 0).and_then(|d| read_props(pkg, d));
@@ -1252,16 +1297,35 @@ fn cook_matinee(pkg: &Package, idata: &Props, voices: &HashMap<[u32; 4], Vec<Str
                     let prop = str_of(&tp, "PropertyName");
                     group.tracks.push(KTrack::Float { prop, points: curve(pkg, &tp, "FloatTrack") });
                 }
-                "InterpTrackStretchAnimControl" => group.tracks.push(KTrack::Anim(
-                    keys("AnimSeqs")
+                "InterpTrackStretchAnimControl" => {
+                    let ks = keys("AnimSeqs");
+                    group.tracks.push(KTrack::Anim(
+                        ks.iter()
+                            .map(|k| {
+                                let name = str_of(k, "AnimSeqName");
+                                let looping = name.to_ascii_lowercase().contains("loop");
+                                (k.float("StartTime").unwrap_or(0.0), name, k.float("AnimStartOffset").unwrap_or(0.0), k.float("AnimPlayRate").unwrap_or(1.0), looping)
+                            })
+                            .collect(),
+                    ));
+                    // each key laid out along its sequence (the group's own sets' first)
+                    let index = sequences(pkg);
+                    let stretch: Vec<Option<crate::format::KStretch>> = ks
                         .iter()
                         .map(|k| {
-                            let name = str_of(k, "AnimSeqName");
-                            let looping = name.to_ascii_lowercase().contains("loop");
-                            (k.float("StartTime").unwrap_or(0.0), name, k.float("AnimStartOffset").unwrap_or(0.0), k.float("AnimPlayRate").unwrap_or(1.0), looping)
+                            let found = index.get(&str_of(k, "AnimSeqName").to_ascii_lowercase())?;
+                            let (_, len, markers) = found.iter().find(|(set, _, _)| group.anim_sets.iter().any(|s| s.eq_ignore_ascii_case(set))).or(found.first())?;
+                            let mut offsets = [0.0f32; 6];
+                            for (i, o) in offsets.iter_mut().enumerate() {
+                                *o = k.get_idx("SoireeOffsets", i as i32).and_then(|v| if let Value::Float(f) = v { Some(*f) } else { None }).unwrap_or(0.0);
+                            }
+                            Some(crate::format::KStretch::lay_out(*len, markers, k.float("AnimStartOffset").unwrap_or(0.0), k.float("AnimEndOffset").unwrap_or(0.0), offsets))
                         })
-                        .collect(),
-                )),
+                        .collect();
+                    if stretch.iter().any(|s| s.is_some()) {
+                        group.tracks.push(KTrack::AnimStretch(stretch));
+                    }
+                }
                 "InterpTrackDialog" => group.tracks.push(KTrack::Dialog(
                     keys("DialogKeys")
                         .iter()
@@ -1354,6 +1418,7 @@ fn cook_matinee(pkg: &Package, idata: &Props, voices: &HashMap<[u32; 4], Vec<Str
                     KTrack::Locomotion(k) => k.iter().map(|k| k.0 + k.1).fold(0.0, f32::max),
                     KTrack::Attach { keys, .. } => keys.iter().map(|k| k.0).fold(0.0, f32::max),
                     KTrack::Pins(k) => k.iter().map(|k| k.0 + k.1).fold(0.0, f32::max),
+                    KTrack::AnimStretch(_) => 0.0,
                 };
                 end = end.max(last);
             }

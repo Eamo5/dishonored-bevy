@@ -6757,6 +6757,10 @@ pub fn apply_effects(
                         if from.0 == s {
                             t.translation = pos + Vec3::Y * (crate::npc::NPC_CENTER + 0.05);
                             npc.yaw = yaw;
+                            // (turned too: one a scene holds isn't turned to its yaw by its own
+                            // steering, and the Empress's death played facing where she had
+                            // stood before, 90 degrees from Corvo's arms)
+                            t.rotation = Quat::from_rotation_y(yaw);
                         }
                     }
                 }

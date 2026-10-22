@@ -34,6 +34,16 @@ impl Plugin for MatineePlugin {
 #[derive(Resource, Default)]
 pub struct SceneArms(pub Option<(String, f32, bool, f32, (u32, usize))>);
 
+impl SceneArms {
+    /// The key playing on Corvo's rig, if it is: a key past its sequence's end (not looping)
+    /// plays nothing, as the stretched key reports none there (0x00905740): he is himself again
+    /// for the rest of the scene. (Held on its last frame, the letter's bow had kept his view at
+    /// the Empress's waist through the scenes after it.)
+    pub fn playing(&self, lib: &crate::anim::CharAnims) -> Option<&(String, f32, bool, f32, (u32, usize))> {
+        self.0.as_ref().filter(|s| lib.find(&s.0).is_some_and(|c| s.2 || s.1 <= lib.duration(c) + 0.05))
+    }
+}
+
 /// Screen fade set by a matinee's director (0 clear .. 1 black), overriding script fades.
 #[derive(Resource, Default)]
 pub struct CinematicFade(pub Option<f32>);
@@ -258,6 +268,60 @@ fn camera_transform(m: Mat4) -> Transform {
     let fwd = Vec3::from(ue_dir(m.x_axis.truncate().to_array())).normalize_or(Vec3::NEG_Z);
     let up = Vec3::from(ue_dir(m.z_axis.truncate().to_array())).normalize_or(Vec3::Y);
     Transform::from_translation(pos).looking_to(fwd, up)
+}
+
+/// The first animation track of a group, and the stretch of its keys (`KTrack::AnimStretch`
+/// right after it), if laid out.
+fn anim_track(group: &dhcook::format::KInterpGroup) -> Option<(&Vec<(f32, String, f32, f32, bool)>, Option<&Vec<Option<dhcook::format::KStretch>>>)> {
+    let i = group.tracks.iter().position(|tr| matches!(tr, KTrack::Anim(_)))?;
+    let KTrack::Anim(keys) = &group.tracks[i] else { return None };
+    let stretch = match group.tracks.get(i + 1) {
+        Some(KTrack::AnimStretch(s)) if s.len() == keys.len() => Some(s),
+        _ => None,
+    };
+    Some((keys, stretch))
+}
+
+/// The key a group's character plays `t` into its scene, of all its animation tracks (not its
+/// face's): the one started last that still plays (a shake or a cough over the scene's long
+/// clip, the accusation's start between its other keys); none playing, the last one started,
+/// past its end. Its identity (track, key), the key, its stretch and where it plays.
+#[allow(clippy::type_complexity)]
+fn active_key(group: &dhcook::format::KInterpGroup, t: f32) -> Option<(usize, &(f32, String, f32, f32, bool), Option<&dhcook::format::KStretch>, Option<(f32, f32, bool)>)> {
+    let mut best: Option<(usize, &(f32, String, f32, f32, bool), Option<&dhcook::format::KStretch>, Option<(f32, f32, bool)>)> = None;
+    for (i, tr) in group.tracks.iter().enumerate() {
+        let KTrack::Anim(keys) = tr else { continue };
+        if keys.is_empty() || keys.iter().all(|k| k.1.to_ascii_lowercase().ends_with("_face")) {
+            continue;
+        }
+        let stretch = match group.tracks.get(i + 1) {
+            Some(KTrack::AnimStretch(s)) if s.len() == keys.len() => Some(s),
+            _ => None,
+        };
+        let Some(k) = keys.iter().rposition(|k| k.0 <= t + 1e-4) else { continue };
+        let laid = stretch.and_then(|s| s[k].as_ref());
+        let at = key_time(&keys[k], laid, t);
+        let better = match &best {
+            None => true,
+            Some((_, bk, _, bat)) => (at.is_some(), keys[k].0) > (bat.is_some(), bk.0),
+        };
+        if better {
+            best = Some((i * 10_000 + k, &keys[k], laid, at));
+        }
+    }
+    best
+}
+
+/// Where a key plays its sequence `t` into the scene: the sequence's time, its pace and whether
+/// it loops (stretched along its markers, else from its start offset at its rate); none past a
+/// laid out key's end.
+fn key_time(key: &(f32, String, f32, f32, bool), stretch: Option<&dhcook::format::KStretch>, t: f32) -> Option<(f32, f32, bool)> {
+    let (start, _, offset, rate, looping) = key;
+    let rate = rate.max(0.01);
+    match stretch {
+        Some(s) => s.at((t - start).max(0.0) * rate).map(|(at, pace)| (at, pace * rate, false)),
+        None => Some((offset + (t - start).max(0.0) * rate, rate, *looping)),
+    }
 }
 
 /// An ambient scene's enemy fighting Corvo (no cinematic holding him) breaks off it: its AI
@@ -556,8 +620,7 @@ fn play_matinees(
                 group_tm.entry(*gi).or_insert((tm, fov));
                 // scripted scenes: the NPC of a spawner plays the group's animations
                 if let (true, Some(s)) = (drives_pawns && owner.get(&ka.spawner.unwrap_or(u32::MAX)).is_none_or(|o| *o == op), ka.spawner) {
-                    let anim_keys = group.tracks.iter().find_map(|tr| if let KTrack::Anim(k) = tr { Some(k) } else { None });
-                    if let Some(keys) = anim_keys {
+                    if anim_track(group).is_some() {
                         for (e, from, mut animator, mut ntf, mut npc, _) in &mut npcs {
                             if from.0 != s || npc.is_down() {
                                 continue;
@@ -576,17 +639,33 @@ fn play_matinees(
                                     ntf.rotation = Quat::from_rotation_y(mark.yaw);
                                 }
                             }
-                            let Some(k) = keys.iter().rposition(|k| k.0 <= t + 1e-4) else { continue };
-                            let (start, seq, offset, rate, looping) = &keys[k];
+                            // (past a laid out key's end: its last frame held, the pawn still the
+                            // scene's)
+                            let Some((k, key, laid, at)) = active_key(group, t) else { continue };
+                            let seq = &key.1;
                             if st.npc_keys.get(&e) == Some(&(mi, k)) {
+                                // (stretched: kept to the key's place along its sequence, a loop
+                                // starting over, a stretch at its pace)
+                                if let (Some(_), Some(clip)) = (laid, animator.lib.find(seq)) {
+                                    match at {
+                                        Some((s, pace, _)) => {
+                                            animator.play(clip, false, pace, 0.2);
+                                            if animator.current().is_some_and(|c| (c.t - s).abs() > 0.08) {
+                                                animator.seek(s);
+                                            }
+                                        }
+                                        None => animator.play(clip, false, 0.0, 0.2),
+                                    }
+                                }
                                 continue;
                             }
                             let Some(clip) = animator.lib.find(seq) else { continue };
                             if std::env::var("DH_MATINEE_LOG").is_ok() {
                                 info!("matinee #{mi}: {} plays {seq} at t={t:.1}", ka.name);
                             }
-                            animator.restart(clip, *looping, rate.max(0.01), 0.2);
-                            animator.seek(offset + (t - start).max(0.0) * rate);
+                            let (s, pace, looping) = at.unwrap_or((animator.lib.duration(clip), 0.0, false));
+                            animator.restart(clip, looping, pace, 0.2);
+                            animator.seek(s);
                             st.npc_keys.insert(e, (mi, k));
                             commands.entity(e).try_insert(crate::npc::ScriptedAnim);
                         }
@@ -632,11 +711,9 @@ fn play_matinees(
         }
         // Corvo's arms play the player group's animation keys
         if let Some(gr) = m.groups.iter().find(|gr| gr.player) {
-            if let Some(keys) = gr.tracks.iter().find_map(|tr| if let KTrack::Anim(k) = tr { Some(k) } else { None }) {
-                if let Some(k) = keys.iter().rposition(|k| k.0 <= t + 1e-4) {
-                    let (start, seq, offset, rate, looping) = &keys[k];
-                    scene_arms.0 = Some((seq.clone(), offset + (t - start).max(0.0) * rate, *looping, rate.max(0.01), (mi, k)));
-                }
+            // (past a laid out key's end, none: he is himself again)
+            if let Some((k, key, _, Some((s, pace, looping)))) = active_key(gr, t) {
+                scene_arms.0 = Some((key.1.clone(), s, looping, pace.max(0.01), (mi, k)));
             }
         }
         // the player riding (a boat): from the player group's stage mark, carried along, the
@@ -673,7 +750,7 @@ fn play_matinees(
             if !carried && !m.groups[pg].stage_mark.is_empty() {
                 player_scene = true;
             }
-            if !carried && !st.player_staged.contains(&op) {
+            if !carried && !st.player_staged.contains(&op) && std::env::var_os("DH_NO_STAGE").is_none() {
                 let mark = m.groups[pg].stage_mark.as_str();
                 let actor = (!mark.is_empty())
                     .then(|| m.groups.iter().position(|gr| gr.name.eq_ignore_ascii_case(mark)))
@@ -691,7 +768,9 @@ fn play_matinees(
                 }
             }
             if let Some((sop, from, from_yaw, from_pitch, to, to_yaw, k)) = st.player_stage.filter(|s| s.0 == op && s.6 < 1.0) {
-                let k = (k + dt / 0.2).min(1.0);
+                // (over a few frames however long the first: the scripts' teleport in the scene's first
+                // frame, the Tower's to where the Empress's death was once staged, gives way to it)
+                let k = (k + dt.min(0.05) / 0.2).min(1.0);
                 if let Ok((mut pt, mut p)) = player.single_mut() {
                     let turn = (to_yaw - from_yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
                     pt.translation = from.lerp(to, k);
@@ -699,7 +778,20 @@ fn play_matinees(
                     p.pitch = from_pitch * (1.0 - k);
                     p.velocity = Vec3::ZERO;
                 }
+                if std::env::var("DH_MATINEE_LOG").is_ok() {
+                    info!("matinee #{mi}: the player's blend to its mark {k:.2}");
+                }
                 st.player_stage = Some((sop, from, from_yaw, from_pitch, to, to_yaw, k));
+            } else if let Some((_, _, _, _, to, to_yaw, _)) = st.player_stage.filter(|s| s.0 == op) {
+                // (then kept there while it plays, its keys laid out from it: the scripts'
+                // teleport of him as it began, to where the scene was once staged, gives way)
+                if let Ok((mut pt, mut p)) = player.single_mut() {
+                    if pt.translation.distance(to) > 0.05 {
+                        pt.translation = to;
+                        p.yaw = to_yaw;
+                        p.velocity = Vec3::ZERO;
+                    }
+                }
             }
             if let (Some(delta), Ok((mut pt, mut p))) = (rides.get(&(pg as u32)).copied(), player.single_mut()) {
                 st.player_ride = Some(op);

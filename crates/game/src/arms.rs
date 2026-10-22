@@ -29,7 +29,8 @@ impl Plugin for ArmsPlugin {
             .init_resource::<ArmSteps>()
             .add_systems(OnEnter(GameState::InGame), spawn_arms.after(spawn_view_model))
             .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_steps.after(ArmsAnimSet), arm_effects.after(ArmsAnimSet), possess_hand.after(ArmsAnimSet), (animate_held, animate_sword, show_bolts).after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
-            .add_systems(PostUpdate, (align_arms.in_set(ArmsAlign), arm_pitch).after(AnimPose).before(TransformSystems::Propagate));
+            .add_systems(PostUpdate, (align_arms.in_set(ArmsAlign), arm_pitch).after(AnimPose).before(TransformSystems::Propagate))
+            .add_systems(Last, scene_align_log.run_if(|| std::env::var_os("DH_SCENE_ALIGN").is_some()));
     }
 }
 
@@ -953,13 +954,19 @@ fn animate_arms(
     // ---- right arm / body (base layer)
     let mut base_busy = false;
     // a scene's own animation of Corvo's arms
-    match &scene_arms.0 {
+    match scene_arms.playing(&anim.lib) {
         Some((seq, t, looping, rate, key)) => {
             if let Some(cl) = anim.lib.find(seq) {
                 if st.scene_key != Some(*key) {
                     st.scene_key = Some(*key);
                     anim.restart(cl, *looping, *rate, 0.2);
                     anim.seek(*t);
+                } else if !*looping {
+                    // (kept to the key's place: a stretched key's pace, its loops starting over)
+                    anim.play(cl, false, *rate, 0.2);
+                    if anim.current().is_some_and(|c| (c.t - *t).abs() > 0.08) {
+                        anim.seek(*t);
+                    }
                 }
                 base_busy = true;
             }
@@ -968,7 +975,7 @@ fn animate_arms(
     }
     // swimming: both arms stroke (`Empty_Swim*` by the direction swum), the sword away
     let empty = stats.unarmed || stats.sheathed;
-    let full_body = scene_arms.0.as_ref().is_some_and(|s| anim.lib.find(&s.0).is_some())
+    let full_body = scene_arms.playing(&anim.lib).is_some()
         || swim.swimming() || carry.carrying();
     let away = full_body || empty;
     if away != st.swimming {
@@ -1831,6 +1838,27 @@ fn arm_effects(
     }
 }
 
+/// (`DH_SCENE_ALIGN`) Where Corvo's hands and the characters' chests are in the world, each
+/// second: how a scene's parts line up.
+fn scene_align_log(time: Res<Time>, mut last: Local<f32>, rigs: Query<&ArmRig>, cam: Query<&GlobalTransform, With<crate::player::PlayerCamera>>, joints: Query<&GlobalTransform>, npcs: Query<(&crate::npc::Npc, &crate::npc::NpcRig, &GlobalTransform)>) {
+    if time.elapsed_secs() - *last < 1.0 {
+        return;
+    }
+    *last = time.elapsed_secs();
+    let c = cam.single().map(|g| g.translation()).unwrap_or_default();
+    for r in &rigs {
+        let at = |i: usize| r.joints.get(i).and_then(|j| joints.get(*j).ok()).map(|g| g.translation());
+        info!("scene align: camera {c:.2} right hand {:.2?} left {:.2?}", at(r.right.hand), at(r.left.hand));
+    }
+    for (n, rig, ng) in &npcs {
+        if let Some(g) = rig.joint("spine_2_jnt").and_then(|j| joints.get(j).ok()) {
+            if g.translation().distance(c) < 8.0 {
+                info!("scene align: {} chest {:.2} yaw {:.2} at {:.2} turned {:.2}", n.name, g.translation(), n.yaw, ng.translation(), ng.rotation().to_euler(EulerRot::YXZ).0);
+            }
+        }
+    }
+}
+
 /// The head's bob (`DisAnimNodeBlendByHeadBob`, by `PSI_Gameplay_HeadBobAmount`): as Corvo
 /// walks, runs, sprints or sneaks his head's additive clip for the pace (`ADD_Head_*`, blended
 /// by the way he goes as `AnimNodeBlendDirectional` does, in step with his stride) moves
@@ -1844,10 +1872,15 @@ fn align_arms(
     mut cam: Query<&mut Transform, (With<crate::player::PlayerCamera>, Without<ArmsRoot>)>,
     player: Query<&Player>,
     (swim, climb, cine): (Res<crate::swim::Swim>, Res<crate::climb::Climb>, Res<crate::script_world::Cinematic>),
-    (breath, data, death_fall): (Res<crate::breath::Breath>, Res<crate::gamedata::Data>, Res<DeathFall>),
+    (breath, data, death_fall, scene_arms): (Res<crate::breath::Breath>, Res<crate::gamedata::Data>, Res<DeathFall>, Res<crate::matinee::SceneArms>),
 ) {
     for (mut t, anim, mut st, rig, vis) in &mut arms {
         let a = anim.model(rig.camera);
+        // (a scene playing his full-body keys: the view is its camera bone's, whole, in the
+        // scene's cinematic mode too, as the soiree state's camera is: held by Daud's assassin,
+        // thrown down, the Empress dying in his arms. Before, the view stayed as he had left
+        // it while his arms played the scene before it)
+        let scene = scene_arms.playing(&anim.lib).is_some();
         if std::env::var("DH_CAMBONE_LOG").is_ok() {
             let b = anim.bind_model(rig.camera);
             let d = b.rotation.inverse() * a.rotation;
@@ -1856,7 +1889,7 @@ fn align_arms(
         }
         let eye = st.eye.compute_affine();
         let p = player.single().ok();
-        let on = *vis != Visibility::Hidden && !cine.on;
+        let on = *vis != Visibility::Hidden && (!cine.on || scene);
         // the stride: its pace and rate as the arms' locomotion has them
         let dt = time.delta_secs();
         let mut deltas = Vec::new();
@@ -1923,7 +1956,7 @@ fn align_arms(
                 let moved = eye * rest.compute_affine().inverse() * a.compute_affine() * eye.inverse();
                 let (_, mrot, mtr) = moved.to_scale_rotation_translation();
                 // (falling dead, all of it: our reading of the death's view)
-                let roll = if death_fall.0 { 1.0 } else { ROLL_AMOUNT };
+                let roll = if death_fall.0 || scene { 1.0 } else { ROLL_AMOUNT };
                 let mut off = bevy::math::Affine3A::from_rotation_translation(Quat::IDENTITY.slerp(mrot, roll), mtr);
                 if !deltas.is_empty() {
                     // the view's sway: camera_jnt with the bob against without it, in the camera's frame

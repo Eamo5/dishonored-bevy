@@ -21,7 +21,8 @@ use std::path::Path;
 // 131: barks' graphs from their hooks to their lines.
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
 // 158: spawners' flags from their class's defaults (travel spawners make nobody at the start).
-pub const SCENE_VERSION: u32 = 158;
+// 159: scene keys laid out along their sequences' soiree markers (KTrack::AnimStretch).
+pub const SCENE_VERSION: u32 = 159;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -467,6 +468,93 @@ pub struct KInterpGroup {
     pub anim_sets: Vec<String>,
 }
 
+/// A stretched scene key as `InterpTrackStretchAnimControl` plays it (0x00905740, as roshan's
+/// r614/blink research decoded it): its sequence's soiree markers (`AnimNotify_SoireeAccent`,
+/// `Apex`, `Loop`, `End`, `In`, `Out`) moved along the key by its `SoireeOffsets`; between them
+/// the sequence stretched, the stretch ending at the End marker looped instead (as many whole
+/// times as fit), the tail after the last marker stretched to the key's end (its
+/// `AnimEndOffset`). Spans: (key time from, to, sequence time from, to), in the sequence's
+/// seconds (the key's time times its rate).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct KStretch {
+    pub len: f32,
+    pub spans: Vec<[f32; 4]>,
+}
+
+impl KStretch {
+    /// Lay a key out: its sequence's length and markers (kind 0-5 as `SoireeOffsets`, time),
+    /// the key's start and end offsets and its markers' offsets.
+    pub fn lay_out(seq_len: f32, markers: &[(usize, f32)], start: f32, end: f32, offsets: [f32; 6]) -> KStretch {
+        let len = (seq_len - start - end).max(0.0);
+        // (each marker where the key has it; never before one before it)
+        let mut knots: Vec<(f32, f32, usize)> = vec![(0.0, start, usize::MAX)];
+        let mut sorted: Vec<(usize, f32)> = markers.iter().copied().filter(|(_, t)| *t > start + 1e-4 && *t < seq_len + 1e-4).collect();
+        sorted.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let mut shift = 0.0f32;
+        for (kind, t) in sorted {
+            shift = shift.max(offsets.get(kind).copied().unwrap_or(0.0));
+            let u = (t - start + shift).clamp(knots.last().unwrap().0, len);
+            knots.push((u, t, kind));
+        }
+        if knots.last().is_some_and(|k| k.1 < seq_len - 1e-4) {
+            knots.push((len, seq_len, usize::MAX));
+        }
+        let mut spans = Vec::new();
+        for w in knots.windows(2) {
+            let ((u0, s0, _), (u1, s1, kind)) = (w[0], w[1]);
+            let (du, ds) = (u1 - u0, s1 - s0);
+            if du <= 1e-4 {
+                continue;
+            }
+            // (the stretch up to the End marker, held longer than it lasts: looped)
+            if kind == 3 && ds > 1e-3 && du > ds * 1.01 {
+                let n = (du / ds).round().max(1.0) as usize;
+                let each = du / n as f32;
+                for i in 0..n {
+                    spans.push([u0 + each * i as f32, u0 + each * (i + 1) as f32, s0, s1]);
+                }
+            } else {
+                spans.push([u0, u1, s0, s1]);
+            }
+        }
+        KStretch { len, spans }
+    }
+
+    /// The sequence's time and its pace (sequence seconds a key second) `u` into the key (in
+    /// its rate's seconds); none past its end.
+    pub fn at(&self, u: f32) -> Option<(f32, f32)> {
+        if u > self.len + 1e-3 {
+            return None;
+        }
+        let sp = self.spans.iter().find(|s| u < s[1]).or(self.spans.last())?;
+        let k = ((u - sp[0]) / (sp[1] - sp[0]).max(1e-5)).clamp(0.0, 1.0);
+        Some(((sp[2] + (sp[3] - sp[2]) * k).max(0.0), (sp[3] - sp[2]) / (sp[1] - sp[0]).max(1e-5)))
+    }
+}
+
+#[cfg(test)]
+mod stretch_tests {
+    use super::KStretch;
+
+    #[test]
+    fn a_key_held_past_its_end_marker_loops_and_ends_with_the_key() {
+        // Ply_EmpressDeath_LastWords: Loop at 0, End at 2.7, the key 13.02 s (End moved 10.32)
+        let k = KStretch::lay_out(2.7, &[(2, 0.0), (3, 2.7)], 0.0, -10.32, [0.0, 0.0, 0.0, 10.32, 0.0, 0.0]);
+        assert!((k.len - 13.02).abs() < 1e-3);
+        assert_eq!(k.spans.len(), 5, "13.02 / 2.7 rounds to five loops");
+        let (s, pace) = k.at(2.604).unwrap();
+        assert!(s < 0.05 && (pace - 2.7 / 2.604).abs() < 1e-3, "the second loop starts over: {s}");
+        assert!(k.at(13.1).is_none(), "past its end the key plays nothing");
+        // a plain key: the sequence once through
+        let plain = KStretch::lay_out(5.0, &[], 0.0, 0.0, [0.0; 6]);
+        assert_eq!(plain.at(2.5), Some((2.5, 1.0)));
+        // a tail stretched past its last marker
+        let tail = KStretch::lay_out(4.0, &[(4, 1.0)], 0.0, -4.0, [0.0; 6]);
+        let (s, pace) = tail.at(5.0).unwrap();
+        assert!((pace - 3.0 / 7.0).abs() < 1e-3 && (s - (1.0 + 4.0 * 3.0 / 7.0)).abs() < 1e-3);
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum KTrack {
     /// position / rotation (euler degrees: roll, pitch, yaw) curves; relative to the actor's
@@ -484,6 +572,9 @@ pub enum KTrack {
     Float { prop: String, points: Vec<KCurvePoint> },
     /// skeletal animations: (start time, sequence, start offset, play rate, looping)
     Anim(Vec<(f32, String, f32, f32, bool)>),
+    /// the stretched keys of the `Anim` track before it, one for each (`None`: its sequence
+    /// wasn't found to lay it out)
+    AnimStretch(Vec<Option<KStretch>>),
     /// spoken lines: (time, Wwise event, subtitle)
     Dialog(Vec<(f32, String, String)>),
     /// a character turns to face a target (group name, or "Player"): (start, length, target)
