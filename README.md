@@ -2032,7 +2032,10 @@ are in the settings file, `pad_binding_set` 0-3):
   the key's gait), turn them to face one another (`InterpTrackFaceTo`) and turn their heads to
   what they look at (`InterpTrackLookAt`), and hand them props (`InterpTrackAttachment`: a
   glass or cigarette rides the character's bone, smoke rides the cigarette, passengers ride
-  the boat). Moves relative to an actor's start begin from where it stands (the Tower's
+  the boat). A camera carried so shoots from where its carrier's bone has it: the Outsider's
+  dream's shots come from its stand-in Corvo's `Camera_Socket`, looking up at the floating
+  Outsider and down at the burning mark as his head turns (before, the shot stayed where the
+  camera was placed, level with the Outsider's waist). Moves relative to an actor's start begin from where it stands (the Tower's
   boat is lowered from the dock, crosses the river and rises in the waterlock), and animated
   actors collide as their physics assets do (the boat's hull). A character speaking to Corvo looks at him, and a
   speaking character's face plays its line's FaceFX animation (below); lines without one move

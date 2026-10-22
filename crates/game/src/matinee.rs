@@ -208,6 +208,12 @@ fn ue_to_bevy(m: Mat4) -> Mat4 {
     Mat4::from_scale(Vec3::splat(0.01)) * swap * m * swap * Mat4::from_scale(Vec3::splat(100.0))
 }
 
+/// A Bevy-space matrix in UE space (the inverse of `ue_to_bevy`).
+fn bevy_to_ue(m: Mat4) -> Mat4 {
+    let swap = Mat4::from_cols(Vec4::X, Vec4::Z, Vec4::Y, Vec4::W);
+    Mat4::from_scale(Vec3::splat(100.0)) * swap * m * swap * Mat4::from_scale(Vec3::splat(0.01))
+}
+
 fn cubic(p0: f32, t0: f32, p1: f32, t1: f32, a: f32) -> f32 {
     let a2 = a * a;
     let a3 = a2 * a;
@@ -516,7 +522,12 @@ fn play_matinees(
                 // instances follow the actor (and their colliders); carried, it goes where the
                 // bone takes it
                 let mut delta = rides.get(gi).copied();
-                if delta.is_none() {
+                if let Some(d) = delta {
+                    // (carried, it is where its carrier's bone has it: a camera on the Outsider
+                    // dream's fake Corvo's `Camera_Socket` looks up at the Outsider as his head
+                    // does; before, the shot stayed where the camera was placed, at his waist)
+                    tm = bevy_to_ue(d) * init;
+                } else {
                     if let Some(KTrack::Move { pos, rot, relative }) = group.tracks.iter().find(|tr| matches!(tr, KTrack::Move { .. })) {
                         tm = move_tm(pos, rot, *relative, init, t);
                         delta = Some(ue_to_bevy(tm * init.inverse()));
