@@ -161,7 +161,7 @@ are in the settings file, `pad_binding_set` 0-3):
   the soul pass is a custom render phase on Bevy's mesh pipeline after the grading pass.
 - **The post-process graph's screen warps** (`ppgraph.rs`): the original vector-field
   materials (`PPG_BendTimeVectors`, `PPG_BlinkVectors`, `PPG_UnderWaterVectorField`,
-  `PPG_KOVectors`, the plague's `PPG_AdrenalineVectors`), their `TPpMaterialPixelShader`
+  `PPG_KOVectors` (a scripted knock's, `Epp_Knocked`: running out after 4 s on its own as the manager's `m_KnockOutTimer` does, as no script stops the Prison's torture or blast ones; before, their smear stayed on the screen through the escape), the plague's `PPG_AdrenalineVectors`), their `TPpMaterialPixelShader`
   translated at load (`ue3prog::build_post`), drawn in turn into a quarter-resolution float
   field the way the graph's switches chain them, then the original motion blur
   (`FArkPpMotionBlur2PixelShader`, `ue3prog::build_global`) shifts the image by the field's

@@ -134,6 +134,10 @@ pub struct Switches {
 /// than by a script op.
 pub const CONV_CHOICE: u32 = 0x8000_0000;
 
+/// How long a knock's screen effect lasts unless stopped (s). (The manager's `m_KnockOutTimer`
+/// runs it down natively; its start value isn't decoded: our reading, a stagger's few seconds.)
+pub const KNOCK_TIME: f32 = 4.0;
+
 /// Who walked into a trigger volume: Corvo (or Corvo inside a creature, UE3's possession
 /// proxy pawn), or a character.
 #[derive(Clone, Copy, Debug)]
@@ -868,6 +872,8 @@ pub struct Vm {
     /// screen effects the scripts started (`DisSeqAct_PostProcess` `m_Effect`: "Epp_Knocked",
     /// "Epp_Weepers"...), for the post-process graph (`ppgraph`)
     pub post_effects: Vec<String>,
+    /// until when (the scripts' clock) the last knock (`Epp_Knocked`) lasts
+    pub knocked_until: f32,
     /// watch towers told to fire at something (`DisSeqAct_WatchTowerShootAtTarget`): the
     /// tower (actor name), where
     pub tower_shots: Vec<(String, Vec3)>,
@@ -1154,6 +1160,7 @@ impl Vm {
             usable_stages: Vec::new(),
             krust_spits: Vec::new(),
             post_effects: Vec::new(),
+            knocked_until: 0.0,
             tower_shots: Vec::new(),
             highlights: HashSet::new(),
             player_vis: None,
@@ -2611,6 +2618,11 @@ impl Vm {
                 if let Some(e) = self.ps(op, "m_Effect") {
                     self.post_effects.retain(|x| *x != e);
                     if input == 0 {
+                        // (a knock is the manager's timed one, `m_KnockOutTimer`: started, it
+                        // runs out of itself; the Prison's torture and blast never stop theirs)
+                        if e == "Epp_Knocked" {
+                            self.knocked_until = self.time + KNOCK_TIME;
+                        }
                         self.post_effects.push(e);
                     }
                 }

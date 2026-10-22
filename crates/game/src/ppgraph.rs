@@ -279,7 +279,9 @@ fn update_graph(
     // the scripts' screen effects (`DisSeqAct_PostProcess`)
     let scripted = |e: &str| vm.as_ref().is_some_and(|v| v.post_effects.iter().any(|x| x == e));
     let step = |v: f32, on: bool| if on { (v + dt / SCRIPTED_FADE).min(1.0) } else { (v - dt / SCRIPTED_FADE).max(0.0) };
-    tl.ko = step(tl.ko, scripted("Epp_Knocked"));
+    // (a knock runs out of itself: `KNOCK_TIME`; before, the Prison's torture left its smear
+    // on the screen for the rest of the escape)
+    tl.ko = step(tl.ko, scripted("Epp_Knocked") && vm.as_ref().is_some_and(|v| v.time < v.knocked_until));
     tl.weepers = step(tl.weepers, scripted("Epp_Weepers"));
     // Blood Thirst's adrenaline full: the graph's adrenaline vectors (`m_AdrenalinePp`) fade in
     // over Corvo's `m_fAdrenalineFadeInDuration` (5 s) and out over `..FadeOutDuration` (6 s)

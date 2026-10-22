@@ -1862,6 +1862,9 @@ fn run_script(
                     if let Some(mut vm) = w.get_resource_mut::<crate::kismet::Vm>() {
                         vm.post_effects.retain(|x| *x != name);
                         if on {
+                            if name == "Epp_Knocked" {
+                                vm.knocked_until = vm.time + crate::kismet::KNOCK_TIME;
+                            }
                             vm.post_effects.push(name);
                         }
                     }
