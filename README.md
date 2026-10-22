@@ -2372,8 +2372,11 @@ are in the settings file, `pad_binding_set` 0-3):
       (`UI_PowerWheel_DLC06`, `WheelHandler_DLC06`'s orders and illustrations). The icons are
       `UI_EquipmentIcons_DLC06` and `UI_ItemIcons_Small_DLC06`, and the names are his
       ("Transversal", "Void Gaze").
-  The rest of DLC06 (its other maps, store and campaign flow) waits for the DLC's maps to be
-  cooked. `DH_SUMMON_LOG`; `DH_GADGET_LOG` (chokedust clouds and who they catch); `DH_PFX_SLOW=<n>`
+  Its maps and The Brigmore Witches' (`DLC/PCConsole/DLC06`, `DLC07`) cook with `dhtool cook
+  <map>` (`cook-all` leaves the DLC out); once cooked, the main menu's Downloadable Content page
+  lists each story by its own name (`t_DLC06_Name`, `t_DLC07_Name`) beside Dunwall City Trials,
+  and starts it on its first map (`DLC06_Tower_P`, `L_DLC07_BaseIntro_P`) once a difficulty is
+  chosen, as New Game does the Tower. `DH_SUMMON_LOG`; `DH_GADGET_LOG` (chokedust clouds and who they catch); `DH_PFX_SLOW=<n>`
   (every effect n times slower, to see the briefest: an arc mine's 0.1 s lightning).
 
 ## Rules from roshan's r614/blink research

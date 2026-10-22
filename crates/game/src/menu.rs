@@ -21,6 +21,14 @@ pub const MENU_MAP: &str = "Dishonored_MainMenu";
 pub const TRIALS_MAP: &str = "L_DLC05_MainMenu_P";
 /// The first mission (the prologue at the Tower).
 pub const FIRST_MAP: &str = "L_Tower_P";
+/// The story packs' first maps (`missions`: The Knife of Dunwall's mission 11, The Brigmore
+/// Witches' 16), with their names (`t_DLC06_Name`, `t_DLC07_Name`)
+pub const DLC_CAMPAIGNS: [(&str, &str); 2] = [("DLC06_Tower_P", "t_DLC06_Name"), ("L_DLC07_BaseIntro_P", "t_DLC07_Name")];
+
+/// Whether a map is cooked (its scene in the cache).
+fn map_cooked(map: &str) -> bool {
+    crate::loading::cache_dir().join("maps").join(format!("{}.json", map.to_ascii_lowercase())).exists()
+}
 
 pub struct MenuPlugin;
 
@@ -164,6 +172,8 @@ enum Action {
     /// into Dunwall City Trials (its menu map), and out
     Trials,
     LeaveTrials,
+    /// a story pack's campaign begun anew (its first map), once a difficulty is chosen
+    NewCampaign(&'static str),
     /// the trials' welcome read (`APressed`: `OnWelcomeDisclaimerClosed`), their credits
     /// (`DLC05_Credits`: `CreditsDLC05`)
     WelcomeDone,
@@ -216,6 +226,9 @@ pub struct Menu {
     board_over_results: bool,
     /// the tutorial notes the help lists (`EDisTutorialNote` names)
     tutorials: Vec<String>,
+    /// the campaign a difficulty is being chosen for (a story pack's first map; none: the
+    /// game's own)
+    campaign_map: Option<&'static str>,
 }
 
 /// How an option row shows its value (`OptionsStepperB_widget`, `OptionsStepper_widget`,
@@ -325,7 +338,7 @@ pub const OPT_CATEGORIES: [(&str, &[&str]); 4] = [
 
 impl Default for Menu {
     fn default() -> Self {
-        Menu { open: None, page: Page::Main, stack: Vec::new(), sel: 0, dirty: true, gamma: None, pad_map: None, video: None, video_click: None, items: Vec::new(), started: false, capture: None, opt_cat: 0, opt_sub: 0, confirm: None, confirm_click: None, pending_challenge: None, gallery_view: None, board_row: None, board_over_results: false, tutorials: Vec::new() }
+        Menu { open: None, page: Page::Main, stack: Vec::new(), sel: 0, dirty: true, gamma: None, pad_map: None, video: None, video_click: None, items: Vec::new(), started: false, capture: None, opt_cat: 0, opt_sub: 0, confirm: None, confirm_click: None, pending_challenge: None, gallery_view: None, board_row: None, board_over_results: false, tutorials: Vec::new(), campaign_map: None }
     }
 }
 
@@ -953,14 +966,27 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
                 v.push(("Load".into(), Action::Page(Page::Load)));
             }
             // (`t_DownloadableContent_Caps`: the installed DLC)
-            if !data.0.challenges.is_empty() {
+            if !data.0.challenges.is_empty() || DLC_CAMPAIGNS.iter().any(|(m, _)| map_cooked(m)) {
                 v.push(("Downloadable Content".into(), Action::Page(Page::Dlc)));
             }
             v.push(("Options".into(), Action::Page(Page::Options)));
             v.push(("Quit Game".into(), Action::QuitGame));
             v
         }
-        (_, Page::Dlc) => vec![(data.text("DisDLC05MoviePlayerChallengeMenu_Texts", "t_DLC05_Name"), Action::Trials), ("Back".into(), Action::Back)],
+        (_, Page::Dlc) => {
+            // (the installed packs: the trials, Daud's two stories)
+            let mut v = Vec::new();
+            if !data.0.challenges.is_empty() {
+                v.push((data.text("DisDLC05MoviePlayerChallengeMenu_Texts", "t_DLC05_Name"), Action::Trials));
+            }
+            for (map, name) in DLC_CAMPAIGNS {
+                if map_cooked(map) {
+                    v.push((data.text("DisGFxMoviePlayerBase_Texts", name), Action::NewCampaign(map)));
+                }
+            }
+            v.push(("Back".into(), Action::Back));
+            v
+        }
         // (`CM_Home_Screen.SetHomeMenu`: the challenges, the way out; leaderboards, gallery and
         // credits aside)
         (_, Page::Trials) => {
@@ -1735,7 +1761,17 @@ fn menu_input(
         }
     };
     match action {
-        Action::Page(p) => menu.go(p),
+        Action::Page(p) => {
+            // (the game's own campaign: New Game)
+            if p == Page::Difficulty {
+                menu.campaign_map = None;
+            }
+            menu.go(p)
+        }
+        Action::NewCampaign(map) => {
+            menu.campaign_map = Some(map);
+            menu.go(Page::Difficulty)
+        }
         Action::ReadTutorial(i) => {
             if let Some(id) = menu.tutorials.get(i) {
                 read.write(crate::journal::ReadNote(format!("{}{id}", crate::tutorials::KEY)));
@@ -1787,11 +1823,13 @@ fn menu_input(
             *campaign = Default::default();
             settings.difficulty = d;
             settings.save();
-            config.map = FIRST_MAP.into();
+            // (a story pack's from its first map; the game's own with the intro while the Tower
+            // loads)
+            let start = menu.campaign_map.take();
+            config.map = start.unwrap_or(FIRST_MAP).into();
             config.spawn_index = None;
             menu.open = None;
-            // (the intro plays while the Tower loads)
-            intro.0 = true;
+            intro.0 = start.is_none();
             next.set(GameState::Loading);
         }
         Action::Continue => {
