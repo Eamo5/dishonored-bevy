@@ -49,7 +49,9 @@ pub struct StopMovie;
 #[derive(Message, Clone)]
 pub struct MovieDone(pub String);
 
-/// A new game was started: its intro plays while the Tower loads.
+/// A map is arrived at afresh (a new game or story, a journey on): its opening movie plays
+/// while it loads (the Tower's letter; Daud's monologues before his missions, `+PlayOnce`: not
+/// again on a save's load).
 #[derive(Resource, Default)]
 pub struct IntroPending(pub bool);
 
@@ -99,6 +101,17 @@ impl Movies {
     /// Whether a cooked movie exists.
     pub fn has(&mut self, name: &str) -> bool {
         self.index().is_some_and(|i| i.movies.contains_key(&name.to_ascii_lowercase()))
+    }
+    /// The movie a map opens with when arrived at afresh, when cooked (`[FullScreenMovie]`'s
+    /// `map=movie`: the Tower's letter, Daud's monologues).
+    pub fn intro_movie(&mut self, map: &str) -> Option<String> {
+        let idx = self.index()?;
+        let name = idx.intros.get(&map.to_ascii_lowercase())?.clone();
+        idx.movies.contains_key(&name.to_ascii_lowercase()).then_some(name)
+    }
+    /// Whether a map's opening movie plays only its first time (`+PlayOnce`).
+    pub fn intro_once(&mut self, map: &str) -> bool {
+        self.index().is_some_and(|i| i.play_once.iter().any(|m| m.eq_ignore_ascii_case(map)))
     }
     /// The loading movie of a map, when cooked.
     pub fn loading_movie(&mut self, map: &str) -> Option<String> {
@@ -150,6 +163,11 @@ fn start_movies(
     let Some(req) = request else { return };
     let cache = crate::loading::cache_dir();
     let Some(idx) = movies.index() else { return };
+    // (its localized file where the name leaves `_LOC` off: the scripts' `DLC07_End_HC`)
+    let mut req = req;
+    if !idx.movies.contains_key(&req.name.to_ascii_lowercase()) && idx.movies.contains_key(&format!("{}_loc", req.name.to_ascii_lowercase())) {
+        req.name = format!("{}_LOC", req.name);
+    }
     let key = req.name.to_ascii_lowercase();
     let Some(info) = idx.movies.get(&key).cloned() else {
         warn!("movie {} not cooked (dhtool cook-movies)", req.name);

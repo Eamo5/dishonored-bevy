@@ -1175,6 +1175,8 @@ pub struct Campaign {
     /// the pursuers away from their maps after Corvo (`travel`), and the last trip's number
     pub trips: Vec<crate::travel::Trip>,
     pub next_trip: u32,
+    /// the maps whose opening movie has played (those it plays once for: +PlayOnce)
+    pub intros_seen: std::collections::BTreeSet<String>,
 }
 
 fn tick_time_control(time: Res<Time>, mut tc: ResMut<TimeControl>, mut sfx: MessageWriter<crate::audio::PostEvent>) {

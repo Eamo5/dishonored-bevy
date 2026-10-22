@@ -2093,11 +2093,17 @@ are in the settings file, `pad_binding_set` 0-3):
   through the speaker's graph and move its jaw, lips, tongue, lids and brows over its
   animation (`DH_FACEFX_LOG`, `DH_FACEFX_FORCE=NODE`).
 - **Movies**: the Bink movies are converted at cook time (ffmpeg's Bink decoder) into MJPEG
-  frames and a WAV soundtrack (`cache/movies`, `dhtool cook-movies`). New Game plays the
-  intro (the Empress's letter, its subtitles from `Movies/INTRO_LOC.txt` and
-  `Subtitles.int`; skippable) while the Tower loads; each map's loading screen loops its
+  frames and a WAV soundtrack (`cache/movies`, `dhtool cook-movies`). A map arrived at afresh
+  (a new game or story, a journey on; not a save's load) plays its opening movie while it loads
+  (`[FullScreenMovie]`'s `map=movie` lines, skippable, with their subtitles from
+  `Movies/<name>.txt` and `Subtitles.int`): New Game the Empress's letter over the Tower's
+  loading, Daud's stories his monologues before each mission (only the first time:
+  `+PlayOnce`); the level waits for it. Each map's loading screen loops its
   `m_LoadingMovieName` (`DefaultEngine.ini`) behind the title and hints; the scripts'
-  `SeqAct_ControlGameMovie` plays the Tower's title card and the endings' credits.
+  `SeqAct_ControlGameMovie` plays the Tower's title card, the endings' credits and Daud's
+  endings (`DLC06_Outro_*`, `DLC07_End_*`: the localized `_LOC` file where the script leaves
+  it off), each pack's movies (`DLC/PCConsole/DLCnn/Movies`) cooked with its maps. Before,
+  only the Tower's intro played: Daud's monologues, endings and credits never did.
 - **Collision**: static meshes collide as their simplified collision says (`AggGeom`: boxes,
   spheres, capsules and convex hulls; the Prison cells' floors are boxes).
 - **Doors** start as the level leaves them (`m_InitialDoorState`: the Prison cell's is open

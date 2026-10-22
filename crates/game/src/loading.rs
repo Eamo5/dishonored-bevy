@@ -419,12 +419,21 @@ fn spawn_loading_ui(
     mut images: ResMut<Assets<Image>>,
     data: Res<crate::gamedata::Data>,
     (mut movies, mut play, mut intro): (ResMut<crate::movie::Movies>, MessageWriter<crate::movie::PlayMovie>, ResMut<crate::movie::IntroPending>),
+    mut campaign: ResMut<crate::gameplay::Campaign>,
 ) {
-    // a new game: the intro (the Empress's letter) over the Tower's loading, skippable;
-    // otherwise the map's loading movie loops behind the title and hints
-    let intro_on = std::mem::take(&mut intro.0) && movies.has("INTRO_LOC") && (std::env::var("DH_SCRIPT").is_err() || std::env::var("DH_INTRO").is_ok());
-    if intro_on {
-        play.write(crate::movie::PlayMovie { name: "INTRO_LOC".into(), looping: false, skippable: true, layer: crate::movie::MovieLayer::Fullscreen });
+    // arrived afresh: the map's opening movie over its loading, skippable (the Empress's letter
+    // over the Tower's, Daud's monologues); otherwise the map's loading movie loops behind the
+    // title and hints
+    let fresh = std::mem::take(&mut intro.0) && (std::env::var("DH_SCRIPT").is_err() || std::env::var("DH_INTRO").is_ok());
+    let key = config.map.to_ascii_lowercase();
+    let opening = if fresh && !(movies.intro_once(&key) && campaign.intros_seen.contains(&key)) { movies.intro_movie(&config.map) } else { None };
+    if opening.is_some() {
+        campaign.intros_seen.insert(key);
+    }
+    let intro_on = opening.is_some();
+    if let Some(name) = opening {
+        play.write(crate::movie::PlayMovie { name, looping: false, skippable: true, layer: crate::movie::MovieLayer::Fullscreen });
+        commands.insert_resource(MovieStarting(2.0));
     }
     let backdrop = if intro_on { None } else { movies.loading_movie(&config.map) };
     if let Some(m) = &backdrop {
@@ -503,7 +512,26 @@ fn relayout_title(mut events: MessageReader<AssetEvent<Font>>, mut q: Query<&mut
 #[derive(Resource)]
 struct AwaitMovie;
 
-fn await_movie(mut commands: Commands, wait: Option<Res<AwaitMovie>>, movies: Res<crate::movie::Movies>, mut next: ResMut<NextState<GameState>>) {
+/// An opening movie asked for and not yet begun (seconds it is waited for): a level ready in
+/// the same frame waits for it too (a monologue's map, quickly loaded, had gone straight in).
+#[derive(Resource)]
+pub struct MovieStarting(pub f32);
+
+fn await_movie(
+    mut commands: Commands,
+    wait: Option<Res<AwaitMovie>>,
+    starting: Option<ResMut<MovieStarting>>,
+    time: Res<Time<bevy::time::Real>>,
+    movies: Res<crate::movie::Movies>,
+    mut next: ResMut<NextState<GameState>>,
+) {
+    if let Some(mut s) = starting {
+        s.0 -= time.delta_secs();
+        if movies.holding() || s.0 <= 0.0 {
+            commands.remove_resource::<MovieStarting>();
+        }
+        return;
+    }
     if wait.is_some() && !movies.holding() {
         commands.remove_resource::<AwaitMovie>();
         next.set(GameState::InGame);
@@ -529,7 +557,7 @@ fn poll_loading(
     mut text: Query<&mut Text, With<LoadingText>>,
     mut bar: Query<&mut Node, With<LoadingBar>>,
     mut next: ResMut<NextState<GameState>>,
-    movies: Res<crate::movie::Movies>,
+    (movies, starting): (Res<crate::movie::Movies>, Option<Res<MovieStarting>>),
 ) {
     let Some(rx) = rx else { return };
     let rx = rx.0.lock().unwrap();
@@ -556,7 +584,7 @@ fn poll_loading(
                 if let Ok(path) = std::env::var("DH_LOADING_SHOT") {
                     commands.spawn(bevy::render::view::screenshot::Screenshot::primary_window()).observe(bevy::render::view::screenshot::save_to_disk(path));
                     commands.insert_resource(HoldLoading(1.0));
-                } else if movies.holding() {
+                } else if movies.holding() || starting.is_some() {
                     commands.insert_resource(AwaitMovie);
                 } else {
                     next.set(GameState::InGame);

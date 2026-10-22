@@ -5024,13 +5024,19 @@ impl<'a> Cooker<'a> {
     /// `SeqAct_ControlGameMovie`: the movie's length, from its Bink header (frames x the
     /// frame rate's divider / dividend), cooked onto the op.
     fn movie_lengths(&mut self) {
-        let movies = self.assets.cooked_dir.parent().map(|d| d.join("Movies"));
+        // (the game's movies and the story packs': `DLC/PCConsole/DLCnn/Movies`)
+        let game = self.assets.cooked_dir.parent().map(Path::to_path_buf).unwrap_or_default();
+        let mut dirs = vec![game.join("Movies")];
+        if let Ok(rd) = std::fs::read_dir(game.join("DLC").join("PCConsole")) {
+            dirs.extend(rd.filter_map(|e| e.ok()).map(|e| e.path().join("Movies")).filter(|p| p.is_dir()));
+        }
         for i in 0..self.scene.kismet.ops.len() {
             if self.scene.kismet.ops[i].class != "SeqAct_ControlGameMovie" {
                 continue;
             }
             let Some(KVal::Str(name)) = self.scene.kismet.ops[i].props.get("MovieName").cloned() else { continue };
-            let Some(path) = movies.as_ref().map(|d| d.join(format!("{name}.bik"))) else { continue };
+            // (its localized file where the name leaves `_LOC` off: `DLC07_End_HC`)
+            let Some(path) = [format!("{name}.bik"), format!("{name}_LOC.bik")].iter().flat_map(|f| dirs.iter().map(move |d| d.join(f))).find(|p| p.exists()) else { continue };
             let Ok(head) = std::fs::read(&path).map(|d| d.get(..44).map(|h| h.to_vec()).unwrap_or_default()) else { continue };
             if head.len() < 44 || &head[..3] != b"BIK" {
                 continue;

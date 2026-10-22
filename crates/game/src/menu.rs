@@ -1829,7 +1829,7 @@ fn menu_input(
             config.map = start.unwrap_or(FIRST_MAP).into();
             config.spawn_index = None;
             menu.open = None;
-            intro.0 = start.is_none();
+            intro.0 = true;
             next.set(GameState::Loading);
         }
         Action::Continue => {

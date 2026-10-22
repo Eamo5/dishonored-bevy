@@ -26,6 +26,13 @@ pub struct MovieIndex {
     /// subtitles by movie: (start, end seconds, text) (`Movies/<name>.txt` cues,
     /// `Localization/INT/Subtitles.int` lines)
     pub subtitles: BTreeMap<String, Vec<(f32, f32, String)>>,
+    /// the movie a map opens with, over its loading (`[FullScreenMovie]`'s `map=movie` lines:
+    /// the Tower's letter, Daud's monologues), lower-case map names
+    #[serde(default)]
+    pub intros: BTreeMap<String, String>,
+    /// the maps whose opening movie plays only the first time (`+PlayOnce`), lower case
+    #[serde(default)]
+    pub play_once: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -203,23 +210,51 @@ fn int_strings(path: &Path) -> BTreeMap<String, String> {
     out
 }
 
+/// A movie as the game asks for it, as the install spells its file (the localized `_LOC` one
+/// where the name leaves it off: the scripts' `DLC07_End_HC`).
+pub fn movie_file<'a>(available: &'a [String], name: &str) -> Option<&'a String> {
+    available.iter().find(|a| a.eq_ignore_ascii_case(name)).or_else(|| available.iter().find(|a| a.eq_ignore_ascii_case(&format!("{name}_LOC"))))
+}
+
+/// The movies the cooked maps' scripts play (`SeqAct_ControlGameMovie`'s `MovieName`).
+fn script_movies(cache: &Path) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let Ok(rd) = std::fs::read_dir(cache.join("maps")) else { return out };
+    const KEY: &str = "\"MovieName\":{\"Str\":\"";
+    for e in rd.filter_map(|e| e.ok()) {
+        let Ok(s) = std::fs::read_to_string(e.path()) else { continue };
+        for (i, _) in s.match_indices(KEY) {
+            let rest = &s[i + KEY.len()..];
+            if let Some(end) = rest.find('"') {
+                let n = rest[..end].to_string();
+                if !n.is_empty() && !out.iter().any(|o| o.eq_ignore_ascii_case(&n)) {
+                    out.push(n);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The movies to cook: (name, width, quality).
-fn wanted(index: &MovieIndex, available: &[String]) -> Vec<(String, u32, u32)> {
+fn wanted(index: &MovieIndex, available: &[String], scripted: &[String]) -> Vec<(String, u32, u32)> {
     let mut names: Vec<String> = vec!["Dishonored".into(), "INTRO_LOC".into(), "LoadingSavingNotification".into()];
     names.push(index.default_loading.clone());
     names.extend(index.maps.values().cloned());
+    names.extend(index.intros.values().cloned());
     let mut out: Vec<(String, u32, u32)> = Vec::new();
-    for n in names {
+    // the credits (nine minutes of them; each pack's own) smaller
+    let credits = |n: &str| n.to_ascii_lowercase().starts_with("credits");
+    for n in names.iter().chain(scripted) {
         // (the original spelling of the file)
-        let Some(file) = available.iter().find(|a| a.eq_ignore_ascii_case(&n)) else { continue };
+        let Some(file) = movie_file(available, n) else { continue };
         if out.iter().any(|(o, _, _)| o.eq_ignore_ascii_case(file)) {
             continue;
         }
-        out.push((file.clone(), 1280, 5));
+        out.push(if credits(file) { (file.clone(), 960, 7) } else { (file.clone(), 1280, 5) });
     }
-    // the credits (nine minutes of them; the trials' own) smaller
     for n in ["Credits", "CreditsDLC05"] {
-        if let Some(c) = available.iter().find(|a| a.eq_ignore_ascii_case(n)) {
+        if let Some(c) = movie_file(available, n).filter(|c| !out.iter().any(|(o, _, _)| o.eq_ignore_ascii_case(c))) {
             out.push((c.clone(), 960, 7));
         }
     }
@@ -235,7 +270,8 @@ fn movie_dirs(game: &Path, cache: &Path) -> Vec<PathBuf> {
     packs.sort();
     for pack in packs {
         let maps: Vec<String> = std::fs::read_dir(&pack)
-            .map(|rd| rd.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_string_lossy().to_ascii_lowercase().strip_suffix("_p.upk").map(str::to_string)).collect())
+            // (not the pack's whole-game package, `DLC06_DishonoredGameFull_P`: no map)
+            .map(|rd| rd.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_string_lossy().to_ascii_lowercase().strip_suffix("_p.upk").map(str::to_string)).filter(|m| !m.contains("gamefull")).collect())
             .unwrap_or_default();
         if !maps.is_empty() && maps.iter().all(|m| cache.join("maps").join(format!("{m}_p.json")).exists()) {
             dirs.push(pack.join("Movies"));
@@ -250,8 +286,20 @@ pub fn cook_movies(game: &Path, cache: &Path, force: bool) -> Result<MovieIndex>
     let mut index = MovieIndex { default_loading: "Loading".into(), ..Default::default() };
     // each map's loading movie
     let engine = std::fs::read_to_string(game.join("Config").join("DefaultEngine.ini")).unwrap_or_default();
+    let mut section = String::new();
     for line in engine.lines() {
         let line = line.trim();
+        if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            section = s.to_string();
+            continue;
+        }
+        if section == "FullScreenMovie" {
+            if let Some(m) = line.strip_prefix("+PlayOnce=") {
+                index.play_once.push(m.trim().to_ascii_lowercase());
+            } else if let Some((map, movie)) = line.split_once('=').filter(|(m, _)| !line.starts_with(['+', '.', '-', ';']) && m.trim().to_ascii_lowercase().ends_with("_p")) {
+                index.intros.insert(map.trim().to_ascii_lowercase(), movie.trim().to_string());
+            }
+        }
         if let Some(rest) = line.strip_prefix("+m_MapConfig=(") {
             let field = |k: &str| rest.split(',').find_map(|f| f.trim().strip_prefix(k)).map(|v| v.trim_matches(|c| c == '"' || c == ')').to_string());
             if let (Some(map), Some(movie)) = (field("m_Name="), field("m_LoadingMovieName=")) {
@@ -298,7 +346,7 @@ pub fn cook_movies(game: &Path, cache: &Path, force: bool) -> Result<MovieIndex>
         log::warn!("movies: ffmpeg not found (set DH_FFMPEG): the movies are left out");
     }
     let old: MovieIndex = std::fs::read(index_path(cache)).ok().and_then(|d| serde_json::from_slice(&d).ok()).unwrap_or_default();
-    let jobs = wanted(&index, &available);
+    let jobs = wanted(&index, &available, &script_movies(cache));
     let done: Vec<(String, MovieInfo)> = {
         use rayon::prelude::*;
         jobs.par_iter()

@@ -214,8 +214,11 @@ fn travel(
     mut paused: ResMut<Paused>,
     vm: Option<Res<crate::kismet::Vm>>,
     (mut timelines, window, data, slots): (ResMut<crate::flash::MovieTimelines>, Query<&Window, With<bevy::window::PrimaryWindow>>, Res<crate::gamedata::Data>, Res<crate::save::SaveSlots>),
+    mut intro: ResMut<crate::movie::IntroPending>,
 ) {
     let Some(r) = requests.read().last().cloned() else { return };
+    // (arrived at afresh: the map's opening movie, Daud's monologue before his mission)
+    intro.0 = true;
     campaign.carry = Some(stats.clone());
     if let Some(vm) = vm.as_ref() {
         campaign.flags = vm.flags().clone();
