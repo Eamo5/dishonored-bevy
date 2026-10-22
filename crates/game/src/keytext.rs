@@ -96,6 +96,7 @@ fn sync(
     mut commands: Commands,
     roots: Query<(Entity, &KeyText, &TextFont, &TextColor, Option<&Children>), Or<(Changed<KeyText>, Changed<TextFont>, Changed<TextColor>)>>,
     mut spans: Query<(&mut TextSpan, &mut TextFont, &mut TextColor), Without<KeyText>>,
+    mut root_text: Query<&mut Text, With<KeyText>>,
 ) {
     for (e, kt, font, color, children) in &roots {
         // (a pad's button: a gap for its icon)
@@ -120,6 +121,11 @@ fn sync(
         }
         for k in kids {
             commands.entity(k).despawn();
+        }
+        // (its spans gone, its layout redone: removing the last of them alone leaves the old
+        // lines drawn, "Give the letter to the Empress" on through the Tower's scenes)
+        if let Ok(mut t) = root_text.get_mut(e) {
+            t.set_changed();
         }
         for (t, key) in r {
             commands.spawn((TextSpan::new(t), font.clone(), TextColor(tint(key)), ChildOf(e)));

@@ -1135,7 +1135,9 @@ are in the settings file, `pad_binding_set` 0-3):
   `m_PressKeyToAdrenalineKill_Gamepad`); in the Flash fields too (the tutorial notes: each
   button its own span of the field, the icon laid over it where the field's layout put it,
   scaled with the field), but for a field turned in a mask, which names the button (`[RT]`).
-  The keys are
+  A text emptied has its layout redone (Bevy keeps a text's last lines while only its spans
+  go: "Give the letter to the Empress" had stayed on the screen through the Tower's scenes
+  after the scripts hid it, and any HUD line cleared to nothing stayed as it was). The keys are
   named as the original names them (`Settings.int` `[Keys]`: `[Space Bar]`,
   `[Left Control]`, `[Left Mouse Button]`; in the options' keyboard mapping too, `One` for
   the 1 key), bracketed in the tutorials and messages as in the interaction texts.

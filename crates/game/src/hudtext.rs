@@ -120,10 +120,12 @@ fn tutorial_line(
         }
         return;
     };
-    // (the HUD hidden, a cinematic's: only a forced line)
-    let want = if hidden.0 && !msgs.tutorial_forced { Visibility::Hidden } else { Visibility::Inherited };
-    if *vis != want {
-        *vis = want;
+    // (the HUD hidden, a cinematic's: only a forced line. Faded out rather than hidden: a hidden
+    // text's layout isn't redone, so a line put away while hidden came back as it was, and "Give
+    // the letter to the Empress" stayed on the screen through the Tower's scenes after it)
+    let hide = hidden.0 && !msgs.tutorial_forced;
+    if *vis != Visibility::Inherited {
+        *vis = Visibility::Inherited;
     }
     let ms = crate::hud::MovieSpace::of(w);
     let s = ms.s;
@@ -158,7 +160,10 @@ fn tutorial_line(
             }
         }
     };
-    c.0 = TUTORIAL.color.with_alpha(a);
+    let a = if hide { 0.0 } else { a };
+    if c.0 != TUTORIAL.color.with_alpha(a) {
+        c.0 = TUTORIAL.color.with_alpha(a);
+    }
     let want = shadow_of(&TUTORIAL, s);
     if *sh != want {
         *sh = want;
