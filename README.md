@@ -1997,6 +1997,10 @@ are in the settings file, `pad_binding_set` 0-3):
   boat's) places him itself. Before, he stayed and walked wherever he was: the letter was
   handed over from behind the Empress. The choke's line no longer shows while the scripts
   forbid the chokehold (`DisSeqAct_ToggleChoke`: the Tower's prologue).
+  A character bound with animation keys by two scenes at once plays the one started last, as
+  the latest group instance registered with the pawn takes its stack. Before, both restarted
+  their clips every frame: the Empress stood frozen in the first second of her death while the
+  assassination's scene and the one before it both held her.
 - **Animated props**: skeletal level actors that matinees animate (the Tower's gangway
   lowering as the boat docks, machinery, doors in the Hound Pits; 29 maps) are cooked as
   animated types from their mesh and the scene group's `GroupAnimSets`, and play on the

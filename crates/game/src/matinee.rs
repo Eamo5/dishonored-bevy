@@ -350,6 +350,22 @@ fn play_matinees(
     let mut player_rides = false;
     let mut player_scene = false;
     let npc_pos: HashMap<u32, Vec3> = npcs.iter().filter(|x| !x.4.is_down()).map(|x| (x.1 .0, x.3.translation)).collect();
+    // each character's scene: of those binding it to a group with animation keys, the one
+    // started last, as the latest group instance registered with the pawn takes its stack
+    // (two at once had each restarted its clip every frame: the Empress froze in the first
+    // second of her death as the assassination's scene and the one before it both held her)
+    let mut owner: HashMap<u32, u32> = HashMap::new();
+    for (op, mi, _, binds) in &plays {
+        let Some(m) = g.matinees.get(*mi as usize) else { continue };
+        for (gi, actors) in binds.iter() {
+            let animates = m.groups.get(*gi as usize).is_some_and(|gr| gr.tracks.iter().any(|tr| matches!(tr, KTrack::Anim(k) if !k.is_empty())));
+            if animates {
+                for s in actors.iter().filter_map(|a| g.actors.get(*a as usize).and_then(|ka| ka.spawner)) {
+                    owner.insert(s, *op);
+                }
+            }
+        }
+    }
     for (op, mi, t, binds) in plays {
         let Some(m): Option<&KMatinee> = g.matinees.get(mi as usize) else { continue };
         // a distraction's scene (`ESAP_Distractor`): the character is the distraction's to
@@ -539,7 +555,7 @@ fn play_matinees(
                 }
                 group_tm.entry(*gi).or_insert((tm, fov));
                 // scripted scenes: the NPC of a spawner plays the group's animations
-                if let (true, Some(s)) = (drives_pawns, ka.spawner) {
+                if let (true, Some(s)) = (drives_pawns && owner.get(&ka.spawner.unwrap_or(u32::MAX)).is_none_or(|o| *o == op), ka.spawner) {
                     let anim_keys = group.tracks.iter().find_map(|tr| if let KTrack::Anim(k) = tr { Some(k) } else { None });
                     if let Some(keys) = anim_keys {
                         for (e, from, mut animator, mut ntf, mut npc, _) in &mut npcs {
