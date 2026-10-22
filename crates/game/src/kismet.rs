@@ -5955,9 +5955,14 @@ fn world_events(
         }
     }
     // powers: the Outsider's tutorial waits for Blink to be equipped and used
-    for _ in power_used.read() {
+    // (the output of the power used, at its level: "Blink 1", "Windblast 2"; before, every
+    // power set off "DarkVision 1")
+    for used in power_used.read() {
+        let Some(key) = used.0.key() else { continue };
         for ev in class_ops(&vm.g, "DisSeqEvent_PowerUsed") {
-            vm.event(ev, 0, Some(Val::Player));
+            if let Some(i) = power_used_output(&vm.g.ops[ev as usize], key, stats.power(key)) {
+                vm.event(ev, i, Some(Val::Player));
+            }
         }
     }
     for _ in power_equipped.read() {
@@ -6491,6 +6496,26 @@ fn more_events(
 
 fn class_ops(g: &Graph, class: &str) -> Vec<u32> {
     g.ops.iter().enumerate().filter(|(_, o)| o.class == class).map(|(i, _)| i as u32).collect()
+}
+
+/// `DisSeqEvent_PowerUsed`'s output for a power used at a level: "Blink 1", "Windblast 2"
+/// (the power's name and its level, 1 or 2).
+fn power_used_output(op: &dhcook::format::KOp, power: &str, level: u8) -> Option<usize> {
+    let want = format!("{power} {}", level.clamp(1, 2));
+    op.outputs.iter().position(|o| o.desc.eq_ignore_ascii_case(&want))
+}
+
+#[cfg(test)]
+mod power_used_tests {
+    #[test]
+    fn a_power_used_sets_off_its_own_output_at_its_level() {
+        let names = ["DarkVision 1", "DarkVision 2", "BendTime 1", "BendTime 2", "Blink 1", "Blink 2", "Windblast 1", "Windblast 2"];
+        let op = dhcook::format::KOp { outputs: names.iter().map(|d| dhcook::format::KOutput { desc: d.to_string(), ..Default::default() }).collect(), ..Default::default() };
+        assert_eq!(super::power_used_output(&op, "Blink", 1), Some(4));
+        assert_eq!(super::power_used_output(&op, "Windblast", 2), Some(7));
+        assert_eq!(super::power_used_output(&op, "BendTime", 0), Some(2), "unlevelled reads as level 1");
+        assert_eq!(super::power_used_output(&op, "Possess", 1), None);
+    }
 }
 
 fn run(time: Res<Time>, mut vm: ResMut<Vm>) {

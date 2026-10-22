@@ -2048,7 +2048,12 @@ are in the settings file, `pad_binding_set` 0-3):
   (`DisSeqAct_BackupAndClearInventory`: all but his coins, with his upgrades) and give them
   back, open the journal on its powers page after the rune (`DisSeqAct_OpenJournal`) and go on
   once it has been seen and closed (`DisSeqEvent_JournalViewed`), wait on his mana
-  (`DisSeqEvent_PlayerManaThreshold`) and hide the whole HUD (`SeqAct_ToggleHUD`). Objectives
+  (`DisSeqEvent_PlayerManaThreshold`) and hide the whole HUD (`SeqAct_ToggleHUD`). A power used
+  sets off `DisSeqEvent_PowerUsed`'s output for that power at its level ("Blink 1",
+  "Windblast 2"); before, every power set off its first, "DarkVision 1", which nearly no
+  script listens to: the dream's Blink line never went away, and the scripts awaiting a Bend
+  Time in Daud's base, a Wind Blast in the Flooded streets or a swarm in the refinery never
+  heard of it. Objectives
   coming up raise `DisSeqEvent_TaskActivated` (the Bridge's markers), rat bites
   `DisSeqEvent_AttackedByRats`, blown-up tanks the battery's `Destroyed`. Characters beg on
   their knees or panic when the scripts say so (`DisSeqAct_AIDoSimpleBehaviors`: the
