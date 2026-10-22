@@ -1238,7 +1238,7 @@ fn run_script(
             let at = t.translation;
             commands.queue(move |w: &mut World| {
                 let mut q = w.query::<(&Npc, &mut Transform)>();
-                if let Some((n, mut nt)) = q.iter_mut(w).filter(|(n, _)| !n.is_down() && (n.hostile() || !named.is_empty()) && n.name.contains(&named)).min_by(|a, b| a.1.translation.distance(at).total_cmp(&b.1.translation.distance(at))) {
+                if let Some((n, mut nt)) = q.iter_mut(w).filter(|(n, _)| !n.is_down() && (n.hostile() || !named.is_empty()) && (n.name.contains(&named) || n.pawn.contains(&named))).min_by(|a, b| a.1.translation.distance(at).total_cmp(&b.1.translation.distance(at))) {
                     info!("script: {} moved to {to:.2}", n.name);
                     nt.translation = to;
                 }
