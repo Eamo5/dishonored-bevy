@@ -1873,7 +1873,7 @@ pub fn speaking_jaw(
         }
         let k = f - i as f32;
         let v = (env[i] as f32 * (1.0 - k) + env[i + 1] as f32 * k) / 255.0;
-        if face {
+        if face || std::env::var_os("DH_NO_JAW").is_some() {
             continue;
         }
         let Some(ji) = rig.idx.jaw else { continue };

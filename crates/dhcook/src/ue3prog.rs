@@ -454,7 +454,9 @@ fn ue_tag(i: u32) -> u32 { return mesh_functions::get_tag(i); }
 // first-person view model (UE3's foreground depth priority group): the world's field of view
 // but for the mask's zoom (the arms' `m_fCurFOV_Arms` follows the world's unless a zoom locks
 // it: the scene entry's projection scale, `ue_inst[2].x`), and depths squeezed into the nearest
-// slice so it never clips into the world
+// tenth so it never clips into the world (the world's depths reach there only nearer than 5.6 cm).
+// (A thousandth left the group's own surfaces too few depths apart: the Outsider's teeth and
+// eyes showed through his lips and lids in blotches, the arms through their sleeves.)
 fn ue_clip_from_world() -> mat4x4<f32> {
     var p = view.clip_from_view;
 #ifdef UE_FOREGROUND_WORLD
@@ -467,7 +469,7 @@ fn ue_clip_from_world() -> mat4x4<f32> {
     p[0][0] *= k;
     p[1][1] *= k;
     for (var c = 0; c < 4; c++) {
-        p[c].z = 0.001 * p[c].z + 0.999 * p[c].w;
+        p[c].z = 0.1 * p[c].z + 0.9 * p[c].w;
     }
     return p * view.view_from_world;
 }

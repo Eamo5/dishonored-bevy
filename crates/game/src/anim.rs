@@ -694,6 +694,9 @@ impl Animator {
     fn pose(&mut self) {
         self.rot.copy_from_slice(&self.bind_rot);
         self.trans.copy_from_slice(&self.bind_t);
+        if std::env::var_os("DH_BIND_POSE").is_some() {
+            return;
+        }
         // (beneath a clip keying part of the body, the whole-body one before it)
         if let Some(u) = self.base.under {
             sample_playing(&self.lib, &u, (&self.bind_rot, &self.bind_t), (&mut self.rot, &mut self.trans), (&mut self.rot_c, &mut self.trans_c));

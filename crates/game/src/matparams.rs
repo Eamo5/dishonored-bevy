@@ -15,7 +15,32 @@ impl Plugin for MatParamsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MatIndex>()
             .add_systems(OnEnter(GameState::InGame), |mut i: ResMut<MatIndex>| *i = MatIndex::default())
-            .add_systems(Update, (set_params, set_materials).after(crate::kismet::apply_effects).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (set_params, set_materials).after(crate::kismet::apply_effects).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, dump_params.run_if(|| std::env::var_os("DH_MATDUMP").is_some()));
+    }
+}
+
+/// (`DH_MATDUMP=NAME`) Every 2 s, the parameters of the drawn surfaces whose material's name
+/// holds NAME.
+fn dump_params(time: Res<Time>, mut last: Local<f32>, level: Option<Res<LevelInfo>>, materials: Res<Assets<Ue3Material>>, drawn: Query<&MeshMaterial3d<Ue3Material>>) {
+    if time.elapsed_secs() - *last < 2.0 {
+        return;
+    }
+    *last = time.elapsed_secs();
+    let Some(level) = level else { return };
+    let want = std::env::var("DH_MATDUMP").unwrap_or_default().to_ascii_lowercase();
+    let mut seen = std::collections::HashSet::new();
+    for h in &drawn {
+        if !seen.insert(h.0.id()) {
+            continue;
+        }
+        let Some(m) = materials.get(&h.0) else { continue };
+        let Some(d) = level.scene.materials.get(m.mat_id as usize) else { continue };
+        if !d.name.to_ascii_lowercase().contains(&want) {
+            continue;
+        }
+        let n = d.ue3.as_ref().map_or(0, |u| u.params.len());
+        info!("matdump {} {:?}: {:?}", d.name, h.0.id(), m.params.p.iter().take(n).map(|v| v.x).collect::<Vec<_>>());
     }
 }
 
@@ -82,6 +107,10 @@ fn set_params(vm: Option<ResMut<crate::kismet::Vm>>, level: Option<Res<LevelInfo
     }
     let log = std::env::var("DH_SCRIPT_WORLD_LOG").is_ok();
     for (path, param, value) in requests {
+        let value = match std::env::var("DH_FORCE_PARAM").ok().and_then(|s| s.split_once('=').map(|(a, b)| (a.to_string(), b.parse::<f32>().unwrap_or(value)))) {
+            Some((n, v)) if n.eq_ignore_ascii_case(&param) || format!("{path}.{param}").to_ascii_lowercase().ends_with(&n.to_ascii_lowercase()) => v,
+            _ => value,
+        };
         let ids = index.by_name.get(&path.to_ascii_lowercase()).cloned().unwrap_or_default();
         let mut set = 0;
         for id in ids {

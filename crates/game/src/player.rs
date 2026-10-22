@@ -324,6 +324,14 @@ pub fn spawn_player(mut commands: Commands, level: Option<Res<LevelInfo>>, confi
                 Transform::from_xyz(0.0, STAND_EYE, 0.0),
             ));
         });
+    if std::env::var_os("DH_NO_PREPASS").is_some() {
+        commands.queue(|w: &mut World| {
+            let cams: Vec<Entity> = w.query_filtered::<Entity, With<PlayerCamera>>().iter(w).collect();
+            for c in cams {
+                w.entity_mut(c).remove::<bevy::core_pipeline::prepass::DepthPrepass>();
+            }
+        });
+    }
 }
 
 fn cursor_grab(
