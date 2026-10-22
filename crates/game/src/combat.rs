@@ -248,7 +248,7 @@ fn special_moves(
     grabbed: Query<(), With<crate::npc::Grabbed>>,
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
     npcs: Query<(Entity, &Npc, &Transform), Without<Player>>,
-    switches: Res<crate::kismet::ScriptSwitches>,
+    (switches, rigs): (Res<crate::kismet::ScriptSwitches>, Query<&crate::anim::Animator, With<Npc>>),
 ) {
     *sp = Specials::default();
     let (Ok((pt, p)), Ok(cg)) = (player.single(), cam.single()) else { return };
@@ -270,10 +270,12 @@ fn special_moves(
     let to_player = |nt: &Transform| (pt.translation - nt.translation).with_y(0.0).normalize_or_zero();
     // the sword's reach: someone unaware of him, from behind
     if armed {
-        if let Some((_, npc, nt)) = nearest_target(eye, fwd, 2.4, 0.55, npcs.iter()).and_then(|(e, _)| npcs.get(e).ok()) {
+        // (as the attack would take it: the one it reaches, one with its part in it)
+        if let Some((e, npc, nt)) = nearest_target(eye, fwd, 2.75, 0.55, npcs.iter()).and_then(|(e, _)| npcs.get(e).ok()) {
             let behind = npc.forward().dot(to_player(nt)) < -0.2;
             let unaware = npc.alert != Alert::Combat || !npc.sees_player;
-            sp.assassinate = unaware && (behind || npc.alert == Alert::Unaware) && npc.mode != Mode::Combat;
+            let takes = takes_assassination(npc, rigs.get(e).ok().map(|a| a.lib.as_ref()));
+            sp.assassinate = takes && assassinable(npc) && unaware && (behind || npc.alert == Alert::Unaware) && npc.mode != Mode::Combat;
         }
         if stats.power("BloodThirsty") > 0 && stats.adrenaline >= attrs.adrenaline_max {
             sp.adrenaline = nearest_target(eye, fwd, 2.6, 0.5, npcs.iter()).is_some();
@@ -467,6 +469,28 @@ fn assassinable(npc: &Npc) -> bool {
     let fighting = npc.mode == Mode::Combat && npc.alert == Alert::Combat;
     let running = npc.velocity.with_y(0.0).length() > (npc.gait[1] + npc.gait[2]) * 0.5;
     !fighting && !running && !matches!(npc.mode, Mode::Flee | Mode::Choked)
+}
+
+/// A target's dramatic death before Corvo or behind him (the targets and nobles:
+/// `DramaticDeath_*_Slave` with Corvo's `Sword_DramaticDeath_*_Master`), if it has one.
+fn dramatic_pair(lib: &crate::anim::CharAnims, front: bool) -> Option<(String, String)> {
+    let slave = if front {
+        lib.find_like("DramaticDeath_Front_", "_Slave").or_else(|| lib.find_like("Generic_DramaticDeath_Front_", "_Slave"))
+    } else {
+        lib.find_like("DramaticDeath_Back_", "_Slave").or_else(|| lib.find_like("Generic_DramaticDeath_Back_", "_Slave"))
+    }?;
+    let master = format!("Sword_{}", slave.trim_start_matches("Generic_").replace("_Slave", "_Master"));
+    Some((master, slave))
+}
+
+/// Whether one has its part in an assassination: a person (a story character only with a
+/// dramatic death of its own: Emily, the Empress, have none), with its victim's clips.
+fn takes_assassination(npc: &Npc, lib: Option<&crate::anim::CharAnims>) -> bool {
+    let Some(lib) = lib else { return false };
+    let dramatic = dramatic_pair(lib, true).is_some() || dramatic_pair(lib, false).is_some();
+    npc.kind != crate::npc::Kind::Creature
+        && (npc.kind != crate::npc::Kind::Story || dramatic)
+        && (dramatic || lib.find_like("Generic_Assassination_", "_Slave").is_some())
 }
 
 fn nearest_target<'a>(
@@ -716,15 +740,7 @@ fn sword_input(
             // with Corvo's `Sword_DramaticDeath_*_Master`, before him or behind him)
             let lib = rigs.get(e).ok().map(|a| a.lib.clone());
             let front = from.dot(f) >= 0.0;
-            let dramatic = lib.as_ref().and_then(|l| {
-                let slave = if front {
-                    l.find_like("DramaticDeath_Front_", "_Slave").or_else(|| l.find_like("Generic_DramaticDeath_Front_", "_Slave"))
-                } else {
-                    l.find_like("DramaticDeath_Back_", "_Slave").or_else(|| l.find_like("Generic_DramaticDeath_Back_", "_Slave"))
-                }?;
-                let master = format!("Sword_{}", slave.trim_start_matches("Generic_").replace("_Slave", "_Master"));
-                Some((master, slave))
-            });
+            let dramatic = lib.as_ref().and_then(|l| dramatic_pair(l, front));
             let human = npc.kind != crate::npc::Kind::Creature && (npc.kind != crate::npc::Kind::Story || dramatic.is_some());
             if human && assassinable(&npc) {
                 let right = f.cross(Vec3::Y);
