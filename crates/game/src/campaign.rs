@@ -200,7 +200,8 @@ pub fn apply_loadout_from(list: &[dhcook::format::LoadoutDef], name: &str, s: &m
     // (Daud's: the wristbow alone, neither pistol nor Heart)
     let wristbow = l.items.iter().any(|i| i.contains("Wristbow"));
     s.no_pistol = wristbow && !l.items.iter().any(|i| i.contains("Pistol"));
-    s.no_heart = wristbow && !l.items.iter().any(|i| i.contains("Heart"));
+    // (the Heart only where it lists it: not before the Outsider's dream, Hub1)
+    s.no_heart = !l.items.iter().any(|i| i.contains("Heart"));
     // its ammunition (by the original's `eDisAmmoType`) and elixirs, where it gives them
     if !l.ammo.is_empty() {
         for ty in 0..crate::gadgets::AMMO_TYPES as u8 {

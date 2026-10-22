@@ -179,7 +179,10 @@ are in the settings file, `pad_binding_set` 0-3):
   `FArkPpDofDownsample` + DOF uber pass do it: the scene mixed with a quarter-resolution copy
   by `saturate((depth - focus) / radius) x far blur`, before the grading, softening distant
   views. `DH_NO_DOF=1` turns it off.
-- **The Heart**: held in the left hand as the gadgets are (`Gadgets_Idle`), its fingers about
+- **The Heart**: Corvo has it once the Outsider gives it (`DisSeqAct_AddInventoryItem` of
+  `Twk_Inv_HeartCorvo`) or a start loadout lists it, no sooner: the Tower's pistol, given as
+  the assassins attack, no longer brought the Heart (and the crossbow) with it, nor the
+  Prison's. Held in the left hand as the gadgets are (`Gadgets_Idle`), its fingers about
   it in its own grip (`Ply_Gadgets_Heart_as`'s `Gadgets_Heart_Fingers_Idle`, on the finger bones
   alone); beats faster near runes and bone charms; whispers the original secrets about
   the person targeted (by story group) or the place (by mission progress). Held, it marks the

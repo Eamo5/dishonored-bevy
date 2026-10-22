@@ -889,6 +889,7 @@ pub fn use_focus(
                 } else if !stats.weapons {
                     stats.weapons = true;
                     stats.no_crossbow = true;
+                    stats.no_heart = true;
                 }
                 let icon = if w.contains("sword") {
                     Some(if w.contains("elite") || w.contains("city") { "City_Sword_Small" } else if w.contains("overseer") { "Overseer_sabre_Small" } else if w.contains("assassin") { "Assassins_Sword_Small" } else if w.contains("thug") { "ThugSword_Small" } else { "CorvoSword_Small" })

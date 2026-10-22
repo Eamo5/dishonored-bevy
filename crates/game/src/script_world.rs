@@ -791,10 +791,22 @@ fn apply_ai_fx(
                     if it.contains("sword") || (!add && it.ends_with("dishonoredinventoryitem")) {
                         stats.unarmed = !add;
                     } else if add && it.contains("pistol") {
+                        // (the first given, the Tower's: the pistol alone, neither crossbow nor Heart)
+                        if !stats.weapons {
+                            stats.no_crossbow = true;
+                            stats.no_heart = true;
+                        }
                         stats.weapons = true;
                     } else if add && it.contains("crossbow") {
                         stats.weapons = true;
                         stats.no_crossbow = false;
+                    } else if add && it.contains("heart") {
+                        if !stats.weapons {
+                            stats.no_crossbow = true;
+                            stats.no_pistol = true;
+                        }
+                        stats.weapons = true;
+                        stats.no_heart = false;
                     }
                 }
                 let sp = spawners(&targets);
