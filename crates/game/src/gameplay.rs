@@ -1130,7 +1130,11 @@ fn reset_stats(
                 local || crate::campaign::apply_loadout(&data, l, &mut s)
             });
             if !loadout {
-                s.weapons = idx >= 2;
+                // (the dream comes before Piero's workbench: the blade alone; and the Heart is
+                // the dream's to give)
+                let dream = map.to_ascii_lowercase().starts_with("l_outsiderdream");
+                s.weapons = idx >= 2 && !dream;
+                s.no_heart = idx < 2 || dream;
                 if idx >= 3 || (idx == 2 && !map.to_ascii_lowercase().starts_with("l_outsiderdream")) {
                     s.powers.insert("Blink".into(), 1);
                     s.runes = 3 * (idx as u32 - 2);
