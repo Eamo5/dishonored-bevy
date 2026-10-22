@@ -2072,6 +2072,7 @@ fn run_script(
             }
             if let Some(vm) = vm.as_ref() {
                 info!("script: objectives {:?} targets {:?}", vm.objectives, vm.task_targets.iter().map(|(k, v)| (k.rsplit('.').next().unwrap_or(k).to_string(), v.1.clone(), vm.tasks.get(k).copied(), vm.task_vanish.get(k).copied().unwrap_or(0))).collect::<Vec<_>>());
+                info!("script: objective states {:?}, journal rows {:?}", vm.objectives.iter().map(|o| (o.rsplit('.').next().unwrap_or(o).to_string(), vm.tasks.get(o).copied())).collect::<Vec<_>>(), crate::jview::objective_rows(Some(vm), false).iter().map(|r| r.text.clone()).collect::<Vec<_>>());
             }
             for (tp, tt) in &traps {
                 if tt.translation.distance(t.translation) < 30.0 {
