@@ -5965,9 +5965,13 @@ fn world_events(
             }
         }
     }
-    for _ in power_equipped.read() {
+    // (so too the power put in hand: the dream's "equip Blink" line goes once Blink is)
+    for eq in power_equipped.read() {
+        let Some(key) = eq.0.key() else { continue };
         for ev in class_ops(&vm.g, "DisSeqEvent_PowerEquipped") {
-            vm.event(ev, 0, Some(Val::Player));
+            if let Some(i) = power_used_output(&vm.g.ops[ev as usize], key, stats.power(key)) {
+                vm.event(ev, i, Some(Val::Player));
+            }
         }
     }
     // Windblast striking someone (`DisSeqEvent_Windblasted`: pushed, or thrown hard)
