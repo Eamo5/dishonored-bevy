@@ -584,6 +584,7 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
     c.scripted_blasts();
     c.npc_set_materials();
     c.movie_lengths();
+    c.put_pocket_texts();
     c.factory_pickups();
     c.factory_tanks();
     for (r, ops) in c.scene.levels.iter_mut().zip(c.scene.kismet.level_ops.iter()) {
@@ -1222,6 +1223,10 @@ impl<'a> Cooker<'a> {
         // Pass 1: actors with special handling
         for &a in &actors {
             let cls = pkg.class_name(a);
+            // (the story packs' own kinds as the kinds they are: The Knife of Dunwall's and The
+            // Brigmore Witches' spawners, `DisDLC06Spawner` / `DisDLC07Spawner`, and the
+            // Brigmore krusts, `DisDLC07RiverKrust`; before, their characters never appeared)
+            let cls = ["DishonoredSpawner", "DisRiverKrust"].iter().find(|b| cls != **b && self.class_is(&cls, b)).map(|b| b.to_string()).unwrap_or(cls);
             let obj = Obj { pkg: pkg.clone(), idx: a };
             let r = match cls.as_str() {
                 "StaticMeshCollectionActor" => self.mesh_collection(&obj, &mut collected),
@@ -4979,6 +4984,11 @@ impl<'a> Cooker<'a> {
                     (ic.name("m_Name").unwrap_or_default().to_string(), ic.name("m_InteractText").unwrap_or_default().trim().to_string())
                 })
                 .unwrap_or_default();
+            // ("`i": the item's own name)
+            let label = match tc.obj(self.assets, "m_pAbstractItem").and_then(|o| self.chain(&o).name("m_ItemName").map(str::to_string)).filter(|n| label.starts_with("`i") && !n.trim().is_empty()) {
+                Some(n) => n,
+                None => label,
+            };
             let name = format!("Factory_{i}");
             let instance = self.scene.instances.len() as u32;
             self.scene.instances.push(Instance {
@@ -5065,6 +5075,25 @@ impl<'a> Cooker<'a> {
             props.insert("lens_system".into(), KVal::Int(id as i32));
             props.insert("lens_looping".into(), KVal::Bool(looping));
             props.insert("lens_life".into(), KVal::Float(life));
+        }
+    }
+
+    /// `DisDLC06SeqAct_NPCAddPutPocketInteraction`: the words of the thing to plant (its
+    /// pickup tweak's interactable: "`GBA_Use` Plant Document"), cooked onto the op as
+    /// `put_text`.
+    fn put_pocket_texts(&mut self) {
+        for i in 0..self.scene.kismet.ops.len() {
+            if self.scene.kismet.ops[i].class != "DisDLC06SeqAct_NPCAddPutPocketInteraction" {
+                continue;
+            }
+            let Some(KVal::Str(path)) = self.scene.kismet.ops[i].props.get("m_pHighLightItem").cloned() else { continue };
+            let Some(tw) = self.assets.find(&path) else { continue };
+            let tch = self.chain(&tw);
+            let Some(it) = tch.obj(self.assets, "m_pInteractableTweaks") else { continue };
+            let text = self.chain(&it).name("m_InteractText").unwrap_or_default().trim().to_string();
+            if !text.is_empty() {
+                self.scene.kismet.ops[i].props.insert("put_text".into(), KVal::Str(text));
+            }
         }
     }
 
@@ -5575,6 +5604,16 @@ impl<'a> Cooker<'a> {
                 let ic = self.chain(&it);
                 label = ic.name("m_Name").unwrap_or_default().to_string();
                 verb = ic.name("m_InteractText").unwrap_or_default().trim().to_string();
+            }
+        }
+        // ("`i": its item's own name, from the item itself where the game's list doesn't have
+        // it: the story packs' missions' documents, "disabstractitempickup" before)
+        if label.starts_with("`i") {
+            let item_obj = ch
+                .obj(self.assets, "m_pAbstractItem")
+                .or_else(|| ["m_pTweaks", "m_pPickupTweaks"].iter().find_map(|n| ch.obj(self.assets, n)).and_then(|tw| self.chain(&tw).obj(self.assets, "m_pAbstractItem")));
+            if let Some(name) = item_obj.and_then(|o| self.chain(&o).name("m_ItemName").map(str::to_string)).filter(|n| !n.trim().is_empty()) {
+                label = name;
             }
         }
         let key = if actor.class().starts_with("DisKey") { ch.name("m_Name").unwrap_or_default().to_string() } else { String::new() };

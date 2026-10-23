@@ -22,7 +22,8 @@ use std::path::Path;
 // 132: dialogue branches by the speaker's suspicion, story group and possession.
 // 158: spawners' flags from their class's defaults (travel spawners make nobody at the start).
 // 159: scene keys laid out along their sequences' soiree markers (KTrack::AnimStretch).
-pub const SCENE_VERSION: u32 = 159;
+// 160: scene sections' ways (KTrack::PinModes); the story packs' spawners and krusts.
+pub const SCENE_VERSION: u32 = 160;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -589,6 +590,11 @@ pub enum KTrack {
     /// a soiree's sections (`InterpTrackSoireeControl`): (start, length, pin name) - a
     /// distraction repeats its "Loop" so many times
     Pins(Vec<(f32, f32, String)>),
+    /// the sections' ways (right after `Pins`, key for key): held paused at the section's
+    /// start rather than looped (`ESCT_Pause`), let go at once rather than at its next loop
+    /// (`ESBM_BreakImmediately`), and how many times it loops by itself (`m_LoopCount`; 0: till
+    /// its pin is pulled)
+    PinModes(Vec<(bool, bool, u32)>),
 }
 
 /// A curve key (UE3 FInterpCurvePoint); floats use `v[0]`.

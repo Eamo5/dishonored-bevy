@@ -29,7 +29,7 @@ impl Plugin for KismetPlugin {
         app.add_systems(OnEnter(GameState::InGame), setup.after(LevelSpawnSet).after(crate::npc::spawn_npcs))
             .add_systems(
                 Update,
-                (world_events, more_events, destroyed_events, run, apply_effects, update_ui, talk_prompts, speakers_look)
+                (world_events, more_events, (destroyed_events, fired_events, script_shakes), run, apply_effects, update_ui, talk_prompts, speakers_look)
                     .chain()
                     .after(crate::interact::use_focus)
                     .run_if(in_state(GameState::InGame).and_then(resource_exists::<Vm>)),
@@ -172,7 +172,8 @@ pub enum Effect {
     /// when played without the campaign)
     StartMap(String),
     Door(Val, DoorCmd),
-    Damage(Val, f32),
+    /// harm done (healed, if negative); put to sleep instead (`DisDamageType_InstantSleep`)
+    Damage(Val, f32, bool),
     Message(String),
     /// a tutorial line, up so long while shown (`m_fDuration`; unset: until put away), and
     /// whether it shows while the HUD is hidden (`m_bForceDisplay`)
@@ -249,7 +250,22 @@ enum Latent {
     Delay { op: u32, left: f32 },
     /// a playing matinee: position, length, direction x play rate, cooked matinee and the
     /// actors bound to each of its groups
-    Interp { op: u32, t: f32, len: f32, rate: f32, looping: bool, paused: bool, matinee: Option<u32>, binds: Vec<(u32, Vec<u32>)> },
+    Interp {
+        op: u32,
+        t: f32,
+        len: f32,
+        rate: f32,
+        looping: bool,
+        paused: bool,
+        matinee: Option<u32>,
+        binds: Vec<(u32, Vec<u32>)>,
+        /// its sections' pins pulled (SCT_<pin> inputs): those sections no longer hold it,
+        /// and how often each section has looped by itself
+        #[serde(default)]
+        released: Vec<String>,
+        #[serde(default)]
+        loops: Vec<u32>,
+    },
     Spawn { op: u32, left: f32 },
     After { op: u32, out: usize, left: f32 },
     /// a conversation started on a dialogue actor (input name)
@@ -305,6 +321,37 @@ mod flow_tests {
         vm.exec(0, 1);
         vm.exec(0, 0);
         assert_eq!(vm.queue.len(), 1);
+    }
+
+    #[test]
+    fn a_scene_loops_its_section_till_its_pin_is_pulled() {
+        use dhcook::format::{KInterpGroup, KLink, KMatinee, KTrack, KVar};
+        let mut g = Graph::default();
+        let inputs = ["Play", "Reverse", "Stop", "Pause", "Change Dir", "SCT_Loop"];
+        let outputs = ["Completed", "Reversed", "Interrupted", "Stopped", "Started"];
+        g.ops.push(KOp {
+            class: "SeqAct_Interp".into(),
+            inputs: inputs.iter().map(|d| KInput { desc: d.to_string(), ..Default::default() }).collect(),
+            outputs: outputs.iter().map(|d| KOutput { desc: d.to_string(), links: if *d == "Completed" { vec![(1, 0, 0.0)] } else { vec![] }, linked: None }).collect(),
+            vars: vec![KLink { desc: "Data".into(), vars: vec![0], write: false }],
+            ..Default::default()
+        });
+        g.ops.push(KOp { class: "SeqAct_Log".into(), ..Default::default() });
+        g.vars.push(KVar { class: "InterpData".into(), props: [("InterpLength".to_string(), KVal::Float(3.0)), ("Matinee".to_string(), KVal::Int(0))].into_iter().collect(), ..Default::default() });
+        let tracks = vec![KTrack::Pins(vec![(0.5, 1.0, "Loop".into())]), KTrack::PinModes(vec![(false, false, 0)])];
+        g.matinees.push(KMatinee { length: 3.0, groups: vec![KInterpGroup { name: "AI".into(), tracks, ..Default::default() }], ..Default::default() });
+        let mut vm = Vm::new(Arc::new(g), &[]);
+        vm.exec(0, 0);
+        vm.queue.clear();
+        for _ in 0..100 {
+            vm.tick(0.1);
+        }
+        assert!(!vm.queue.iter().any(|q| q.0 == 1), "held in its loop");
+        vm.exec(0, 5);
+        for _ in 0..40 {
+            vm.tick(0.1);
+        }
+        assert!(vm.queue.iter().any(|q| q.0 == 1), "let go, it plays out");
     }
 
     #[test]
@@ -823,6 +870,8 @@ pub struct Vm {
     npc_seen: HashMap<Entity, (Mode, Alert, f32, bool)>,
     /// how many of Corvo's noises each character had heard (`DisSeqEvent_PlayerHeard`)
     npc_heard: HashMap<Entity, u32>,
+    /// characters who have come on a body (for `DisSeqEvent_CorpseDetected`)
+    npc_saw_body: HashSet<Entity>,
     /// each character's attention level as last seen (its steps fire the attention events)
     npc_attn: HashMap<Entity, u8>,
     /// those being assassinated (`DisSeqEvent_Assassinated` started for them), and whether
@@ -834,6 +883,8 @@ pub struct Vm {
     in_rat: bool,
     /// the actors whose destruction the scripts were told of (`SeqEvent_Destroyed`)
     destroyed: HashSet<u32>,
+    /// river krusts whose pearl was taken (by actor)
+    looted: HashSet<u32>,
     player_combat: bool,
     player_crouch: bool,
     pub time: f32,
@@ -933,6 +984,18 @@ pub struct Vm {
     pub pull_blocked: HashSet<u32>,
     /// Pull's character pulls begun (0) and over (1), for DisDLC07SeqEvent_NPCPulled's outputs
     pub npc_pulled: Vec<usize>,
+    /// characters the scripts let Daud plant something on (`DisDLC06SeqAct_NPCAddPutPocketInteraction`:
+    /// Timsh, the forged document): (spawner, its words); and those he planted it on, by actor
+    pub put_pockets: Vec<(u32, String)>,
+    pub put_pocketed: Vec<u32>,
+    /// jolts to the view the scripts give (`DisSeqAct_CameraShake`: the Slaughterhouse's
+    /// machines, uu/s)
+    shakes: Vec<f32>,
+    /// sections' pins pulled before their scene plays, by its op (`SCT_<pin>`)
+    pins_pulled: HashMap<u32, Vec<String>>,
+    /// characters (their actors) roused, fighting, fleeing or down: an ambient scene of theirs
+    /// that holds them in a loop breaks off (`Interrupted`)
+    pub disturbed: HashSet<u32>,
     /// a story pack's end reached (DisDLC06SeqAct_EndDLC06, DisDLC07SeqAct_EndDLC07): its
     /// credits over, back to the main menu
     pub story_end: bool,
@@ -1145,11 +1208,13 @@ impl Vm {
             hook_look: HashMap::new(),
             npc_seen: HashMap::new(),
             npc_heard: HashMap::new(),
+            npc_saw_body: HashSet::new(),
             npc_attn: HashMap::new(),
             being_assassinated: HashMap::new(),
             in_combat: false,
             in_rat: false,
             destroyed: HashSet::new(),
+            looted: HashSet::new(),
             player_combat: false,
             player_crouch: false,
             time: 0.0,
@@ -1199,6 +1264,11 @@ impl Vm {
             input_off: false,
             pull_blocked: HashSet::new(),
             npc_pulled: Vec::new(),
+            put_pockets: Vec::new(),
+            put_pocketed: Vec::new(),
+            shakes: Vec::new(),
+            pins_pulled: HashMap::new(),
+            disturbed: HashSet::new(),
             story_end: false,
             cancel_powers: false,
             bend_time: Vec::new(),
@@ -3096,6 +3166,8 @@ impl Vm {
             "SeqAct_ModifyHealth" => {
                 let amount = self.read_f(op, "Amount", "Amount", 0.0);
                 let heal = self.pb(op, "bHeal").unwrap_or(false);
+                // (a sleep that harms nothing: Lizzy Stride put to sleep in her pillory)
+                let sleep = !heal && self.ps(op, "DamageType").is_some_and(|d| d.ends_with("InstantSleep"));
                 for t in self.read(op, "Target") {
                     // a thing (a PA speaker): worn down, broken
                     if let Some(ka) = if let Val::Actor(a) = t { g.actors.get(a as usize) } else { None } {
@@ -3106,7 +3178,7 @@ impl Vm {
                             continue;
                         }
                     }
-                    self.effects.push(Effect::Damage(t, if heal { -amount } else { amount }));
+                    self.effects.push(Effect::Damage(t, if heal { -amount } else { amount }, sleep));
                 }
                 self.fire(op, 0);
             }
@@ -3360,6 +3432,24 @@ impl Vm {
                 let short = want.rsplit('.').next().unwrap_or(&want).to_ascii_lowercase();
                 let has = self.item_counts.iter().any(|(k, n)| *n > 0 && k.rsplit('.').next().unwrap_or(k).eq_ignore_ascii_case(&short));
                 self.fire(op, if has { 0 } else { 1 });
+            }
+            // something for Daud to slip into a character's pocket (The Knife of Dunwall's forged
+            // document for Timsh): from behind, unseen, as a pickpocket's theft
+            "DisDLC06SeqAct_NPCAddPutPocketInteraction" => {
+                let text = self.ps(op, "put_text").unwrap_or_else(|| "`GBA_Use` Plant".into());
+                for v in self.read(op, "NPC(s)") {
+                    if let Some(s) = if let Val::Actor(a) = v { g.actors.get(a as usize).and_then(|a| a.spawner) } else { None } {
+                        if !self.put_pockets.iter().any(|p| p.0 == s) {
+                            self.put_pockets.push((s, text.clone()));
+                        }
+                    }
+                }
+                self.fire(op, 0);
+            }
+            "DisSeqAct_CameraShake" => {
+                let f = self.pf(op, "m_fShakeForce").unwrap_or(200.0);
+                self.shakes.push(f);
+                self.fire(op, 0);
             }
             // characters Pull can't take (Enable) or can again (Disable)
             "DisDLC07SeqAct_SetPullOverride" => {
@@ -3864,7 +3954,8 @@ impl Vm {
                             // without cooked tracks (or for quick tests) the matinee only times out
                             let len = if matinee.is_none() && !full_matinee() { len.min(0.5) } else { len };
                             let looping = self.pb(op, "bLooping").unwrap_or(false);
-                            self.latent.push(Latent::Interp { op, t, len, rate: if forward { play_rate } else { -play_rate }, looping, paused: false, matinee, binds });
+                            let released = self.pins_pulled.remove(&op).unwrap_or_default();
+                            self.latent.push(Latent::Interp { op, t, len, rate: if forward { play_rate } else { -play_rate }, looping, paused: false, matinee, binds, released, loops: Vec::new() });
                         }
                         self.fire_desc(op, "Started");
                     }
@@ -3884,7 +3975,28 @@ impl Vm {
                             }
                         }
                     }
-                    _ => {}
+                    // a section's pin pulled (`SCT_Loop`: Lizzy Stride kept asleep in the
+                    // pillory till the lever): it holds the scene no longer, let go at once
+                    // where it says so (`ESBM_BreakImmediately`), else at its loop's end
+                    _ => {
+                        let pin = g.ops[op as usize].inputs.get(input as usize).and_then(|i| i.desc.strip_prefix("SCT_")).map(str::to_string);
+                        match (pin, existing) {
+                            (None, _) => {}
+                            (Some(pin), Some(i)) => {
+                                if let Latent::Interp { t, released, matinee, .. } = &mut self.latent[i] {
+                                    if let Some((s, len, _, (_, now, _))) = matinee.and_then(|m| g.matinees.get(m as usize)).and_then(|m| pin_sections(m).into_iter().find(|p| p.2.eq_ignore_ascii_case(&pin))) {
+                                        if now && *t >= s && *t < s + len {
+                                            *t = s + len;
+                                        }
+                                    }
+                                    if !released.iter().any(|r| r.eq_ignore_ascii_case(&pin)) {
+                                        released.push(pin);
+                                    }
+                                }
+                            }
+                            (Some(pin), None) => self.pins_pulled.entry(op).or_default().push(pin),
+                        }
+                    }
                 }
             }
             "SeqAct_AttachToEvent" => {
@@ -5148,6 +5260,7 @@ impl Vm {
         let mut subtitles: Vec<(String, f32)> = Vec::new();
         let paused: Vec<bool> = self.st.iter().map(|s| s.paused).collect();
         let g = self.g.clone();
+        let disturbed = std::mem::take(&mut self.disturbed);
         self.latent.retain_mut(|l| match l {
             Latent::Delay { op, left } => {
                 if !paused[*op as usize] {
@@ -5160,14 +5273,58 @@ impl Vm {
                     true
                 }
             }
-            Latent::Interp { op, t, len, rate, looping, paused, matinee, binds } => {
+            Latent::Interp { op, t, len, rate, looping, paused, matinee, binds, released, loops } => {
                 if *paused {
                     return true;
                 }
+                // a scene held in its sections' loops breaks off when one of its characters is
+                // roused or down (a guard at his smoke hears Daud): `Interrupted`
+                if let Some(m) = matinee.and_then(|m| g.matinees.get(m as usize)) {
+                    let looped = m.groups.iter().any(|gr| gr.tracks.iter().any(|tr| matches!(tr, dhcook::format::KTrack::Pins(p) if !p.is_empty())));
+                    let roused = looped
+                        && m.groups.iter().enumerate().any(|(gi, gr)| !gr.stage_mark.is_empty() && !gr.player && binds.iter().any(|b| b.0 == gi as u32 && b.1.iter().any(|a| disturbed.contains(a))));
+                    if roused {
+                        ended.push((*op, *t));
+                        done.push((*op, 2));
+                        interps_done = true;
+                        return false;
+                    }
+                }
                 let prev = *t;
                 *t = (*t + dt * *rate).clamp(0.0, *len);
+                // its sections hold it till their pins are pulled: looping (Lizzy Stride asleep
+                // in the pillory), or paused at their start; one with a count of its own loops
+                // that many times. (`wrap`: the stretch looped over, its keys played again.)
+                let mut wrap: Option<(f32, f32)> = None;
+                if *rate > 0.0 {
+                    if let Some(m) = matinee.and_then(|m| g.matinees.get(m as usize)) {
+                        let sections = pin_sections(m);
+                        if loops.len() < sections.len() {
+                            loops.resize(sections.len(), 0);
+                        }
+                        for (i, (s, l, pin, (pause, _, count))) in sections.into_iter().enumerate() {
+                            if released.iter().any(|r| r.eq_ignore_ascii_case(&pin)) {
+                                continue;
+                            }
+                            let end = s + l;
+                            if pause {
+                                if prev <= s && *t > s {
+                                    *t = s;
+                                }
+                            } else if l > 0.05 && prev >= s - 1e-3 && prev < end && *t >= end && (count == 0 || loops[i] < count) {
+                                loops[i] += 1;
+                                wrap = Some((s, end));
+                                *t = s + (*t - end).min(l);
+                            }
+                        }
+                    }
+                }
                 let (lo, hi) = if *rate >= 0.0 { (prev, *t) } else { (*t, prev) };
-                let crossed = |k: f32| if *rate >= 0.0 { k > lo && k <= hi || (prev == 0.0 && k == 0.0) } else { k >= lo && k < hi };
+                let crossed = |k: f32| match wrap {
+                    Some((s, end)) => k > prev && k <= end || k >= s && k <= hi,
+                    None if *rate >= 0.0 => k > lo && k <= hi || (prev == 0.0 && k == 0.0),
+                    None => k >= lo && k < hi,
+                };
                 if let Some(m) = matinee.and_then(|m| g.matinees.get(m as usize)) {
                     // event tracks fire the outputs named after their keys; sound tracks
                     // play at the group's actor
@@ -5711,9 +5868,29 @@ fn talk_prompts(
     }
 }
 
-/// Turn world happenings into script events.
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
+/// The scripts' jolts to the view (`DisSeqAct_CameraShake`), as a blow's: the strongest held
+/// to what the view's spring takes (the Slaughterhouse's debug shake asks a billion).
+fn script_shakes(mut vm: ResMut<Vm>, mut shake: MessageWriter<crate::player::ShakeCamera>) {
+    for f in std::mem::take(&mut vm.shakes) {
+        shake.write(crate::player::ShakeCamera(f.clamp(0.0, 1500.0)));
+    }
+}
+
+/// A gun or a bow fired (`DisDLC07SeqEvent_PlayerFiredWeapon`: Corvo shot at in Daud's dream).
+fn fired_events(mut vm: ResMut<Vm>, powers: Option<Res<crate::powers::Powers>>, mut last: Local<u32>) {
+    use crate::powers::Power;
+    let Some(powers) = powers else { return };
+    if powers.cast_seq == *last {
+        return;
+    }
+    *last = powers.cast_seq;
+    if matches!(powers.cast_power, Power::Pistol | Power::ExplosiveBullet | Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt) {
+        for ev in class_ops(&vm.g, "DisDLC07SeqEvent_PlayerFiredWeapon") {
+            vm.event(ev, 0, Some(Val::Player));
+        }
+    }
+}
+
 /// Things destroyed (`SeqEvent_Destroyed`): river krusts killed (the Hound Pits' story
 /// flags for clearing the shore).
 fn destroyed_events(mut vm: ResMut<Vm>, krusts: Option<Res<crate::krust::KrustLog>>) {
@@ -5727,8 +5904,18 @@ fn destroyed_events(mut vm: ResMut<Vm>, krusts: Option<Res<crate::krust::KrustLo
             vm.actor_event(a, &["SeqEvent_Destroyed"], OutSel::Index(0), Some(Val::Player));
         }
     }
+    // (and their pearls taken: `DisSeqEvent_RiverKrustLooted`, The Brigmore Witches' pearls
+    // for the manor's gate)
+    let looted: Vec<u32> = vm.g.actors.iter().enumerate().filter(|(_, a)| a.krust.is_some_and(|k| krusts.dead.get(&k) == Some(&true))).map(|(i, _)| i as u32).collect();
+    for a in looted {
+        if vm.looted.insert(a) {
+            vm.actor_event(a, &["DisSeqEvent_RiverKrustLooted"], OutSel::Index(0), Some(Val::Player));
+        }
+    }
 }
 
+/// Turn world happenings into script events.
+#[allow(clippy::too_many_arguments)]
 fn world_events(
     mut vm: ResMut<Vm>,
     mut used: MessageReader<Interaction>,
@@ -6049,6 +6236,10 @@ fn world_events(
             }
         }
     }
+    // something planted on a character (`DisDLC06SeqEvent_NPCPutPocketed`: Timsh's document)
+    for a in std::mem::take(&mut vm.put_pocketed) {
+        vm.actor_event(a, &["DisDLC06SeqEvent_NPCPutPocketed"], OutSel::Index(0), Some(Val::Player));
+    }
     // Pull taking a character: begun, over (`DisDLC07SeqEvent_NPCPulled`: Daud's)
     for out in std::mem::take(&mut vm.npc_pulled) {
         for ev in class_ops(&vm.g, "DisDLC07SeqEvent_NPCPulled") {
@@ -6078,6 +6269,11 @@ fn world_events(
         }
         let now = (npc.mode, npc.alert, npc.health, npc.sees_player);
         seen.insert(e, now);
+        if npc.is_down() || (npc.enemy && npc.alert != Alert::Unaware) || matches!(npc.mode, Mode::Investigate | Mode::Search | Mode::Combat | Mode::Flee | Mode::Choked) {
+            if let Some(&a) = vm.spawner_actor.get(&from.0) {
+                vm.disturbed.insert(a);
+            }
+        }
         let Some(&(mode0, alert0, health0, sees0)) = vm.npc_seen.get(&e) else { continue };
         let Some(&actor) = vm.spawner_actor.get(&from.0) else { continue };
         let who = Some(Val::Player);
@@ -6101,6 +6297,10 @@ fn world_events(
         } else if !npc.is_down() {
             // (a kill broken off: another may start)
             vm.being_assassinated.remove(&e);
+        }
+        // a body come upon (`DisSeqEvent_CorpseDetected`: the Slaughterhouse's foreman)
+        if npc.saw_body && !npc.is_down() && vm.npc_saw_body.insert(e) {
+            vm.actor_event(actor, &["DisSeqEvent_CorpseDetected"], OutSel::Index(0), who.clone());
         }
         let heard = vm.npc_heard.insert(e, npc.heard_player).unwrap_or(npc.heard_player);
         if npc.heard_player > heard && !npc.is_down() {
@@ -6131,6 +6331,9 @@ fn world_events(
             }
             match npc.mode {
                 Mode::Dead => {
+                    if std::env::var_os("DH_DEATH_LOG").is_some() {
+                        info!("death seen: {e:?} {} ({}) was {mode0:?} health {:.1}", npc.name, npc.pawn, npc.health);
+                    }
                     vm.actor_event(actor, &["SeqEvent_Death"], OutSel::Index(0), who.clone());
                     vm.actor_event(actor, &["DisSeqEvent_NPCIncapacitated"], OutSel::Desc("Dead"), who.clone());
                 }
@@ -6143,6 +6346,11 @@ fn world_events(
         }
         if npc.alert != alert0 && npc.alert == Alert::Combat {
             vm.actor_event(actor, &["DisSeqEvent_Combat"], OutSel::Index(0), who.clone());
+            // (turned on Daud: `DisDLC07SeqEvent_HostileToPlayer`, the Undine's crew failing the
+            // mission while its task stands)
+            if npc.hostile() {
+                vm.actor_event(actor, &["DisDLC07SeqEvent_HostileToPlayer"], OutSel::Index(0), who.clone());
+            }
         }
         // its attention stepping up or down (`DisSeqEvent_AttentionIncreasedTo` / `DecreasedTo`):
         // each level it passes fires its own, as the original's level stepper does them one at
@@ -6162,8 +6370,16 @@ fn world_events(
             for l in steps {
                 for ev in vm.events_of.get(&actor).cloned().unwrap_or_default() {
                     let op = &vm.g.ops[ev as usize];
+                    // (the story packs' own: an output for each level, Unaware to Busted)
+                    let per_level = if up { "DisDLC06SeqEvent_AttentionIncreasedTo" } else { "DisDLC06SeqEvent_AttentionDecreasedTo" };
+                    if op.class == per_level {
+                        if (l as usize) < op.outputs.len() {
+                            vm.event(ev, l as usize, who.clone());
+                        }
+                        continue;
+                    }
                     let mine = if up {
-                        matches!(op.class.as_str(), "DisSeqEvent_AttentionIncreasedTo" | "DisDLC06SeqEvent_AttentionIncreasedTo")
+                        op.class == "DisSeqEvent_AttentionIncreasedTo"
                     } else {
                         op.class == "DisSeqEvent_AttentionDecreasedTo"
                     };
@@ -6579,6 +6795,26 @@ fn more_events(
     }
 }
 
+/// A scene's sections (`InterpTrackSoireeControl`): start, length, pin, and its ways (paused,
+/// let go at once, loops by itself; `KTrack::PinModes`, else looped till its pin).
+fn pin_sections(m: &dhcook::format::KMatinee) -> Vec<(f32, f32, String, (bool, bool, u32))> {
+    use dhcook::format::KTrack;
+    let mut out = Vec::new();
+    for gr in &m.groups {
+        for (j, tr) in gr.tracks.iter().enumerate() {
+            let KTrack::Pins(pins) = tr else { continue };
+            let modes = match gr.tracks.get(j + 1) {
+                Some(KTrack::PinModes(m)) => m.as_slice(),
+                _ => &[],
+            };
+            for (i, (s, len, pin)) in pins.iter().enumerate() {
+                out.push((*s, *len, pin.clone(), modes.get(i).copied().unwrap_or((false, false, 0))));
+            }
+        }
+    }
+    out
+}
+
 fn class_ops(g: &Graph, class: &str) -> Vec<u32> {
     g.ops.iter().enumerate().filter(|(_, o)| o.class == class).map(|(i, _)| i as u32).collect()
 }
@@ -6908,9 +7144,10 @@ pub fn apply_effects(
                     }
                 }
             }
-            Effect::Damage(v, amount) => match v {
+            Effect::Damage(v, amount, sleep) => match v {
                 Val::Player => {
-                    if amount >= 0.0 {
+                    if sleep {
+                    } else if amount >= 0.0 {
                         stats.take_damage(amount);
                     } else {
                         stats.health = (stats.health - amount).clamp(0.0, stats.max_health);
@@ -6918,8 +7155,15 @@ pub fn apply_effects(
                 }
                 _ => {
                     let Some(s) = actor(&v).and_then(|a| a.spawner) else { continue };
-                    for (_, mut npc, from, _) in &mut npcs {
+                    for (e, mut npc, from, _) in &mut npcs {
                         if from.0 == s && !npc.is_down() {
+                            // (asleep where they are, unharmed; before, the sleep's 1000 killed:
+                            // Lizzy Stride died in Coldridge's pillory and the mission was lost)
+                            if sleep {
+                                npc.set_mode(Mode::Unconscious);
+                                commands.entity(e).try_insert(crate::ragdoll::GoLimp::now(Vec3::ZERO, None));
+                                continue;
+                            }
                             npc.health -= amount;
                             if npc.health <= 0.0 {
                                 npc.mode = Mode::Dead;

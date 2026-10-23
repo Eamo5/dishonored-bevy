@@ -801,6 +801,9 @@ impl Npc {
             self.aggression = -1.0;
         }
         if self.mode != m {
+            if m == Mode::Dead && std::env::var_os("DH_DEATH_LOG").is_some() {
+                info!("death: {} ({}) from {:?} at health {:.1}\n{}", self.name, self.pawn, self.mode, self.health, std::backtrace::Backtrace::force_capture());
+            }
             if m == Mode::Investigate {
                 self.react = rand::random::<f32>();
             }

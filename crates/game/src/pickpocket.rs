@@ -13,7 +13,8 @@ pub struct PickpocketPlugin;
 
 impl Plugin for PickpocketPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (attach_pockets, script_pockets, follow_pockets, notice_thefts).chain().run_if(in_state(GameState::InGame)));
+        app.add_systems(Update, (attach_pockets, script_pockets, follow_pockets, notice_thefts, put_pockets).chain().run_if(in_state(GameState::InGame)))
+            .add_systems(Update, plant.after(crate::interact::FocusSet).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -105,6 +106,67 @@ fn script_pockets(
             }
         }
     }
+}
+
+/// Something the scripts let Daud slip into a character's pocket
+/// (`DisDLC06SeqAct_NPCAddPutPocketInteraction`: the forged document for Timsh): reached as a
+/// pocket is (from behind, unseen, or from the body), its words the thing's ("Plant Document");
+/// planted, the scripts hear it (`DisDLC06SeqEvent_NPCPutPocketed`).
+#[derive(Component)]
+pub struct PutPocket {
+    pub npc: Entity,
+    spawner: u32,
+    actor: Option<u32>,
+    pub text: String,
+}
+
+impl PutPocket {
+    pub fn reachable(&self, npcs: &Query<(&Npc, &Transform), Without<Player>>, from: Vec3) -> bool {
+        Pocket { npc: self.npc, meshes: Vec::new(), base: Vec3::ZERO, slot: 0 }.reachable(npcs, from)
+    }
+}
+
+fn put_pockets(
+    mut commands: Commands,
+    vm: Option<Res<crate::kismet::Vm>>,
+    npcs: Query<(Entity, &FromSpawner, &Transform), With<Npc>>,
+    mut spots: Query<(Entity, &PutPocket, &mut Transform), Without<Npc>>,
+) {
+    let Some(vm) = vm else { return };
+    for (s, text) in &vm.put_pockets {
+        if spots.iter().any(|(_, p, _)| p.spawner == *s) {
+            continue;
+        }
+        let Some((npc, _, t)) = npcs.iter().find(|(_, f, _)| f.0 == *s) else { continue };
+        commands.spawn((PutPocket { npc, spawner: *s, actor: vm.actor_of_spawner(*s), text: text.clone() }, Transform::from_translation(t.translation), DespawnOnExit(GameState::InGame)));
+    }
+    // (at the other hip from a purse)
+    for (e, p, mut t) in &mut spots {
+        match npcs.get(p.npc) {
+            Ok((_, _, nt)) => t.translation = nt.translation + nt.rotation * Vec3::new(-0.2, -0.05, 0.12),
+            Err(_) => commands.entity(e).despawn(),
+        }
+    }
+}
+
+/// [Use] on a pocket to plant in: it's done.
+fn plant(
+    mut commands: Commands,
+    (keys, bind, paused): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>, Res<crate::hud::Paused>),
+    focus: Res<crate::interact::InteractFocus>,
+    spots: Query<&PutPocket>,
+    vm: Option<ResMut<crate::kismet::Vm>>,
+) {
+    if paused.0 || !keys.just_pressed(bind.key(crate::bindings::Act::Use)) {
+        return;
+    }
+    let (Some(e), Some(mut vm)) = (focus.1, vm) else { return };
+    let Ok(p) = spots.get(e) else { return };
+    vm.put_pockets.retain(|x| x.0 != p.spawner);
+    if let Some(a) = p.actor {
+        vm.put_pocketed.push(a);
+    }
+    commands.entity(e).despawn();
 }
 
 /// How long after a theft its victim misses what was taken (s: our reading; the original's

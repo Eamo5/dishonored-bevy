@@ -1274,15 +1274,21 @@ fn cook_matinee(pkg: &Package, idata: &Props, voices: &HashMap<[u32; 4], Vec<Str
                     }
                 }
                 "InterpTrackFade" => m.fade = curve(pkg, &tp, "FloatTrack"),
-                "InterpTrackSoireeControl" => group.tracks.push(KTrack::Pins(
-                    keys("SoireeControlKeys")
-                        .iter()
-                        .map(|k| {
-                            let pin = k.object("Properties").filter(|o| *o > 0).and_then(|o| read_props(pkg, o)).map(|p| str_of(&p, "m_PinName")).unwrap_or_default();
-                            (k.float("StartTime").unwrap_or(0.0), k.float("KeyLength").unwrap_or(0.0), pin)
-                        })
-                        .collect(),
-                )),
+                "InterpTrackSoireeControl" => {
+                    let ks = keys("SoireeControlKeys");
+                    let props: Vec<_> = ks.iter().map(|k| k.object("Properties").filter(|o| *o > 0).and_then(|o| read_props(pkg, o))).collect();
+                    group.tracks.push(KTrack::Pins(ks.iter().zip(&props).map(|(k, p)| (k.float("StartTime").unwrap_or(0.0), k.float("KeyLength").unwrap_or(0.0), p.as_ref().map(|p| str_of(p, "m_PinName")).unwrap_or_default())).collect()));
+                    group.tracks.push(KTrack::PinModes(
+                        props
+                            .iter()
+                            .map(|p| {
+                                let e = |n: &str| p.as_ref().map(|p| str_of(p, n)).unwrap_or_default();
+                                let count = p.as_ref().and_then(|p| p.int("m_LoopCount")).unwrap_or(0).max(0) as u32;
+                                (e("m_SoireeControlType") == "ESCT_Pause", e("m_BreakMode") == "ESBM_BreakImmediately", count)
+                            })
+                            .collect(),
+                    ));
+                }
                 "InterpTrackEvent" => group.tracks.push(KTrack::Event(keys("EventTrack").iter().map(|k| (k.float("Time").unwrap_or(0.0), str_of(k, "EventName"))).collect())),
                 "InterpTrackAkEvent" => group.tracks.push(KTrack::Sound(
                     keys("AkEvents").iter().filter_map(|k| Some((k.float("Time").unwrap_or(0.0), name_of_obj(k.object("Event").filter(|e| *e != 0)?)))).collect(),
@@ -1418,7 +1424,7 @@ fn cook_matinee(pkg: &Package, idata: &Props, voices: &HashMap<[u32; 4], Vec<Str
                     KTrack::Locomotion(k) => k.iter().map(|k| k.0 + k.1).fold(0.0, f32::max),
                     KTrack::Attach { keys, .. } => keys.iter().map(|k| k.0).fold(0.0, f32::max),
                     KTrack::Pins(k) => k.iter().map(|k| k.0 + k.1).fold(0.0, f32::max),
-                    KTrack::AnimStretch(_) => 0.0,
+                    KTrack::AnimStretch(_) | KTrack::PinModes(_) => 0.0,
                 };
                 end = end.max(last);
             }

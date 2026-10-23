@@ -2008,7 +2008,16 @@ are in the settings file, `pad_binding_set` 0-3):
   it, the rest stretched, nothing past the key's end (`AnimEndOffset`). Before, a key played
   its sequence once and held its last frame: Corvo's "last words" hold (a 2.7 s loop held for
   13 s) froze, and the letter's bow kept his view at the Empress's waist through the scenes after
-  it. Of a group's several animation tracks the key started last that still plays is the one
+  it. A scene's sections (`InterpTrackSoireeControl`'s keys, their properties'
+  `m_SoireeControlType`, `m_BreakMode`, `m_LoopCount`; `KTrack::PinModes`, scene version 160)
+  hold it: the section loops (or, `ESCT_Pause`, holds at its start) until the scripts pull its
+  pin (the `SCT_<pin>` input), let go at once (`ESBM_BreakImmediately`) or at its loop's end,
+  or until it has looped its own count; an ambient scene so held breaks off ("Interrupted")
+  when one of its characters is roused, fighting, fleeing or down. Before, every scene played
+  straight through: Coldridge's pillory scene ended at once, its "Released" put Lizzy Stride to
+  sleep with a 1000-point `DisDamageType_InstantSleep` hit that killed her, and the mission was
+  lost at the start. A scripted hit of that type now puts its target to sleep, unharmed.
+  Of a group's several animation tracks the key started last that still plays is the one
   played (the cough over the long clip, the accusation's start between its other keys). While a
   scene plays his full-body keys the view is its camera bone's, whole, cinematic mode or not
   (held by Daud's assassin, thrown down, the Empress dying in his arms). A teleported character
@@ -2382,7 +2391,11 @@ are in the settings file, `pad_binding_set` 0-3):
   <map>` (`cook-all` leaves the DLC out); once cooked, the main menu's Downloadable Content page
   lists each story by its own name (`t_DLC06_Name`, `t_DLC07_Name`) beside Dunwall City Trials,
   and starts it on its first map (`DLC06_Tower_P`, `L_DLC07_BaseIntro_P`) once a difficulty is
-  chosen, as New Game does the Tower. The Brigmore Witches' maps play Daud too, by his own tweak
+  chosen, as New Game does the Tower. The packs' own spawners (`DisDLC06Spawner`,
+  `DisDLC07Spawner`) and krusts (`DisDLC07RiverKrust`) cook as the kinds they derive from
+  (`DishonoredSpawner`, `DisRiverKrust`; scene version 160): before, Coldridge's 42 spawners,
+  Lizzy Stride's among them, made nobody, and Timsh's estate lacked its master.
+  The Brigmore Witches' maps play Daud too, by his own tweak
   there (`DLC07_Twk_Player_Daud_Release`: its powers, passives, attributes, faction
   `DLC07_Fctn_Daud`, interface strings; his arms `DLC07_Skm_Player_Daud` with the pack's
   powers and assassination sets): each story its own profile, chosen by the map (two of the
@@ -2409,6 +2422,18 @@ are in the settings file, `pad_binding_set` 0-3):
     statistics' backgrounds (`UI_MSBg_*_DLC07_SF`) cook with `cook-ui`. Our reading: the
     person's flight (toward him at up to 14 m/s, up at 3, as Wind Blast's push reversed); the
     rats, fish and river krusts its list also names are not taken.
+  - *The packs' script hooks*: the scripts let Daud plant something on a character
+    (`DisDLC06SeqAct_NPCAddPutPocketInteraction`: the forged document for Timsh, its words the
+    thing's own, "Plant Document", reached as a pocket is, from behind and unseen) and hear it
+    done (`DisDLC06SeqEvent_NPCPutPocketed`); a river krust's pearl taken raises
+    `DisSeqEvent_RiverKrustLooted` (Brigmore's pearls), a character turning on Daud
+    `DisDLC07SeqEvent_HostileToPlayer` (the Undine's crew), a body come upon
+    `DisSeqEvent_CorpseDetected`, a gun or bow fired `DisDLC07SeqEvent_PlayerFiredWeapon`
+    (Corvo shot at in Daud's dream), and the packs' attention events their output for each
+    level (`DisDLC06SeqEvent_AttentionIncreasedTo` / `DecreasedTo`: Unaware to Busted). The
+    scripts' `DisSeqAct_CameraShake` jolts the view as a blow does (`m_fShakeForce`, held to
+    1500 uu/s). A pickup named for its item ("`i") takes the item's own name where the game's
+    list lacks it (the packs' documents; "disabstractitempickup" before).
   Not yet: the loadout carried from The Knife of Dunwall's end
   (`DisDLC07SeqAct_ImportTransitionPlayerData`: "Nothing Imported"). `DH_SUMMON_LOG`; `DH_GADGET_LOG` (chokedust clouds and who they catch); `DH_PFX_SLOW=<n>`
   (every effect n times slower, to see the briefest: an arc mine's 0.1 s lightning).

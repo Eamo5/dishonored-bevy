@@ -544,7 +544,7 @@ fn find_focus(
         Query<(&crate::npc::Npc, &Transform), Without<Player>>,
         Res<PlayerStats>,
     ),
-    (bounds, kids): (Query<(&bevy::camera::primitives::Aabb, &GlobalTransform)>, Query<&Children>),
+    (bounds, kids, plants): (Query<(&bevy::camera::primitives::Aabb, &GlobalTransform)>, Query<&Children>, Query<(Entity, &crate::pickpocket::PutPocket, &Transform)>),
 ) {
     focus.0 = false;
     focus.1 = None;
@@ -620,6 +620,21 @@ fn find_focus(
         if best.as_ref().map(|b| score < b.0).unwrap_or(true) {
             let (text, label) = pickup_words(level.as_deref(), p, pocket.is_some());
             best = Some((score, e, text, label));
+        }
+    }
+    // a pocket to plant something in (as a pocket to pick: from behind, unseen)
+    for (e, p, t) in &plants {
+        let to = t.translation - eye;
+        let d = to.length();
+        let c = to.normalize_or_zero().dot(fwd);
+        if d > 2.4 || c < 0.82 || !p.reachable(&owners, eye) {
+            continue;
+        }
+        // (before what is in his pockets: it's what Daud came for)
+        let score = d * (2.0 - c) - 0.6;
+        if best.as_ref().map(|b| score < b.0).unwrap_or(true) {
+            let text = crate::gamedata::readable(&p.text.replace("`GBA_Use`", &crate::bindings::hint(crate::bindings::Act::Use)));
+            best = Some((score, e, text, String::new()));
         }
     }
     for (e, door, gt, li) in &doors {
