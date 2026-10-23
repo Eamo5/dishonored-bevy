@@ -1009,6 +1009,12 @@ pub struct Vm {
     /// characters' heads changed for another of their type's (`DisDLC06SeqAct_NPCSetHeadMesh`:
     /// Billie Lurk's), by spawner: the head's index
     pub head_meshes: Vec<(u32, usize)>,
+    /// traces the scripts ask for (`SeqAct_Trace`: the world between two things, the void's
+    /// Delilah in Daud's sight): (op, from, to), answered next frame (`trace_done`)
+    pub traces: Vec<(u32, Vec3, Vec3)>,
+    /// volumes (`scene.volumes`) whose placed mines the scripts destroy
+    /// (`DisDLC06SeqAct_DestroyArcMines`: a scene's ground cleared before it plays)
+    pub destroy_mines: Vec<u32>,
     /// sections' pins pulled before their scene plays, by its op (`SCT_<pin>`)
     pins_pulled: HashMap<u32, Vec<String>>,
     /// characters (their actors) roused, fighting, fleeing or down: an ambient scene of theirs
@@ -1291,6 +1297,8 @@ impl Vm {
             transition_in: None,
             arms_mesh: None,
             head_meshes: Vec::new(),
+            traces: Vec::new(),
+            destroy_mines: Vec::new(),
             pins_pulled: HashMap::new(),
             disturbed: HashSet::new(),
             story_end: false,
@@ -3028,6 +3036,28 @@ impl Vm {
                 if let Some(name) = self.ps(op, "m_Name").filter(|n| !n.is_empty()) {
                     self.effects.push(Effect::Key(name));
                 }
+                self.fire(op, 0);
+            }
+            // the world between two things (`bTraceWorld`, not the actors): answered by the
+            // world next frame (`trace_done`), "Obstructed" or "Not Obstructed"
+            "SeqAct_Trace" => {
+                let at = |v: &Vec<Val>, up: bool| v.iter().find_map(|x| self.pos_of(x)).map(|p| if up && !matches!(v.first(), Some(Val::Player)) { p + Vec3::Y * 0.9 } else { p });
+                match (at(&self.read(op, "Start"), true), at(&self.read(op, "End"), true)) {
+                    (Some(a), Some(b)) => self.traces.push((op, a, b)),
+                    _ => self.fire(op, 0),
+                }
+            }
+            "DisDLC06SeqAct_DestroyArcMines" => {
+                for v in self.read(op, "Volume(s)") {
+                    if let Some(i) = if let Val::Actor(a) = v { g.actors.get(a as usize).and_then(|a| a.volume) } else { None } {
+                        self.destroy_mines.push(i);
+                    }
+                }
+                self.fire(op, 0);
+            }
+            // (its only use, the Drapers Ward mill's, feeds a debug log: the speed read as still)
+            "SeqAct_GetVelocity" => {
+                self.write(op, "Velocity Mag", Val::Float(0.0));
                 self.fire(op, 0);
             }
             "SeqAct_GetDistance" => {
@@ -5184,6 +5214,32 @@ impl Vm {
     }
 
     /// The mission statistics screen of a `DisSeqAct_ShowMissionStats` was closed.
+    /// An actor's event of a class, its first output, the player its instigator (a tentacle's
+    /// spot's `SeqEvent_Death`).
+    pub fn actor_event_pub(&mut self, actor: u32, class: &str) {
+        self.actor_event(actor, &[class], OutSel::Index(0), Some(Val::Player));
+        self.pump();
+    }
+
+    /// Every event of a class with no actor of its own (`DisDLC07SeqEvent_GrabbedByTentacle`).
+    pub fn global_event(&mut self, class: &str) {
+        for ev in class_ops(&self.g, class) {
+            self.event(ev, 0, Some(Val::Player));
+        }
+        self.pump();
+    }
+
+    /// A trace answered (`SeqAct_Trace`): its distance (Unreal units), and "Obstructed" or
+    /// "Not Obstructed".
+    pub fn trace_done(&mut self, op: u32, obstructed: bool, distance: f32) {
+        self.write(op, "Distance", Val::Float(distance * 100.0));
+        match self.output_index(op, if obstructed { "Obstructed" } else { "Not Obstructed" }) {
+            Some(i) => self.fire(op, i),
+            None => self.fire(op, 0),
+        }
+        self.pump();
+    }
+
     /// A store's op told what happened in it (`DisSeqAct_OpenCraftsmanStore`: an item's
     /// `m_OutputLinkOnPurchase`, "Exit Store"), where it has that output.
     pub fn store_output(&mut self, op: u32, desc: &str) {
@@ -6018,8 +6074,17 @@ fn script_shakes(mut vm: ResMut<Vm>, mut shake: MessageWriter<crate::player::Sha
 }
 
 /// A gun or a bow fired (`DisDLC07SeqEvent_PlayerFiredWeapon`: Corvo shot at in Daud's dream).
-fn fired_events(mut vm: ResMut<Vm>, powers: Option<Res<crate::powers::Powers>>, mut last: Local<u32>) {
+fn fired_events(mut vm: ResMut<Vm>, powers: Option<Res<crate::powers::Powers>>, mut last: Local<u32>, player: Query<&crate::player::Player>, mut was_grounded: Local<Option<bool>>) {
     use crate::powers::Power;
+    // (back on the ground after a jump or a fall: `DisDLC06SeqEvent_Landed`)
+    if let Ok(p) = player.single() {
+        if *was_grounded == Some(false) && p.grounded {
+            for ev in class_ops(&vm.g, "DisDLC06SeqEvent_Landed") {
+                vm.event(ev, 0, Some(Val::Player));
+            }
+        }
+        *was_grounded = Some(p.grounded);
+    }
     let Some(powers) = powers else { return };
     if powers.cast_seq == *last {
         return;
@@ -6431,6 +6496,13 @@ fn world_events(
             if !vm.being_assassinated.contains_key(&e) {
                 vm.being_assassinated.insert(e, false);
                 vm.actor_event(actor, &["DisSeqEvent_Assassinated"], OutSel::Desc("Started"), who.clone());
+                // (from above: `DisDLC06SeqEvent_DropAssassinate`, the hideout's "Message from the
+                // Empress", a jump begun from the high ground first)
+                if dropped {
+                    for ev in class_ops(&vm.g, "DisDLC06SeqEvent_DropAssassinate") {
+                        vm.event(ev, 0, Some(Val::Player));
+                    }
+                }
             }
             if npc.mode == Mode::Dead && vm.being_assassinated.insert(e, true) == Some(false) {
                 vm.actor_event(actor, &["DisSeqEvent_Assassinated"], OutSel::Desc("Finished"), who.clone());
@@ -6615,6 +6687,15 @@ fn world_events(
                 vm.used_out(*a, *stage);
                 vm.actor_event(*a, &["SeqEvent_Used", "DisSeqEvent_Interact"], OutSel::Index(0), Some(Val::Player));
                 vm.interacted(*a);
+                // done before someone's eyes (`DisSeqEvent_WitnessedInteraction`: Coldridge's
+                // guards turning on Daud when they see him at the cell levers)
+                if npcs.iter().any(|(_, n, _, _)| !n.is_down() && n.sees_player) {
+                    for ev in class_ops(&vm.g, "DisSeqEvent_WitnessedInteraction") {
+                        vm.write(ev, "InteractedObject", Val::Actor(*a));
+                        vm.write(ev, "InteractingPawn", Val::Player);
+                        vm.event(ev, 0, Some(Val::Player));
+                    }
+                }
                 // characters answer from their dialogue
                 vm.talk(*a);
             }

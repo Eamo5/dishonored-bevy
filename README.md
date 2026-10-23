@@ -1745,6 +1745,61 @@ fields no longer show their stand-in "WW" behind the title.
     slash out of it (`_DodgeAttack_Small`): the next blow, if it comes straight out of the dodge,
     or else one of its own with Corvo still in reach. Their set has no way out of the dodge
     without it (`DodgeLeftOut`), so we read it as every time.
+- **Delilah's witches** (The Brigmore Witches, `DLC07_Pwn_Witch_*`) fight with their hand's
+  spells beside their blades. Their hand (`DisDLC06Tweaks_WepWitchHand`, each kind's
+  `DLC07_Inv_WitchHand*`) is cooked as `NpcWitch`, with its contexts' ranges, angles, cooldowns
+  and damage. Before, they were named "Citizen" and only fought with their blades.
+  - The scream (`DisDLC06Tweaks_NPCWitchScream`, `Sword_Attack_Scream`): Daud within 4 m and
+    60 degrees before her. It strikes along her line as far as 5 m, within its radius of it, at
+    the clip's `DisDLC07Notify_WitchScreamDamage` (0.55 s). It is a strong blow that can't be
+    blocked (`DisDLC06DamageType_WitchScream`), 10/15/30/50 by difficulty.
+  - Her magic (`DisTweaks_NPCFireBow`, `Sword_Power_RangedAttack`): four bolts of
+    `DLC07_Proj_WitchMagic`, loosed at the clip's four `DishonoredNotify_FireProjectile`s. They
+    fly at 15 m/s, invisible but for their trail (`Witch_Missile_Trail`), and fall a little
+    (`m_fGravityMultiplier` 0.18). Each strikes the world or Daud for the hand's ranged damage.
+  - Her vanishing (`DisDLC06Tweaks_NPCWitchTeleport`): gone in her effect for
+    `m_ReappearanceDelay`, her body and hat hidden, then back where Daud is in sight. She comes
+    back as far from him as the context says and within its angle of where she was, or nearer him
+    from any side if no place is found.
+  - A tentacle called up (`DisDLC07Tweaks_NPCSummonTentacle`, `Sword_Power_SummonTentacle`):
+    only where one of the level's tentacle spots is free within 7 m of Daud and 35 m of her.
+  - Our reading where the data is silent: the scream comes on half its turns; a vanish within
+    her ideal reach and in his sight is rolled once at 25%.
+  - A hidden character's hat and other worn pieces are hidden with it now: its joints carry
+    their own visibility. Before, a hidden character's hat stayed floating where it was.
+- **The witches' tentacles** (`DLC07_Pwn_Tentacle_*`) rise at the level's tentacle spots
+  (`DisDLC07TentacleSpawner`), as their attack substate has them
+  (`DisDLC07Tweaks_AISubState_TentacleAttack`):
+  - Rising (`Tentacle_PopOut_01`, `DLC07_Tentacle_Spawn_In`) by its root, which hangs 2 m under
+    its pawn (`Origin` 200). The cooker now keeps the root's motion for its clips, as it does
+    for the carried bodies'. Before that, the clips left it under the floor.
+  - The ground about it burns (`m_fAOERadius` 4 m, `m_AOEDamage` 1/1/2/4 every 0.2 s, its dark
+    `DLC07_Tentacle_AOE`).
+  - From 3-12 m and in sight it draws Daud in (`Tentacle_Pull_*`, every 2-4 s, letting go 2 s
+    after losing him). The draw's speed (2-6 m/s) is our reading.
+  - Within 5 m it winds up (0.8 s) and seizes his arm (`Tentacle_GrabArm_*`; his
+    `Ply_ArmGrab_In`, `_Loop`, `_Out`, from `DLC07_PlyDaud_Tentacle_as`). The scripts are told
+    (`DisDLC07SeqEvent_GrabbedByTentacle`: Delilah's lines in the void). He breaks free with his
+    blade: 1/2/3/4 presses by difficulty, from `DisDLC07Tweaks_NPCTentacleGrab`'s loop settings,
+    with the class default for the one it leaves unset.
+  - Blades and bolts hurt it (25 health, its `NoneTentacle_Hit*` flinch).
+  - Dead, after 8 s without a hold on him, or with its witch fallen, it sinks
+    (`Tentacle_DeSpawn`). A death tells its spot's `SeqEvent_Death` to the scripts (the void's
+    Delilah counts her briars).
+  - Script: `tentacle [REACH]` calls one up by Corvo; `alert [NAME]` sets nearby characters
+    fighting.
+- **The stories' last script hooks**, each of which did nothing before:
+  - `SeqAct_Trace` asks the world, next frame, whether its walls and props stand between two
+    things (not the characters, as `bTraceWorld`). It gives the distance and "Obstructed" or
+    "Not Obstructed": the void's Delilah breaks off her ritual once Daud has her in sight.
+  - `DisDLC06SeqAct_DestroyArcMines` clears Daud's placed mines from its volumes before a
+    scene plays there (Timsh's streets, the ship's deck, the void).
+  - `DisSeqEvent_WitnessedInteraction` fires when something is used in someone's sight
+    (Coldridge's guards turn on Daud seen at the cell levers).
+  - `DisDLC06SeqEvent_DropAssassinate` fires on a kill from above, and
+    `DisDLC06SeqEvent_Landed` when he is back on the ground (the hideout's "Message from the
+    Empress").
+  - `SeqAct_GetVelocity` reads 0: its one use, the mill's, feeds a debug log.
 - **Script-made pickups**: the level scripts' actor factories (`SeqAct_ActorFactory` + `DisActorFactoryTweakObj`) make runes, bone charms, coin pouches, elixirs and notes at their spawn points (the Hound Pits' tutorial rune, the Hub's rewards); each is cooked as a pickup with a hidden instance of its mesh that the script's spawn moves into place. Pickup names standing for their item ("`i", "`k") show the item's name.
 - **Whale oil tanks** (`DisWhaleOilBattery` + `DisTweaks_WhaleOilBattery`): physics props seated in their receptacles; picked up, carried and thrown like any prop, they burst on a hard knock or a blow (their break step's `m_pExplosion`: 8 m, 50 damage), and a receptacle runs its device only while a tank sits in its seat. Holding a tank at an empty receptacle: "[F] Insert Whale Oil Tank". Explosions reach only what they can see.
 - **Cinematic mode** (`SeqAct_ToggleCinematicMode`): the HUD hides (`bHideHUD`), Corvo is held (`bDisableMovement`/`bDisableInput`) and his arms hidden (`bHidePlayer`), each as the op says; released after a minute at most should a script never let go.

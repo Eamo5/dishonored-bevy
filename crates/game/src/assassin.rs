@@ -19,9 +19,13 @@ pub struct AssassinPlugin;
 
 impl Plugin for AssassinPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<Teleported>().add_systems(Update, (mark_whalers, whaler_powers).chain().before(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
+        app.add_message::<Teleported>().add_systems(Update, (mark_whalers, whaler_powers).chain().in_set(WhalerSet).before(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
     }
 }
+
+/// The whalers' systems (their pull set first: the witches' tentacles add theirs after).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WhalerSet;
 
 /// (min, max) seconds between teleports, and when Corvo is out of reach
 const TELEPORT_COOLDOWN: (f32, f32) = (15.0, 20.0);

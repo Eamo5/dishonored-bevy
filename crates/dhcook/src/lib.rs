@@ -4142,6 +4142,62 @@ impl<'a> Cooker<'a> {
         Some(out)
     }
 
+    /// A witch's hand's spells (`NpcWitch`): its scream, vanishing and tentacle contexts, its
+    /// magic's flight.
+    fn witch_hand(&mut self, w: &Obj) -> NpcWitch {
+        let ctxs = self.npc_contexts(w);
+        let find = |c: &str| ctxs.iter().find(|x| x.class() == c).cloned();
+        let f = |s: &mut Self, o: &Option<Obj>, n: &str, d: f32| o.as_ref().and_then(|o| s.tweak_float(o, n, 0)).unwrap_or(d);
+        let ranged = |s: &mut Self, o: &Option<Obj>, n: &str, d: [f32; 2]| match o.as_ref().and_then(|o| s.tweak_prop(o, n, 0, 0)) {
+            Some((_, Value::Struct(_, r))) => {
+                let p = Props(r);
+                [p.float("m_fMinValue").unwrap_or(d[0]), p.float("m_fMaxValue").unwrap_or(d[1])]
+            }
+            _ => d,
+        };
+        let (scream, teleport, summon, bow) = (find("DisDLC06Tweaks_NPCWitchScream"), find("DisDLC06Tweaks_NPCWitchTeleport"), find("DisDLC07Tweaks_NPCSummonTentacle"), find("DisTweaks_NPCFireBow"));
+        let scream_damage = scream.as_ref().and_then(|o| self.dis_attribute(o, "m_AOEDamage")).unwrap_or([10.0, 15.0, 30.0, 50.0]);
+        let mut out = NpcWitch {
+            scream_ctx_range: f(self, &scream, "m_fMaxContextRange", 400.0) * UNIT,
+            scream_height: f(self, &scream, "m_fMaxContextHeightDifference", 100.0) * UNIT,
+            scream_angle: f(self, &scream, "m_fAllowedAngle", 60.0),
+            scream_range: f(self, &scream, "m_fDamageRange", 500.0) * UNIT,
+            scream_radius: f(self, &scream, "m_fDamageRadius", 45.0) * UNIT,
+            scream_damage,
+            scream_cooldown: ranged(self, &scream, "m_ContextCooldown", [1.0, 2.0]),
+            teleport_ctx_range: f(self, &teleport, "m_fMaxContextRange", 3500.0) * UNIT,
+            teleport_reach: [f(self, &teleport, "m_fMinTeleportDistance", 300.0) * UNIT, f(self, &teleport, "m_fMaxTeleportDistance", 3500.0) * UNIT],
+            teleport_from_player: [f(self, &teleport, "m_fMinTeleportDistanceFromPlayer", 1000.0) * UNIT, f(self, &teleport, "m_fMaxTeleportDistanceFromPlayer", 3000.0) * UNIT],
+            teleport_player_angle: f(self, &teleport, "m_fAllowedTeleportAngleFromPlayer", 45.0),
+            teleport_delay: ranged(self, &teleport, "m_ReappearanceDelay", [2.0, 4.0]),
+            teleport_cooldown: ranged(self, &teleport, "m_ContextCooldown", [10.0, 10.0]),
+            summon_ctx_range: f(self, &summon, "m_fMaxContextRange", 3500.0) * UNIT,
+            summon_angle: f(self, &summon, "m_fAllowedAngle", 90.0),
+            summon_near_target: f(self, &summon, "m_fMaxTargetTentacleDistance", 700.0) * UNIT,
+            summon_cooldown: ranged(self, &summon, "m_ContextCooldown", [5.0, 10.0]),
+            magic_speed: f(self, &bow, "m_fProjectileSpeed", 1500.0) * UNIT,
+            magic_gravity: 0.18,
+        };
+        if summon.is_none() {
+            out.summon_ctx_range = 0.0;
+        }
+        if teleport.is_none() {
+            out.teleport_ctx_range = 0.0;
+        }
+        if scream.is_none() {
+            out.scream_ctx_range = 0.0;
+        }
+        // (its magic's drop: `DisTweaks_Arrow.m_fGravityMultiplier`)
+        if let Some((pkg, Value::Array { count, offset, size })) = self.tweak_prop(w, "m_RangedAmmoTypes", 0, 0) {
+            if let Some(f) = parse_struct_array(&pkg, offset, size, count).ok().and_then(|a| a.into_iter().next()) {
+                if let Some(p) = f.object("m_pProjectileType").filter(|o| *o != 0).and_then(|o| self.assets.resolve(&pkg, o)) {
+                    out.magic_gravity = self.tweak_float(&p, "m_fGravityMultiplier", 0).unwrap_or(0.18);
+                }
+            }
+        }
+        out
+    }
+
     /// What a character can take and deal: its attributes (the Normal slot's attribute
     /// tweak), its weapons and ammunition, its combat tweak's hit reactions.
     fn npc_stats(&mut self, pawn: &Obj) -> NpcStats {
@@ -4224,6 +4280,9 @@ impl<'a> Cooker<'a> {
             }
             if w.class() == "DisTweaks_WepMusicBox" {
                 st.tunes = self.music_box_tunes(&w);
+            }
+            if w.class() == "DisDLC06Tweaks_WepWitchHand" && st.witch.is_none() {
+                st.witch = Some(self.witch_hand(&w));
             }
             if st.fire.is_none() {
                 st.fire = self.fire_context(&w);
@@ -7449,6 +7508,25 @@ impl<'a> Cooker<'a> {
             ("chokedust", "DLC06_VFX_Weapon.Effects.Chokedust.Chokedust_Explosion"),
             ("chokedust_trail", "DLC06_VFX_Weapon.Effects.Chokedust.Chokedust_Trail"),
             ("bolt_explosion", "vfx_characters.Effects.ps_TB_ArrowExplosion"),
+            // (the witches': vanishing and coming back (`m_pDisappearanceEffect`,
+            // `m_pReappearanceEffect`), the scream, the magic's trail and where it strikes
+            // (`DLC07_Proj_WitchMagic.m_pTrailEffect`), a tentacle called up; the tentacles'
+            // coming and going, their burning ground and pull (`DisDLC07Tweaks_AISubState_
+            // TentacleAttack`))
+            ("witch_vanish", "DLC07_VFX_Gameplay.Effects.Witch.Witch_Teleport_Out"),
+            ("witch_appear", "DLC07_VFX_Gameplay.Effects.Witch.Witch_Teleport_In"),
+            ("witch_scream", "DLC07_VFX_Gameplay.Effects.Witch.Witch_Scream"),
+            ("witch_magic", "DLC06_VFX_Gameplay.Effects.WitchMissile.Witch_Missile_Trail"),
+            ("witch_magic_hit", "DLC07_VFX_Gameplay.Effects.WitchMissile.DLC07_Witch_Missile_Impact"),
+            ("witch_summon", "DLC07_VFX_Gameplay.Effects.WitchTentacle.DLC07_Witch_Summon_Tentacle"),
+            ("tentacle_in", "DLC07_VFX_Gameplay.Effects.WitchTentacle.DLC07_Tentacle_Spawn_In"),
+            ("tentacle_out", "DLC07_VFX_Gameplay.Effects.WitchTentacle.DLC07_Tentacle_Spawn_Out"),
+            ("tentacle_aoe", "DLC07_VFX_Gameplay.Effects.WitchTentacle.DLC07_Tentacle_AOE"),
+            ("tentacle_aoe_camera", "DLC07_VFX_Gameplay.Effects.WitchTentacle.DLC07_Tentacle_AOE_Camera"),
+            ("tentacle_pull", "DLC07_VFX_Gameplay.Effects.WitchTentacle.DLC07_Tentacle_Pull_Cast"),
+            ("tentacle_pull_player", "DLC07_VFX_Gameplay.Effects.WitchTentacle.DLC07_Tentacle_Pull_Player"),
+            ("tentacle_hit_sword", "DLC07_VFX_Gameplay.Effects.WitchTentacle.DLC07_Tentacle_Hit_Sword"),
+            ("tentacle_hit", "DLC07_VFX_Gameplay.Effects.WitchTentacle.DLC07_Tentacle_Hit_Projectile"),
         ];
         // the textures gameplay effects sample (`DarkVision_PMAT`, `PPG_DarkVisionFinal_Mat`)
         const GAME_TEXTURES: &[(&str, &str)] = &[
@@ -7738,8 +7816,9 @@ impl<'a> Cooker<'a> {
                         }
                     }
                     // (and his side of the wolfhound's arm attack, `DisNPCAnimDefinitions_Wolfhound`'s
-                    // linked player clips: only where hounds are, in their levels' script packages)
-                    const LEVEL_SETS: &[&str] = &["Ply_WolfhoundAttacks_as.Ply_WolfhoundAttacks_as"];
+                    // linked player clips, and of a witch's tentacle's hold, `Ply_ArmGrab_*`: only
+                    // where hounds and tentacles are, in their levels' script packages)
+                    const LEVEL_SETS: &[&str] = &["Ply_WolfhoundAttacks_as.Ply_WolfhoundAttacks_as", "DLC07_PlyDaud_Tentacle_as.DLC07_PlyDaud_Tentacle_as"];
                     sets.extend(LEVEL_SETS.iter().filter_map(|path| self.assets.find(path)));
                     let anim_sets = Vec::new();
                     // the clips' effects at the hands (`AnimNotify_PlayParticleEffect`: the
@@ -8663,8 +8742,9 @@ fn cook_anim_set(set: &Obj, layout: &AnimLayout, path: &Path) -> Result<bool> {
         };
         clip.sounds = sound_notifies(&set.pkg, &so.props);
         // a carried body's clips place it relative to the carrier through its root bone; the
-        // fish is modelled upright and swims laid flat by its root
-        let keep_root = clip.name.starts_with("Corpses_CarryCorpse") || clip.name.starts_with("Empty_CarryCorpse") || clip.name.starts_with("Fish_");
+        // fish is modelled upright and swims laid flat by its root; a witch's tentacle rises out of
+        // the ground by its root (`Tentacle_PopOut_01`: from 2 m down) and lashes about it
+        let keep_root = clip.name.starts_with("Corpses_CarryCorpse") || clip.name.starts_with("Empty_CarryCorpse") || clip.name.starts_with("Fish_") || clip.name.contains("Tentacle_");
         // (the Heart's own set, `Heart_as`, holds its `Root_jnt` turned 130 degrees through every
         // clip, where its place in Corvo's hand has it at rest: the beat alone)
         let held_heart = set.path() == "Heart_as.Heart_as";

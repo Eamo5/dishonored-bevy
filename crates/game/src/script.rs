@@ -1244,6 +1244,33 @@ fn run_script(
                 }
             });
         }
+        "tentacle" => {
+            // (tests) tentacle [REACH]: a witch's tentacle called up at the spot nearest Corvo
+            let at = t.translation;
+            let reach = if cmd.len() > 1 { f(1) } else { 12.0 };
+            commands.queue(move |w: &mut World| {
+                w.write_message(crate::tentacle::SummonTentacle { witch: Entity::PLACEHOLDER, witch_at: at, near: at, reach });
+            });
+        }
+        "alert" => {
+            // (tests) alert [NAME]: the nearest standing characters (whose name or pawn holds
+            // NAME) within 30 m know where Corvo is and fight
+            let at = t.translation;
+            let named = cmd.get(1).cloned().unwrap_or_default();
+            commands.queue(move |w: &mut World| {
+                let mut q = w.query::<(&mut Npc, &Transform)>();
+                for (mut n, nt) in q.iter_mut(w) {
+                    if n.is_down() || !(n.name.contains(&named) || n.pawn.contains(&named)) || nt.translation.distance(at) > 30.0 {
+                        continue;
+                    }
+                    n.alert = crate::npc::Alert::Combat;
+                    n.awareness = 1.0;
+                    n.last_seen = Some(at);
+                    n.set_mode(crate::npc::Mode::Combat);
+                    info!("script: {} alerted", n.name);
+                }
+            });
+        }
         "knockout" => {
             // (tests) knockout [NAME]: the nearest standing character (whose name or pawn holds
             // NAME) asleep where it stands

@@ -252,6 +252,8 @@ struct ArmClips {
     grabbed_loop: Option<ClipId>,
     grabbed_out: Option<ClipId>,
     pinned: [Option<ClipId>; 3],
+    /// a witch's tentacle has his arm (`Ply_ArmGrab_In`, `_Loop`, `_Out`)
+    tentacle: [Option<ClipId>; 3],
     // left arm
     powers_idle: Option<ClipId>,
     /// the left hand on the move with a power, with a gadget: walking, sprinting, in the air
@@ -391,6 +393,7 @@ impl ArmClips {
             grabbed_loop: lib.find("Sword_Weeper_ArmGrab_Loop"),
             grabbed_out: lib.find("Sword_Weeper_ArmGrab_Out"),
             pinned: ["GrabArm", "GrabLoop", "GrabOut"].map(|s| lib.find(&format!("Sword_ArmAttack_{s}_Minigame"))),
+            tentacle: ["In", "Loop", "Out"].map(|s| lib.find(&format!("Ply_ArmGrab_{s}"))),
             drop_kill: [
                 lib.find("Sword_Ready_Assassination_DropFront_Master"),
                 lib.find("Sword_Ready_Assassination_DropBack_Master"),
@@ -485,6 +488,7 @@ struct ArmsAnim {
     grabbed: bool,
     /// (by a wolfhound)
     pinned: bool,
+    tentacle_grab: bool,
     oneshot: bool,
     /// mantling (as last seen)
     mantling: bool,
@@ -810,6 +814,7 @@ fn spawn_arms(
                 choke_phase: 0,
                 grabbed: false,
                 pinned: false,
+                tentacle_grab: false,
                 oneshot: false,
                 airborne: false,
                 grounded: true,
@@ -1148,12 +1153,14 @@ fn animate_arms(
     // a weeper holds Corvo's arm, or a wolfhound has it in its teeth
     let [grab_in, grab_loop, _] = match grabbed {
         Some(g) if g.hound && c.pinned[1].is_some() => c.pinned,
+        Some(g) if g.tentacle && c.tentacle[1].is_some() => c.tentacle,
         _ => [c.grabbed_in, c.grabbed_loop, c.grabbed_out],
     };
     if grabbed.is_some() {
         if !st.grabbed {
             st.grabbed = true;
             st.pinned = grabbed.is_some_and(|g| g.hound) && c.pinned[1].is_some();
+            st.tentacle_grab = grabbed.is_some_and(|g| g.tentacle) && c.tentacle[1].is_some();
             if let Some(cl) = grab_in.or(grab_loop) {
                 anim.restart(cl, false, 1.0, 0.1);
             }
@@ -1165,7 +1172,7 @@ fn animate_arms(
         base_busy = true;
     } else if st.grabbed {
         st.grabbed = false;
-        if let Some(cl) = if st.pinned { c.pinned[2] } else { c.grabbed_out } {
+        if let Some(cl) = if st.pinned { c.pinned[2] } else if st.tentacle_grab { c.tentacle[2] } else { c.grabbed_out } {
             anim.restart(cl, false, 1.0, 0.1);
             st.oneshot = true;
         }

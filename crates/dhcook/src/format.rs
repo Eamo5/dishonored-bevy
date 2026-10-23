@@ -1244,6 +1244,10 @@ pub struct NpcStats {
     /// `DisTweaks_NPCTune_Protection`)
     #[serde(default)]
     pub tunes: Option<NpcTunes>,
+    /// a witch's hand (`DisDLC06Tweaks_WepWitchHand`): her scream, her vanishing and her
+    /// tentacles (The Brigmore Witches)
+    #[serde(default)]
+    pub witch: Option<NpcWitch>,
     /// how its firearm or bow shoots (its `DisTweaks_NPCFireGun` / `DisTweaks_NPCFireBow`)
     #[serde(default)]
     pub fire: Option<FireContext>,
@@ -1440,6 +1444,39 @@ pub struct NpcWhiskey {
 /// at `m_fThrowSpeed` (m/s), sooner again with him out of reach
 /// (`m_ContextCooldownWhenUnreachable`), harming him by the hand's ranged damage (by
 /// difficulty).
+/// A witch's hand's contexts (`DisDLC06Tweaks_WepWitchHand`'s NPC slots), distances in metres:
+/// - her scream (`DisDLC06Tweaks_NPCWitchScream`): Corvo within `ctx_range` (and `height`) and
+///   `angle` of her front, it strikes along her line as far as `range`, within `radius` of it,
+///   for `damage` by difficulty; again after `cooldown`;
+/// - her vanishing (`DisDLC06Tweaks_NPCWitchTeleport`): gone for `delay` and back where Corvo
+///   is in sight, `from_player` away from him within `player_angle` of her bearing from him and
+///   `reach` from where she was; at him within `ctx_range`, again after `cooldown`;
+/// - her tentacles (`DisDLC07Tweaks_NPCSummonTentacle`): one called up within `near_target`
+///   of Corvo, him within `ctx_range` and `angle`; again after `cooldown`;
+/// - her magic (`DisTweaks_NPCFireBow`, `DLC07_Proj_WitchMagic`): its speed (m/s) and drop.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct NpcWitch {
+    pub scream_ctx_range: f32,
+    pub scream_height: f32,
+    pub scream_angle: f32,
+    pub scream_range: f32,
+    pub scream_radius: f32,
+    pub scream_damage: [f32; 4],
+    pub scream_cooldown: [f32; 2],
+    pub teleport_ctx_range: f32,
+    pub teleport_reach: [f32; 2],
+    pub teleport_from_player: [f32; 2],
+    pub teleport_player_angle: f32,
+    pub teleport_delay: [f32; 2],
+    pub teleport_cooldown: [f32; 2],
+    pub summon_ctx_range: f32,
+    pub summon_angle: f32,
+    pub summon_near_target: f32,
+    pub summon_cooldown: [f32; 2],
+    pub magic_speed: f32,
+    pub magic_gravity: f32,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct NpcThrowing {
     pub speed: f32,

@@ -529,6 +529,8 @@ pub struct Arms {
     pub plague: Option<dhcook::format::NpcPlague>,
     /// a thug's whiskey bottle (its fire breath, the bottle it throws)
     pub whiskey: Option<dhcook::format::NpcWhiskey>,
+    /// a witch's spells (`witch`)
+    pub witch: Option<dhcook::format::NpcWitch>,
     /// how it paces its fight (its combat behaviour's)
     pub pacing: Option<dhcook::format::NpcPacing>,
     /// how danger zones steer it, and the one its aim lays (`danger`)
@@ -546,7 +548,7 @@ pub struct Arms {
 
 impl Default for Arms {
     fn default() -> Self {
-        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, pacing: None, danger: Default::default(), turning: LocoTurn::default(), throwing: None, outer_only: Vec::new(), outer_place: None }
+        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, witch: None, pacing: None, danger: Default::default(), turning: LocoTurn::default(), throwing: None, outer_only: Vec::new(), outer_place: None }
     }
 }
 
@@ -569,7 +571,7 @@ pub struct Swing {
 
 /// A gun's or bow's reach, facing and cooldowns (its `DisTweaks_NPCFire` context; without one,
 /// a pistol's, an assassin's wrist bow's).
-fn fire_context(npc: &Npc) -> dhcook::format::FireContext {
+pub(crate) fn fire_context(npc: &Npc) -> dhcook::format::FireContext {
     npc.arms.fire.clone().unwrap_or(dhcook::format::FireContext {
         range: [2.5, 30.0, 6.5],
         angle: 25.0,
@@ -581,7 +583,7 @@ fn fire_context(npc: &Npc) -> dhcook::format::FireContext {
 
 /// A shot's chance to hit `d` m away: its accuracy, `m_MaxAccuracy` close, falling to
 /// `m_MinAccuracy` at the end of its reach (less `miss`, the difficulty's for guns).
-fn shot_chance(npc: &Npc, ctx: &dhcook::format::FireContext, d: f32, miss: f32) -> f32 {
+pub(crate) fn shot_chance(npc: &Npc, ctx: &dhcook::format::FireContext, d: f32, miss: f32) -> f32 {
     let [near, far, _] = ctx.range;
     let k = ((d - near) / (far - near).max(0.1)).clamp(0.0, 1.0);
     (npc.arms.accuracy[0] + (npc.arms.accuracy[1] - npc.arms.accuracy[0]) * k) * (1.0 - miss)
@@ -602,6 +604,12 @@ pub enum MoveKind {
     Attract,
     /// an assassin's wrist bow shot (`Sword_RangedAttack`), its bolt loosed at the clip's cue
     Ranged,
+    /// a witch's scream (`Sword_Attack_Scream`), her magic's volley (`Sword_Power_RangedAttack`:
+    /// four, at its `DishonoredNotify_FireProjectile`s) and a tentacle called up
+    /// (`Sword_Power_SummonTentacle`)
+    Scream,
+    Magic,
+    Summon,
     Medium,
     Long,
     Bash,
@@ -679,7 +687,7 @@ impl Arms {
         if let Some(w) = blade {
             a.melee = w.melee[d];
         }
-        let gun = ["DisTweaks_WepPistol", "DisTweaks_WepTallboyBow", "DisTweaks_WepSwordOfAssassin"].iter().find_map(|c| st.weapons.iter().find(|w| w.class == *c));
+        let gun = ["DisTweaks_WepPistol", "DisTweaks_WepTallboyBow", "DisTweaks_WepSwordOfAssassin", "DisDLC06Tweaks_WepWitchHand"].iter().find_map(|c| st.weapons.iter().find(|w| w.class == *c));
         if let Some(w) = gun {
             a.ranged = if w.projectile_damage > 0.0 { w.projectile_damage } else { w.ranged[d] * w.projectile_mult };
         }
@@ -695,6 +703,7 @@ impl Arms {
         a.grenades = st.grenades.clone();
         a.moves = st.melee.clone();
         a.whiskey = st.whiskey.clone();
+        a.witch = st.witch.clone();
         a.pacing = st.pacing.clone();
         a.danger = st.danger.clone();
         a.turning = LocoTurn::of(&st.loco);
@@ -1014,6 +1023,10 @@ fn display_name(pawn: &str) -> &'static str {
         "Overseer"
     } else if p.contains("thug") {
         "Thug"
+    } else if p.contains("delilah") {
+        "Delilah"
+    } else if p.contains("witch") {
+        "Witch"
     } else if p.contains("regent") {
         "Lord Regent"
     } else if p.contains("hound") {
@@ -1328,6 +1341,9 @@ pub struct Grabbed {
     pub by: Entity,
     pub presses: u32,
     pub hound: bool,
+    /// a witch's tentacle has his arm (`tentacle`), and the presses it takes to break free
+    pub tentacle: bool,
+    pub need: u32,
 }
 
 /// `DisTweaks_WeeperGrab`: reach, dodge radius (UE units / 100), presses to break free.
@@ -1432,7 +1448,7 @@ fn weeper_grab(
                 } else if d < if hound { HOUND_HOLD } else { GRAB_DODGE } && grabbed.is_none() && !npc.is_down() {
                     info!("weeper grab: {} holds Corvo", npc.name);
                     npc.grab = Some((GrabPhase::Hold, 0.0));
-                    commands.entity(pe).insert(Grabbed { by: e, presses: 0, hound });
+                    commands.entity(pe).insert(Grabbed { by: e, presses: 0, hound, tentacle: false, need: 0 });
                     p.locked = true;
                     p.velocity = Vec3::ZERO;
                     sfx.write(crate::audio::PostEvent::named("Snd_P_Clothes_Grab_01_Cue_ak", Some(pt.translation)));
@@ -1483,8 +1499,8 @@ fn weeper_grab(
             _ => {}
         }
     }
-    // the weeper went away (despawned)
-    if let Some(g) = grabbed {
+    // the weeper went away (despawned; a tentacle's hold is its own)
+    if let Some(g) = grabbed.filter(|g| !g.tentacle) {
         if npcs.get(g.by).is_err() {
             commands.entity(pe).remove::<Grabbed>();
             p.locked = false;
@@ -2383,7 +2399,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
     let mut bind_world: Vec<Quat> = Vec::with_capacity(bones.len());
     for b in bones {
         let q = Quat::from_array(b.rotation).normalize();
-        let e = commands.spawn(Transform::from_translation(Vec3::from(b.translation)).with_rotation(q)).id();
+        // (seen as their character is: what hangs from them, a hat, goes with it when it is
+        // hidden)
+        let e = commands.spawn((Transform::from_translation(Vec3::from(b.translation)).with_rotation(q), Visibility::default())).id();
         let w = if b.parent >= 0 && (b.parent as usize) < bind_world.len() { bind_world[b.parent as usize] * q } else { q };
         bind_world.push(w);
         joints.push(e);
@@ -4093,7 +4111,7 @@ pub(crate) fn npc_brain(
         Res<crate::powers::Powers>,
         Local<f32>,
     ),
-    (mut grenades, mut bottles, mut whiskey_fx, mut throws): (MessageWriter<crate::gadgets::NpcGrenade>, MessageWriter<crate::whiskey::NpcBottle>, MessageWriter<crate::particles::SpawnEffect>, MessageWriter<crate::thrown::NpcThrow>),
+    (mut grenades, mut bottles, mut whiskey_fx, mut throws, mut spells): (MessageWriter<crate::gadgets::NpcGrenade>, MessageWriter<crate::whiskey::NpcBottle>, MessageWriter<crate::particles::SpawnEffect>, MessageWriter<crate::thrown::NpcThrow>, MessageWriter<crate::witch::WitchSpell>),
     mut looked_over: Local<Vec<Vec3>>,
     (finishing, mut finishers, mut tallboy_shots, devices, mut patrols, mut handled, mut crumbs): (
         Query<(), With<FinisherClip>>,
@@ -5293,6 +5311,17 @@ pub(crate) fn npc_brain(
                             if !(t_att < b && t_new >= b) {
                                 continue;
                             }
+                            // a witch's spell at its cue (`witch`): her scream along her line,
+                            // a bolt of her magic, a tentacle called up by Corvo
+                            if let Some(k @ (MoveKind::Scream | MoveKind::Magic | MoveKind::Summon)) = kind {
+                                let spell = match k {
+                                    MoveKind::Scream => crate::witch::Spell::Scream,
+                                    MoveKind::Magic => crate::witch::Spell::Magic,
+                                    _ => crate::witch::Spell::Summon,
+                                };
+                                spells.write(crate::witch::WitchSpell { witch: e, spell, from: pos, facing: npc.forward() });
+                                continue;
+                            }
                             // an assassin's bolt, as its accuracy has it
                             if kind == Some(MoveKind::Ranged) {
                                 let hit = npc.sees_player && rand::random::<f32>() < shot_chance(&npc, &fire_context(&npc), d, 0.0);
@@ -6264,6 +6293,9 @@ pub struct NpcClips {
     attract: [Option<ClipId>; 4],
     /// an assassin's wrist bow shot
     wrist_shot: Option<ClipId>,
+    /// a witch's scream, her magic and a tentacle called up (`Sword_Attack_Scream`,
+    /// `Sword_Power_RangedAttack`, `Sword_Power_SummonTentacle`)
+    witch: [Option<ClipId>; 3],
     /// a tallboy's bow: drawn, held, loosed, let down (`Empty_Bow_Charged_In`, `_Charged`,
     /// `Empty_Bow_Fire`, `_Charged_Out`)
     bow: [Option<ClipId>; 4],
@@ -6455,6 +6487,7 @@ impl NpcClips {
             unpossess: [lib.first(&["Empty_Unpossess_Eject", "Patrol_Unpossess_Eject"]), lib.first(&["Empty_Unpossess_Dizzy", "Patrol_Unpossess_Dizzy"]), lib.first(&["Empty_Unpossess_Puke", "Patrol_Unpossess_Puke"])],
             attract: ["In", "Loop", "Attack", "Cancel"].map(|p| lib.find(&format!("Sword_Power_Attract_{p}"))),
             wrist_shot: lib.find("Sword_RangedAttack"),
+            witch: [lib.find("Sword_Attack_Scream"), lib.find("Sword_Power_RangedAttack"), lib.find("Sword_Power_SummonTentacle")],
             bow: [lib.find("Empty_Bow_Charged_In"), lib.find("Empty_Bow_Charged"), lib.find("Empty_Bow_Fire"), lib.find("Empty_Bow_Charged_Out")],
             get_up: [lib.find("Generic_RagdollToBack"), lib.find("Generic_RagdollToFront")],
             push_limp: [
@@ -7496,6 +7529,9 @@ fn npc_select_anim(
                     MoveKind::Throw => pick(&clips.throw_rock),
                     MoveKind::Attract => clips.attract[2].or_else(|| pick(&clips.attack_short_big)),
                     MoveKind::Ranged => clips.wrist_shot,
+                    MoveKind::Scream => clips.witch[0],
+                    MoveKind::Magic => clips.witch[1],
+                    MoveKind::Summon => clips.witch[2],
                 };
                 // (a blade's blow straight out of a dodge to the side: its slash out of it,
                 // `_DodgeAttack_Small`)
@@ -7506,6 +7542,29 @@ fn npc_select_anim(
                 // an assassin's wrist bow shot, its bolt loosed at the clip's
                 // `DishonoredNotify_FireProjectile` (or its fire sound's cue,
                 // `AI_Assassin_Ranged_Attack_Fire`, 0.73 s)
+                // (a witch's: her magic loosed at each of the clip's four
+                // `DishonoredNotify_FireProjectile`s; her scream striking at its
+                // `DisDLC07Notify_WitchScreamDamage`, 0.55 s; a tentacle called up as her hand's
+                // effect starts, 0.34 s)
+                if matches!(kind, MoveKind::Scream | MoveKind::Magic | MoveKind::Summon) {
+                    if let (Some(c), Some(s)) = (own, npc.swing.as_mut()) {
+                        let fires = st.marks.get(&c).map(|m| m.fires.clone()).unwrap_or_default();
+                        match kind {
+                            MoveKind::Magic if !fires.is_empty() => {
+                                s.hit = fires[0];
+                                s.more = fires[1..].to_vec();
+                            }
+                            MoveKind::Magic => s.hit = 0.41,
+                            MoveKind::Scream => s.hit = 0.55,
+                            _ => s.hit = 0.34,
+                        }
+                        s.len = lib.duration(c).max(s.hit + 0.1);
+                        anim.restart(c, false, 1.0, 0.1);
+                    }
+                    st.last_mode = npc.mode;
+                    st.last_alert = npc.alert;
+                    continue;
+                }
                 if kind == MoveKind::Ranged {
                     if let (Some(c), Some(s)) = (own, npc.swing.as_mut()) {
                         s.hit = st.marks.get(&c).and_then(|m| m.fires.first().copied()).unwrap_or(0.73);

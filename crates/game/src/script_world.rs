@@ -25,7 +25,7 @@ impl Plugin for ScriptWorldPlugin {
             .add_systems(OnEnter(GameState::InGame), |mut c: ResMut<Cinematic>| *c = Cinematic::default())
             .init_resource::<crate::kismet::ScriptSwitches>()
             .add_systems(Update, (apply_ai_fx.after(crate::kismet::apply_effects), apply_overrides, follow_and_sense, track_targets, cinematic_hud, scripted_shots, script_time, vanish_unseen, player_track, behaviors, beg, script_blasts, npc_materials).chain().run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (sync_switches, scripted_severs, scripted_heads, spawn_props, foreground_npcs).after(crate::kismet::apply_effects).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (sync_switches, scripted_severs, scripted_heads, script_traces, spawn_props, foreground_npcs).after(crate::kismet::apply_effects).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -1047,6 +1047,26 @@ fn foreground_npcs(
             mat.key.foreground_world = true;
         }
         done.insert(m.0.id());
+    }
+}
+
+/// The scripts' traces (`SeqAct_Trace`): the world's walls and props between the two places
+/// (not its characters, as `bTraceWorld` alone), the distance to what stops it.
+fn script_traces(vm: Option<ResMut<Vm>>, rapier: bevy_rapier3d::prelude::ReadRapierContext) {
+    use bevy_rapier3d::prelude::{CollisionGroups, Group, QueryFilter};
+    let Some(mut vm) = vm else { return };
+    if vm.traces.is_empty() {
+        return;
+    }
+    let ctx = rapier.single().ok();
+    for (op, a, b) in std::mem::take(&mut vm.traces) {
+        let d = a.distance(b);
+        let hit = (d > 0.001)
+            .then_some(())
+            .and(ctx.as_ref())
+            .and_then(|c| c.cast_ray(a, (b - a) / d, d, true, QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, crate::level::GROUP_WORLD | crate::level::GROUP_PROP))))
+            .map(|(_, toi)| toi);
+        vm.trace_done(op, hit.is_some(), hit.unwrap_or(d));
     }
 }
 

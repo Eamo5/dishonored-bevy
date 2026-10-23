@@ -29,7 +29,54 @@ impl Plugin for GadgetsPlugin {
             .add_systems(Update, grenade_focus.after(crate::interact::FocusSet).before(crate::props::prop_focus).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
             .add_systems(Update, mine_focus.after(grenade_focus).before(crate::props::prop_focus).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
             .add_systems(Update, restore_gadgets.after(crate::save::restore_npcs).before(grenade_focus).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (use_gadget, npc_grenades, grenades_struck, fly_grenades, razors, mines, choke_clouds, explode).chain().after(grenade_focus).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (use_gadget, npc_grenades, grenades_struck, fly_grenades, razors, mines, choke_clouds, explode).chain().after(grenade_focus).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, scripted_mine_clearing.run_if(in_state(GameState::InGame)));
+    }
+}
+
+/// The scripts clear Daud's mines from a volume (`DisDLC06SeqAct_DestroyArcMines`: the ground a
+/// scene plays on, Timsh's streets' ambush, the ship's deck): those placed inside are gone.
+fn scripted_mine_clearing(mut commands: Commands, vm: Option<ResMut<crate::kismet::Vm>>, level: Option<Res<crate::level::LevelInfo>>, mines: Query<(Entity, &Razor, &Transform)>) {
+    let (Some(mut vm), Some(level)) = (vm, level) else { return };
+    if vm.destroy_mines.is_empty() {
+        return;
+    }
+    for v in std::mem::take(&mut vm.destroy_mines) {
+        let Some(vol) = level.scene.volumes.get(v as usize) else { continue };
+        for (e, r, t) in &mines {
+            if r.mine.is_some() && vol.hulls.iter().any(|h| hull_contains(h, t.translation)) {
+                commands.entity(e).despawn();
+            }
+        }
+    }
+}
+
+/// Whether a convex hull (its points) holds a point: within its bounds, and inside the hull.
+fn hull_contains(points: &[[f32; 3]], p: Vec3) -> bool {
+    let pts: Vec<Vec3> = points.iter().map(|q| Vec3::from(*q)).collect();
+    if pts.len() < 4 {
+        return false;
+    }
+    let (lo, hi) = pts.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(l, h), q| (l.min(*q), h.max(*q)));
+    if p.cmplt(lo - 0.05).any() || p.cmpgt(hi + 0.05).any() {
+        return false;
+    }
+    match bevy_rapier3d::prelude::Collider::convex_hull(&pts) {
+        Some(c) => c.contains_point(Vec3::ZERO, Quat::IDENTITY, p),
+        None => true,
+    }
+}
+
+#[cfg(test)]
+mod hull_tests {
+    use super::*;
+
+    #[test]
+    fn a_point_is_held_by_a_box_hull_and_not_outside_it() {
+        let cube: Vec<[f32; 3]> = (0..8).map(|i| [(i & 1) as f32 * 2.0, (i >> 1 & 1) as f32 * 2.0, (i >> 2 & 1) as f32 * 2.0]).collect();
+        assert!(hull_contains(&cube, Vec3::splat(1.0)));
+        assert!(!hull_contains(&cube, Vec3::new(3.0, 1.0, 1.0)));
+        assert!(!hull_contains(&cube[..3], Vec3::splat(1.0)));
     }
 }
 
