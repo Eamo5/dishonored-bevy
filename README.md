@@ -648,6 +648,14 @@ are in the settings file, `pad_binding_set` 0-3):
   `PLAY AUDIOGRAPH` / `STOP AUDIOGRAPH` to replay it from there.
 - **Bone charms** (the 29 originals, found at random, worn up to the slot count), **stores**
   (Piero's workshop, Griff) with the original items, prices and blueprint requirements.
+Daud's stories have their own (`DLC06_Twk_GlobalStore` before each Knife of Dunwall mission,
+`DLC07_Twk_GlobalStore` and the Drapers Ward's `DLC07_Twk_InWorldStore`): his ammunition by its
+type (`m_AmmoRanges`), his upgrades (`dlc06_Upgrade_*`, `DLC06_Upgrd_*`: their attributes, as
+Corvo's), and his favors, offered on their mission (`m_StoryReq`, against the scripts' story
+flags as the store opens) and setting theirs once bought (`m_StoryOnPurchase`: the safe code,
+the stolen rune, the silent sabotage...). Each story's maps run its own campaign scripts (its
+whole-game package's, `DLC06_DishonoredGameFull_P`, `L_DLC07_GameFull_P`: the missions' ends,
+statistics, stores and journeys), not Corvo's.
   Acrobat's `MantleAnimRate` speeds up the climb and its head animation together.
   Strong Arms shortens the choke hold and its progress indicator (the hold is `ChokeTime`,
   1.5 s, and the victim's In clip, 0.667 s: 2.2 s, as roshan's r614/blink research decoded the

@@ -20,26 +20,42 @@ impl Plugin for CampaignPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, track_hub.run_if(in_state(crate::GameState::InGame)))
             .add_systems(OnEnter(crate::GameState::InGame), restore_hub.after(crate::level::LevelSpawnSet));
-        let path = std::path::Path::new("cache/game/campaign.json");
-        let script = match std::fs::read(path).map_err(anyhow::Error::from).and_then(|d| Ok(serde_json::from_slice::<Graph>(&d)?)) {
-            Ok(g) => {
-                info!("campaign scripts: {} ops", g.ops.len());
-                Some(Arc::new(g))
-            }
-            Err(e) => {
-                warn!("no campaign scripts ({}: {e}); run `dhtool cook-gamedata`", path.display());
-                None
+        let read = |file: &str| -> Option<Arc<Graph>> {
+            let path = std::path::Path::new("cache/game").join(file);
+            match std::fs::read(&path).map_err(anyhow::Error::from).and_then(|d| Ok(serde_json::from_slice::<Graph>(&d)?)) {
+                Ok(g) => {
+                    info!("campaign scripts ({file}): {} ops", g.ops.len());
+                    Some(Arc::new(g))
+                }
+                Err(e) => {
+                    if file == "campaign.json" {
+                        warn!("no campaign scripts ({}: {e}); run `dhtool cook-gamedata`", path.display());
+                    }
+                    None
+                }
             }
         };
-        app.insert_resource(CampaignScript(script)).add_systems(
-            Update,
-            apply_campaign.after(crate::kismet::apply_effects).run_if(in_state(GameState::InGame).and_then(resource_exists::<Vm>)),
-        );
+        let base = read("campaign.json");
+        let packs = dhcook::DAUD_PACKS.iter().filter_map(|p| read(&format!("campaign_{}.json", p.dir)).map(|g| (p.prefix, g))).collect();
+        app.insert_resource(CampaignScript(base.clone(), base, packs))
+            .add_systems(OnEnter(GameState::Loading), choose_campaign)
+            .add_systems(Update, apply_campaign.after(crate::kismet::apply_effects).run_if(in_state(GameState::InGame).and_then(resource_exists::<Vm>)));
     }
 }
 
+/// The campaign scripts the map runs (`.0`): Daud's stories' own on their maps (their
+/// whole-game packages', `DLC06_DishonoredGameFull_P`, `L_DLC07_GameFull_P`: their missions'
+/// ends, statistics and journeys), else the game's (`.1`); the stories' by map prefix (`.2`).
 #[derive(Resource)]
-pub struct CampaignScript(pub Option<Arc<Graph>>);
+pub struct CampaignScript(pub Option<Arc<Graph>>, pub Option<Arc<Graph>>, pub Vec<(&'static str, Arc<Graph>)>);
+
+fn choose_campaign(config: Res<crate::Config>, mut script: ResMut<CampaignScript>) {
+    let m = config.map.to_ascii_lowercase();
+    let want = script.2.iter().find(|(p, _)| m.starts_with(p)).map(|(_, g)| g.clone()).or_else(|| script.1.clone());
+    if script.0.as_ref().map(Arc::as_ptr) != want.as_ref().map(Arc::as_ptr) {
+        script.0 = want;
+    }
+}
 
 /// What the campaign scripts ask for.
 #[derive(Clone, Debug)]

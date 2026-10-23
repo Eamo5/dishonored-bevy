@@ -42,6 +42,10 @@ pub struct Store {
     confirm: Option<(String, usize, usize)>,
     /// a button of the question clicked (`msgbox`)
     pub confirm_click: Option<usize>,
+    /// the scripts' story flags as the store opened (what Daud's favors are offered under),
+    /// and those its purchases set, for the scripts
+    pub flags: std::collections::HashMap<String, bool>,
+    pub set_flags: Vec<(String, bool)>,
 }
 
 impl Store {
@@ -66,7 +70,8 @@ fn purchase(stats: &mut PlayerStats, attrs: &crate::gamedata::Attrs, it: &StoreI
             stats.give_elixirs(false, q, attrs.elixir_capacity(false));
         }
         "Rune_twk" => stats.runes += q,
-        id if id.starts_with("Twk_Upgrade_") => stats.upgrades.push(id.to_string()),
+        "" => {}
+        id if is_upgrade(id) => stats.upgrades.push(id.to_string()),
         id if id.starts_with("BP_") => {
             let base = id.trim_end_matches("_twk");
             stats.upgrades.push(format!("{base}_AbsItm"));
@@ -101,12 +106,19 @@ fn has(stats: &PlayerStats, req: &str) -> bool {
 }
 
 /// Shown at all (blueprint-gated upgrades appear once the blueprint is found).
-fn visible(stats: &PlayerStats, it: &StoreItem) -> bool {
-    it.requires.iter().filter(|r| r.starts_with("BP_")).all(|r| has(stats, r))
+fn visible(stats: &PlayerStats, flags: &std::collections::HashMap<String, bool>, it: &StoreItem) -> bool {
+    // (Daud's favors: offered on their mission, by its story flag)
+    it.requires.iter().filter(|r| r.starts_with("BP_")).all(|r| has(stats, r)) && it.story_req.as_ref().is_none_or(|(f, want)| flags.get(f).copied().unwrap_or(false) == *want)
 }
 
-fn owned(stats: &PlayerStats, it: &StoreItem) -> bool {
-    it.item.starts_with("Twk_Upgrade_") && stats.upgrades.iter().any(|u| *u == it.item)
+/// An upgrade (Corvo's `Twk_Upgrade_`, Daud's `dlc06_Upgrade_`, `DLC06_Upgrd_`...).
+fn is_upgrade(item: &str) -> bool {
+    let l = item.to_ascii_lowercase();
+    l.starts_with("twk_upgrade_") || (l.starts_with("dlc0") && (l.contains("_upgrade") || l.contains("_upgrd")))
+}
+
+fn owned(stats: &PlayerStats, flags: &std::collections::HashMap<String, bool>, it: &StoreItem) -> bool {
+    (is_upgrade(&it.item) && stats.upgrades.iter().any(|u| *u == it.item)) || it.story_set.as_ref().is_some_and(|(f, v)| flags.get(f).copied().unwrap_or(!*v) == *v)
 }
 
 fn open(
@@ -116,8 +128,16 @@ fn open(
     mut paused: ResMut<Paused>,
     mut cursor: Single<&mut CursorOptions>,
     mut sfx: MessageWriter<PostEvent>,
+    mut vm: Option<ResMut<crate::kismet::Vm>>,
 ) {
+    // (the favors bought: their story flags, for the mission's scripts)
+    if let Some(vm) = vm.as_mut() {
+        for (f, v) in std::mem::take(&mut store.set_flags) {
+            vm.set_flag(&f, v);
+        }
+    }
     let Some(r) = requests.read().last().cloned() else { return };
+    store.flags = vm.as_ref().map(|v| v.flags().clone()).unwrap_or_default();
     let Some(i) = data.0.stores.iter().position(|s| s.id.eq_ignore_ascii_case(&r.0)).or_else(|| {
         // a store variant of the same shop (Piero's at a later visit)
         let base = r.0.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');
@@ -137,8 +157,8 @@ fn open(
 }
 
 /// The items of a tab, in the grid's order: (item index, the section header before it).
-fn tab_items(def: &dhcook::format::StoreDef, stats: &PlayerStats, tab: u8, tabs: bool) -> Vec<usize> {
-    (0..def.items.len()).filter(|&i| visible(stats, &def.items[i]) && (!tabs || (def.items[i].section > 0) == (tab == 1))).collect()
+fn tab_items(def: &dhcook::format::StoreDef, stats: &PlayerStats, flags: &std::collections::HashMap<String, bool>, tab: u8, tabs: bool) -> Vec<usize> {
+    (0..def.items.len()).filter(|&i| visible(stats, flags, &def.items[i]) && (!tabs || (def.items[i].section > 0) == (tab == 1))).collect()
 }
 
 /// Whether the store shows its two tabs (`UpgradesTabAvailable`): it sells upgrades.
@@ -182,8 +202,12 @@ fn input(
         } else if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || click.is_some() {
             store.confirm = None;
             if choice == 0 {
-                if let Some(it) = def.items.get(item).filter(|it| stats.coins >= it.coins && !owned(&stats, it)) {
+                if let Some(it) = def.items.get(item).filter(|it| stats.coins >= it.coins && !owned(&stats, &store.flags, it)) {
                     purchase(&mut stats, &attrs, it);
+                    if let Some(f) = it.story_set.clone() {
+                        store.flags.insert(f.0.clone(), f.1);
+                        store.set_flags.push(f);
+                    }
                     sfx.write(PostEvent::named("UI_S_ItemBuy", None));
                 }
             }
@@ -207,12 +231,12 @@ fn input(
     }
     if let Some(t) = tab {
         store.tab = t;
-        store.selected = tab_items(def, &stats, t, tabs).first().copied().unwrap_or(0);
+        store.selected = tab_items(def, &stats, &store.flags, t, tabs).first().copied().unwrap_or(0);
         store.dirty = true;
         sfx.write(PostEvent::named("UI_ChangeMainTab", None));
         return;
     }
-    let list = tab_items(def, &stats, store.tab, tabs);
+    let list = tab_items(def, &stats, &store.flags, store.tab, tabs);
     let mut clicked = false;
     for (i, r) in rows.iter().filter(|_| pointer) {
         if matches!(i, Interaction::Pressed | Interaction::Hovered) && store.selected != r.0 {
@@ -257,7 +281,7 @@ fn input(
         return;
     }
     let Some(it) = def.items.get(store.selected).cloned() else { return };
-    if owned(&stats, &it) || !it.requires.iter().all(|r| has(&stats, r)) {
+    if owned(&stats, &store.flags, &it) || !it.requires.iter().all(|r| has(&stats, r)) {
         sfx.write(PostEvent::named("UI_Failure", None));
         return;
     }
@@ -278,6 +302,11 @@ fn input(
         return;
     }
     purchase(&mut stats, &attrs, &it);
+    // (a favor: its story flag, for the mission's scripts)
+    if let Some(f) = it.story_set.clone() {
+        store.flags.insert(f.0.clone(), f.1);
+        store.set_flags.push(f);
+    }
     sfx.write(PostEvent::named("UI_S_ItemBuy", None));
     store.dirty = true;
 }
@@ -326,7 +355,7 @@ fn carried(stats: &PlayerStats, attrs: &crate::gamedata::Attrs, item: &str) -> O
         "Elixir_Mana_twk" => (stats.mana_elixirs, Some(attrs.elixir_capacity(true))),
         "Elixir_Health_twk" => (stats.health_elixirs, Some(attrs.elixir_capacity(false))),
         "Rune_twk" => (stats.runes, None),
-        id if id.starts_with("Twk_Upgrade_") || id.starts_with("BP_") => return None,
+        id if is_upgrade(id) || id.starts_with("BP_") || id.is_empty() => return None,
         id => (stats.items.get(id).copied().unwrap_or(0), None),
     })
 }
@@ -377,7 +406,7 @@ fn refresh(
     let lib = timelines.get("lib");
     let def = &data.0.stores[si];
     let tabs = has_tabs(def);
-    let list = tab_items(def, &stats, store.tab, tabs);
+    let list = tab_items(def, &stats, &store.flags, store.tab, tabs);
     if !list.contains(&store.selected) {
         store.selected = list.first().copied().unwrap_or(0);
     }
@@ -566,7 +595,7 @@ fn refresh(
         };
         let it = &def.items[i];
         let on = i == sel;
-        let have = owned(&stats, it);
+        let have = owned(&stats, &store.flags, it);
         let missing = it.requires.iter().find(|r| !has(&stats, r)).cloned();
         let available = !have && missing.is_none();
         let turn = [-2.5, -1.5, -0.5, 0.5, 1.5, 2.5][(i * 7 + 3) % 6];

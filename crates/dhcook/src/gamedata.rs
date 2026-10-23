@@ -1116,8 +1116,25 @@ fn upgrades(startup: &Package) -> Vec<UpgradeDef> {
 
 fn stores(cooked: &Path) -> Vec<StoreDef> {
     let mut out: Vec<StoreDef> = Vec::new();
-    for name in ["L_Pub_Craftsman", "L_Pub_FromPrison_Script", "L_Streets1_Script", "L_Streets2_Script"] {
-        let Ok(pkg) = Package::open(&cooked.join(format!("{name}.upk"))) else { continue };
+    // (and Daud's stories': their missions' preparations, `DLCnn_GlobalStore`, and the
+    // Drapers Ward's black market)
+    let dlc = cooked.join("..").join("DLC").join("PCConsole");
+    let paths = ["L_Pub_Craftsman", "L_Pub_FromPrison_Script", "L_Streets1_Script", "L_Streets2_Script"]
+        .iter()
+        .map(|n| cooked.join(format!("{n}.upk")))
+        .chain([("DLC06", "DLC06_GlobalStore"), ("DLC07", "L_DLC07_GlobalStore"), ("DLC07", "L_DLC07_DraperStreets_Script")].iter().map(|(d, n)| dlc.join(d).join(format!("{n}.upk"))));
+    // (a story flag requirement, as the scripts key their flags: none where its set is empty)
+    let story = |p: &Props, n: &str| -> Option<(String, bool)> {
+        let Some(Value::Struct(_, s)) = p.get(n) else { return None };
+        let s = Props(s.clone());
+        if s.object("m_pStoryFlagSet").unwrap_or(0) == 0 {
+            return None;
+        }
+        let Some(Value::Guid(g)) = s.get("m_StoryFlag") else { return None };
+        Some((format!("{:08x}{:08x}{:08x}{:08x}", g[0], g[1], g[2], g[3]), s.bool("m_bStoryFlagValue").unwrap_or(false)))
+    };
+    for path in paths {
+        let Ok(pkg) = Package::open(&path) else { continue };
         for i in pkg.exports_of_class("DisTweaks_Store").collect::<Vec<_>>() {
             let id = object_name(&pkg, i);
             if out.iter().any(|s| s.id == id) {
@@ -1146,9 +1163,20 @@ fn stores(cooked: &Path) -> Vec<StoreDef> {
                         icon: s(it, "m_StoreIconName"),
                         section: it.int("m_SubSectionIndex").unwrap_or(0),
                         coins: struct_array(&pkg, it, "m_Cost").iter().map(|c| c.int("m_Quantity").unwrap_or(0).max(0) as u32).sum(),
-                        item: it.object("m_Item").filter(|o| *o != 0).map(|o| object_name(&pkg, o)).unwrap_or_default(),
+                        // (Daud's ammunition by its type: `ammo:<type>`)
+                        item: it
+                            .object("m_Item")
+                            .filter(|o| *o != 0)
+                            .map(|o| pickup_ammo(&pkg, o).filter(|_| object_name(&pkg, o).starts_with("DLC0")).map(|a| a.0).unwrap_or_else(|| object_name(&pkg, o)))
+                            .unwrap_or_default(),
                         requires: i32_array(&pkg, it, "m_Prerequisites").into_iter().filter(|o| *o != 0).map(|o| object_name(&pkg, o)).collect(),
-                        quantity: it.object("m_Item").filter(|o| *o != 0).and_then(|o| pickup_quantity(&pkg, o)).unwrap_or(1),
+                        quantity: it
+                            .object("m_Item")
+                            .filter(|o| *o != 0)
+                            .and_then(|o| pickup_ammo(&pkg, o).filter(|_| object_name(&pkg, o).starts_with("DLC0")).map(|a| a.1).or_else(|| pickup_quantity(&pkg, o)))
+                            .unwrap_or(1),
+                        story_req: story(it, "m_StoryReq"),
+                        story_set: story(it, "m_StoryOnPurchase"),
                     })
                     .collect(),
             });
@@ -1330,6 +1358,19 @@ fn decode_int(raw: &[u8]) -> String {
 }
 
 /// How much a pickup tweak gives (`m_Quantity` / `m_nAmount`), local or imported.
+/// A pickup's ammunition (`m_AmmoRanges[type]`: its type and the most it gives), where it is
+/// ammunition: Daud's stores' bolts and mines, as `ammo:<type>`.
+fn pickup_ammo(pkg: &Package, o: i32) -> Option<(String, u32)> {
+    let p = if o > 0 { props(pkg, o) } else { None }?;
+    (0..16).find_map(|ty| match p.get_idx("m_AmmoRanges", ty) {
+        Some(Value::Struct(_, s)) => {
+            let s = Props(s.clone());
+            Some((format!("ammo:{ty}"), s.int("m_MaxValue").or(s.int("m_MinValue")).unwrap_or(1).max(1) as u32))
+        }
+        _ => None,
+    })
+}
+
 fn pickup_quantity(pkg: &Package, o: i32) -> Option<u32> {
     let p = if o > 0 { props(pkg, o) } else { None }?;
     ["m_Quantity", "m_nQuantity", "m_Amount", "m_nAmount", "m_iQuantity"].iter().find_map(|k| p.int(k)).map(|v| v.max(1) as u32)
@@ -1635,6 +1676,15 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
     let game = Package::open(&cooked.join("DishonoredGame.upk")).context("DishonoredGame.upk")?;
     let startup = Package::open(&cooked.join("Startup.upk")).context("Startup.upk")?;
     let mut d = GameData { actives: actives(&game), passives: passives(&game), attributes: attributes(&game, &startup), charms: charms(&startup), upgrades: upgrades(&startup), stores: stores(cooked), ..Default::default() };
+    // (Daud's upgrades, which his stores sell: their packages')
+    for (dir, name) in [("DLC06", "DLC06_GlobalStore"), ("DLC07", "L_DLC07_GlobalStore"), ("DLC07", "L_DLC07_DraperStreets_Script")] {
+        let Ok(pkg) = Package::open(&cooked.join("..").join("DLC").join("PCConsole").join(dir).join(format!("{name}.upk"))) else { continue };
+        for u in upgrades(&pkg) {
+            if !d.upgrades.iter().any(|x| x.id == u.id) {
+                d.upgrades.push(u);
+            }
+        }
+    }
     if let Ok(engine) = Package::open(&cooked.join("Engine.upk")) {
         if let Some(gravity) = engine.find_export("Default__WorldInfo").and_then(|i| props(&engine, i)).and_then(|p| p.float("DefaultGravityZ")) {
             d.pawn.insert("world.DefaultGravityZ".into(), gravity);
@@ -1810,6 +1860,14 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
             std::fs::write(dir.join("campaign.json"), serde_json::to_vec(&k)?)?;
         }
         Err(e) => log::warn!("campaign scripts (DishonoredGameFull_P): {e:#}"),
+    }
+    // (and Daud's stories' own: their whole-game packages, `campaign_DLC06.json`...)
+    for pack in &crate::DAUD_PACKS {
+        let path = cooked.join("..").join("DLC").join("PCConsole").join(pack.dir).join(format!("{}.upk", pack.game_full));
+        let Ok(full) = Package::open(&path) else { continue };
+        let k = crate::kismet::cook(&[std::sync::Arc::new(full)], &std::collections::HashMap::new());
+        log::info!("campaign {}: {} script ops, {} variables", pack.dir, k.ops.len(), k.vars.len());
+        std::fs::write(dir.join(format!("campaign_{}.json", pack.dir)), serde_json::to_vec(&k)?)?;
     }
     let startup = std::sync::Arc::new(startup);
     d.heart = conv_graph(&startup, "Dlg_HeartGadget.Dlg_HeartGadget");

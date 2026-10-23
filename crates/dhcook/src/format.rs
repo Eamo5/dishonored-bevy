@@ -3949,6 +3949,12 @@ pub struct StoreItem {
     /// how many it gives (ammunition, elixirs)
     #[serde(default)]
     pub quantity: u32,
+    /// the story flag it is offered under (`m_StoryReq`: the flag, the value wanted), and the
+    /// one it sets once bought (`m_StoryOnPurchase`: Daud's favors), as the scripts key them
+    #[serde(default)]
+    pub story_req: Option<(String, bool)>,
+    #[serde(default)]
+    pub story_set: Option<(String, bool)>,
 }
 
 /// A security device of a map (and what powers it).

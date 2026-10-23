@@ -1455,6 +1455,11 @@ impl Vm {
         &self.flags
     }
 
+    /// A story flag set from outside the scripts (a favor bought in Daud's store).
+    pub fn set_flag(&mut self, flag: &str, value: bool) {
+        self.flags.insert(flag.to_string(), value);
+    }
+
     fn prop(&self, op: u32, k: &str) -> Option<&KVal> {
         self.g.ops[op as usize].props.get(k)
     }

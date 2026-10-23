@@ -87,8 +87,12 @@ fn ammo_item(ty: u8) -> Option<&'static str> {
 }
 
 pub fn ammo_type(item: &str) -> Option<u8> {
+    // (Daud's stores' ammunition by its type: `ammo:<type>`)
+    if let Some(ty) = item.strip_prefix("ammo:").and_then(|t| t.parse::<u8>().ok()) {
+        return (ty < AMMO_TYPES as u8).then_some(ty);
+    }
     Some(match item {
-        "Bullets_Store_Ammo_twk" => 0,
+        "Bullets_Store_Ammo_twk" | "Bullets_Ammo_twk" => 0,
         "Bolt_Ammo_twk" | "Bolts_Ammo_twk" => 2,
         "SleepDart_Ammo_twk" => 3,
         _ => return (0..AMMO_TYPES as u8).find(|ty| ammo_item(*ty) == Some(item)),
