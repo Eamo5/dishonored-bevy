@@ -29,7 +29,7 @@ impl Plugin for KismetPlugin {
         app.add_systems(OnEnter(GameState::InGame), setup.after(LevelSpawnSet).after(crate::npc::spawn_npcs))
             .add_systems(
                 Update,
-                (world_events, more_events, (destroyed_events, fired_events, script_shakes), run, apply_effects, update_ui, talk_prompts, speakers_look)
+                (world_events, more_events, (destroyed_events, fired_events, script_shakes, recipe_events), run, apply_effects, update_ui, talk_prompts, speakers_look)
                     .chain()
                     .after(crate::interact::use_focus)
                     .run_if(in_state(GameState::InGame).and_then(resource_exists::<Vm>)),
@@ -5905,6 +5905,60 @@ fn talk_prompts(
                 commands.entity(e).try_remove::<Usable>();
             }
             _ => {}
+        }
+    }
+}
+
+/// Granny Rags' wedding (`DisDLC07TriggerGrannyRecipe`, `DisDLC07SeqEvent_GrannyRecipe`): a body
+/// that may stand for the groom, and one for the bride, laid in her circle; found, lost, changed
+/// for another, both there, one gone.
+fn recipe_events(
+    mut vm: ResMut<Vm>,
+    level: Option<Res<crate::level::LevelInfo>>,
+    npcs: Query<(Entity, &Npc, &FromSpawner, &Transform)>,
+    mut st: Local<HashMap<u32, (Option<Entity>, Option<Entity>)>>,
+) {
+    let Some(level) = level else { return };
+    let circles: Vec<(u32, Vec3, (f32, f32, Vec<String>, Vec<String>))> =
+        vm.g.actors.iter().enumerate().filter_map(|(i, a)| a.recipe.clone().map(|r| (i as u32, Vec3::from(a.position), r))).collect();
+    for (actor, at, (r, h, grooms, brides)) in circles {
+        let fits = |n: &Npc, from: &FromSpawner, names: &[String]| -> bool {
+            let tail = n.pawn.rsplit('.').next().unwrap_or(&n.pawn);
+            let lineage = level.scene.spawners.get(from.0 as usize).and_then(|s| s.npc_type).and_then(|t| level.scene.npc_types.get(t as usize)).map(|t| t.lineage.as_slice()).unwrap_or(&[]);
+            names.iter().any(|w| w.eq_ignore_ascii_case(tail) || lineage.iter().any(|l| l.eq_ignore_ascii_case(w)))
+        };
+        let inside: Vec<(Entity, &Npc, &FromSpawner)> = npcs
+            .iter()
+            .filter(|(_, n, _, t)| n.is_down() && (t.translation - at).with_y(0.0).length() <= r && (t.translation.y - at.y).abs() <= h + 0.6)
+            .map(|(e, n, f, _)| (e, n, f))
+            .collect();
+        let pick = |names: &[String], now: Option<Entity>| -> Option<Entity> {
+            let ok: Vec<Entity> = inside.iter().filter(|(_, n, f)| fits(n, f, names)).map(|x| x.0).collect();
+            now.filter(|e| ok.contains(e)).or_else(|| ok.first().copied())
+        };
+        let (g0, b0) = st.get(&actor).copied().unwrap_or((None, None));
+        let (g1, b1) = (pick(&grooms, g0), pick(&brides, b0));
+        if (g0, b0) == (g1, b1) {
+            continue;
+        }
+        st.insert(actor, (g1, b1));
+        let mut outs: Vec<&str> = Vec::new();
+        for (was, now, who) in [(g0, g1, "Groom"), (b0, b1, "Bride")] {
+            match (was, now) {
+                (None, Some(_)) => outs.push(if who == "Groom" { "Groom Found" } else { "Bride Found" }),
+                (Some(_), None) => outs.push(if who == "Groom" { "Groom Lost" } else { "Bride Lost" }),
+                (Some(a), Some(b)) if a != b => outs.push(if who == "Groom" { "Groom Has Changed" } else { "Bride Has Changed" }),
+                _ => {}
+            }
+        }
+        let (both0, both1) = (g0.is_some() && b0.is_some(), g1.is_some() && b1.is_some());
+        if both1 && !both0 {
+            outs.push("Both Are Now Present");
+        } else if both0 && !both1 {
+            outs.push("One Or More Are No Longer Present");
+        }
+        for o in outs {
+            vm.actor_event(actor, &["DisDLC07SeqEvent_GrannyRecipe"], OutSel::Desc(o), Some(Val::Player));
         }
     }
 }

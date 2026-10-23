@@ -1244,6 +1244,19 @@ fn run_script(
                 }
             });
         }
+        "knockout" => {
+            // (tests) knockout [NAME]: the nearest standing character (whose name or pawn holds
+            // NAME) asleep where it stands
+            let at = t.translation;
+            let named = cmd.get(1).cloned().unwrap_or_default();
+            commands.queue(move |w: &mut World| {
+                let mut q = w.query::<(&mut Npc, &Transform)>();
+                if let Some((mut n, _)) = q.iter_mut(w).filter(|(n, _)| !n.is_down() && (n.name.contains(&named) || n.pawn.contains(&named))).min_by(|a, b| a.1.translation.distance(at).total_cmp(&b.1.translation.distance(at))) {
+                    info!("script: {} ({}) knocked out", n.name, n.pawn);
+                    n.set_mode(crate::npc::Mode::Unconscious);
+                }
+            });
+        }
         "pistol" | "bow" => {
             // (tests) pistol [NAME]: the nearest standing hostile character (whose name holds NAME)
             // carries a pistol (or a tallboy's bow), and fights (knowing where Corvo is)

@@ -2430,7 +2430,11 @@ are in the settings file, `pad_binding_set` 0-3):
     `DisDLC07SeqEvent_HostileToPlayer` (the Undine's crew), a body come upon
     `DisSeqEvent_CorpseDetected`, a gun or bow fired `DisDLC07SeqEvent_PlayerFiredWeapon`
     (Corvo shot at in Daud's dream), and the packs' attention events their output for each
-    level (`DisDLC06SeqEvent_AttentionIncreasedTo` / `DecreasedTo`: Unaware to Busted). The
+    level (`DisDLC06SeqEvent_AttentionIncreasedTo` / `DecreasedTo`: Unaware to Busted). Granny
+    Rags' wedding (`DisDLC07TriggerGrannyRecipe`: its cylinder and `m_pAllowedGroomTweaks` /
+    `m_pAllowedBrideTweaks`, cooked onto its actor) watches the bodies laid in her circle and
+    tells its event (`DisDLC07SeqEvent_GrannyRecipe`) the groom or bride found, lost or changed,
+    both there, one gone: the Drapers Ward's "Recreate Granny's Wedding". The
     scripts' `DisSeqAct_CameraShake` jolts the view as a blow does (`m_fShakeForce`, held to
     1500 uu/s). A pickup named for its item ("`i") takes the item's own name where the game's
     list lacks it (the packs' documents; "disabstractitempickup" before).

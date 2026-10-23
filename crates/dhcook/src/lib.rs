@@ -1237,6 +1237,17 @@ impl<'a> Cooker<'a> {
                 "DisWallOfLight" | "DisDefenceTower" | "DisWatchTower" | "DisAlarmBell" | "DisWhaleOilReceptacle" | "DisWhaleOilBattery" => self.security(&obj),
                 "DisRatSpawner" => self.rat_spawner(&obj),
                 "DisRiverKrust" => self.krust(&obj),
+                "DisDLC07TriggerGrannyRecipe" => {
+                    // its cylinder and who may be laid in it
+                    let od = obj.props()?;
+                    let names = |n: &str| -> Vec<String> { object_array(&obj.pkg, &od, n).into_iter().filter_map(|o| self.assets.resolve(&obj.pkg, o)).map(|o| o.name().to_string()).collect() };
+                    let (grooms, brides) = (names("m_pAllowedGroomTweaks"), names("m_pAllowedBrideTweaks"));
+                    let cyl = self.chain(&obj).obj(self.assets, "CylinderComponent").map(|c| self.chain(&c));
+                    let r = cyl.as_ref().and_then(|c| c.float("CollisionRadius")).unwrap_or(22.0) * UNIT;
+                    let h = cyl.as_ref().and_then(|c| c.float("CollisionHeight")).unwrap_or(44.0) * UNIT;
+                    self.actor_ref(&obj).recipe = Some((r, h, grooms, brides));
+                    Ok(())
+                }
                 "DisFish" => self.fish(&obj),
                 "DisWaterSource" => self.water_source(&obj),
                 "DishonoredUsableObject" | "DisAudioLogPlayer" => self.usable_object(&obj),

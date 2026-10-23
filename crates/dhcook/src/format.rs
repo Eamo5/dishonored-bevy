@@ -941,6 +941,11 @@ pub struct KActor {
     /// `InventoryPickupSwordBase`)
     #[serde(default)]
     pub tweaks: Vec<String>,
+    /// Granny Rags' wedding circle (`DisDLC07TriggerGrannyRecipe`): its radius and half height
+    /// (m) and the characters that may stand for the groom and the bride
+    /// (`m_pAllowedGroomTweaks`, `m_pAllowedBrideTweaks`: pawn tweak names)
+    #[serde(default)]
+    pub recipe: Option<(f32, f32, Vec<String>, Vec<String>)>,
     /// the instances of actors attached to it (`Base`), which move with it: a gate's crusher
     #[serde(default)]
     pub riders: Vec<u32>,
