@@ -145,7 +145,9 @@ fn open(
     // (the favors bought: their story flags, for the mission's scripts; and the store's op
     // told of each purchase, and of the leaving: Piero's brandy, Griff's diagrams, Daud's
     // favors, the mission begun)
-    if let Some(vm) = vm.as_mut() {
+    // (touched only when there is something: a store changed each frame kept the pause menu
+    // from opening, as it waits on a store just shut)
+    if let Some(vm) = vm.as_mut().filter(|_| !store.set_flags.is_empty() || !store.outputs.is_empty()) {
         for (f, v) in std::mem::take(&mut store.set_flags) {
             vm.set_flag(&f, v);
         }
@@ -412,6 +414,53 @@ fn icon_of<'a>(data: &'a Data, it: &'a StoreItem) -> &'a str {
 /// The purchase handler and help bar share the same inventory-capacity check.
 fn at_capacity(stats: &PlayerStats, attrs: &crate::gamedata::Attrs, item: &str) -> bool {
     carried(stats, attrs, item).is_some_and(|(count, maximum)| maximum.is_some_and(|maximum| count >= maximum))
+}
+
+#[cfg(test)]
+mod open_tests {
+    use super::*;
+
+    fn app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Store>()
+            .init_resource::<Data>()
+            .init_resource::<Paused>()
+            .add_message::<OpenStore>()
+            .add_message::<PostEvent>()
+            .add_systems(Update, open);
+        app.world_mut().spawn(CursorOptions::default());
+        app
+    }
+
+    /// Nothing to tell the scripts: the store left untouched (the pause menu waits on a store
+    /// just changed, and opened never while it was touched each frame).
+    #[test]
+    fn an_idle_store_is_not_changed_each_frame() {
+        let mut app = app();
+        app.update();
+        app.update();
+        let tick = app.world().read_change_tick();
+        app.update();
+        let now = app.world().read_change_tick();
+        assert!(!app.world().resource_ref::<Store>().last_changed().is_newer_than(tick, now));
+    }
+
+    /// What was bought and the leaving reach the op that opened the store.
+    #[test]
+    fn purchases_and_the_exit_are_handed_on_once() {
+        let mut app = app();
+        app.insert_resource(crate::kismet::Vm::new(std::sync::Arc::new(Default::default()), &[]));
+        {
+            let mut s = app.world_mut().resource_mut::<Store>();
+            s.op = Some(3);
+            s.outputs = vec!["Brandy".into(), "Exit Store".into()];
+            s.set_flags = vec![("f".into(), true)];
+        }
+        app.update();
+        let s = app.world().resource::<Store>();
+        assert!(s.outputs.is_empty() && s.set_flags.is_empty());
+    }
 }
 
 #[cfg(test)]

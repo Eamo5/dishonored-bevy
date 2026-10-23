@@ -663,7 +663,9 @@ autosave, no "go to sleep"), and Daud's store before a mission never let the mis
 Daud's favors have their own tab (`ShopListPanelWithTabs_DLC06`'s FAVORS: the three small
 `lib_mTabs_tab_s`), bought with "Purchase Favor"; leaving his store before a mission says
 "Start Mission" and asks first (`t_Q_ExitStore`, YES / NO). A card wholly past the list's mask
-no longer draws its name squeezed under the list.
+no longer draws its name squeezed under the list. (The store is left untouched while it has
+nothing to tell: touched each frame, it kept the pause menu, which waits on a store just shut,
+from ever opening.)
 The story packs' own interface movies stand in for the game's on their maps (`UI_HUD_DLC07`,
 `UI_MissionStats_DLC06/07`, `UI_PauseMenu_*`, `UI_Shop_*`, `UI_Journal_*`, `UI_Note_*`, cooked
 with `cook-ui`; The Brigmore Witches' before The Knife of Dunwall's). A mission's statistics

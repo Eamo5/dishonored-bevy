@@ -1176,7 +1176,7 @@ pub struct Vm {
 }
 
 impl Vm {
-    fn new(g: Arc<Graph>, scene_volumes: &[dhcook::format::Volume]) -> Vm {
+    pub(crate) fn new(g: Arc<Graph>, scene_volumes: &[dhcook::format::Volume]) -> Vm {
         let n_ops = g.ops.len();
         let mut vm = Vm {
             vals: g.vars.iter().map(initial_value).collect(),
