@@ -476,6 +476,8 @@ pub struct NpcVisual {
 /// Character and prop visuals built from the cooked data, for gameplay systems.
 #[derive(Resource, Default)]
 pub struct GameAssets {
+    /// the other arms the scripts may put on the player (`Scene::arm_meshes`), by mesh path
+    pub arm_meshes: Vec<(String, VisualParts)>,
     pub white_rat_material: Option<PartMat>,
     /// a wall of light's dead as they vanish, and its `O_Opacity` slots (each expression's)
     pub electrocuted_material: Option<(Handle<Ue3Material>, Vec<usize>)>,
@@ -1559,6 +1561,12 @@ fn spawn_level(
         let mut parts = build_parts(t.body, &t.body_materials, &mut mb, &mut mesh_assets, &mut image_assets, &mut mat_assets, &mut sky_assets);
         let no_mark = (t.kind == "player" && scene.arms_no_mark.len() == t.body_materials.len())
             .then(|| build_parts(t.body, &scene.arms_no_mark, &mut mb, &mut mesh_assets, &mut image_assets, &mut mat_assets, &mut sky_assets));
+        if t.kind == "player" {
+            for (path, mesh, mats) in &scene.arm_meshes {
+                let alt = build_parts(Some(*mesh), mats, &mut mb, &mut mesh_assets, &mut image_assets, &mut mat_assets, &mut sky_assets);
+                game_assets.arm_meshes.push((path.clone(), alt));
+            }
+        }
         let head = build_parts(t.head, &t.head_materials, &mut mb, &mut mesh_assets, &mut image_assets, &mut mat_assets, &mut sky_assets);
         parts.mats.extend(head.mats.iter().map(|(_, m)| (true, *m)));
         parts.parts.extend(head.parts);

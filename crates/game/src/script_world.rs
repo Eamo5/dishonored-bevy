@@ -25,7 +25,7 @@ impl Plugin for ScriptWorldPlugin {
             .add_systems(OnEnter(GameState::InGame), |mut c: ResMut<Cinematic>| *c = Cinematic::default())
             .init_resource::<crate::kismet::ScriptSwitches>()
             .add_systems(Update, (apply_ai_fx.after(crate::kismet::apply_effects), apply_overrides, follow_and_sense, track_targets, cinematic_hud, scripted_shots, script_time, vanish_unseen, player_track, behaviors, beg, script_blasts, npc_materials).chain().run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (sync_switches, scripted_severs, spawn_props, foreground_npcs).after(crate::kismet::apply_effects).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (sync_switches, scripted_severs, scripted_heads, spawn_props, foreground_npcs).after(crate::kismet::apply_effects).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -1047,6 +1047,52 @@ fn foreground_npcs(
             mat.key.foreground_world = true;
         }
         done.insert(m.0.id());
+    }
+}
+
+/// Heads the scripts change (`DisDLC06SeqAct_NPCSetHeadMesh`: Billie Lurk's in Daud's base):
+/// the character's head parts for those of its type's other head (`NpcType::variants`, by the
+/// index), on the same body and skeleton.
+fn scripted_heads(
+    mut commands: Commands,
+    vm: Option<ResMut<Vm>>,
+    assets: Option<Res<crate::level::GameAssets>>,
+    level: Option<Res<crate::level::LevelInfo>>,
+    npcs: Query<&FromSpawner, With<Npc>>,
+    parents: Query<&ChildOf>,
+    mut parts: Query<(Entity, &crate::npc::NpcPart, &ChildOf, &mut Mesh3d)>,
+) {
+    let (Some(mut vm), Some(assets), Some(level)) = (vm, assets, level) else { return };
+    if vm.head_meshes.is_empty() {
+        return;
+    }
+    for (s, index) in std::mem::take(&mut vm.head_meshes) {
+        for (e, part, child, mut mesh) in &mut parts {
+            if part.lod != 0 {
+                continue;
+            }
+            let Ok(root) = parents.get(child.parent()) else { continue };
+            if npcs.get(root.parent()).map(|f| f.0) != Ok(s) {
+                continue;
+            }
+            let Some(vis) = assets.npc_types.get(part.npc_type as usize).and_then(|v| v.as_ref()) else { continue };
+            // (only the head's parts: their place among the head's)
+            if !vis.parts.mats.get(part.index as usize).is_some_and(|m| m.0) {
+                continue;
+            }
+            let k = vis.parts.mats.iter().take(part.index as usize).filter(|m| m.0).count();
+            // the head's type: its base's variant at that index
+            let base = level.scene.npc_types.iter().position(|t| t.variants.iter().any(|v| v.0 == part.npc_type)).unwrap_or(part.npc_type as usize);
+            let Some(&(to, _)) = level.scene.npc_types.get(base).and_then(|t| t.variants.get(index)) else { continue };
+            let Some(other) = assets.npc_types.get(to as usize).and_then(|v| v.as_ref()) else { continue };
+            let heads: Vec<usize> = other.parts.mats.iter().enumerate().filter(|(_, m)| m.0).map(|(i, _)| i).collect();
+            let Some(&j) = heads.get(k) else { continue };
+            let Some((m, mat)) = other.parts.parts.get(j) else { continue };
+            mesh.0 = m.clone();
+            let mut ec = commands.entity(e);
+            ec.remove::<(MeshMaterial3d<crate::lightmap::WorldMaterial>, MeshMaterial3d<crate::ue3mat::Ue3Material>)>();
+            mat.apply(&mut ec);
+        }
     }
 }
 

@@ -7855,7 +7855,33 @@ impl<'a> Cooker<'a> {
                             facefx: None,
                             sight: None,
                             stats: None,
-                        })
+                        });
+                            // the other arms the scripts put on him (`DisDLC07SeqAct_SetPlayerArmsMesh`),
+                            // on the same skeleton
+                            let mut alts: Vec<String> = Vec::new();
+                            for op in &self.scene.kismet.ops {
+                                if op.class == "DisDLC07SeqAct_SetPlayerArmsMesh" {
+                                    if let Some(KVal::Str(p)) = op.props.get("m_pPlayerArmsMesh") {
+                                        if !alts.contains(p) && !p.eq_ignore_ascii_case(&obj.path()) {
+                                            alts.push(p.clone());
+                                        }
+                                    }
+                                }
+                            }
+                            for p in alts {
+                                let Some(ao) = self.assets.find(&p) else {
+                                    log::warn!("player arms {p} not found");
+                                    continue;
+                                };
+                                match skeletal::read_skeletal_mesh(&ao.pkg, ao.idx) {
+                                    Ok(ad) if ad.bones.len() == d.bones.len() && ad.bones.iter().zip(&d.bones).all(|(a, b)| a.name.eq_ignore_ascii_case(&b.name)) => match self.cook_skinned(&ao, &ad, None) {
+                                        Ok((m, mats)) => self.scene.arm_meshes.push((p, m, mats)),
+                                        Err(e) => log::warn!("player arms {p}: {e:#}"),
+                                    },
+                                    Ok(_) => log::warn!("player arms {p}: another skeleton"),
+                                    Err(e) => log::warn!("player arms {p}: {e:#}"),
+                                }
+                            }
                         }
                         Err(e) => log::warn!("player arms: {e:#}"),
                     }

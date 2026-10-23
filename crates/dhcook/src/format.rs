@@ -87,6 +87,11 @@ pub struct Scene {
     /// (parallel to the player_arms type's `body_materials`)
     #[serde(default)]
     pub arms_no_mark: Vec<u32>,
+    /// The other arms the scripts put on the player (`DisDLC07SeqAct_SetPlayerArmsMesh`: Daud
+    /// bloodied in his dream, in an Overseer's coat at Coldridge): (mesh path, cooked mesh,
+    /// materials), on the player skeleton
+    #[serde(default)]
+    pub arm_meshes: Vec<(String, u32, Vec<u32>)>,
     /// The musical Overseers' music box as a rig of its own (a "device" type: its crank, levers
     /// and lid animated by `Overseer_MusicBox_as`), on the maps that have them.
     #[serde(default)]

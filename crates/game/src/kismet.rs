@@ -720,6 +720,11 @@ pub struct VmSave {
     /// objectives whose markers the journal turned the other way
     #[serde(default)]
     marker_flips: Vec<String>,
+    /// the arms the scripts put on the player, and saving barred
+    #[serde(default)]
+    arms_mesh: Option<String>,
+    #[serde(default)]
+    saving_off: bool,
 }
 
 /// What a conversation's speaker is doing that ends it (`DisConvoEndReasonEnum`: death,
@@ -999,6 +1004,11 @@ pub struct Vm {
     pub transition_out: Option<bool>,
     /// The Brigmore Witches took Daud up from it: his state to put in place
     pub transition_in: Option<Box<crate::gameplay::PlayerStats>>,
+    /// the arms the scripts put on the player (`DisDLC07SeqAct_SetPlayerArmsMesh`: a mesh path)
+    pub arms_mesh: Option<String>,
+    /// characters' heads changed for another of their type's (`DisDLC06SeqAct_NPCSetHeadMesh`:
+    /// Billie Lurk's), by spawner: the head's index
+    pub head_meshes: Vec<(u32, usize)>,
     /// sections' pins pulled before their scene plays, by its op (`SCT_<pin>`)
     pins_pulled: HashMap<u32, Vec<String>>,
     /// characters (their actors) roused, fighting, fleeing or down: an ambient scene of theirs
@@ -1279,6 +1289,8 @@ impl Vm {
             clear_tutorials: false,
             transition_out: None,
             transition_in: None,
+            arms_mesh: None,
+            head_meshes: Vec::new(),
             pins_pulled: HashMap::new(),
             disturbed: HashSet::new(),
             story_end: false,
@@ -3478,6 +3490,19 @@ impl Vm {
                     None => self.fire(op, 0),
                 }
             }
+            "DisDLC06SeqAct_NPCSetHeadMesh" => {
+                let i = self.pi(op, "m_HeadMeshIndex").unwrap_or(0).max(0) as usize;
+                for v in self.read(op, "NPC(s)") {
+                    if let Some(s) = if let Val::Actor(a) = v { g.actors.get(a as usize).and_then(|a| a.spawner) } else { None } {
+                        self.head_meshes.push((s, i));
+                    }
+                }
+                self.fire(op, 0);
+            }
+            "DisDLC07SeqAct_SetPlayerArmsMesh" => {
+                self.arms_mesh = self.ps(op, "m_pPlayerArmsMesh");
+                self.fire(op, 0);
+            }
             "DisDLC07SeqAct_ToggleSaving" => {
                 self.saving_off = input == 1;
                 self.fire(op, 0);
@@ -5051,6 +5076,8 @@ impl Vm {
             tower_cmds: self.tower_cmds.clone(),
             tutorials_up: self.tutorials_up.iter().map(|(op, up)| (*op, up.0, up.1.is_finite().then_some(up.1))).collect(),
             marker_flips: self.marker_flips.iter().cloned().collect(),
+            arms_mesh: self.arms_mesh.clone(),
+            saving_off: self.saving_off,
         }
     }
 
@@ -5102,6 +5129,8 @@ impl Vm {
         self.tower_cmds = s.tower_cmds;
         self.tutorials_up = s.tutorials_up.into_iter().map(|(op, at, until)| (op, (at, until.unwrap_or(f32::INFINITY)))).collect();
         self.marker_flips = s.marker_flips.into_iter().collect();
+        self.arms_mesh = s.arms_mesh;
+        self.saving_off = s.saving_off;
         if let Some(i) = s.inert {
             self.inert = i;
         }

@@ -2443,7 +2443,11 @@ are in the settings file, `pad_binding_set` 0-3):
     Witches takes him up (`DisDLC07SeqAct_ImportTransitionPlayerData`: "Low Chaos Imported" /
     "High Chaos Imported" with his powers, upgrades, charms, money and gear, whole and with
     the map's counts afresh; "Nothing Imported", and the pack's `NoTransfer` loadout, without
-    one). The scripts' `DisDLC07SeqAct_ToggleSaving` bars saving (the intro's dream),
+    one). The scripts change Daud's arms (`DisDLC07SeqAct_SetPlayerArmsMesh`: bloodied in his
+    dream, an Overseer's coat at Coldridge; the other meshes cooked on his skeleton,
+    `Scene::arm_meshes`) and a character's head for another of its type's
+    (`DisDLC06SeqAct_NPCSetHeadMesh`: Billie Lurk unmasked, by `m_HeadMeshIndex`);
+    `DisDLC07SeqAct_ToggleSaving` bars saving (the intro's dream),
     `DisDLC07SeqAct_ClearTutorials` puts the tutorial lines away, and
     `DisDLC07SeqAct_ClearPersonalRelationship` returns sides to their factions' standing (the
     Dead Eels with Daud and Edgar Wakefield). `DH_SUMMON_LOG`; `DH_GADGET_LOG` (chokedust clouds and who they catch); `DH_PFX_SLOW=<n>`

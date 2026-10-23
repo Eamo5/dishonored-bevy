@@ -28,7 +28,7 @@ impl Plugin for ArmsPlugin {
         app.init_resource::<DeathFall>()
             .init_resource::<ArmSteps>()
             .add_systems(OnEnter(GameState::InGame), spawn_arms.after(spawn_view_model))
-            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_steps.after(ArmsAnimSet), arm_effects.after(ArmsAnimSet), possess_hand.after(ArmsAnimSet), (animate_held, animate_sword, show_bolts).after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin).after(animate_view_model).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_steps.after(ArmsAnimSet), arm_effects.after(ArmsAnimSet), possess_hand.after(ArmsAnimSet), (animate_held, animate_sword, show_bolts).after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin, swap_arms).after(animate_view_model).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, (align_arms.in_set(ArmsAlign), arm_pitch).after(AnimPose).before(TransformSystems::Propagate))
             .add_systems(Last, scene_align_log.run_if(|| std::env::var_os("DH_SCENE_ALIGN").is_some()));
     }
@@ -616,6 +616,7 @@ fn spawn_arms(
                 NoFrustumCulling,
                 RenderLayers::layer(VIEW_LAYER),
                 crate::fxlight::LitPart,
+                ArmsPart(k),
             ))
             .id();
         if let Some(u) = unmarked.as_ref().and_then(|u| u.get(k)) {
@@ -2144,6 +2145,48 @@ fn pose_arms_ik(
     let (up, lo) = two_bone(rig, l, pl, shoulder + Vec3::new(0.05, -0.45, -0.08), Vec3::new(-0.2, -0.3, -1.0));
     set(&mut joints, l.upper, pl.inverse() * up);
     set(&mut joints, l.lower, up.inverse() * lo);
+}
+
+/// One of the arms' meshes (its place among the player type's view parts).
+#[derive(Component)]
+pub struct ArmsPart(pub usize);
+
+/// The arms the scripts put on the player (`DisDLC07SeqAct_SetPlayerArmsMesh`: Daud bloodied in
+/// his dream, in an Overseer's coat at Coldridge; his own again): each part's mesh and material
+/// swapped for the other arms' (cooked on the same skeleton).
+fn swap_arms(
+    mut commands: Commands,
+    vm: Option<Res<crate::kismet::Vm>>,
+    assets: Option<Res<GameAssets>>,
+    mut parts: Query<(Entity, &ArmsPart, &mut Mesh3d, &mut Visibility)>,
+    mut shown: Local<Option<String>>,
+) {
+    let (Some(vm), Some(assets)) = (vm, assets) else { return };
+    let want = vm.arms_mesh.clone();
+    if *shown == want {
+        return;
+    }
+    let Some(player) = assets.npc_types.iter().flatten().find(|v| v.kind == "player") else { return };
+    let alt = want.as_ref().and_then(|w| assets.arm_meshes.iter().find(|(p, _)| p.eq_ignore_ascii_case(w))).map(|(_, v)| v);
+    // (an arms mesh not cooked as another: his own)
+    let set = alt.unwrap_or(&player.parts);
+    for (e, part, mut mesh, mut vis) in &mut parts {
+        match set.view_parts.get(part.0) {
+            Some((m, mat)) => {
+                mesh.0 = m.clone();
+                let mut ec = commands.entity(e);
+                ec.remove::<(MeshMaterial3d<crate::lightmap::WorldMaterial>, MeshMaterial3d<crate::ue3mat::Ue3Material>)>();
+                mat.apply(&mut ec);
+                // (the mark's two skins are his own arms')
+                if alt.is_some() {
+                    ec.remove::<MarkSkin>();
+                }
+                *vis = Visibility::Inherited;
+            }
+            None => *vis = Visibility::Hidden,
+        }
+    }
+    *shown = want;
 }
 
 /// An arm mesh with both skins: the Outsider's mark appears with the first gift (the dream).
