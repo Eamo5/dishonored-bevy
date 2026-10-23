@@ -28,6 +28,8 @@ enum Ask {
     Key(String),
     Near(String, Vec3),
     Anim(usize),
+    Wave(Vec<RumbleSample>),
+    Stop,
 }
 
 static ASKED: std::sync::Mutex<Vec<Ask>> = std::sync::Mutex::new(Vec::new());
@@ -44,6 +46,14 @@ pub fn play(key: &str) {
 pub fn play_near(key: &str, at: Vec3) {
     if let Ok(mut a) = ASKED.lock() {
         a.push(Ask::Near(key.to_string(), at));
+    }
+}
+
+/// Rumble a waveform of the scripts' (`SeqAct_ForceFeedback`'s own), or stop what plays (its
+/// Stop).
+pub fn play_wave(wave: Vec<RumbleSample>) {
+    if let Ok(mut a) = ASKED.lock() {
+        a.push(if wave.is_empty() { Ask::Stop } else { Ask::Wave(wave) });
     }
 }
 
@@ -143,6 +153,11 @@ fn drive(
             let name = match &a {
                 Ask::Key(k) | Ask::Near(k, _) => k.clone(),
                 Ask::Anim(i) => data.0.anim_rumbles.get(*i).map(|r| format!("{}:{}", r.set, r.clip)).unwrap_or_default(),
+                Ask::Wave(_) => "script".into(),
+                Ask::Stop => {
+                    st.waves.clear();
+                    continue;
+                }
             };
             let w = match a {
                 Ask::Key(k) => data.0.rumbles.get(&k).cloned(),
@@ -156,6 +171,8 @@ fn drive(
                     }
                 }
                 Ask::Anim(i) => data.0.anim_rumbles.get(i).map(|r| r.wave.clone()),
+                Ask::Wave(w) => Some(w),
+                Ask::Stop => None,
             };
             if log {
                 info!("rumble: {name} {}", if w.is_some() { "plays" } else { "(none)" });

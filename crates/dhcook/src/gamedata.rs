@@ -1514,7 +1514,7 @@ const HOOK_ROWS: &[(u8, u8, f32, f32, u32)] = &[
 ];
 
 /// A force feedback waveform's samples (`ForceFeedbackWaveform.Samples`).
-fn waveform(pkg: &Package, idx: i32) -> Vec<RumbleSample> {
+pub(crate) fn waveform(pkg: &Package, idx: i32) -> Vec<RumbleSample> {
     let Some(p) = props(pkg, idx) else { return Vec::new() };
     let Some((c, off, sz)) = p.array("Samples") else { return Vec::new() };
     let shape = |s: &Props, n: &str| match s.name(n).unwrap_or("WF_Constant") {

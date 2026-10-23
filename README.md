@@ -571,7 +571,9 @@ are in the settings file, `pad_binding_set` 0-3):
   (`m_pSelectionForceFeedback`); and the contact system's (`DisContactSub_Rumble`)
   for him struck by a blade or a thing thrown, his sword striking a body or a wall, the blades
   meeting, a rat's bite, and, within 20 m and 10 m, a tallboy's step and an explosion. Paused,
-  the rumble stops.
+  the rumble stops. The level scripts' own play too (`SeqAct_ForceFeedback`, its waveform's
+  samples cooked onto the op; Stop ends it): the Rothwild slaughterhouse's machines and blasts
+  shaking the pad. Before, the op did nothing.
 - **The menus' sounds as the movies ask for them** (`SoundHandler.PlaySound` through the
   `Default` sound theme, `UISoundTheme_Common` and the movies' own, to `Snd_UI_Ingame`): a
   move along a list (`UI_Move`; at its end `UI_Stop`, the lists going no further, as

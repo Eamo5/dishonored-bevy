@@ -663,6 +663,17 @@ pub fn cook(levels: &[Arc<Package>], refs: &HashMap<ActorKey, KActor>) -> Kismet
                 op.props.insert(out.into(), KVal::List(list));
             }
         }
+        // the pad's rumble the op plays (its own `ForceFeedbackWaveform`'s samples: left, right,
+        // their shapes, seconds)
+        if op.class == "SeqAct_ForceFeedback" {
+            if let Some(w) = props.object("FFWaveform").filter(|o| *o > 0) {
+                let wave: Vec<KVal> = crate::gamedata::waveform(&pkg, w)
+                    .into_iter()
+                    .map(|s| KVal::List(vec![KVal::Int(s.left as i32), KVal::Int(s.right as i32), KVal::Int(s.left_fn as i32), KVal::Int(s.right_fn as i32), KVal::Float(s.duration)]))
+                    .collect();
+                op.props.insert("wave".into(), KVal::List(wave));
+            }
+        }
         ex.out.ops.push(op);
     }
     let voices = voice_events(levels);

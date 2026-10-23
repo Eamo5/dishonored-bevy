@@ -3055,6 +3055,35 @@ impl Vm {
                 }
                 self.fire(op, 0);
             }
+            // the pad shaken by the scripts (its waveform, cooked onto the op: `wave`); Stop ends it
+            "SeqAct_ForceFeedback" => {
+                let wave = match (input, self.g.ops[op as usize].props.get("wave")) {
+                    (0, Some(KVal::List(l))) => l
+                        .iter()
+                        .filter_map(|s| match s {
+                            KVal::List(v) => {
+                                let n = |k: usize| match v.get(k) {
+                                    Some(KVal::Int(i)) => *i,
+                                    _ => 0,
+                                };
+                                let d = match v.get(4) {
+                                    Some(KVal::Float(f)) => *f,
+                                    _ => 0.0,
+                                };
+                                Some(dhcook::format::RumbleSample { left: n(0).clamp(0, 255) as u8, right: n(1).clamp(0, 255) as u8, left_fn: n(2) as u8, right_fn: n(3) as u8, duration: d })
+                            }
+                            _ => None,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                crate::rumble::play_wave(wave);
+                self.fire(op, 0);
+            }
+            "DisDLC07SeqAct_IgnoreIdealMaximumCountForCorpseCleanup" => {
+                // (the mill's bodies kept however many there are: ours are never cleared away)
+                self.fire(op, 0);
+            }
             // (its only use, the Drapers Ward mill's, feeds a debug log: the speed read as still)
             "SeqAct_GetVelocity" => {
                 self.write(op, "Velocity Mag", Val::Float(0.0));
