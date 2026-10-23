@@ -215,8 +215,8 @@ pub enum Effect {
     Ambient(Val, bool),
     /// give (level > 0) or take (0) one of Corvo's powers
     Power(String, u8),
-    /// open a store (its tweak object's name)
-    Store(String),
+    /// open a store (its tweak object's name; the op that opened it, for its outputs)
+    Store(String, u32),
     /// save the game (`DisSeqAct_AutoSave`, at mission starts and milestones; a mission
     /// start's: its number)
     AutoSave(Option<u8>),
@@ -3097,7 +3097,7 @@ impl Vm {
             "DisSeqAct_OpenCraftsmanStore" => {
                 let tweak = self.ps(op, "m_pTweaks").unwrap_or_default();
                 let tweak = tweak.rsplit('.').next().unwrap_or(&tweak).to_string();
-                self.effects.push(Effect::Store(tweak));
+                self.effects.push(Effect::Store(tweak, op));
                 self.fire(op, 0);
             }
             "DisSeqAct_SetStoryFlag" => {
@@ -5184,6 +5184,18 @@ impl Vm {
     }
 
     /// The mission statistics screen of a `DisSeqAct_ShowMissionStats` was closed.
+    /// A store's op told what happened in it (`DisSeqAct_OpenCraftsmanStore`: an item's
+    /// `m_OutputLinkOnPurchase`, "Exit Store"), where it has that output.
+    pub fn store_output(&mut self, op: u32, desc: &str) {
+        if (op as usize) >= self.g.ops.len() {
+            return;
+        }
+        if let Some(i) = self.output_index(op, desc) {
+            self.fire(op, i);
+            self.pump();
+        }
+    }
+
     pub fn stats_closed(&mut self, op: u32) {
         match self.output_index(op, "Closed") {
             Some(i) => self.fire(op, i),
@@ -7100,8 +7112,8 @@ pub fn apply_effects(
                     stats.powers.insert(name, level);
                 }
             }
-            Effect::Store(tweak) => {
-                store.write(crate::store::OpenStore(tweak));
+            Effect::Store(tweak, op) => {
+                store.write(crate::store::OpenStore(tweak, Some(op)));
             }
             Effect::Choice(op, options) => {
                 choice.ask(op, options);

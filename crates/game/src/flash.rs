@@ -79,11 +79,44 @@ impl UiMaterial for FlashFill {
 }
 
 /// The movies' cooked timelines, loaded when first asked for.
+/// The story packs' own versions of the interface's movies (`UI_HUD_DLC07`, `UI_Shop_DLC06`,
+/// `UI_MissionStats_DLC07`...: Daud's art where Corvo's was), by the suffix their cooked names
+/// carry, tried in turn before the game's (set with the player's profile).
+static MOVIE_VARIANTS: std::sync::RwLock<Vec<&'static str>> = std::sync::RwLock::new(Vec::new());
+static MOVIE_COOKED: std::sync::Mutex<Option<HashMap<String, bool>>> = std::sync::Mutex::new(None);
+
+pub fn set_movie_variants(suffixes: &[&'static str]) {
+    if let Ok(mut v) = MOVIE_VARIANTS.write() {
+        *v = suffixes.to_vec();
+    }
+}
+
+/// The movie a name stands for now: the pack's own version where it was cooked, else itself.
+pub fn movie_variant(movie: &str) -> String {
+    let Ok(v) = MOVIE_VARIANTS.read() else { return movie.to_string() };
+    for s in v.iter() {
+        if movie.contains("_DLC") {
+            break;
+        }
+        let name = format!("{movie}{s}");
+        let cooked = {
+            let mut c = MOVIE_COOKED.lock().unwrap_or_else(|e| e.into_inner());
+            *c.get_or_insert_with(HashMap::new).entry(name.clone()).or_insert_with(|| crate::loading::cache_dir().join("ui").join(&name).join("timeline.json").exists())
+        };
+        if cooked {
+            return name;
+        }
+    }
+    movie.to_string()
+}
+
 #[derive(Resource, Default)]
 pub struct MovieTimelines(HashMap<String, Option<Arc<Timelines>>>);
 
 impl MovieTimelines {
     pub fn get(&mut self, movie: &str) -> Option<Arc<Timelines>> {
+        let movie = movie_variant(movie);
+        let movie = movie.as_str();
         self.0
             .entry(movie.to_string())
             .or_insert_with(|| {
@@ -942,7 +975,7 @@ fn field_box(def: &dhcook::format::EditTextDef, content: &str, align: u8, wrap: 
 
 impl FlashClip {
     pub fn new(movie: &str, tl: Arc<Timelines>, clip: Clip) -> FlashClip {
-        FlashClip { show_texts: false, images: HashMap::new(), texts: HashMap::new(), autosize: HashMap::new(), wrap: HashMap::new(), tweens: Vec::new(), spins: Vec::new(), movie: movie.to_string(), tl, clip, scale: 1.0, alpha: 1.0, m: IDENTITY, frozen: false, real_time: false, masks: Vec::new(), acc: 0.0, turned: HashMap::new() }
+        FlashClip { show_texts: false, images: HashMap::new(), texts: HashMap::new(), autosize: HashMap::new(), wrap: HashMap::new(), tweens: Vec::new(), spins: Vec::new(), movie: movie_variant(movie), tl, clip, scale: 1.0, alpha: 1.0, m: IDENTITY, frozen: false, real_time: false, masks: Vec::new(), acc: 0.0, turned: HashMap::new() }
     }
 
     /// `clip.setMask(mask)`: a clip drawn only within its mask's rectangle (bitmaps and text

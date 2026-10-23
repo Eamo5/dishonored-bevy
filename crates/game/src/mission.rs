@@ -165,6 +165,8 @@ fn record_view(def: &dhcook::format::MissionStatsDef, rec: &MissionRecord) -> St
             "ePlayerStat_GoldFound" => Some("coins"),
             "ePlayerStat_SokolovPaintingFound" => Some("paintings"),
             "ePlayerStat_OutsiderShrineFound" => Some("outsider"),
+            // (The Brigmore Witches' corrupted charms: its movie's own picture)
+            "ePlayerStat_CrackedCharmFound" => Some("crackedCharms"),
             _ => None,
         };
         if let Some(k) = kind {
@@ -181,7 +183,9 @@ fn record_view(def: &dhcook::format::MissionStatsDef, rec: &MissionRecord) -> St
         rows.push((row.description.clone(), shown));
     }
     let summary = def.summary.iter().enumerate().filter(|(j, (_, flag, want))| !flag.is_empty() && *j < 32 && (rec.summary >> j & 1 == 1) == *want).map(|(_, (d, _, _))| d.clone()).collect();
-    StatsView { title: rec.title.clone(), art: Some(stats_art(&def.name)), rows, summary, pickups, replay: false, in_menu: false }
+    // (the story packs' own picture: `m_BackgroundImagePath`'s texture)
+    let art = def.background.rsplit('.').next().filter(|b| !b.is_empty()).map(str::to_string).unwrap_or_else(|| stats_art(&def.name).to_string());
+    StatsView { title: rec.title.clone(), art: Some(art), rows, summary, pickups, replay: false, in_menu: false }
 }
 
 /// The main menu's missions: a mission's statistics as last shown (`OpenMissionStats`), over
@@ -284,7 +288,9 @@ fn show_stats(
     };
     // the mission's record kept for the main menu; the screen drawn from it
     let map = level.as_ref().map(|l| l.scene.name.clone()).unwrap_or_default();
-    let rec = record_of(def, &stats, vm.as_deref(), mission_name(&map));
+    // (its title the mission's name: `m_MissionNames` by its number or its map's)
+    let title = data.mission_title(&map, def.mission).unwrap_or_else(|| mission_name(&map));
+    let rec = record_of(def, &stats, vm.as_deref(), title);
     let mut view = record_view(def, &rec);
     records.keep(tweak_mission(def), rec);
     paused.0 = true;
@@ -307,7 +313,7 @@ enum Stat {
 /// reached, the things found (the panel's icon frame, name, count).
 struct StatsView {
     title: String,
-    art: Option<&'static str>,
+    art: Option<String>,
     rows: Vec<(String, Stat)>,
     summary: Vec<String>,
     /// (icon frame, name, found, how many there were: 0 unknown)
@@ -378,7 +384,7 @@ fn spawn_stats(commands: &mut Commands, tl: std::sync::Arc<dhcook::format::Timel
     let title_font = |size: f32| TextFont { font: fonts.title.clone().into(), font_size: FontSize::Px(size * s), ..default() };
     let normal_font = |size: f32| TextFont { font_size: FontSize::Px(size * s), ..default() };
     // the mission's illustration (`_img_mc`, its 1280 x 720 grown 5%)
-    if let Some((h, _)) = view.art.and_then(|a| ui.file(images, "missionstats", a)) {
+    if let Some((h, _)) = view.art.as_deref().and_then(|a| ui.file(images, "missionstats", a)) {
         let (iw, ih) = (1280.0 * 1.05, 720.0 * 1.05);
         let p = off + (Vec2::new(640.0, 360.0) - Vec2::new(iw, ih) * 0.5) * s;
         commands.spawn((ImageNode::new(h), Node { position_type: PositionType::Absolute, left: Val::Px(p.x), top: Val::Px(p.y), width: Val::Px(iw * s), height: Val::Px(ih * s), ..default() }, Pickable::IGNORE, ChildOf(root)));

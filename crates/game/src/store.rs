@@ -25,9 +25,10 @@ impl Plugin for StorePlugin {
     }
 }
 
-/// Open a store by its tweak object's name (`Twk_Store_Craftsman`).
+/// Open a store by its tweak object's name (`Twk_Store_Craftsman`), and the script op that
+/// opened it (told of purchases and the exit).
 #[derive(Message, Clone)]
-pub struct OpenStore(pub String);
+pub struct OpenStore(pub String, pub Option<u32>);
 
 #[derive(Resource, Default)]
 pub struct Store {
@@ -46,12 +47,23 @@ pub struct Store {
     /// and those its purchases set, for the scripts
     pub flags: std::collections::HashMap<String, bool>,
     pub set_flags: Vec<(String, bool)>,
+    /// the script op that opened it and the outputs to raise on it (`m_OutputLinkOnPurchase`,
+    /// "Exit Store")
+    op: Option<u32>,
+    outputs: Vec<String>,
+    /// leaving asked first (Daud's stores before a mission: `t_Q_ExitStore`): the button chosen
+    leaving: Option<(String, usize)>,
 }
 
 impl Store {
     /// The question asked over it (its words, the button chosen), if any (`msgbox`).
     pub fn question(&self) -> Option<(&str, usize)> {
-        self.confirm.as_ref().map(|c| (c.0.as_str(), c.1))
+        self.confirm.as_ref().map(|c| (c.0.as_str(), c.1)).or_else(|| self.leaving.as_ref().map(|c| (c.0.as_str(), c.1)))
+    }
+
+    /// Its question is the leaving's (YES / NO), not a purchase's (PURCHASE / CANCEL).
+    pub fn asks_leaving(&self) -> bool {
+        self.confirm.is_none() && self.leaving.is_some()
     }
 }
 
@@ -130,14 +142,24 @@ fn open(
     mut sfx: MessageWriter<PostEvent>,
     mut vm: Option<ResMut<crate::kismet::Vm>>,
 ) {
-    // (the favors bought: their story flags, for the mission's scripts)
+    // (the favors bought: their story flags, for the mission's scripts; and the store's op
+    // told of each purchase, and of the leaving: Piero's brandy, Griff's diagrams, Daud's
+    // favors, the mission begun)
     if let Some(vm) = vm.as_mut() {
         for (f, v) in std::mem::take(&mut store.set_flags) {
             vm.set_flag(&f, v);
         }
+        let outs = std::mem::take(&mut store.outputs);
+        if let Some(op) = store.op {
+            for o in outs {
+                vm.store_output(op, &o);
+            }
+        }
     }
     let Some(r) = requests.read().last().cloned() else { return };
     store.flags = vm.as_ref().map(|v| v.flags().clone()).unwrap_or_default();
+    store.op = r.1;
+    store.leaving = None;
     let Some(i) = data.0.stores.iter().position(|s| s.id.eq_ignore_ascii_case(&r.0)).or_else(|| {
         // a store variant of the same shop (Piero's at a later visit)
         let base = r.0.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');
@@ -156,14 +178,42 @@ fn open(
     cursor.grab_mode = CursorGrabMode::None;
 }
 
-/// The items of a tab, in the grid's order: (item index, the section header before it).
-fn tab_items(def: &dhcook::format::StoreDef, stats: &PlayerStats, flags: &std::collections::HashMap<String, bool>, tab: u8, tabs: bool) -> Vec<usize> {
-    (0..def.items.len()).filter(|&i| visible(stats, flags, &def.items[i]) && (!tabs || (def.items[i].section > 0) == (tab == 1))).collect()
+/// The tab an item goes under: 0 purchases, 1 upgrades, 2 favors (Daud's: no item, a story
+/// flag set once bought; `ShopListPanelWithTabs_DLC06`'s `l_TabFavors`).
+fn tab_of(it: &StoreItem) -> u8 {
+    if it.item.is_empty() && it.story_set.is_some() {
+        2
+    } else if it.section > 0 {
+        1
+    } else {
+        0
+    }
 }
 
-/// Whether the store shows its two tabs (`UpgradesTabAvailable`): it sells upgrades.
+/// The items of a tab, in the grid's order.
+fn tab_items(def: &dhcook::format::StoreDef, stats: &PlayerStats, flags: &std::collections::HashMap<String, bool>, tab: u8, tabs: bool) -> Vec<usize> {
+    (0..def.items.len()).filter(|&i| visible(stats, flags, &def.items[i]) && (!tabs || tab_of(&def.items[i]) == tab)).collect()
+}
+
+/// The store's tabs (`UpgradesTabAvailable`: it sells upgrades; Daud's favors a third).
+fn tab_list(def: &dhcook::format::StoreDef) -> Vec<u8> {
+    let mut t = vec![0];
+    for k in [1, 2] {
+        if def.items.iter().any(|it| tab_of(it) == k) {
+            t.push(k);
+        }
+    }
+    t
+}
+
 fn has_tabs(def: &dhcook::format::StoreDef) -> bool {
-    def.items.iter().any(|it| it.section > 0)
+    tab_list(def).len() > 1
+}
+
+/// Leaving it asks first and begins the mission (`t_ExitStore` "Start Mission",
+/// `t_Q_ExitStore`): Daud's stores before a mission.
+fn starts_mission(def: &dhcook::format::StoreDef) -> bool {
+    def.id.contains("GlobalStore")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -204,10 +254,7 @@ fn input(
             if choice == 0 {
                 if let Some(it) = def.items.get(item).filter(|it| stats.coins >= it.coins && !owned(&stats, &store.flags, it)) {
                     purchase(&mut stats, &attrs, it);
-                    if let Some(f) = it.story_set.clone() {
-                        store.flags.insert(f.0.clone(), f.1);
-                        store.set_flags.push(f);
-                    }
+                    bought(&mut store, it);
                     sfx.write(PostEvent::named("UI_S_ItemBuy", None));
                 }
             }
@@ -219,6 +266,28 @@ fn input(
         }
         return;
     }
+    // leaving for the mission asked first: YES leaves, NO or Escape stays
+    if let Some((_, choice)) = store.leaving.clone() {
+        let mut choice = choice;
+        if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyA) || keys.just_pressed(KeyCode::KeyD) {
+            choice = 1 - choice.min(1);
+        }
+        let click = store.confirm_click.take();
+        if let Some(c) = click {
+            choice = c;
+        }
+        if keys.just_pressed(KeyCode::Escape) {
+            store.leaving = None;
+        } else if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || click.is_some() {
+            store.leaving = None;
+            if choice == 0 {
+                close(&mut commands, &mut store, &roots, &mut paused, &mut cursor, &mut sfx);
+            }
+        } else if let Some(l) = store.leaving.as_mut() {
+            l.1 = choice;
+        }
+        return;
+    }
     // the tabs: clicked, or Q / E (`LB` / `RB`)
     let mut tab = None;
     for (i, t) in tabs_q.iter().filter(|_| pointer) {
@@ -226,8 +295,12 @@ fn input(
             tab = Some(t.0);
         }
     }
-    if tabs && (keys.just_pressed(KeyCode::KeyQ) || keys.just_pressed(KeyCode::KeyE) || keys.just_pressed(KeyCode::Tab)) {
-        tab = Some(1 - store.tab);
+    let order = tab_list(def);
+    let at = order.iter().position(|t| *t == store.tab).unwrap_or(0);
+    if tabs && keys.just_pressed(KeyCode::KeyQ) {
+        tab = Some(order[(at + order.len() - 1) % order.len()]);
+    } else if tabs && (keys.just_pressed(KeyCode::KeyE) || keys.just_pressed(KeyCode::Tab)) {
+        tab = Some(order[(at + 1) % order.len()]);
     }
     if let Some(t) = tab {
         store.tab = t;
@@ -267,14 +340,11 @@ fn input(
     }
     let quit = keys.just_pressed(KeyCode::Escape) || help == Some(crate::helpbar::Btn::B);
     if quit {
-        store.open = None;
-        for e in &roots {
-            commands.entity(e).despawn();
+        if starts_mission(def) {
+            store.leaving = Some((data.text(S, "t_Q_ExitStore"), 0));
+            return;
         }
-        paused.0 = false;
-        cursor.visible = false;
-        cursor.grab_mode = CursorGrabMode::Locked;
-        sfx.write(PostEvent::named("UI_S_CloseShop", None));
+        close(&mut commands, &mut store, &roots, &mut paused, &mut cursor, &mut sfx);
         return;
     }
     if !(help == Some(crate::helpbar::Btn::A) || keys.just_pressed(KeyCode::Enter) || clicked && step == 0 && rows.is_empty()) {
@@ -302,13 +372,33 @@ fn input(
         return;
     }
     purchase(&mut stats, &attrs, &it);
-    // (a favor: its story flag, for the mission's scripts)
+    bought(&mut store, &it);
+    sfx.write(PostEvent::named("UI_S_ItemBuy", None));
+    store.dirty = true;
+}
+
+/// What a purchase tells the scripts: a favor's story flag, and its output on the store's op.
+fn bought(store: &mut Store, it: &StoreItem) {
     if let Some(f) = it.story_set.clone() {
         store.flags.insert(f.0.clone(), f.1);
         store.set_flags.push(f);
     }
-    sfx.write(PostEvent::named("UI_S_ItemBuy", None));
-    store.dirty = true;
+    if !it.output.is_empty() {
+        store.outputs.push(it.output.clone());
+    }
+}
+
+/// The store shut: play goes on, its op told ("Exit Store": the mission begun, Piero's talk).
+fn close(commands: &mut Commands, store: &mut Store, roots: &Query<Entity, With<StoreRoot>>, paused: &mut Paused, cursor: &mut CursorOptions, sfx: &mut MessageWriter<PostEvent>) {
+    store.open = None;
+    store.outputs.push("Exit Store".into());
+    for e in roots {
+        commands.entity(e).despawn();
+    }
+    paused.0 = false;
+    cursor.visible = false;
+    cursor.grab_mode = CursorGrabMode::Locked;
+    sfx.write(PostEvent::named("UI_S_CloseShop", None));
 }
 
 /// A store item's picture (`items/<icon>_Large`): its own, or its upgrade's.
@@ -476,9 +566,27 @@ fn refresh(
     });
     // the tabs
     if let (true, Some(lib)) = (tabs, lib.as_ref()) {
-        for (t, (x, key)) in [(334.0, "t_Purchases"), (596.0, "t_Upgrades")].into_iter().enumerate() {
-            let on = t as u8 == store.tab;
-            clip(&mut commands, root, Vec2::ZERO, lib, "lib", "lib_mTabs_tab", Vec2::new(x, 87.55), &mut |fc| {
+        // (two: `lib_mTabs_tab` at 334 and 596; Daud's three, with his favors, the small
+        // `lib_mTabs_tab_s` 196 apart about the panel, as `TabsHandler` lays them)
+        let order = tab_list(def);
+        let three = order.len() > 2;
+        let places: Vec<(u8, f32, String)> = order
+            .iter()
+            .enumerate()
+            .map(|(k, &t)| {
+                let x = if three { 465.0 + 196.0 * (k as f32 - 1.0) } else { [334.0, 596.0][k.min(1)] };
+                let label = match t {
+                    0 => data.text(S, "t_Purchases"),
+                    1 => data.text(S, "t_Upgrades"),
+                    _ => data.text("DisGFxMoviePlayerBase_Texts", "t_Favors"),
+                };
+                (t, x, label)
+            })
+            .collect();
+        let sym = if three { "lib_mTabs_tab_s" } else { "lib_mTabs_tab" };
+        for (t, x, label) in places {
+            let on = t == store.tab;
+            clip(&mut commands, root, Vec2::ZERO, lib, "lib", sym, Vec2::new(x, 87.55), &mut |fc| {
                 fc.set_visible("tab_mc.icUpdate_mc", false);
                 if on {
                     fc.goto("tab_mc", "selected", true);
@@ -495,9 +603,9 @@ fn refresh(
             });
             let (k, dy) = if on { (1.25, -20.0) } else { (1.0, 0.0) };
             let mid = Vec2::new(x, 87.55 + dy + k * -4.0);
-            words(&mut commands, root, Vec2::ZERO, Rect::from_center_size(mid, Vec2::new(280.0, 40.0)), 0.0, data.text(S, key).to_uppercase(), title(20.0 * k), if on { Color::srgb(27.0 / 255.0, 30.0 / 255.0, 31.0 / 255.0) } else { PALE }, Justify::Center, false, true);
-            let e = commands.spawn((TabButton(t as u8), Button, Node { position_type: PositionType::Absolute, left: Val::Px(off.x + (x - 120.0) * s), top: Val::Px(off.y + (87.55 - 40.0) * s), width: Val::Px(240.0 * s), height: Val::Px(76.0 * s), ..default() }, ChildOf(root))).id();
-            let _ = e;
+            let w = if three { 196.0 } else { 240.0 };
+            words(&mut commands, root, Vec2::ZERO, Rect::from_center_size(mid, Vec2::new(w + 30.0, 40.0)), 0.0, label.to_uppercase(), title(20.0 * k), if on { Color::srgb(27.0 / 255.0, 30.0 / 255.0, 31.0 / 255.0) } else { PALE }, Justify::Center, false, true);
+            commands.spawn((TabButton(t), Button, Node { position_type: PositionType::Absolute, left: Val::Px(off.x + (x - w * 0.5) * s), top: Val::Px(off.y + (87.55 - 40.0) * s), width: Val::Px(w * s), height: Val::Px(76.0 * s), ..default() }, ChildOf(root)));
         }
     }
     // the cards: their places in the list (`MovieClipCreator`), sections first in the upgrades
@@ -510,7 +618,8 @@ fn refresh(
     let mut row_y = 95.0;
     for (k, &i) in list.iter().enumerate() {
         let it = &def.items[i];
-        if tabs && store.tab == 1 && it.section != section {
+        // (Daud's stores name no sections: one grid)
+        if tabs && store.tab == 1 && it.section != section && !def.sections.is_empty() {
             // a new section: the last row's ghosts, then its name
             if section >= 0 {
                 while col % 4 != 0 {
@@ -579,7 +688,9 @@ fn refresh(
     }
     for (k, (item, c)) in cells.iter().enumerate() {
         let at = list_at + Vec2::new(c.x, c.y - scroll);
-        if at.y < list_at.y - 100.0 || at.y > list_at.y + mask_h + 100.0 {
+        // (only the cards the list's mask shows: one wholly past it drew its words, squeezed,
+        // under the list)
+        if at.y + 88.0 < list_at.y || at.y - 88.0 > list_at.y + mask_h {
             continue;
         }
         let Some(i) = *item else {
@@ -651,7 +762,10 @@ fn refresh(
         }
         // its name, two lines under it; its price on the tag
         let name_c = at + apply(&m, Vec2::new(0.0, 38.95 + 23.3));
-        words(&mut commands, clipped, origin, Rect::from_center_size(name_c, Vec2::new(149.6, 46.6) * sc), turn as f32, it.name.clone(), normal(19.0 * sc), if on { Color::srgb(200.0 / 255.0, 204.0 / 255.0, 196.0 / 255.0) } else { Color::srgb(133.0 / 255.0, 142.0 / 255.0, 125.0 / 255.0) }, Justify::Center, true, false);
+        // (its words wholly in the mask, else not at all: cut by it, they drew squeezed)
+        if name_c.y + 23.3 * sc <= list_at.y + mask_h && name_c.y - 23.3 * sc >= list_at.y {
+            words(&mut commands, clipped, origin, Rect::from_center_size(name_c, Vec2::new(149.6, 46.6) * sc), turn as f32, it.name.clone(), normal(19.0 * sc), if on { Color::srgb(200.0 / 255.0, 204.0 / 255.0, 196.0 / 255.0) } else { Color::srgb(133.0 / 255.0, 142.0 / 255.0, 125.0 / 255.0) }, Justify::Center, true, false);
+        }
         if missing.is_none() {
             let price_c = at + apply(&m, Vec2::new(-76.25 + 22.85 + 22.0, 16.3 + 12.2));
             let col = if !available { Color::srgb(140.0 / 255.0, 25.0 / 255.0, 24.0 / 255.0) } else if on { DARK } else { PALE };
@@ -669,7 +783,14 @@ fn refresh(
     // list's `_lock`)
     if let Some(lib) = lib.clone() {
         use crate::helpbar::{Btn, Entry};
-        let entries = [Entry::new(Btn::A, data.text(S, if store.tab == 1 { "t_PurchaseUpgrade" } else { "t_Purchase" })).locked(list.is_empty()), Entry::new(Btn::B, data.text("DisGFxMoviePlayerBase_Texts", "t_Exit"))];
+        // (a favor: `t_PurchaseFavor`; Daud's stores before a mission leave for it: `t_ExitStore`)
+        let buy = match store.tab {
+            1 => data.text(S, "t_PurchaseUpgrade"),
+            2 => data.text("DisGFxMoviePlayerBase_Texts", "t_PurchaseFavor"),
+            _ => data.text(S, "t_Purchase"),
+        };
+        let exit = if starts_mission(def) { data.text(S, "t_ExitStore") } else { data.text("DisGFxMoviePlayerBase_Texts", "t_Exit") };
+        let entries = [Entry::new(Btn::A, buy).locked(list.is_empty()), Entry::new(Btn::B, exit)];
         crate::helpbar::spawn(&mut commands, root, lib, s, off + crate::helpbar::END * s, &entries, &mut ui, &mut images, !opening);
     }
     // the chosen item's details

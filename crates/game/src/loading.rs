@@ -447,7 +447,8 @@ fn spawn_loading_ui(
     let menu = config.map.eq_ignore_ascii_case(crate::menu::MENU_MAP);
     let art = if backdrop.is_some() { None } else { mission_art(&config.map).and_then(|a| ui_png(&mut images, &format!("missions/MissionsScreen_{a}_Large.png"))) };
     let strip = ui_png(&mut images, "loading/ChapterTitleBg.png");
-    let title = if menu { "DISHONORED".to_string() } else { crate::save::mission_name(&config.map) };
+    // (the map's own name, `[MapNames]`, as the original's `DisBinkOverlayManager` gives it)
+    let title = if menu { "DISHONORED".to_string() } else { data.map_name(&config.map).map(str::to_string).unwrap_or_else(|| crate::save::mission_name(&config.map)) };
     let gold = Color::srgb(0.86, 0.80, 0.66);
     // (its interface blending in gamma space, as the game's: `CompositingSpace::Srgb`)
     let cam = commands.spawn((LoadingUi, Camera2d, Camera { order: 100, ..default() }, bevy::camera::CompositingSpace::Srgb)).id();

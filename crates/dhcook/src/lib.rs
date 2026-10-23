@@ -9050,6 +9050,19 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         // The Knife of Dunwall: Daud's wheel; The Brigmore Witches' (Pull's place)
         ("UI_PowerWheel_DLC06_SF", ""),
         ("UI_PowerWheel_DLC07_SF", ""),
+        // (and the stories' own versions of the other screens: Daud's art where Corvo's was;
+        // their pause menus' packages hold the game's options and load screens too)
+        ("UI_MissionStats_DLC06_SF", ""),
+        ("UI_MissionStats_DLC07_SF", ""),
+        ("UI_PauseMenu_DLC06_SF", "UI_PauseMenu_DLC06."),
+        ("UI_PauseMenu_DLC07_SF", "UI_PauseMenu_DLC07."),
+        ("UI_Shop_DLC06_SF", ""),
+        ("UI_Shop_DLC07_SF", ""),
+        ("UI_Journal_DLC06_SF", ""),
+        ("UI_Journal_DLC07_SF", ""),
+        ("UI_Note_DLC06_SF", ""),
+        ("UI_Note_DLC07_SF", ""),
+        ("UI_HUD_DLC07_SF", ""),
     ] {
         // (the game's packages, or the DLC's)
         let path = std::iter::once(cooked.to_path_buf()).chain(crate::resolver::dlc_dirs(cooked)).map(|d| d.join(format!("{pkg_name}.upk"))).find(|p| p.exists());

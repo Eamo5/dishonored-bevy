@@ -1372,7 +1372,7 @@ fn run_script(
             // store TWEAK: open a store (`Twk_Store_Craftsman`, `Twk_Store_GriffShop`)
             if let Some(tweak) = cmd.get(1).cloned() {
                 commands.queue(move |w: &mut World| {
-                    w.write_message(crate::store::OpenStore(tweak));
+                    w.write_message(crate::store::OpenStore(tweak, None));
                 });
             }
         }

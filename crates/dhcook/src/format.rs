@@ -3795,6 +3795,10 @@ pub struct AnimRumble {
 pub struct MissionStatsDef {
     pub name: String,
     pub mission: i32,
+    /// its own picture behind the statistics (`m_BackgroundImagePath`: the story packs',
+    /// `UI_MSBg_Intro_DLC07.MissionStatsDLC07_Intro`; the game's are the movie's by mission)
+    #[serde(default)]
+    pub background: String,
     pub stats: Vec<MissionStatRow>,
     /// story outcomes shown when their flag has the value: (description, flag, value)
     pub summary: Vec<(String, String, bool)>,
@@ -3955,6 +3959,10 @@ pub struct StoreItem {
     pub story_req: Option<(String, bool)>,
     #[serde(default)]
     pub story_set: Option<(String, bool)>,
+    /// the output of the store's script op raised once it is bought (`m_OutputLinkOnPurchase`:
+    /// "Brandy", "Optical Diagram", Daud's "Favor_SafeCode")
+    #[serde(default)]
+    pub output: String,
 }
 
 /// A security device of a map (and what powers it).

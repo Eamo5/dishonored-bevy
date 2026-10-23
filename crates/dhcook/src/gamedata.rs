@@ -395,7 +395,7 @@ fn campaign_tweaks(pkg: &Package, d: &mut GameData) {
         match pkg.class_name(i).as_str() {
             "DisTweaks_MissionStats" => {
                 let Some(p) = props(pkg, i) else { continue };
-                let mut m = MissionStatsDef { name: object_name(pkg, i), mission: p.int("m_MissionNumber").unwrap_or(-1), ..Default::default() };
+                let mut m = MissionStatsDef { name: object_name(pkg, i), mission: p.int("m_MissionNumber").unwrap_or(-1), background: s(&p, "m_BackgroundImagePath"), ..Default::default() };
                 let maxes = i32_array(pkg, &p, "m_MissionStatsMaxValues");
                 for (k, r) in struct_array(pkg, &p, "m_MissionStats").into_iter().enumerate() {
                     m.stats.push(MissionStatRow {
@@ -1177,6 +1177,7 @@ fn stores(cooked: &Path) -> Vec<StoreDef> {
                             .unwrap_or(1),
                         story_req: story(it, "m_StoryReq"),
                         story_set: story(it, "m_StoryOnPurchase"),
+                        output: s(it, "m_OutputLinkOnPurchase"),
                     })
                     .collect(),
             });
@@ -1202,6 +1203,22 @@ fn localization(cooked: &Path, d: &mut GameData) {
             let v = v.trim();
             let v = v.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(v).to_string();
             d.texts.insert(format!("{prefix}.{}", k.trim()), v);
+        }
+    }
+    // the missions' names by their number (`DishonoredGameInfo.m_MissionNames[n]`: "Dishonored"
+    // to "Everything is Connected", the stories' own from 10), as `Missions.<n>`
+    if let Ok(raw) = std::fs::read(cooked.join("..").join("Localization").join("INT").join("DishonoredGame.int")) {
+        let mut section = String::new();
+        for line in decode_int(&raw).lines() {
+            let line = line.trim();
+            if line.starts_with('[') && line.ends_with(']') {
+                section = line[1..line.len() - 1].to_string();
+                continue;
+            }
+            let Some((k, v)) = line.split_once('=') else { continue };
+            let Some(n) = k.trim().strip_prefix("m_MissionNames[").and_then(|r| r.strip_suffix(']')).filter(|_| section == "DishonoredGameInfo") else { continue };
+            let v = v.trim();
+            d.texts.insert(format!("Missions.{n}"), v.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(v).to_string());
         }
     }
     // Corvo's pawn tweak's strings (`m_HeartTargetTutorialMessage`...) as `Pawn.<key>` (its

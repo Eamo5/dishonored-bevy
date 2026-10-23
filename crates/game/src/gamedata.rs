@@ -52,6 +52,12 @@ impl Data {
         }
         self.1 .1.clear();
         self.1 .2 = want_i;
+        // (the story's own interface movies: The Brigmore Witches' over The Knife of Dunwall's)
+        crate::flash::set_movie_variants(match want_i.and_then(|i| self.0.profiles.get(i)).and_then(|p| p.maps.first()).map(|m| m.as_str()) {
+            Some("l_dlc07_") => &["_DLC07", "_DLC06"],
+            Some(_) => &["_DLC06"],
+            None => &[],
+        });
         if let Some(p) = want_i.and_then(|i| self.0.profiles.get(i)).cloned() {
             let name = p.name.clone();
             self.1 .1 = p.texts.clone();
@@ -88,6 +94,24 @@ impl Data {
     /// A power by the name the player's data gives it ("Transversal": Blink).
     pub fn power_name<'a>(&'a self, name: &'a str) -> &'a str {
         self.0.power_aliases.iter().find(|(from, _)| from == name).map(|(_, to)| to.as_str()).unwrap_or(name)
+    }
+
+    /// A map's own name (`DishonoredGame.int [MapNames]`: "Rothwild Slaughterhouse"), as the
+    /// loading screen gives it.
+    pub fn map_name(&self, map: &str) -> Option<&str> {
+        self.0.map_names.iter().find(|(k, _)| k.eq_ignore_ascii_case(map.trim())).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty())
+    }
+
+    /// A mission's name (`DishonoredGameInfo.m_MissionNames[n]`): the mission's number given
+    /// (`m_MissionNumber`, from 1), else that of the mission the map belongs to
+    /// (`m_MissionsGame`: the prison's "Dishonored", Daud's "Choosing Your Mark"...).
+    pub fn mission_title(&self, map: &str, number: i32) -> Option<String> {
+        let n = if number >= 1 {
+            number
+        } else {
+            self.0.missions.iter().find(|(n, maps)| *n >= 0 && maps.iter().any(|m| m.trim().eq_ignore_ascii_case(map.trim()))).map(|(n, _)| *n)?
+        };
+        self.0.texts.get(&format!("Missions.{n}")).filter(|t| !t.is_empty()).cloned()
     }
 
     /// Daud plays (The Knife of Dunwall's maps).

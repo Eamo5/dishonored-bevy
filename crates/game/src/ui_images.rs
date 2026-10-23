@@ -12,8 +12,10 @@ pub struct UiImages(HashMap<(String, u32), Option<(Handle<Image>, Vec2)>>);
 impl UiImages {
     /// An image of a movie and its pixel size (None if not cooked).
     pub fn get(&mut self, images: &mut Assets<Image>, movie: &str, id: u32) -> Option<(Handle<Image>, Vec2)> {
+        // (the story pack's own version of the movie, as its timeline is)
+        let movie = crate::flash::movie_variant(movie);
         self.0
-            .entry((movie.to_string(), id))
+            .entry((movie.clone(), id))
             .or_insert_with(|| {
                 let path = crate::loading::cache_dir().join("ui").join(movie).join(format!("{id}.png"));
                 let bytes = std::fs::read(&path).ok()?;

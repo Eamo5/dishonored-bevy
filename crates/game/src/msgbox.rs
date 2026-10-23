@@ -75,7 +75,7 @@ fn draw(
     let size = UVec2::new(w.width() as u32, w.height() as u32);
     let want = menu.question().or_else(|| journal.question()).or_else(|| store.question()).map(|(q, c)| (q.to_string(), c, size)).or_else(|| end.as_ref().and_then(|e| e.question(&data)).map(|(q, c)| (q, c, size)));
     // (the store's buttons: PURCHASE / CANCEL; the others' YES / NO)
-    let buttons = if store.question().is_some() && menu.question().is_none() && journal.question().is_none() {
+    let buttons = if store.question().is_some() && !store.asks_leaving() && menu.question().is_none() && journal.question().is_none() {
         [("DisGFxMoviePlayerStore_Texts", "t_Purchase"), ("DisGFxMoviePlayerBase_Texts", "t_Cancel")]
     } else {
         [("DisGFxMoviePlayerBase_Texts", "t_Yes"), ("DisGFxMoviePlayerBase_Texts", "t_No")]
