@@ -991,6 +991,14 @@ pub struct Vm {
     /// jolts to the view the scripts give (`DisSeqAct_CameraShake`: the Slaughterhouse's
     /// machines, uu/s)
     shakes: Vec<f32>,
+    /// saving barred by the scripts (`DisDLC07SeqAct_ToggleSaving`: the Brigmore intro's dream)
+    pub saving_off: bool,
+    /// the tutorial lines on screen cleared (`DisDLC07SeqAct_ClearTutorials`)
+    pub clear_tutorials: bool,
+    /// The Knife of Dunwall ended: Daud as he is kept for The Brigmore Witches (high chaos?)
+    pub transition_out: Option<bool>,
+    /// The Brigmore Witches took Daud up from it: his state to put in place
+    pub transition_in: Option<Box<crate::gameplay::PlayerStats>>,
     /// sections' pins pulled before their scene plays, by its op (`SCT_<pin>`)
     pins_pulled: HashMap<u32, Vec<String>>,
     /// characters (their actors) roused, fighting, fleeing or down: an ambient scene of theirs
@@ -1267,6 +1275,10 @@ impl Vm {
             put_pockets: Vec::new(),
             put_pocketed: Vec::new(),
             shakes: Vec::new(),
+            saving_off: false,
+            clear_tutorials: false,
+            transition_out: None,
+            transition_in: None,
             pins_pulled: HashMap::new(),
             disturbed: HashSet::new(),
             story_end: false,
@@ -2325,6 +2337,13 @@ impl Vm {
                 let (targets, recipients) = (self.read(op, "Target"), self.read(op, "Recipients"));
                 let reciprocate = self.pb(op, "m_bReciprocate").unwrap_or(true);
                 self.ai_fx.push(crate::script_world::AiFx::Disposition { targets, recipients, input: input.min(2) as u8, hostile: disp.contains("Enemy"), reciprocate });
+                self.fire(op, 0);
+            }
+            // (The Brigmore Witches: the sides' own feelings forgotten, back to their factions'
+            // standing: the Dead Eels' with Daud's and Edgar Wakefield's)
+            "DisDLC07SeqAct_ClearPersonalRelationship" => {
+                let (targets, recipients) = (self.read(op, "Target"), self.read(op, "Recipients"));
+                self.ai_fx.push(crate::script_world::AiFx::Disposition { targets, recipients, input: 1, hostile: false, reciprocate: true });
                 self.fire(op, 0);
             }
             "DisSeqAct_LimitPawnMinHealth" => {
@@ -3446,6 +3465,27 @@ impl Vm {
                 }
                 self.fire(op, 0);
             }
+            // The Brigmore Witches taking up Daud as The Knife of Dunwall left him (its end's
+            // save): "Low Chaos Imported" / "High Chaos Imported", else "Nothing Imported" (none,
+            // or the intro's first look, `m_bSkipImporting`)
+            "DisDLC07SeqAct_ImportTransitionPlayerData" => {
+                let found = (!self.pb(op, "m_bSkipImporting").unwrap_or(false)).then(crate::save::read_transition).flatten();
+                match found {
+                    Some(t) => {
+                        self.transition_in = Some(Box::new(t.stats));
+                        self.fire(op, if t.high_chaos { 2 } else { 1 });
+                    }
+                    None => self.fire(op, 0),
+                }
+            }
+            "DisDLC07SeqAct_ToggleSaving" => {
+                self.saving_off = input == 1;
+                self.fire(op, 0);
+            }
+            "DisDLC07SeqAct_ClearTutorials" => {
+                self.clear_tutorials = true;
+                self.fire(op, 0);
+            }
             "DisSeqAct_CameraShake" => {
                 let f = self.pf(op, "m_fShakeForce").unwrap_or(200.0);
                 self.shakes.push(f);
@@ -3477,6 +3517,7 @@ impl Vm {
             // credits are over, the main menu
             "DisDLC06SeqAct_EndDLC06" => {
                 self.story_end = true;
+                self.transition_out = Some(input == 1);
                 self.fire(op, input.min(1) as usize);
             }
             "DisDLC07SeqAct_EndDLC07" => {
@@ -6871,6 +6912,9 @@ pub fn apply_effects(
         ResMut<crate::patrol::Patrols>,
     ),
 ) {
+    if std::mem::take(&mut vm.clear_tutorials) {
+        msgs.clear_tutorials();
+    }
     if vm.effects.is_empty() {
         return;
     }

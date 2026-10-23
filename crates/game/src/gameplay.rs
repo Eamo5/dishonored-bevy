@@ -1002,6 +1002,12 @@ impl HudMessages {
         self.stack.retain(|t| t.text != s);
     }
 
+    /// Every tutorial line put away (`DisDLC07SeqAct_ClearTutorials`).
+    pub fn clear_tutorials(&mut self) {
+        self.stack.clear();
+        self.shown = 0;
+    }
+
     /// The tutorial window on screen: its words and picture.
     pub fn tutorial_window_shown(&self) -> Option<(String, u8)> {
         self.stack.get(self.shown).and_then(|t| t.window.map(|i| (t.text.clone(), i)))

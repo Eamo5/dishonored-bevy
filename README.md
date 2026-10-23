@@ -2434,8 +2434,15 @@ are in the settings file, `pad_binding_set` 0-3):
     scripts' `DisSeqAct_CameraShake` jolts the view as a blow does (`m_fShakeForce`, held to
     1500 uu/s). A pickup named for its item ("`i") takes the item's own name where the game's
     list lacks it (the packs' documents; "disabstractitempickup" before).
-  Not yet: the loadout carried from The Knife of Dunwall's end
-  (`DisDLC07SeqAct_ImportTransitionPlayerData`: "Nothing Imported"). `DH_SUMMON_LOG`; `DH_GADGET_LOG` (chokedust clouds and who they catch); `DH_PFX_SLOW=<n>`
+  - *One story to the next*: The Knife of Dunwall's end (`DisDLC06SeqAct_EndDLC06`) keeps Daud
+    as he is and the chaos it ended in (`saves/dlc06_transition.json`), and The Brigmore
+    Witches takes him up (`DisDLC07SeqAct_ImportTransitionPlayerData`: "Low Chaos Imported" /
+    "High Chaos Imported" with his powers, upgrades, charms, money and gear, whole and with
+    the map's counts afresh; "Nothing Imported", and the pack's `NoTransfer` loadout, without
+    one). The scripts' `DisDLC07SeqAct_ToggleSaving` bars saving (the intro's dream),
+    `DisDLC07SeqAct_ClearTutorials` puts the tutorial lines away, and
+    `DisDLC07SeqAct_ClearPersonalRelationship` returns sides to their factions' standing (the
+    Dead Eels with Daud and Edgar Wakefield). `DH_SUMMON_LOG`; `DH_GADGET_LOG` (chokedust clouds and who they catch); `DH_PFX_SLOW=<n>`
   (every effect n times slower, to see the briefest: an arc mine's 0.1 s lightning).
 
 ## Rules from roshan's r614/blink research

@@ -958,6 +958,27 @@ fn script_time(
         tc.bend_remaining = 0.0;
         powers.dark_vision = false;
     }
+    // Daud carried from one story to the next: kept at The Knife of Dunwall's end, taken up
+    // at The Brigmore Witches' start (his powers, upgrades, charms, money and gear; whole in
+    // body and with this map's counts begun afresh)
+    if let Some(high_chaos) = vm.transition_out.take() {
+        crate::save::write_transition(&crate::save::Transition { high_chaos, stats: stats.clone() });
+        info!("level scripts: Daud kept for The Brigmore Witches ({} chaos)", if high_chaos { "high" } else { "low" });
+    }
+    if let Some(t) = vm.transition_in.take() {
+        let mut s = *t;
+        s.health = s.max_health;
+        s.mana = s.max_mana;
+        s.mana_cap = s.max_mana;
+        s.dead = false;
+        s.game_over = None;
+        s.kills = 0;
+        s.knockouts = 0;
+        s.times_detected = 0;
+        s.civilians_killed = 0;
+        *stats = s;
+        info!("level scripts: Daud taken up from The Knife of Dunwall");
+    }
     // the statistics the scripts read (`DisSeqAct_GetPlayerStat`), and those they reset
     for name in std::mem::take(&mut vm.stat_resets) {
         stats.counters.insert(name, 0);

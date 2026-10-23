@@ -70,6 +70,7 @@ fn save_blocked(
     choice: Res<crate::choice::Choice>,
     cine: Res<crate::script_world::Cinematic>,
     peek: Res<crate::keyhole::Peek>,
+    vm: Option<Res<crate::kismet::Vm>>,
 ) {
     let dt = time.delta_secs();
     let fighting = npcs.iter().any(|n| !n.is_down() && n.hostile() && n.mode == crate::npc::Mode::Combat);
@@ -77,7 +78,8 @@ fn save_blocked(
     for (i, (on, linger)) in [(fighting, 1.0), (choice.pending.is_some(), 0.1), (cine.on, 1.0)].into_iter().enumerate() {
         b.after[i] = if on { linger } else { (b.after[i] - dt).max(0.0) };
     }
-    b.now = b.after.iter().any(|t| *t > 0.0) || powers.blink.is_some() || choking || assassinating || peek.at.is_some();
+    // (and while the scripts bar it: `DisDLC07SeqAct_ToggleSaving`)
+    b.now = b.after.iter().any(|t| *t > 0.0) || powers.blink.is_some() || choking || assassinating || peek.at.is_some() || vm.is_some_and(|v| v.saving_off);
 }
 
 /// The slot the autosaves are asked for: they go to it or the next, in turn, never over the
@@ -312,6 +314,35 @@ fn saves_dir() -> PathBuf {
     let d = crate::settings::user_dir().join("saves");
     let _ = std::fs::create_dir_all(&d);
     d
+}
+
+/// What The Knife of Dunwall's end leaves for The Brigmore Witches to take up
+/// (`DisDLC06SeqAct_EndDLC06`'s save, `DisDLC07SeqAct_ImportTransitionPlayerData`): the chaos it
+/// ended in (high?) and Daud as he was.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Transition {
+    pub high_chaos: bool,
+    pub stats: PlayerStats,
+}
+
+pub fn transition_path() -> PathBuf {
+    saves_dir().join("dlc06_transition.json")
+}
+
+pub fn write_transition(t: &Transition) {
+    let path = transition_path();
+    match serde_json::to_vec(t) {
+        Ok(d) => {
+            if let Err(e) = replace_save(&path, |f| std::io::Write::write_all(f, &d)) {
+                warn!("transition: {e}");
+            }
+        }
+        Err(e) => warn!("transition: {e}"),
+    }
+}
+
+pub fn read_transition() -> Option<Transition> {
+    serde_json::from_slice(&std::fs::read(transition_path()).ok()?).ok()
 }
 
 fn slot_path(slot: usize) -> PathBuf {
