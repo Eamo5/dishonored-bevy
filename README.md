@@ -673,7 +673,12 @@ are titled with its name (`DishonoredGameInfo.m_MissionNames` by its tweak's `m_
 else its map's `m_MissionsGame` entry: "Choosing Your Mark", not "L_DLC07_BaseIntro_P") over its
 own picture (`m_BackgroundImagePath`: Corvo in Daud's dream) and count The Brigmore Witches'
 corrupted charms (`ePlayerStat_CrackedCharmFound`) on the FOUND panel. The loading screen names
-the map as `[MapNames]` does ("Rothwild Slaughterhouse", "Drapers Ward").
+the map as `[MapNames]` does ("Rothwild Slaughterhouse", "Drapers Ward"). A pack movie's own
+versions of a symbol stand in for it (`sh_listPanelWithTabs_DLC06`, `p_pauseMenu_DLC07`). The
+journal knows Daud's chapters (`DLC06_ChapterInfoList`, `DLC07_ChapterInfoList`, from the
+stories' whole-game packages: "A Stay of Execution for Lizzy" with Lizzy Stride's portrait,
+`UI_portraits_objectives_DLC07`); before, his chapter pane was empty. A tutorial page's title
+fields no longer show their stand-in "WW" behind the title.
   Acrobat's `MantleAnimRate` speeds up the climb and its head animation together.
   Strong Arms shortens the choke hold and its progress indicator (the hold is `ChokeTime`,
   1.5 s, and the victim's In clip, 0.667 s: 2.2 s, as roshan's r614/blink research decoded the

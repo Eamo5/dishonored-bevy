@@ -2070,7 +2070,7 @@ fn run_script(
                 "script: player pos {:.2} grounded {} locked {} vel {:.2} hp {:.0} mana {:.0} kills {} ko {} dead {}",
                 t.translation, p.grounded, p.locked, p.velocity, stats.health, stats.mana, stats.kills, stats.knockouts, stats.dead
             );
-            info!("script: runes {} coins {} powers {:?} charms {:?} items {:?}", stats.runes, stats.coins, stats.powers, stats.charms_owned, stats.items);
+            info!("script: runes {} coins {} powers {:?} charms {:?} items {:?} chapter {:?}", stats.runes, stats.coins, stats.powers, stats.charms_owned, stats.items, stats.chapter);
             commands.queue(|w: &mut World| {
                 let c = w.resource::<crate::script_world::Cinematic>();
                 let (on, hold, since) = (c.on, c.hold, c.since);

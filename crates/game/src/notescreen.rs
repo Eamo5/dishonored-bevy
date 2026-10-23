@@ -227,6 +227,11 @@ fn draw(
                 }
             }
             fc.show_texts = true;
+            // (the title's own fields stay blank: the title is drawn over them; their stand-in
+            // "WW" showed through)
+            for f in ["_txt_mc", "_txtShadow0_mc", "_txtShadow1_mc", "_txtShadow2_mc"] {
+                fc.set_text(&format!("_title_mc.{f}.txt"), String::new());
+            }
         }
         // (the map's legend: its places aren't kept)
         fc.set_visible("_map_mc._legend_mc", false);

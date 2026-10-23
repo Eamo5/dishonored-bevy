@@ -611,7 +611,13 @@ fn tutorial_notes(cooked: &Path, game: &Package, d: &mut GameData) {
 }
 
 fn chapters(pkg: &Package, d: &mut GameData) {
-    let Some(list) = pkg.find_export("Twk_ChapterInfoList.Twk_ChapterInfoList").and_then(|i| props(pkg, i)) else { return };
+    chapter_list(pkg, "Twk_ChapterInfoList.Twk_ChapterInfoList", d);
+}
+
+/// A chapter list's chapters (the game's; Daud's stories', in their whole-game packages:
+/// `DLC07_ChapterInfoList.ChapterInfoList.DLC07_ChapterInfoList`).
+fn chapter_list(pkg: &Package, path: &str, d: &mut GameData) {
+    let Some(list) = pkg.find_export(path).and_then(|i| props(pkg, i)) else { return };
     for e in struct_array(pkg, &list, "m_ChapterList") {
         let tag = s(&e, "m_ChapterTag");
         let Some(info) = e.object("m_pChapterInfo").filter(|&o| o > 0).and_then(|o| props(pkg, o)) else { continue };
@@ -623,7 +629,9 @@ fn chapters(pkg: &Package, d: &mut GameData) {
             let portrait = s(&tp, "m_TargetPortraitPath");
             c.targets.push((s(&tp, "m_TargetName"), portrait.rsplit('.').next().unwrap_or(&portrait).to_string()));
         }
-        d.chapters.push(c);
+        if !d.chapters.iter().any(|x| x.tag == c.tag) {
+            d.chapters.push(c);
+        }
     }
     log::info!("gamedata: {} chapters", d.chapters.len());
 }
@@ -1882,6 +1890,9 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
     for pack in &crate::DAUD_PACKS {
         let path = cooked.join("..").join("DLC").join("PCConsole").join(pack.dir).join(format!("{}.upk", pack.game_full));
         let Ok(full) = Package::open(&path) else { continue };
+        // (its chapters, for the journal: "A Stay of Execution for Lizzy" and its target)
+        let list = format!("{0}_ChapterInfoList.ChapterInfoList.{0}_ChapterInfoList", pack.dir);
+        chapter_list(&full, &list, &mut d);
         let k = crate::kismet::cook(&[std::sync::Arc::new(full)], &std::collections::HashMap::new());
         log::info!("campaign {}: {} script ops, {} variables", pack.dir, k.ops.len(), k.vars.len());
         std::fs::write(dir.join(format!("campaign_{}.json", pack.dir)), serde_json::to_vec(&k)?)?;

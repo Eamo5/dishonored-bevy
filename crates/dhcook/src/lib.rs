@@ -8945,6 +8945,9 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         // the mask's lens frame
         ("Startup", "effects", "AltScreen_Effects.SpyGlass"),
         ("UI_portraits_objectives", "portraits", ""),
+        // (and Daud's stories' targets: Rothwild, Timsh, Lizzy Stride, Delilah...)
+        ("UI_portraits_objectives_DLC06", "portraits", ""),
+        ("UI_portraits_objectives_DLC07", "portraits", ""),
         // the options' controls scheme pictures (`m_GamepadXenonImagePath`, `_PS3ImagePath`)
         ("UI_GamepadMapping", "pad", ""),
     ]

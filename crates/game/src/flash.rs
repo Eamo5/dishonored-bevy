@@ -449,7 +449,10 @@ impl Clip {
 
     /// An exported symbol's clip.
     pub fn export(tl: &Timelines, name: &str) -> Option<Clip> {
-        tl.exports.get(name).filter(|id| tl.sprites.contains_key(id)).map(|&id| Clip::new(tl, id))
+        // (a story pack's movie names its own versions of a symbol: `sh_listPanelWithTabs_DLC06`,
+        // `p_pauseMenu_DLC07`)
+        let found = |n: &str| tl.exports.get(n).filter(|id| tl.sprites.contains_key(id)).copied();
+        found(name).or_else(|| ["_DLC07", "_DLC06"].iter().find_map(|s| found(&format!("{name}{s}")))).map(|id| Clip::new(tl, id))
     }
 
     fn frames(tl: &Timelines, sprite: u16) -> usize {
