@@ -33,24 +33,26 @@ pub struct Data(pub GameData, pub Corvo);
 /// screens, kept while another player's are played (by that player's name); that player's
 /// interface strings, over Corvo's.
 #[derive(Default)]
-pub struct Corvo(Option<(String, dhcook::format::PlayerProfile)>, BTreeMap<String, String>);
+pub struct Corvo(Option<(String, dhcook::format::PlayerProfile)>, BTreeMap<String, String>, Option<usize>);
 
 impl Data {
     /// The player of a map: another's profile (Daud on The Knife of Dunwall's maps) put in
     /// place of Corvo's, or Corvo's put back. Whose it is now.
     pub fn use_profile(&mut self, map: &str) -> String {
         let m = map.to_ascii_lowercase();
-        let want = self.0.profiles.iter().find(|p| p.maps.iter().any(|pre| m.starts_with(pre.as_str()))).map(|p| p.name.clone());
-        let now = self.1 .0.as_ref().map(|(n, _)| n.clone());
-        if want == now {
-            return now.unwrap_or_else(|| "Corvo".into());
+        // (by the profile itself: Daud's two stories each have theirs)
+        let want_i = self.0.profiles.iter().position(|p| p.maps.iter().any(|pre| m.starts_with(pre.as_str())));
+        let want = want_i.map(|i| self.0.profiles[i].name.clone());
+        if want_i == self.1 .2 {
+            return want.unwrap_or_else(|| "Corvo".into());
         }
         // (Corvo's back first)
         if let Some((_, c)) = self.1 .0.take() {
             self.swap(c);
         }
         self.1 .1.clear();
-        if let Some(p) = want.as_ref().and_then(|w| self.0.profiles.iter().find(|p| &p.name == w)).cloned() {
+        self.1 .2 = want_i;
+        if let Some(p) = want_i.and_then(|i| self.0.profiles.get(i)).cloned() {
             let name = p.name.clone();
             self.1 .1 = p.texts.clone();
             let corvo = self.swap(p);
@@ -537,6 +539,23 @@ mod tests {
         assert_eq!(data.power_name("Transversal"), "Transversal");
         assert!(data.ui_text("HUD.m_InteractionTexts[23]").is_none());
         assert_eq!(data.0.profiles.len(), 1);
+    }
+
+    #[test]
+    fn each_story_plays_its_own_profile_of_the_same_player() {
+        use dhcook::format::{LoadoutDef, PlayerProfile};
+        let mut d = GameData::default();
+        for (prefix, loadout) in [("dlc06_", "Knife"), ("l_dlc07_", "Witches")] {
+            d.profiles.push(PlayerProfile { name: "Daud".into(), maps: vec![prefix.into()], loadouts: vec![LoadoutDef { name: loadout.into(), ..Default::default() }], ..Default::default() });
+        }
+        let mut data = Data(d, Corvo::default());
+        assert_eq!(data.use_profile("DLC06_Tower_P"), "Daud");
+        assert_eq!(data.0.loadouts[0].name, "Knife");
+        // (from one story's Daud straight to the other's)
+        assert_eq!(data.use_profile("L_DLC07_Coldridge_P"), "Daud");
+        assert_eq!(data.0.loadouts[0].name, "Witches");
+        assert_eq!(data.use_profile("L_Tower_P"), "Corvo");
+        assert!(data.0.loadouts.is_empty());
     }
 
     #[test]

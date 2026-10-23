@@ -194,14 +194,14 @@ fn flatten(pkg: &Package, props: &[upk::props::Prop], prefix: &str, out: &mut BT
 /// passives, attributes (over Corvo's: `m_pAttributeTweaks[1]`, the class default's under
 /// them), pawn tweaks, the campaign's start loadouts and mission statistics screens, his
 /// faction.
-fn dlc06_profile(cooked: &Path, game: &Package, base: &GameData) -> Option<crate::format::PlayerProfile> {
-    let dir = cooked.join("..").join("DLC").join("PCConsole").join("DLC06");
-    let pkg = Package::open(&dir.join("DLC06_Twk_Player_Daud_SF.upk")).ok()?;
-    let pawn_idx = pkg.find_export("DLC06_Twk_Player_Daud.DLC06_Twk_Player_Daud_Release")?;
+fn daud_profile(cooked: &Path, game: &Package, base: &GameData, pack: &crate::DaudPack) -> Option<crate::format::PlayerProfile> {
+    let dir = cooked.join("..").join("DLC").join("PCConsole").join(pack.dir);
+    let pkg = Package::open(&dir.join(format!("{}.upk", pack.package))).ok()?;
+    let pawn_idx = pkg.find_export(pack.pawn)?;
     let pawn = props(&pkg, pawn_idx)?;
     let mut p = crate::format::PlayerProfile {
         name: "Daud".into(),
-        maps: vec!["dlc06_".into()],
+        maps: vec![pack.prefix.into()],
         power_aliases: vec![("Transversal".into(), "Blink".into()), ("DaudDarkVision".into(), "DarkVision".into())],
         ..Default::default()
     };
@@ -278,7 +278,7 @@ fn dlc06_profile(cooked: &Path, game: &Package, base: &GameData) -> Option<crate
         .collect();
     // his attributes over Corvo's (the DLC class's defaults, then his own)
     p.attributes = base.attributes.clone();
-    let def = game.find_export("Default__DisDLC06Tweaks_PlayerPawn_Attributes").and_then(|d| props(game, d));
+    let def = game.find_export(&format!("Default__{}", pack.attributes)).or_else(|| game.find_export("Default__DisDLC06Tweaks_PlayerPawn_Attributes")).and_then(|d| props(game, d));
     let own = match pawn.get_idx("m_pAttributeTweaks", 1) {
         Some(Value::Object(o)) if *o > 0 => props(&pkg, *o),
         _ => None,
@@ -330,15 +330,15 @@ fn dlc06_profile(cooked: &Path, game: &Package, base: &GameData) -> Option<crate
     }
     p.faction = match pawn.get("m_pFactionTweak") {
         Some(Value::Object(o)) if *o != 0 => object_name(&pkg, *o),
-        _ => "DLC06_Fctn_Daud_Default".into(),
+        _ => pack.faction.into(),
     };
     // his HUD's strings (`DLC06_Twk_UI.int`: `Twk_DisDLC06MoviePlayerHUD`) as `HUD.<key>`
-    if let Ok(raw) = std::fs::read(cooked.join("..").join("Localization").join("INT").join("DLC06_Twk_UI.int")) {
+    if let Ok(raw) = std::fs::read(cooked.join("..").join("Localization").join("INT").join(pack.ui.0)) {
         let mut hud = false;
         for line in decode_int(&raw).lines() {
             let line = line.trim();
             if line.starts_with('[') && line.ends_with(']') {
-                hud = line[1..line.len() - 1].split_whitespace().next() == Some("Twk_DisDLC06MoviePlayerHUD");
+                hud = line[1..line.len() - 1].split_whitespace().next() == Some(pack.ui.1);
                 continue;
             }
             let Some((k, v)) = line.split_once('=').filter(|_| hud) else { continue };
@@ -349,11 +349,25 @@ fn dlc06_profile(cooked: &Path, game: &Package, base: &GameData) -> Option<crate
     }
     p.darkness = darkness(&pkg, &pawn);
     // the campaign's start loadouts and mission statistics screens
-    if let Ok(full) = Package::open(&dir.join("DLC06_DishonoredGameFull_P.upk")) {
+    if let Ok(full) = Package::open(&dir.join(format!("{}.upk", pack.game_full))) {
         let mut tmp = GameData::default();
         campaign_tweaks(&full, &mut tmp);
         p.loadouts = tmp.loadouts;
         p.mission_stats = tmp.mission_stats;
+    }
+    // (and the missions' own, the maps' `PerLevel` ones: The Brigmore Witches' Coldridge,
+    // Draper, Brigmore, for any of a mission's maps started outright)
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        let mut maps: Vec<_> = rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|f| f.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.to_ascii_lowercase().ends_with("_p.upk") && !n.to_ascii_lowercase().contains("gamefull"))).collect();
+        maps.sort();
+        for f in maps {
+            let Ok(pkg) = Package::open(&f) else { continue };
+            for l in loadouts_in(&pkg) {
+                if !p.loadouts.iter().any(|x| x.name == l.name) {
+                    p.loadouts.push(l);
+                }
+            }
+        }
     }
     Some(p)
 }
@@ -1771,10 +1785,12 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
         }
         d.post_nodes.insert(effect.to_string(), fields);
     }
-    // Daud (The Knife of Dunwall), where its packages are installed
-    if let Some(p) = dlc06_profile(cooked, &game, &d) {
-        log::info!("gamedata: profile {}: {} active / {} passive powers, {} attributes, {} loadouts", p.name, p.actives.len(), p.passives.len(), p.attributes.len(), p.loadouts.len());
-        d.profiles.push(p);
+    // Daud (The Knife of Dunwall, The Brigmore Witches), where their packages are installed
+    for pack in &crate::DAUD_PACKS {
+        if let Some(p) = daud_profile(cooked, &game, &d, pack) {
+            log::info!("gamedata: profile {} ({}): {} active / {} passive powers, {} attributes, {} loadouts", p.name, pack.dir, p.actives.len(), p.passives.len(), p.attributes.len(), p.loadouts.len());
+            d.profiles.push(p);
+        }
     }
     localization(cooked, &mut d);
     abstract_items(cooked, &mut d);

@@ -277,6 +277,10 @@ pub fn direct_start_loadout(map: &str) -> Option<&'static str> {
         "l_isl_lowchaos_p" | "l_isl_highchaos_p" | "l_lighth_lowchaos_p" | "l_lighth_highchaos_p" => "Twk_PlayerLoadout_LightHouse",
         // (The Knife of Dunwall: its first mission begins with the campaign's loadout, the
         // later ones with the fuller default)
+        // (The Brigmore Witches: each mission's own, `PerLevel`; the intro's its scripts give)
+        "l_dlc07_coldridge_p" => "DLC07_Loadout_Coldridge",
+        "l_dlc07_draperstreets_p" | "l_dlc07_drapership_p" | "l_dlc07_drapermill_p" | "l_dlc07_drapersewers_p" => "DLC07_Loadout_Draper",
+        "l_dlc07_brig_ext_p" | "l_dlc07_brigmore_int_p" | "l_dlc07_brigmore_void_p" | "l_dlc07_endgame_p" => "DLC07_Loadout_Brigmore",
         m if m.starts_with("dlc06_slaughter") => "DLC06_Twk_PlayerLoadout_Campaign",
         m if m.starts_with("dlc06_") => "DLC06_Twk_PlayerLoadout_Default",
         _ => return None,

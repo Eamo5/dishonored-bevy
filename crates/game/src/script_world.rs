@@ -99,6 +99,8 @@ pub struct Cinematic {
     /// Corvo's arms and weapons hidden (`bHidePlayer`)
     pub hide_player: bool,
     pub since: f32,
+    /// the player's controls off (SeqAct_ToggleInput), outside any cinematic
+    pub input_off: bool,
 }
 
 impl Cinematic {
@@ -106,7 +108,7 @@ impl Cinematic {
         self.on && self.since < 60.0
     }
     pub fn holds_movement(&self) -> bool {
-        self.live() && self.hold
+        self.live() && self.hold || self.input_off
     }
     pub fn hides_hud(&self) -> bool {
         self.live() && self.hide_hud
@@ -774,7 +776,7 @@ fn apply_ai_fx(
             }
             AiFx::Cinematic { on, hide_hud, hold, hide_player } => {
                 let on = on.unwrap_or(!cine.on);
-                *cine = Cinematic { on, hide_hud, hold, hide_player, since: 0.0 };
+                *cine = Cinematic { on, hide_hud, hold, hide_player, since: 0.0, input_off: cine.input_off };
             }
             AiFx::GameOver(reason) => {
                 if !stats.dead {
@@ -976,13 +978,19 @@ fn script_time(
             counts.entry(n.clone()).or_insert(1);
         }
         vm.item_counts = counts;
+        // (his upgrades, for `DisDLC07SeqAct_CheckPlayerUpgrade`)
+        vm.player_upgrades = stats.upgrades.clone();
     }
 }
 
 /// The scripts' switches where the world reads them: Blood Thirst's adrenaline held empty while
 /// it's off, the game's own tutorials held back.
-fn sync_switches(vm: Option<Res<Vm>>, mut sw: ResMut<crate::kismet::ScriptSwitches>, mut stats: ResMut<PlayerStats>, mut tw: ResMut<crate::tutwindow::TutorialWindow>) {
+fn sync_switches(vm: Option<Res<Vm>>, mut sw: ResMut<crate::kismet::ScriptSwitches>, mut stats: ResMut<PlayerStats>, mut tw: ResMut<crate::tutwindow::TutorialWindow>, mut cine: ResMut<Cinematic>) {
     let Some(vm) = vm else { return };
+    // (the player's controls the scripts switched off: `SeqAct_ToggleInput`)
+    if cine.input_off != vm.input_off {
+        cine.input_off = vm.input_off;
+    }
     if sw.0 != vm.switches {
         sw.0 = vm.switches.clone();
     }

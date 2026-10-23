@@ -2382,7 +2382,20 @@ are in the settings file, `pad_binding_set` 0-3):
   <map>` (`cook-all` leaves the DLC out); once cooked, the main menu's Downloadable Content page
   lists each story by its own name (`t_DLC06_Name`, `t_DLC07_Name`) beside Dunwall City Trials,
   and starts it on its first map (`DLC06_Tower_P`, `L_DLC07_BaseIntro_P`) once a difficulty is
-  chosen, as New Game does the Tower. `DH_SUMMON_LOG`; `DH_GADGET_LOG` (chokedust clouds and who they catch); `DH_PFX_SLOW=<n>`
+  chosen, as New Game does the Tower. The Brigmore Witches' maps play Daud too, by his own tweak
+  there (`DLC07_Twk_Player_Daud_Release`: its powers, passives, attributes, faction
+  `DLC07_Fctn_Daud`, interface strings; his arms `DLC07_Skm_Player_Daud` with the pack's
+  powers and assassination sets): each story its own profile, chosen by the map (two of the
+  same name had played the first, The Knife of Dunwall's, on both). A Brigmore mission's map
+  started outright begins with its `PerLevel` loadout (`DLC07_Loadout_Coldridge`, `_Draper`,
+  `_Brigmore`); the scripts' checks of what he carried over answer by what he has
+  (`DisDLC07SeqAct_CheckPlayerUpgrade`, `CheckPlayerInventoryItem`: before, always "Has"),
+  `SeqAct_ToggleInput` holds his controls, the packs' vector sums are done
+  (`DisDLC06SeqAct_VectorAdd`, `Subtract`, `Normalize`), and a story's end
+  (`DisDLC06SeqAct_EndDLC06`, `DisDLC07SeqAct_EndDLC07`: its chaos's "Save Finished") returns
+  to the main menu once its credits are over (the scripts' `start <pack>GameFull_P`).
+  Not yet: Pull (`DLC07_Twk_Pwr_Pull`), the loadout carried from The Knife of Dunwall's end
+  (`DisDLC07SeqAct_ImportTransitionPlayerData`: "Nothing Imported"). `DH_SUMMON_LOG`; `DH_GADGET_LOG` (chokedust clouds and who they catch); `DH_PFX_SLOW=<n>`
   (every effect n times slower, to see the briefest: an arc mine's 0.1 s lightning).
 
 ## Rules from roshan's r614/blink research

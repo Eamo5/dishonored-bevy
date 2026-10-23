@@ -914,7 +914,7 @@ fn apply_pending(
         // (the start-up's cinematic, e.g. waking in the cell, gives way to the save's)
         matinee.restore_player_ride(s.player_ride);
         *cine = match s.cinematic {
-            Some((hide_hud, hold, hide_player)) => crate::script_world::Cinematic { on: true, hide_hud, hold, hide_player, since: 0.0 },
+            Some((hide_hud, hold, hide_player)) => crate::script_world::Cinematic { on: true, hide_hud, hold, hide_player, since: 0.0, input_off: false },
             None => crate::script_world::Cinematic::default(),
         };
         if let Some(mut ui) = script_ui {

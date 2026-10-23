@@ -36,6 +36,53 @@ use xform::*;
 
 pub const DEFAULT_GAME_DIR: &str = r"S:\Games\SteamLibrary\steamapps\common\Dishonored";
 
+/// Daud's story packs: the maps' prefix, the pack's folder, his player package, his pawn
+/// tweak, his first-person arms, the pack's whole-game package, its default faction, its
+/// attributes' class and its interface strings (`DLCnn_Twk_UI.int`, the HUD section).
+pub struct DaudPack {
+    pub prefix: &'static str,
+    pub dir: &'static str,
+    pub package: &'static str,
+    pub pawn: &'static str,
+    pub arms: &'static str,
+    pub game_full: &'static str,
+    pub faction: &'static str,
+    pub attributes: &'static str,
+    pub ui: (&'static str, &'static str),
+}
+
+pub const DAUD_PACKS: [DaudPack; 2] = [
+    DaudPack {
+        prefix: "dlc06_",
+        dir: "DLC06",
+        package: "DLC06_Twk_Player_Daud_SF",
+        pawn: "DLC06_Twk_Player_Daud.DLC06_Twk_Player_Daud_Release",
+        arms: "DLC06_PlyDaud.DLC06_Skm_Player_Daud",
+        game_full: "DLC06_DishonoredGameFull_P",
+        faction: "DLC06_Fctn_Daud_Default",
+        attributes: "DisDLC06Tweaks_PlayerPawn_Attributes",
+        ui: ("DLC06_Twk_UI.int", "Twk_DisDLC06MoviePlayerHUD"),
+    },
+    // (The Brigmore Witches: Daud's own tweak again, `DisDLC07Tweaks_PlayerPawn`)
+    DaudPack {
+        prefix: "l_dlc07_",
+        dir: "DLC07",
+        package: "DLC07_Twk_Player_Daud_SF",
+        pawn: "DLC07_Twk_Player_Daud.DLC07_Twk_Player_Daud_Release",
+        arms: "DLC07_PlyDaud.DLC07_Skm_Player_Daud",
+        game_full: "L_DLC07_GameFull_P",
+        faction: "DLC07_Fctn_Daud",
+        attributes: "DisDLC07Tweaks_PlayerPawn_Attributes",
+        ui: ("DLC07_Twk_UI.int", "Twk_DisDLC07MoviePlayerHUD"),
+    },
+];
+
+/// The pack whose maps make Daud the player (by the map's name).
+pub fn daud_pack(map: &str) -> Option<&'static DaudPack> {
+    let m = map.to_ascii_lowercase();
+    DAUD_PACKS.iter().find(|p| m.starts_with(p.prefix))
+}
+
 /// Locate the Dishonored CookedPCConsole directory.
 pub fn find_cooked_dir() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
@@ -414,8 +461,8 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
             traps: (before.4, c.scene.traps.len() as u32),
         });
     }
-    // Daud's summoned assassins on The Knife of Dunwall's maps
-    if map.to_ascii_lowercase().starts_with("dlc06_") {
+    // Daud's summoned assassins on his stories' maps
+    if daud_pack(map).is_some() {
         c.summon_spawners();
     }
     let started = kismet::spawners_started_at_load(&levels);
@@ -7252,10 +7299,10 @@ impl<'a> Cooker<'a> {
     }
 
     fn cook_props(&mut self) {
-        // (Daud's things on The Knife of Dunwall's maps: his player package's)
-        let daud = self.scene.name.to_ascii_lowercase().starts_with("dlc06_");
-        if daud && self.assets.find("DLC06_ArcMine.DLC06_ArcMine").is_none() {
-            if let Some(pkg) = self.assets.package("DLC06_Twk_Player_Daud_SF") {
+        // (Daud's things on his stories' maps: his player package's)
+        let daud = daud_pack(&self.scene.name).is_some();
+        if let Some(pack) = daud_pack(&self.scene.name).filter(|_| self.assets.find("DLC06_ArcMine.DLC06_ArcMine").is_none()) {
+            if let Some(pkg) = self.assets.package(pack.package) {
                 self.assets.add_search(pkg);
             }
         }
@@ -7585,13 +7632,14 @@ impl<'a> Cooker<'a> {
         // the first-person arms: a skinned rig exposed as the "player_arms" character type
         // (Corvo's; Daud's on The Knife of Dunwall's maps: his pawn's `m_pSkeletalMesh`, his
         // sets over Corvo's)
-        let daud = self.scene.name.to_ascii_lowercase().starts_with("dlc06_");
-        if daud && self.assets.find("DLC06_PlyDaud.DLC06_Skm_Player_Daud").is_none() {
-            if let Some(pkg) = self.assets.package("DLC06_Twk_Player_Daud_SF") {
+        let pack = daud_pack(&self.scene.name);
+        if let Some(pack) = pack.filter(|p| self.assets.find(p.arms).is_none()) {
+            if let Some(pkg) = self.assets.package(pack.package) {
                 self.assets.add_search(pkg);
             }
         }
-        let arms_mesh = if daud { self.assets.find("DLC06_PlyDaud.DLC06_Skm_Player_Daud") } else { None };
+        let daud = pack.is_some();
+        let arms_mesh = pack.and_then(|p| self.assets.find(p.arms));
         if let Some(obj) = arms_mesh.or_else(|| self.assets.find("Engine.Ply_Player.Skm_Player")) {
             match skeletal::read_skeletal_mesh(&obj.pkg, obj.idx) {
                 Ok(d) => {
@@ -7623,8 +7671,17 @@ impl<'a> Cooker<'a> {
                         "Ply_Empty_CarryCorpse_as.Ply_Empty_CarryCorpse_as",
                     ];
                     const DAUD_SETS: &[&str] = &["DLC06_PlyDaud_Powers_as.DLC06_PlyDaud_Powers_as", "DLC06_PlyDaud_Wristbow_as.DLC06_PlyDaud_Wristbow_as", "DLC06_PlyDaud_Assassination_as.DLC06_PlyDaud_Assassination_as"];
+                    // (The Brigmore Witches' own powers and assassinations, the wristbow The
+                    // Knife of Dunwall's)
+                    const DAUD07_SETS: &[&str] = &["DLC07_PlyDaud_Powers_as.DLC07_PlyDaud_Powers_as", "DLC06_PlyDaud_Wristbow_as.DLC06_PlyDaud_Wristbow_as", "DLC07_PlyDaud_Assassination_as.DLC07_PlyDaud_Assassination_as"];
+                    let daud_sets: &[&str] = match pack.map(|p| p.dir) {
+                        Some("DLC07") => DAUD07_SETS,
+                        Some(_) => DAUD_SETS,
+                        None => &[],
+                    };
+                    let _ = daud;
                     let mut sets = Vec::new();
-                    for path in PLAYER_SETS.iter().chain(if daud { DAUD_SETS } else { &[] }) {
+                    for path in PLAYER_SETS.iter().chain(daud_sets) {
                         match self.assets.find(path) {
                             Some(set) => sets.push(set),
                             None => log::warn!("player anim set {path} not found"),

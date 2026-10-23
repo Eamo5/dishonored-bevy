@@ -925,6 +925,13 @@ pub struct Vm {
     /// Corvo's abstract items by `Group.Name` (`DisSeqAct_GetAbstractItemQuantity`), kept up
     /// to date by the world
     pub item_counts: HashMap<String, u32>,
+    /// Corvo's (Daud's) upgrades, as the world has them
+    pub player_upgrades: Vec<String>,
+    /// the player's controls switched off by the scripts (SeqAct_ToggleInput)
+    pub input_off: bool,
+    /// a story pack's end reached (DisDLC06SeqAct_EndDLC06, DisDLC07SeqAct_EndDLC07): its
+    /// credits over, back to the main menu
+    pub story_end: bool,
     /// the scripts stop Corvo's active power (`DisSeqAct_CancelPlayerActivePower`)
     pub cancel_powers: bool,
     /// scripted bent time (`DisSeqAct_BendTime`): the world's dilation, or the end of it
@@ -1184,6 +1191,9 @@ impl Vm {
             set_materials: Vec::new(),
             timer_start: HashMap::new(),
             item_counts: HashMap::new(),
+            player_upgrades: Vec::new(),
+            input_off: false,
+            story_end: false,
             cancel_powers: false,
             bend_time: Vec::new(),
             vanish: Vec::new(),
@@ -3316,6 +3326,52 @@ impl Vm {
                     self.write(op, "Y", Val::Float(v[1]));
                     self.write(op, "Z", Val::Float(v[2]));
                 }
+                self.fire(op, 0);
+            }
+            // The Knife of Dunwall's vector sums (the Brigmore intro's heading to an object)
+            "DisDLC06SeqAct_VectorAdd" | "DisDLC06SeqAct_VectorSubtract" | "DisDLC06SeqAct_VectorNormalize" => {
+                let vec = |s: &Self, d: &str| s.read(op, d).into_iter().find_map(|v| if let Val::Vec3(p) = v { Some(Vec3::from(p)) } else { None });
+                let r = match class.as_str() {
+                    "DisDLC06SeqAct_VectorAdd" => vec(self, "A").zip(vec(self, "B")).map(|(a, b)| a + b),
+                    "DisDLC06SeqAct_VectorSubtract" => vec(self, "A").zip(vec(self, "B")).map(|(a, b)| a - b),
+                    _ => vec(self, "Vector").map(|v| v.normalize_or_zero()),
+                };
+                if let Some(r) = r {
+                    self.write(op, "Result", Val::Vec3(r.to_array()));
+                }
+                self.fire(op, 0);
+            }
+            // The Brigmore Witches' checks of what Daud carries over: an upgrade bought, an item
+            // held ("Has ...", else "Does Not Have ...")
+            "DisDLC07SeqAct_CheckPlayerUpgrade" => {
+                let want = self.ps(op, "m_pUpgrade").unwrap_or_default();
+                let short = want.rsplit('.').next().unwrap_or(&want).to_ascii_lowercase();
+                let has = self.player_upgrades.iter().any(|u| u.rsplit('.').next().unwrap_or(u).eq_ignore_ascii_case(&short));
+                self.fire(op, if has { 0 } else { 1 });
+            }
+            "DisDLC07SeqAct_CheckPlayerInventoryItem" => {
+                let want = self.ps(op, "m_pInventoryItem").unwrap_or_default();
+                let short = want.rsplit('.').next().unwrap_or(&want).to_ascii_lowercase();
+                let has = self.item_counts.iter().any(|(k, n)| *n > 0 && k.rsplit('.').next().unwrap_or(k).eq_ignore_ascii_case(&short));
+                self.fire(op, if has { 0 } else { 1 });
+            }
+            // the player's controls off (Turn Off), back on (Turn On), or the other way
+            "SeqAct_ToggleInput" => {
+                self.input_off = match input {
+                    0 => false,
+                    1 => true,
+                    _ => !self.input_off,
+                };
+                self.fire(op, 0);
+            }
+            // a story's end: saved ("Save Finished" for the chaos it ended in), then once its
+            // credits are over, the main menu
+            "DisDLC06SeqAct_EndDLC06" => {
+                self.story_end = true;
+                self.fire(op, input.min(1) as usize);
+            }
+            "DisDLC07SeqAct_EndDLC07" => {
+                self.story_end = true;
                 self.fire(op, 0);
             }
             "SeqAct_SetVectorComponents" => {
@@ -6954,6 +7010,18 @@ pub fn apply_effects(
                 }
             },
             Effect::StartMap(map) => {
+                // (a story's end, its credits over: its whole-game package started, which is
+                // its own front end: the main menu)
+                if vm.story_end && map.to_ascii_lowercase().contains("gamefull") {
+                    info!("level scripts: the story is over, to the main menu");
+                    commands.queue(|w: &mut World| {
+                        let mut config = w.resource_mut::<crate::Config>();
+                        config.map = crate::menu::MENU_MAP.into();
+                        config.spawn_index = None;
+                        w.resource_mut::<NextState<crate::GameState>>().set(crate::GameState::Loading);
+                    });
+                    continue;
+                }
                 // (the campaign takes Corvo on itself)
                 if vm.campaign.is_none() {
                     match crate::campaign::start_in(&map, None) {
