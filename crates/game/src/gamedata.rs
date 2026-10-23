@@ -102,15 +102,12 @@ impl Data {
         self.0.map_names.iter().find(|(k, _)| k.eq_ignore_ascii_case(map.trim())).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty())
     }
 
-    /// A mission's name (`DishonoredGameInfo.m_MissionNames[n]`): the mission's number given
-    /// (`m_MissionNumber`, from 1), else that of the mission the map belongs to
-    /// (`m_MissionsGame`: the prison's "Dishonored", Daud's "Choosing Your Mark"...).
+    /// A mission's name (`DishonoredGameInfo.m_MissionNames[n]`): that of the mission the map
+    /// belongs to (`m_MissionsGame`: the prison's "Dishonored", Daud's "Choosing Your Mark"...),
+    /// else the statistics' own number (`m_MissionNumber`: the stories' count from 1 within
+    /// themselves, Coldridge's "1" not Campbell's).
     pub fn mission_title(&self, map: &str, number: i32) -> Option<String> {
-        let n = if number >= 1 {
-            number
-        } else {
-            self.0.missions.iter().find(|(n, maps)| *n >= 0 && maps.iter().any(|m| m.trim().eq_ignore_ascii_case(map.trim()))).map(|(n, _)| *n)?
-        };
+        let n = self.0.missions.iter().find(|(n, maps)| *n >= 0 && maps.iter().any(|m| m.trim().eq_ignore_ascii_case(map.trim()))).map(|(n, _)| *n).or((number >= 1).then_some(number))?;
         self.0.texts.get(&format!("Missions.{n}")).filter(|t| !t.is_empty()).cloned()
     }
 
@@ -539,6 +536,20 @@ fn derive_attributes(data: Res<Data>, settings: Res<crate::settings::Settings>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mission_is_named_by_its_map_before_its_statistics_number() {
+        let mut data = Data::default();
+        data.0.missions = vec![(0, vec!["L_Prison_P".into()]), (17, vec!["L_DLC07_Coldridge_P".into()])];
+        for (n, t) in [(0, "Dishonored"), (1, "High Overseer Campbell"), (17, "A Stay of Execution For Lizzy")] {
+            data.0.texts.insert(format!("Missions.{n}"), t.into());
+        }
+        // (the story's statistics count from 1 within it)
+        assert_eq!(data.mission_title("L_DLC07_Coldridge_P", 1).as_deref(), Some("A Stay of Execution For Lizzy"));
+        assert_eq!(data.mission_title("L_Prison_P", -1).as_deref(), Some("Dishonored"));
+        assert_eq!(data.mission_title("L_Unknown_P", 1).as_deref(), Some("High Overseer Campbell"));
+        assert_eq!(data.mission_title("L_Unknown_P", -1), None);
+    }
 
     #[test]
     fn a_profile_is_played_on_its_maps_and_corvo_comes_back() {

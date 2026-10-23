@@ -669,8 +669,9 @@ from ever opening.)
 The story packs' own interface movies stand in for the game's on their maps (`UI_HUD_DLC07`,
 `UI_MissionStats_DLC06/07`, `UI_PauseMenu_*`, `UI_Shop_*`, `UI_Journal_*`, `UI_Note_*`, cooked
 with `cook-ui`; The Brigmore Witches' before The Knife of Dunwall's). A mission's statistics
-are titled with its name (`DishonoredGameInfo.m_MissionNames` by its tweak's `m_MissionNumber`,
-else its map's `m_MissionsGame` entry: "Choosing Your Mark", not "L_DLC07_BaseIntro_P") over its
+are titled with its name (`DishonoredGameInfo.m_MissionNames` by its map's `m_MissionsGame`
+entry, else its tweak's `m_MissionNumber`, which the stories count within themselves: "Choosing
+Your Mark", not "L_DLC07_BaseIntro_P"; Coldridge's "A Stay of Execution For Lizzy", not Campbell's) over its
 own picture (`m_BackgroundImagePath`: Corvo in Daud's dream) and count The Brigmore Witches'
 corrupted charms (`ePlayerStat_CrackedCharmFound`) on the FOUND panel. The loading screen names
 the map as `[MapNames]` does ("Rothwild Slaughterhouse", "Drapers Ward"). A pack movie's own
