@@ -946,6 +946,10 @@ fn sword_input(
                 // a krust's shell
                 struck.write(crate::gameplay::Struck { target: s, damage: attrs.sword_damage, kind: HitKind::Sword, at });
             } else {
+                if std::env::var("DH_MELEE_LOG").is_ok() {
+                    let near: Vec<(f32, f32)> = strikeables.iter().map(|(_, g)| ((g.translation() - eye).length(), (g.translation() - eye).normalize_or_zero().dot(fwd))).filter(|(d, _)| *d < 5.0).collect();
+                    info!("melee: blade meets nothing it can strike (eye {eye:.2}; near {near:.2?})");
+                }
                 // the world: what the blade meets (a speaker, a crate the scripts listen to)
                 use crate::worlddamage::{Reach, WorldDamage};
                 world_hits.write(WorldDamage::player(Reach::Ray { from: eye, dir: fwd, len: 2.2 }, attrs.sword_damage, "DisDamageType_FastHit_Right"));

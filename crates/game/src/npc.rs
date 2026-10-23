@@ -2105,7 +2105,8 @@ pub fn spawn_npcs(
         if n >= max {
             break;
         }
-        if !sp.spawn_on_begin_play && !all || crate::campaign::spawner_unloaded(scene, &loaded, si as u32) {
+        // (a grave hound that starts as its skull lies there: `gravehound`)
+        if !sp.spawn_on_begin_play && !all || sp.start_as_skull || crate::campaign::spawner_unloaded(scene, &loaded, si as u32) {
             continue;
         }
         if let Some(entity) = spawn_npc(&mut commands, &assets, scene, wl.as_deref_mut(), si, settings.difficulty) {
@@ -2136,7 +2137,8 @@ fn spawn_requested(
     };
     let mut done: Vec<u32> = existing.iter().filter(|(_, n)| !n.is_down()).map(|(f, _)| f.0).collect();
     for r in requests.read() {
-        if done.contains(&r.0) {
+        // (a sleeping grave hound's skull is woken instead: `gravehound`)
+        if done.contains(&r.0) || level.scene.spawners.get(r.0 as usize).is_some_and(|s| s.start_as_skull) {
             continue;
         }
         done.push(r.0);

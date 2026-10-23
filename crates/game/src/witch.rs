@@ -256,7 +256,7 @@ fn witch_spells(
     npcs: Query<&Npc>,
     player: Query<&Transform, With<Player>>,
     settings: Res<crate::settings::Settings>,
-    (mut hits, mut fx, mut sfx, mut summon): (MessageWriter<crate::gameplay::PlayerHit>, MessageWriter<SpawnEffect>, MessageWriter<PostEvent>, MessageWriter<crate::tentacle::SummonTentacle>),
+    (mut hits, mut fx, mut summon): (MessageWriter<crate::gameplay::PlayerHit>, MessageWriter<SpawnEffect>, MessageWriter<crate::tentacle::SummonTentacle>),
 ) {
     let Ok(pt) = player.single() else {
         spells.clear();
@@ -295,7 +295,6 @@ fn witch_spells(
             Spell::Summon => {
                 fx.write(SpawnEffect::at("witch_summon", s.from + Vec3::Y * 0.6 + s.facing * 0.4));
                 summon.write(crate::tentacle::SummonTentacle { witch: s.witch, witch_at: s.from, near: pt.translation, reach: sp.summon_near_target });
-                sfx.write(PostEvent::named("DLC07_Witch_Summon_Tentacle", Some(s.from)));
             }
         }
     }
@@ -310,7 +309,7 @@ fn fly_magic(
     rapier: ReadRapierContext,
     mut bolts: Query<(Entity, &mut Magic, &mut Transform)>,
     player: Query<&Transform, (With<Player>, Without<Magic>)>,
-    (mut hits, mut fx): (MessageWriter<crate::gameplay::PlayerHit>, MessageWriter<SpawnEffect>),
+    (mut hits, mut fx, mut sfx): (MessageWriter<crate::gameplay::PlayerHit>, MessageWriter<SpawnEffect>, MessageWriter<PostEvent>),
 ) {
     let dt = time.delta_secs() * tc.world_scale();
     if dt <= 0.0 {
@@ -334,12 +333,14 @@ fn fly_magic(
             if off.with_y(0.0).length() < crate::player::RADIUS + 0.1 && off.y.abs() < 0.95 {
                 hits.write(crate::gameplay::PlayerHit { npc: m.owner, from: a, damage: m.damage, kick: false, big: false, push: false, unblockable: true, missile: true });
                 fx.write(SpawnEffect::at("witch_magic_hit", near));
+                sfx.write(PostEvent::named("DLC07_Witch_Bolt_Impact", Some(near)));
                 commands.entity(e).despawn();
                 continue;
             }
         }
         if let Some((_, toi)) = ctx.as_ref().and_then(|c| c.cast_ray(a, seg / len, len, true, walls)) {
             fx.write(SpawnEffect::at("witch_magic_hit", a + seg / len * toi));
+            sfx.write(PostEvent::named("DLC07_Witch_Bolt_Impact", Some(a + seg / len * toi)));
             commands.entity(e).despawn();
             continue;
         }

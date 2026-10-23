@@ -136,7 +136,7 @@ fn summon(
     level: Option<Res<LevelInfo>>,
     mut wl: Option<ResMut<WorldLighting>>,
     existing: Query<&Tentacle>,
-    (mut fx, mut sfx): (MessageWriter<SpawnEffect>, MessageWriter<PostEvent>),
+    mut fx: MessageWriter<SpawnEffect>,
 ) {
     let (Some(assets), Some(level)) = (assets, level) else {
         asks.clear();
@@ -158,7 +158,6 @@ fn summon(
         busy.push(si as u32);
         spawn(&mut commands, vis, at, yaw, si as u32, Some(a.witch).filter(|w| *w != Entity::PLACEHOLDER), slot);
         fx.write(SpawnEffect::at("tentacle_in", at));
-        sfx.write(PostEvent::named("DLC07_Tentacle_Spawn", Some(at)));
         if std::env::var("DH_WITCH_LOG").is_ok() {
             info!("tentacle: rises at {at:.1}, {:.1} m from Daud", at.distance(a.near));
         }
@@ -230,7 +229,7 @@ fn tentacle_hits(
         }
         let sword = matches!(s.kind, HitKind::Sword | HitKind::Assassinate | HitKind::Fatality);
         fx.write(SpawnEffect { rot: Transform::IDENTITY.looking_to(s.at - g.translation(), Vec3::Y).rotation, ..SpawnEffect::at(if sword { "tentacle_hit_sword" } else { "tentacle_hit" }, s.at) });
-        sfx.write(PostEvent::named("DLC07_Tentacle_Hit", Some(s.at)));
+        sfx.write(PostEvent::named("Snd_DLC07_AI_Tentacles_Hit", Some(s.at)));
         t.hp -= s.damage.max(1.0);
         if t.hp <= 0.0 {
             t.state = State::Leaving;
@@ -334,7 +333,6 @@ fn tentacle_brain(
                     t.state = State::WindUp;
                     t.t = 0.0;
                     clip(&mut a, "Tentacle_GrabArm_WindUp", false);
-                    sfx.write(PostEvent::named("DLC07_Tentacle_Grab_WindUp", Some(base)));
                 } else if d > ATTRACT_RANGE.0 && d < ATTRACT_RANGE.1 && (ppos.y - base.y).abs() < ATTRACT_HEIGHT && t.pull_cd <= 0.0 && sees {
                     t.state = State::Pulling;
                     t.t = 0.0;

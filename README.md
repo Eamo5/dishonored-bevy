@@ -1788,6 +1788,28 @@ fields no longer show their stand-in "WW" behind the title.
     Delilah counts her briars).
   - Script: `tentacle [REACH]` calls one up by Corvo; `alert [NAME]` sets nearby characters
     fighting.
+- **Delilah's grave hounds** (`DLC07_Pwn_Gravehound`) are bones that won't stay down, as their
+  pawn tweak has them (`DisDLC07Tweaks_Gravehound`, cooked as `NpcGravehound`). They fight as
+  the wolfhounds they are built on. Before, they died like any hound and stayed dead, and the
+  ones meant to lie as skulls stood up at the level's start.
+  - Alive, smoke trails from their spine and shoulders (`m_AliveLoopingEffects`:
+    `DLC07_Gravehound_Idle_A/B/C`).
+  - Killed, they fall apart (`m_DeathEffects`, the body gone over `m_fFadeOutDuration` 0.85 s)
+    and drop their skull (`m_pSkull`, `DLC07_Twk_Gravehound_Skull_V2`'s mesh, 0.75 s after,
+    smoking: `DLC07_Skull_Idle`).
+  - While the skull lasts, the hound gets up again after 3.75-4.25 s (`m_RespawnTime`,
+    `Generic_Respawn_In`, `m_RespawnEffects`, `Gravehound_Respawn`), hunting Daud if it was. It
+    rises where the skull lies, or up to 10 m away on the navigation mesh when he stands within
+    5 m (`m_fRespawnLocationSearchRadius`, `m_fRespawnLocationAvoidPlayerRadius`). There is no
+    limit (`m_RespawnCountLimit` -1).
+  - The skull's 5 health (`m_Health`) broken by a blade, bolt, bullet or blast
+    (`DLC07_Skull_Destroy`, `Gravehound_Skull_Impact`), the hound is gone for good. Saves keep
+    that.
+  - Those whose spawner says `m_bStartAsSkull` lie as their skull from the start. They get up
+    (after 0.7-0.8 s, `m_StartAsSkullDisturbedSpawnTime`) when the scripts call them (the
+    manor's sleeping hounds waking one after another), when their skull is struck, or, with
+    their `m_SpawnAtSuspicionLevel` set, when someone within 30 m is alerted (the 30 m is our
+    reading).
 - **The stories' last script hooks**, each of which did nothing before:
   - `SeqAct_Trace` asks the world, next frame, whether its walls and props stand between two
     things (not the characters, as `bTraceWorld`). It gives the distance and "Obstructed" or

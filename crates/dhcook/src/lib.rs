@@ -2766,6 +2766,7 @@ impl<'a> Cooker<'a> {
             can_flee: flag("m_bCapableOfFleeing").unwrap_or(true),
             spawn_at: ch.get("m_SpawnAtSuspicionLevel").and_then(|v| if let Value::Enum(e) = v { Some(e.clone()) } else { None }).filter(|e| !e.ends_with("None")),
             spawn_on_help: flag("m_bSpawnOnHearHelpRequest").unwrap_or(false),
+            start_as_skull: flag("m_bStartAsSkull").unwrap_or(false),
             spawn_visible,
             spawn_near,
             tether: Vec::new(),
@@ -2837,6 +2838,7 @@ impl<'a> Cooker<'a> {
                 can_flee: false,
                 spawn_at: None,
                 spawn_on_help: false,
+            start_as_skull: false,
                 spawn_visible: true,
                 spawn_near: true,
                 tether: Vec::new(),
@@ -4142,6 +4144,47 @@ impl<'a> Cooker<'a> {
         Some(out)
     }
 
+    /// A grave hound's bones (`DisDLC07Tweaks_Gravehound`): its skull (`m_pSkull`'s mesh and
+    /// health) and its coming back.
+    fn gravehound(&mut self, pawn: &Obj) -> Option<NpcGravehound> {
+        let skull = self.tweak_obj(pawn, "m_pSkull")?;
+        let f = |s: &mut Self, o: &Obj, n: &str, d: f32| s.tweak_float(o, n, 0).unwrap_or(d);
+        let ranged = |s: &mut Self, n: &str, d: [f32; 2]| match s.tweak_prop(pawn, n, 0, 0) {
+            Some((_, Value::Struct(_, r))) => {
+                let p = Props(r);
+                [p.float("m_fMinValue").unwrap_or(d[0]), p.float("m_fMaxValue").unwrap_or(d[1])]
+            }
+            _ => d,
+        };
+        let prop = match self.tweak_prop(&skull, "m_pStaticMesh", 0, 0) {
+            Some((pkg, Value::Object(o))) if o != 0 => self.assets.resolve(&pkg, o).and_then(|mesh| {
+                let name = format!("acc:{}", mesh.path());
+                if !self.scene.props.iter().any(|p| p.name == name) {
+                    let Ok(Some((m, materials))) = self.cook_mesh(&mesh) else { return None };
+                    self.scene.props.push(PropDef { name: name.clone(), mesh: m, materials, blade: None, muzzle: None });
+                }
+                Some(name)
+            }),
+            _ => None,
+        }
+        .unwrap_or_default();
+        let skull_health = match self.tweak_prop(&skull, "m_Health", 0, 0) {
+            Some((_, Value::Int(h))) => h as f32,
+            _ => 5.0,
+        };
+        Some(NpcGravehound {
+            respawn: ranged(self, "m_RespawnTime", [3.75, 4.25]),
+            disturbed: ranged(self, "m_StartAsSkullDisturbedSpawnTime", [0.7, 0.8]),
+            skull_delay: f(self, pawn, "m_fSkullSpawnDelay", 0.75),
+            respawn_reach: f(self, pawn, "m_fRespawnLocationSearchRadius", 1000.0) * UNIT,
+            avoid_player: f(self, pawn, "m_fRespawnLocationAvoidPlayerRadius", 500.0) * UNIT,
+            fade_out: f(self, pawn, "m_fFadeOutDuration", 0.85),
+            fade_in: f(self, pawn, "m_fFadeInDuration", 1.1),
+            prop,
+            skull_health,
+        })
+    }
+
     /// A witch's hand's spells (`NpcWitch`): its scream, vanishing and tentacle contexts, its
     /// magic's flight.
     fn witch_hand(&mut self, w: &Obj) -> NpcWitch {
@@ -4319,6 +4362,7 @@ impl<'a> Cooker<'a> {
             st.rat_dps = self.tweak_float(&c, "m_fRatSwarmDamagePerSecond", 0).unwrap_or(0.0);
         }
         st.plague = self.npc_plague(pawn);
+        st.gravehound = self.gravehound(pawn);
         st.pacing = self.pacing(pawn);
         st.danger = self.danger_steering(pawn);
         st.loco = self.npc_loco(pawn);
@@ -7527,6 +7571,24 @@ impl<'a> Cooker<'a> {
             ("tentacle_pull_player", "DLC07_VFX_Gameplay.Effects.WitchTentacle.DLC07_Tentacle_Pull_Player"),
             ("tentacle_hit_sword", "DLC07_VFX_Gameplay.Effects.WitchTentacle.DLC07_Tentacle_Hit_Sword"),
             ("tentacle_hit", "DLC07_VFX_Gameplay.Effects.WitchTentacle.DLC07_Tentacle_Hit_Projectile"),
+            // (the grave hounds': falling apart and coming back (`m_DeathEffects`,
+            // `m_RespawnEffects`: the body's, its limbs', its spine's), the smoke they trail
+            // (`m_AliveLoopingEffects`), their skull's (`m_SkullSpawnEffects`, its idle, its
+            // breaking: `DLC07_Twk_Gravehound_Skull_V2`), struck)
+            ("hound_death", "DLC07_VFX_Gameplay.Effects.Gravehound.DLC07_Gravehound_Death_Main"),
+            ("hound_death_limbs", "DLC07_VFX_Gameplay.Effects.Gravehound.DLC07_Gravehound_Death_Limbs"),
+            ("hound_death_spine", "DLC07_VFX_Gameplay.Effects.Gravehound.DLC07_Gravehound_Death_Spine"),
+            ("hound_respawn", "DLC07_VFX_Gameplay.Effects.Gravehound.DLC07_Gravehound_Respawn_Main"),
+            ("hound_respawn_limbs", "DLC07_VFX_Gameplay.Effects.Gravehound.DLC07_Gravehound_Respawn_Limbs"),
+            ("hound_respawn_spine", "DLC07_VFX_Gameplay.Effects.Gravehound.DLC07_Gravehound_Respawn_Spine"),
+            ("hound_smoke_a", "DLC07_VFX_Gameplay.Effects.Gravehound.DLC07_Gravehound_Idle_A"),
+            ("hound_smoke_b", "DLC07_VFX_Gameplay.Effects.Gravehound.DLC07_Gravehound_Idle_B"),
+            ("hound_smoke_c", "DLC07_VFX_Gameplay.Effects.Gravehound.DLC07_Gravehound_Idle_C"),
+            ("skull_spawn", "DLC07_VFX_Gameplay.Effects.Gravehound.DLC07_Skull_Spawn"),
+            ("skull_idle", "DLC07_VFX_Gameplay.Effects.Gravehound.DLC07_Skull_Idle"),
+            ("skull_destroy", "DLC07_VFX_Gameplay.Effects.Gravehound.DLC07_Skull_Destroy"),
+            ("hound_hit_sword", "DLC07_VFX_Gameplay.Effects.Gravehound.DLC07_Gravehound_Hit_Sword"),
+            ("hound_hit", "DLC07_VFX_Gameplay.Effects.Gravehound.DLC07_Gravehound_Hit_Projectile"),
         ];
         // the textures gameplay effects sample (`DarkVision_PMAT`, `PPG_DarkVisionFinal_Mat`)
         const GAME_TEXTURES: &[(&str, &str)] = &[

@@ -1248,6 +1248,9 @@ pub struct NpcStats {
     /// tentacles (The Brigmore Witches)
     #[serde(default)]
     pub witch: Option<NpcWitch>,
+    /// a grave hound's bones (`DisDLC07Tweaks_Gravehound`): its skull, and its coming back
+    #[serde(default)]
+    pub gravehound: Option<NpcGravehound>,
     /// how its firearm or bow shoots (its `DisTweaks_NPCFireGun` / `DisTweaks_NPCFireBow`)
     #[serde(default)]
     pub fire: Option<FireContext>,
@@ -1475,6 +1478,25 @@ pub struct NpcWitch {
     pub summon_cooldown: [f32; 2],
     pub magic_speed: f32,
     pub magic_gravity: f32,
+}
+
+/// A grave hound (`DisDLC07Tweaks_Gravehound`), distances in metres: dead, it falls apart
+/// (`m_fFadeOutDuration`) and leaves its skull (`m_pSkull`: `prop`, `m_Health`) after
+/// `skull_delay`; while the skull lasts it comes back after `respawn` seconds, within
+/// `respawn_reach` of the skull and not within `avoid_player` of Corvo, fading in
+/// (`m_fFadeInDuration`). A skull it starts as (its spawner's `m_bStartAsSkull`) gets up once
+/// disturbed, after `disturbed` seconds.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct NpcGravehound {
+    pub respawn: [f32; 2],
+    pub disturbed: [f32; 2],
+    pub skull_delay: f32,
+    pub respawn_reach: f32,
+    pub avoid_player: f32,
+    pub fade_out: f32,
+    pub fade_in: f32,
+    pub prop: String,
+    pub skull_health: f32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -2356,6 +2378,9 @@ pub struct Spawner {
     /// spawns when its squad calls for help (`m_bSpawnOnHearHelpRequest`)
     #[serde(default)]
     pub spawn_on_help: bool,
+    /// a grave hound that lies as its skull till disturbed (`m_bStartAsSkull`)
+    #[serde(default)]
+    pub start_as_skull: bool,
     /// may spawn while Corvo sees the spot (`m_bCanSpawnWhenVisible`) / is near it
     /// (`m_bCanSpawnWhenPlayerNear`)
     #[serde(default)]
