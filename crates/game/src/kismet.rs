@@ -929,6 +929,10 @@ pub struct Vm {
     pub player_upgrades: Vec<String>,
     /// the player's controls switched off by the scripts (SeqAct_ToggleInput)
     pub input_off: bool,
+    /// characters Pull can't take (DisDLC07SeqAct_SetPullOverride: Lizzy Stride), by spawner
+    pub pull_blocked: HashSet<u32>,
+    /// Pull's character pulls begun (0) and over (1), for DisDLC07SeqEvent_NPCPulled's outputs
+    pub npc_pulled: Vec<usize>,
     /// a story pack's end reached (DisDLC06SeqAct_EndDLC06, DisDLC07SeqAct_EndDLC07): its
     /// credits over, back to the main menu
     pub story_end: bool,
@@ -1193,6 +1197,8 @@ impl Vm {
             item_counts: HashMap::new(),
             player_upgrades: Vec::new(),
             input_off: false,
+            pull_blocked: HashSet::new(),
+            npc_pulled: Vec::new(),
             story_end: false,
             cancel_powers: false,
             bend_time: Vec::new(),
@@ -3354,6 +3360,19 @@ impl Vm {
                 let short = want.rsplit('.').next().unwrap_or(&want).to_ascii_lowercase();
                 let has = self.item_counts.iter().any(|(k, n)| *n > 0 && k.rsplit('.').next().unwrap_or(k).eq_ignore_ascii_case(&short));
                 self.fire(op, if has { 0 } else { 1 });
+            }
+            // characters Pull can't take (Enable) or can again (Disable)
+            "DisDLC07SeqAct_SetPullOverride" => {
+                for v in self.read(op, "Target") {
+                    if let Some(s) = if let Val::Actor(a) = v { self.g.actors.get(a as usize).and_then(|a| a.spawner) } else { None } {
+                        if input == 0 {
+                            self.pull_blocked.insert(s);
+                        } else {
+                            self.pull_blocked.remove(&s);
+                        }
+                    }
+                }
+                self.fire(op, 0);
             }
             // the player's controls off (Turn Off), back on (Turn On), or the other way
             "SeqAct_ToggleInput" => {
@@ -6028,6 +6047,12 @@ fn world_events(
             if let Some(i) = power_used_output(&vm.g.ops[ev as usize], key, stats.power(key)) {
                 vm.event(ev, i, Some(Val::Player));
             }
+        }
+    }
+    // Pull taking a character: begun, over (`DisDLC07SeqEvent_NPCPulled`: Daud's)
+    for out in std::mem::take(&mut vm.npc_pulled) {
+        for ev in class_ops(&vm.g, "DisDLC07SeqEvent_NPCPulled") {
+            vm.event(ev, out, Some(Val::Player));
         }
     }
     // Windblast striking someone (`DisSeqEvent_Windblasted`: pushed, or thrown hard)

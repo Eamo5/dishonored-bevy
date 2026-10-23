@@ -65,12 +65,14 @@ pub enum Power {
     ArcMine,
     StunMine,
     Chokedust,
+    /// Daud's (The Brigmore Witches)
+    Pull,
 }
 
 /// The original keyboard shortcut order (`DefaultUI.ini`'s `m_AutoAssign_KeyboardItemOrder`,
 /// The Knife of Dunwall's after Corvo's; its arc mine set at `[29]`, so last): the first ten
 /// items owned go on keys 1-0.
-pub const SHORTCUT_ORDER: [Power; 20] = [
+pub const SHORTCUT_ORDER: [Power; 21] = [
     Power::Pistol,
     Power::Crossbow,
     Power::Grenade,
@@ -83,6 +85,7 @@ pub const SHORTCUT_ORDER: [Power; 20] = [
     Power::BendTime,
     Power::Possess,
     Power::SummonAssassin,
+    Power::Pull,
     Power::SleepDart,
     Power::IncendiaryBolt,
     Power::StickyGrenade,
@@ -94,7 +97,7 @@ pub const SHORTCUT_ORDER: [Power; 20] = [
 ];
 
 /// The pad's (`m_AutoAssign_GamepadItemOrder`): the pistol, Blink and the Heart first.
-pub const PAD_SHORTCUT_ORDER: [Power; 20] = [
+pub const PAD_SHORTCUT_ORDER: [Power; 21] = [
     Power::Pistol,
     Power::Blink,
     Power::Heart,
@@ -106,6 +109,7 @@ pub const PAD_SHORTCUT_ORDER: [Power; 20] = [
     Power::DarkVision,
     Power::Possess,
     Power::SummonAssassin,
+    Power::Pull,
     Power::SleepDart,
     Power::IncendiaryBolt,
     Power::SpringRazor,
@@ -157,6 +161,7 @@ impl Power {
             Power::ArcMine => "Arc Mine",
             Power::StunMine => "Stun Mine",
             Power::Chokedust => "Chokedust",
+            Power::Pull => "Pull",
         }
     }
     /// Its name as the one playing has it (Daud's Transversal and Void Gaze).
@@ -185,6 +190,7 @@ impl Power {
             Power::Possess => "Possess",
             Power::DevouringSwarm => "DevouringSwarm",
             Power::SummonAssassin => "SummonAssassin",
+            Power::Pull => "Pull",
             _ => return None,
         })
     }
@@ -215,6 +221,7 @@ impl Power {
             Power::ArcMine => "ic_item_DLC06_arcMine",
             Power::StunMine => "ic_item_DLC06_arcMineStun",
             Power::Chokedust => "ic_item_DLC06_flashSmoke",
+            Power::Pull => "ic_pow_DLC07_pull",
         }
     }
     /// Fired from the pistol or crossbow.
@@ -1252,7 +1259,7 @@ fn use_power(
         return;
     }
     // the Heart's whispers are its own (heart.rs)
-    if !can_act || !mouse.just_pressed(MouseButton::Right) || powers.cooldown > 0.0 || matches!(sel, Power::Empty | Power::Blink | Power::Heart | Power::SummonAssassin | Power::Possess) {
+    if !can_act || !mouse.just_pressed(MouseButton::Right) || powers.cooldown > 0.0 || matches!(sel, Power::Empty | Power::Blink | Power::Heart | Power::SummonAssassin | Power::Pull | Power::Possess) {
         return;
     }
     // toggles end for free
@@ -1284,8 +1291,9 @@ fn use_power(
     }
     let mut cast = true;
     match sel {
-        // (Summon Assassin and Possession are aimed and let go: summon.rs, possession.rs)
-        Power::Empty | Power::Blink | Power::Heart | Power::SummonAssassin | Power::Possess => {}
+        // (Summon Assassin, Pull and Possession are aimed and let go: summon.rs, pull.rs,
+        // possession.rs)
+        Power::Empty | Power::Blink | Power::Heart | Power::SummonAssassin | Power::Pull | Power::Possess => {}
         Power::DarkVision => {
             stats.spend_mana(cost, &attrs);
             powers.dark_vision = true;

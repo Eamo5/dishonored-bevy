@@ -270,7 +270,7 @@ fn spawn_gauges(
 ) {
     *meters = Meters::default();
     // (Daud's wheel movie has his own discs)
-    let movie = if data.is_daud() && timelines.get("powerwheel_DLC06").is_some() { "powerwheel_DLC06" } else { "powerwheel" };
+    let movie = data.wheel_movies().iter().copied().find(|m| timelines.get(m).is_some()).unwrap_or("powerwheel");
     let disc = timelines.get(movie).map(|tl| {
         let mut fc = FlashClip::new(movie, tl.clone(), Clip::new(&tl, DISC_SPRITE));
         fc.m = [DISC_SCALE, 0.0, 0.0, DISC_SCALE, 0.0, 0.0];

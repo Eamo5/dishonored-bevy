@@ -284,6 +284,11 @@ struct ArmClips {
     summon: Option<ClipId>,
     summon_aim: [Option<ClipId>; 2],
     summon_cancel: Option<ClipId>,
+    /// his Pull (The Brigmore Witches: Powers_Cast_Pull_In, _Loop aimed; _Out let go,
+    /// _Abort given up)
+    pull: Option<ClipId>,
+    pull_aim: [Option<ClipId>; 2],
+    pull_cancel: Option<ClipId>,
     dark_vision: Option<ClipId>,
     wristbow_idle: Option<ClipId>,
     pistol_fire: Option<ClipId>,
@@ -422,6 +427,9 @@ impl ArmClips {
             summon: lib.find("Powers_Cast_SummonAssassin_Out"),
             summon_aim: [lib.find("Powers_Cast_SummonAssassin_In"), lib.find("Powers_Cast_SummonAssassin_Loop")],
             summon_cancel: lib.find("Powers_Cast_SummonAssassin_Cancel"),
+            pull: lib.find("Powers_Cast_Pull_Out"),
+            pull_aim: [lib.find("Powers_Cast_Pull_In"), lib.find("Powers_Cast_Pull_Loop")],
+            pull_cancel: lib.find("Powers_Cast_Pull_Abort"),
             dark_vision: lib.find("Powers_Cast_DarkVision_In"),
             wristbow_idle: lib.find("Wristbow_Idle"),
             pistol_fire: lib.find("Pistol_Fire"),
@@ -467,6 +475,7 @@ struct ArmsAnim {
     /// aiming Blink, a summoning or a possession (as last seen); their cancels seen
     blink_aiming: bool,
     summon_cancels: u32,
+    pull_cancels: u32,
     possess_cancels: u32,
     /// a grenade cooking (as last seen)
     cooking: bool,
@@ -793,6 +802,7 @@ fn spawn_arms(
                 blocking: false,
                 blink_aiming: false,
                 summon_cancels: 0,
+            pull_cancels: 0,
                 possess_cancels: 0,
                 cooking: false,
                 choking: false,
@@ -894,7 +904,7 @@ fn animate_arms(
     (swim, mut carry, peek, cine, scene_arms): (Res<crate::swim::Swim>, ResMut<crate::carry::Carry>, Res<crate::keyhole::Peek>, Res<crate::script_world::Cinematic>, Res<crate::matinee::SceneArms>),
     (versus, slide, edge, zoom): (Res<crate::combat::Versus>, Res<crate::player::Slide>, Res<crate::player::MantleEdge>, Res<crate::zoom::Zoom>),
     mut death_fall: ResMut<DeathFall>,
-    (summon_aim, possess_aim): (Option<Res<crate::summon::SummonAim>>, Option<Res<crate::possession::PossessAim>>),
+    (summon_aim, possess_aim, pull_aim): (Option<Res<crate::summon::SummonAim>>, Option<Res<crate::possession::PossessAim>>, Option<Res<crate::pull::PullAim>>),
 ) {
     let (Ok((p, sword, choking, grabbed)), Ok((mut anim, mut st, mut vis))) = (player.single(), arms.single_mut()) else { return };
     let st = &mut *st;
@@ -1458,6 +1468,7 @@ fn animate_arms(
             Power::Blink => c.blink,
             Power::Windblast => c.windblast,
             Power::SummonAssassin => c.summon.or(c.windblast),
+            Power::Pull => c.pull.or(c.windblast),
             Power::BendTime => c.bend_time,
             Power::DarkVision => c.dark_vision.or(c.switch),
             Power::Empty | Power::Heart => c.switch,
@@ -1568,13 +1579,20 @@ fn animate_arms(
     // (`_Loop`) until it's let go and the cast plays; a summoning given up plays its `_Cancel`
     let [aim_in, aim_loop] = match powers.selected {
         Power::SummonAssassin => c.summon_aim,
+        Power::Pull => c.pull_aim,
         Power::Possess => c.possess_aim,
         _ => c.blink_aim,
     };
-    let aiming = powers.aiming && matches!(powers.selected, Power::Blink | Power::SummonAssassin | Power::Possess) && aim_loop.is_some();
+    let aiming = powers.aiming && matches!(powers.selected, Power::Blink | Power::SummonAssassin | Power::Pull | Power::Possess) && aim_loop.is_some();
     if let Some(a) = summon_aim.as_ref().filter(|a| a.cancel_seq != st.summon_cancels) {
         st.summon_cancels = a.cancel_seq;
         if let Some(cl) = c.summon_cancel {
+            anim.restart_overlay(cl, false, 1.0, 0.1);
+        }
+    }
+    if let Some(a) = pull_aim.as_ref().filter(|a| a.cancel_seq != st.pull_cancels) {
+        st.pull_cancels = a.cancel_seq;
+        if let Some(cl) = c.pull_cancel {
             anim.restart_overlay(cl, false, 1.0, 0.1);
         }
     }
@@ -1737,6 +1755,7 @@ fn cast_clip(p: Power) -> &'static str {
         Power::Blink => "Powers_Cast_Blink_Out",
         Power::Windblast => "Powers_Cast_Windblast",
         Power::SummonAssassin => "Powers_Cast_SummonAssassin_Out",
+        Power::Pull => "Powers_Cast_Pull_Out",
         Power::BendTime => "Powers_Cast_BendTime",
         Power::DarkVision | Power::Empty | Power::Heart => "Powers_Switch",
         Power::Possess => "Powers_Cast_Possession_In",

@@ -12,6 +12,7 @@ pub struct InteractPlugin;
 impl Plugin for InteractPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InteractFocus>()
+            .init_resource::<ForceUse>()
             .init_resource::<AmmoPickupRestore>()
             .add_systems(OnEnter(GameState::InGame), |mut pending: ResMut<AmmoPickupRestore>| pending.0.clear())
             .add_systems(Update, restore_ammo_pickups.after(crate::save::restore_npcs).before(find_focus).run_if(in_state(GameState::InGame)))
@@ -137,6 +138,10 @@ mod capacity_tests {
         assert_eq!(app.world().get::<Pickup>(weapon).unwrap().kind, PickupKind::Weapon("Crossbow".into(), vec![(2, 2)]));
     }
 }
+
+/// A pickup to take now as if Use were pressed on it (one Pull drew to Daud's hand).
+#[derive(Resource, Default)]
+pub struct ForceUse(pub Option<Entity>);
 
 #[derive(Component)]
 pub struct Pickup {
@@ -713,13 +718,17 @@ pub fn use_focus(
     player: Query<&Transform, With<Player>>,
     (level, mut timed, data, mut ambients, mut read, attrs): (Option<Res<LevelInfo>>, ResMut<crate::audio::TimedSounds>, Res<crate::gamedata::Data>, ResMut<crate::audio::Ambients>, MessageWriter<crate::journal::ReadNote>, Res<crate::gamedata::Attrs>),
     (keyholes, peek, mut plog, mut tw, settings, switches): (Query<(), With<crate::keyhole::KeyholeDoor>>, Res<crate::keyhole::Peek>, ResMut<crate::pickuplog::PickupLog>, ResMut<crate::tutwindow::TutorialWindow>, Res<crate::settings::Settings>, Res<crate::kismet::ScriptSwitches>),
+    mut force: ResMut<ForceUse>,
 ) {
     if paused.0 { return; }
     let use_key = bind.key(crate::bindings::Act::Use);
-    let Some(e) = focus.1 else { return };
+    // (a pickup Pull drew to Daud's hand: taken as if used)
+    let forced = force.0.take();
+    let Some(e) = forced.or(focus.1) else { return };
     // a shut door with a keyhole: a tap (on release) opens it, a hold looks through
     let tap = keyholes.contains(e) && doors.get(e).is_ok_and(|(d, _, _)| d.target < 0.5);
-    if tap {
+    if forced.is_some() {
+    } else if tap {
         if !keys.just_released(use_key) || peek.consumed {
             return;
         }

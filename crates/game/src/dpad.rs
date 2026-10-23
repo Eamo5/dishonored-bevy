@@ -136,7 +136,7 @@ fn display(
     };
     if let Some((in_wheel, sel)) = opening {
         if d.root.is_none() {
-            let movie = if data.is_daud() && timelines.get(MOVIE_DLC06).is_some_and(|tl| Clip::export(&tl, SYMBOL).is_some()) { MOVIE_DLC06 } else { MOVIE };
+            let movie = data.wheel_movies().iter().copied().find(|m| timelines.get(m).is_some_and(|tl| Clip::export(&tl, SYMBOL).is_some())).unwrap_or(MOVIE);
             let Some(tl) = timelines.get(movie) else { return };
             let Some(c) = Clip::export(&tl, SYMBOL) else { return };
             let mut fc = FlashClip::new(movie, tl.clone(), c).real();

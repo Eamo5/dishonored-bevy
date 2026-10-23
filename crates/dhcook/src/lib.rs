@@ -8858,6 +8858,14 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         ("UI_EquipmentIcons_DLC06_SF", "icons", "UI_EquipmentIcons_DLC06."),
         ("UI_ItemIcons_Small_DLC06_SF", "itemsmall", "UI_ItemIcons_Small_DLC06."),
         ("UI_ItemIcons_Large_DLC06", "items", ""),
+        // (The Brigmore Witches': Pull, its gadgets and items, its powers' journal art and
+        // missions' pictures)
+        ("UI_EquipmentIcons_DLC07_SF", "icons", "UI_EquipmentIcons_DLC07."),
+        ("UI_ItemIcons_Small_DLC07_SF", "itemsmall", "UI_ItemIcons_Small_DLC07."),
+        ("UI_ItemIcons_Large_DLC07", "items", ""),
+        ("UI_Powers_Large_DLC07", "powers", ""),
+        ("UI_Mission_Large_DLC07", "missions", ""),
+        ("UI_Mission_Small_DLC07", "missions", ""),
         // the mask's lens frame
         ("Startup", "effects", "AltScreen_Effects.SpyGlass"),
         ("UI_portraits_objectives", "portraits", ""),
@@ -8881,12 +8889,23 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         sources.push((format!("UI_ResBg_{c}_SF"), "dlc05", ""));
         sources.push((format!("UI_Brf_{c}_SF"), "dlc05", ""));
     }
-    // ... the tutorial notes' pictures (`UI_Tuto_*_SF`: `tuto_<note>_<n>`)
-    if let Ok(rd) = std::fs::read_dir(cooked) {
-        let mut tuto: Vec<String> = rd.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_str().map(str::to_string)).filter(|n| n.starts_with("UI_Tuto_") && n.ends_with("_SF.upk")).map(|n| n.trim_end_matches(".upk").to_string()).collect();
+    // ... the tutorial notes' pictures (`UI_Tuto_*_SF`: `tuto_<note>_<n>`; the story packs'
+    // too, Pull's) and The Brigmore Witches' statistics screens' backgrounds
+    // (`UI_MSBg_<mission>_DLC07_SF`)
+    for d in std::iter::once(cooked.to_path_buf()).chain(crate::resolver::dlc_dirs(cooked)) {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        let names: Vec<String> = rd.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_str().map(str::to_string)).collect();
+        let mut tuto: Vec<String> = names.iter().filter(|n| n.starts_with("UI_Tuto_") && n.ends_with("_SF.upk")).map(|n| n.trim_end_matches(".upk").to_string()).collect();
         tuto.sort();
         for n in tuto {
-            sources.push((n, "tutorials", ""));
+            if !sources.iter().any(|s| s.0 == n) {
+                sources.push((n, "tutorials", ""));
+            }
+        }
+        let mut bgs: Vec<String> = names.iter().filter(|n| n.starts_with("UI_MSBg_") && n.ends_with("_SF.upk")).map(|n| n.trim_end_matches(".upk").to_string()).collect();
+        bgs.sort();
+        for n in bgs {
+            sources.push((n, "missionstats", ""));
         }
     }
     // (and the mystery man's possible targets, in its script level: `DLC05_H_MMTarget`)
@@ -8952,8 +8971,9 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         // (its challenge menu, in its menu map; its pause menu)
         ("L_DLC05_MainMenu_P", "UI_ChallengesMenu_DLC05."),
         ("UI_PauseMenu_DLC05_SF", "UI_PauseMenu_DLC05."),
-        // The Knife of Dunwall: Daud's wheel
+        // The Knife of Dunwall: Daud's wheel; The Brigmore Witches' (Pull's place)
         ("UI_PowerWheel_DLC06_SF", ""),
+        ("UI_PowerWheel_DLC07_SF", ""),
     ] {
         // (the game's packages, or the DLC's)
         let path = std::iter::once(cooked.to_path_buf()).chain(crate::resolver::dlc_dirs(cooked)).map(|d| d.join(format!("{pkg_name}.upk"))).find(|p| p.exists());

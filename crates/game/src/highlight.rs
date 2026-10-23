@@ -20,6 +20,7 @@ impl Plugin for HighlightPlugin {
         app.add_plugins(MaterialPlugin::<HighlightMaterial>::default())
             .add_systems(OnExit(GameState::InGame), |mut h: ResMut<HighlightLook>| h.0 = None)
             .init_resource::<HighlightLook>()
+            .init_resource::<ExtraHighlight>()
             .add_systems(Update, highlight.after(crate::interact::FocusSet).run_if(in_state(GameState::InGame)));
     }
 }
@@ -43,6 +44,11 @@ impl Material for HighlightMaterial {
     }
 }
 
+/// Things to rim besides the focus (their entities and their meshes below): the target Pull
+/// has (The Brigmore Witches).
+#[derive(Resource, Default)]
+pub struct ExtraHighlight(pub Vec<Entity>);
+
 /// The level's rim material, made on first use.
 #[derive(Resource, Default)]
 struct HighlightLook(Option<Handle<HighlightMaterial>>);
@@ -57,7 +63,7 @@ fn highlight(
     (focus, settings): (Res<InteractFocus>, Res<crate::settings::Settings>),
     level: Option<Res<LevelInfo>>,
     (mut look, mut mats): (ResMut<HighlightLook>, ResMut<Assets<HighlightMaterial>>),
-    vm: Option<Res<crate::kismet::Vm>>,
+    (vm, extra): (Option<Res<crate::kismet::Vm>>, Res<ExtraHighlight>),
     (pickups, usables, instances): (Query<&Pickup>, Query<&Usable>, Query<(Entity, &LevelInstance)>),
     meshes: Query<(&Mesh3d, Option<&bevy::mesh::skinning::SkinnedMesh>), Without<HighlightPart>>,
     children: Query<&Children>,
@@ -98,6 +104,12 @@ fn highlight(
     if let Some(vm) = vm.as_ref() {
         for &a in &vm.highlights {
             actor_meshes(a, &mut want);
+        }
+    }
+    for &e in &extra.0 {
+        match pickups.get(e) {
+            Ok(p) => want.extend(p.entities.iter().copied()),
+            Err(_) => want.push(e),
         }
     }
     want.sort();

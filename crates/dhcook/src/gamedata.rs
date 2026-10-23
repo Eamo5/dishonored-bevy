@@ -207,7 +207,7 @@ fn daud_profile(cooked: &Path, game: &Package, base: &GameData, pack: &crate::Da
     };
     // his active powers, each over Corvo's it plays as (the tweaks' own fallback), except
     // what a tweak keeps to itself (`m_FallbackSkip`)
-    for (key, field, mana) in [("Blink", "m_pTransversalPowerTweaks", 20.0), ("DarkVision", "m_pDarkVisionPowerTweaks", 20.0), ("BendTime", "m_pBendTimePowerTweaks", 60.0), ("SummonAssassin", "m_pSummonAssassinPowerTweaks", 40.0)] {
+    for (key, field, mana) in [("Blink", "m_pTransversalPowerTweaks", 20.0), ("DarkVision", "m_pDarkVisionPowerTweaks", 20.0), ("BendTime", "m_pBendTimePowerTweaks", 60.0), ("SummonAssassin", "m_pSummonAssassinPowerTweaks", 40.0), ("Pull", "m_pPullPowerTweaks", 40.0)] {
         let Some(o) = pawn.object(field).filter(|o| *o > 0) else { continue };
         let Some(obj) = props(&pkg, o) else { continue };
         let cls = pkg.class_name(o);

@@ -95,6 +95,16 @@ impl Data {
         self.1 .0.as_ref().is_some_and(|(n, _)| n == "Daud")
     }
 
+    /// The quick-access wheel's movies, the player's first: Daud's on his stories' maps (The
+    /// Brigmore Witches' own, `UI_PowerWheel_DLC07`, with Pull's place), Corvo's last.
+    pub fn wheel_movies(&self) -> &'static [&'static str] {
+        match self.1 .2.and_then(|i| self.0.profiles.get(i)).and_then(|p| p.maps.first()).map(|m| m.as_str()) {
+            Some("l_dlc07_") => &["powerwheel_DLC07", "powerwheel_DLC06", "powerwheel"],
+            Some(_) => &["powerwheel_DLC06", "powerwheel"],
+            None => &["powerwheel"],
+        }
+    }
+
     /// The most of each ammunition (`eDisAmmoType` order) that can be carried: Corvo's eight,
     /// then Daud's explosive bolts, arc mines, chokedust and stun mines (none for Corvo, whose
     /// attributes have no such capacities).

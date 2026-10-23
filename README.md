@@ -2394,7 +2394,22 @@ are in the settings file, `pad_binding_set` 0-3):
   (`DisDLC06SeqAct_VectorAdd`, `Subtract`, `Normalize`), and a story's end
   (`DisDLC06SeqAct_EndDLC06`, `DisDLC07SeqAct_EndDLC07`: its chaos's "Save Finished") returns
   to the main menu once its credits are over (the scripts' `start <pack>GameFull_P`).
-  Not yet: Pull (`DLC07_Twk_Pwr_Pull`), the loadout carried from The Knife of Dunwall's end
+  - *Pull* (`DLC07_Twk_Pwr_Pull`, `DisDLC07Tweaks_Pull`): held, Daud reaches for what he looks
+    at within `m_fMaxDistance` (20 m) and `m_fCheckExtent` (1 m) of the look, in sight, its rim
+    showing; let go, it comes. A pickup flies to his hand at `m_fPickupSpeed` (30 m/s) and is
+    taken; a loose prop comes into his hands as if grabbed; from the second level a person is
+    torn off its feet and flung at him, reeling. Each costs as its class does (`m_ManaCosts`: a
+    person 40, a pickup or a prop 20). His arms reach (`Powers_Cast_Pull_In`, `_Loop`), cast
+    (`_Out`) or give up (`_Abort`: Use, the power put away, nothing there). The scripts bar
+    people from it (`DisDLC07SeqAct_SetPullOverride`: Lizzy Stride) and hear of one taken
+    (`DisDLC07SeqEvent_NPCPulled`: Started, Finished). The quick-access wheel is the pack's
+    own (`UI_PowerWheel_DLC07`: `WheelHandler_DLC07`'s orders, Pull last, its own
+    illustration); its icon (`ic_pow_DLC07_pull`), the pack's equipment and item icons, the
+    powers' journal art, its tutorial pictures (`UI_Tuto_*_DLC07_SF`) and the mission
+    statistics' backgrounds (`UI_MSBg_*_DLC07_SF`) cook with `cook-ui`. Our reading: the
+    person's flight (toward him at up to 14 m/s, up at 3, as Wind Blast's push reversed); the
+    rats, fish and river krusts its list also names are not taken.
+  Not yet: the loadout carried from The Knife of Dunwall's end
   (`DisDLC07SeqAct_ImportTransitionPlayerData`: "Nothing Imported"). `DH_SUMMON_LOG`; `DH_GADGET_LOG` (chokedust clouds and who they catch); `DH_PFX_SLOW=<n>`
   (every effect n times slower, to see the briefest: an arc mine's 0.1 s lightning).
 

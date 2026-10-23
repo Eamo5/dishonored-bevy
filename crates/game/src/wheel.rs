@@ -8,7 +8,8 @@
 //! Time, Possession) on round from them, each `360 / count` degrees, its icon at 75% on the
 //! 500-wide circle's rim, the separators between the two, the indicator turned to the one
 //! pointed at. The mouse points; letting go equips it. Daud's is The Knife of Dunwall's own
-//! movie (`UI_PowerWheel_DLC06`: `WheelHandler_DLC06`'s orders, with his gadgets and powers).
+//! movie (`UI_PowerWheel_DLC06`: `WheelHandler_DLC06`'s orders, with his gadgets and powers;
+//! The Brigmore Witches' `UI_PowerWheel_DLC07`, Pull last and its own illustration).
 
 use crate::audio::PostEvent;
 use crate::flash::{turn_scale, Clip, FlashClip, MovieTimelines};
@@ -60,8 +61,6 @@ pub const WHEEL_TIME: f32 = 0.05;
 const STICK_DEAD: f32 = 0.4;
 const PAD_DELAY: f32 = 0.25;
 
-const MOVIE: &str = "powerwheel";
-const MOVIE_DLC06: &str = "powerwheel_DLC06";
 /// An item's disc (`ic`), the same sprite in both movies.
 const IC_SPRITE: u16 = 29;
 const WHEEL_AT: Vec2 = Vec2::new(640.0, 354.0);
@@ -83,7 +82,8 @@ const POWERS: [Power; 6] = [Power::Windblast, Power::DarkVision, Power::Blink, P
 /// `WheelHandler_DLC06`'s: the explosive bolt first, Daud's gadgets last; his Void Gaze
 /// (`pow_DLC06_daudDarkVision`) after Dark Vision, Transversal and Summon Assassin last.
 const WEAPONS_DLC06: [Power; 13] = [Power::ExplosiveBolt, Power::IncendiaryBolt, Power::Crossbow, Power::SleepDart, Power::Heart, Power::SpringRazor, Power::Grenade, Power::StickyGrenade, Power::Pistol, Power::ExplosiveBullet, Power::ArcMine, Power::StunMine, Power::Chokedust];
-const POWERS_DLC06: [Power; 7] = [Power::Windblast, Power::DarkVision, Power::DevouringSwarm, Power::BendTime, Power::Possess, Power::Blink, Power::SummonAssassin];
+/// (WheelHandler_DLC07's the same, Pull last: owned only on The Brigmore Witches' maps)
+const POWERS_DLC06: [Power; 8] = [Power::Windblast, Power::DarkVision, Power::DevouringSwarm, Power::BendTime, Power::Possess, Power::Blink, Power::SummonAssassin, Power::Pull];
 
 /// The items the player has and where each sits (`ComputeWeaponAngle` / `ComputePowerAngle`),
 /// and the separators between the groups.
@@ -121,13 +121,15 @@ fn schema(p: Power) -> &'static str {
         Power::Grenade => "regular_grenade",
         Power::SpringRazor => "spring_razor",
         Power::Heart => "heart",
+        // (The Brigmore Witches' movie's own)
+        Power::Pull => "pull",
         Power::Empty => "default",
         _ => "outsider",
     }
 }
 
 fn is_power(p: Power) -> bool {
-    POWERS.contains(&p) || p == Power::SummonAssassin
+    POWERS.contains(&p) || p == Power::SummonAssassin || p == Power::Pull
 }
 
 #[derive(Component)]
@@ -182,14 +184,8 @@ fn wheel(
         w.hover = w.items.iter().position(|(p, _)| *p == powers.selected);
         tc.wheel = WHEEL_TIME;
         sfx.write(PostEvent::named("Snd_UI_Ingame_Wheel_Hand_In", None));
-        // (Daud's movie, if cooked)
-        let (movie, tl) = match timelines.get(MOVIE_DLC06).filter(|_| w.daud) {
-            Some(tl) => (MOVIE_DLC06, tl),
-            None => match timelines.get(MOVIE) {
-                Some(tl) => (MOVIE, tl),
-                None => return,
-            },
-        };
+        // (Daud's movie, if cooked: his story's own)
+        let Some((movie, tl)) = data.wheel_movies().iter().find_map(|m| timelines.get(m).map(|tl| (*m, tl))) else { return };
         let title: bevy::text::FontSource = fonts.title.clone().into();
         let node = || Node { position_type: PositionType::Absolute, ..default() };
         let root = commands.spawn((WheelRoot, Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }, GlobalZIndex(70), Pickable::IGNORE, DespawnOnExit(GameState::InGame))).id();

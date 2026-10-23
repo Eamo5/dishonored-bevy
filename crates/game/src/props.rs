@@ -34,11 +34,12 @@ impl Plugin for PropsPlugin {
             .init_resource::<PropPhysicsStep>()
             .init_resource::<TankEvents>()
             .add_message::<PropGust>()
+            .add_message::<PullProp>()
             .add_systems(PostUpdate, scale_prop_physics.before(PhysicsSet::SyncBackend).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, unscale_prop_physics.after(PhysicsSet::Writeback).run_if(in_state(GameState::InGame)))
             .add_systems(OnEnter(GameState::InGame), ((|mut h: ResMut<Held>| *h = Held::default()), setup_props.after(crate::level::LevelSpawnSet)))
             .add_systems(Update, prop_focus.after(crate::interact::FocusSet).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (restore_props, restore_prop_states, restore_held_prop, hold_prop, make_tanks, prop_impacts, prop_hits, prop_step_meshes, tank_misses, sync_props, burst_tanks, prop_events, script_physics, prop_gusts, wake_props).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (restore_props, restore_prop_states, restore_held_prop, pulled_props, hold_prop, make_tanks, prop_impacts, prop_hits, prop_step_meshes, tank_misses, sync_props, burst_tanks, prop_events, script_physics, prop_gusts, wake_props).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -756,6 +757,49 @@ pub(crate) fn prop_focus(
             g.0 = 0.0;
         }
     }
+}
+
+/// A prop drawn to Daud's hands by Pull (The Brigmore Witches): taken up from where it lies as
+/// if grabbed, the hold drawing it in.
+#[derive(Message, Clone, Copy)]
+pub struct PullProp(pub Entity);
+
+fn pulled_props(
+    mut commands: Commands,
+    mut pulls: MessageReader<PullProp>,
+    mut held: ResMut<Held>,
+    mut props: Query<&mut Prop>,
+    mut bodies: Query<&mut GravityScale>,
+    level: Option<Res<LevelInfo>>,
+    (mut taken, mut sfx): (ResMut<PropsTaken>, MessageWriter<PostEvent>),
+) {
+    let Some(level) = level else { return };
+    for PullProp(e) in pulls.read() {
+        if held.0.is_some() {
+            continue;
+        }
+        let Ok(mut prop) = props.get_mut(*e) else { continue };
+        let Some(m) = level.scene.movables.get(prop.index) else { continue };
+        let Some(b) = prop.body else { continue };
+        prop.dormant = false;
+        prop.thrown = false;
+        prop.released = 0.0;
+        commands.entity(b).try_insert(RigidBody::Dynamic);
+        if let Ok(mut g) = bodies.get_mut(b) {
+            g.0 = 0.0;
+        }
+        held.0 = Some(*e);
+        held.1 = 0.0;
+        taken.0.push(m.instance);
+        if !m.grab_sound.is_empty() {
+            sfx.write(PostEvent::named(&m.grab_sound, None));
+        }
+    }
+}
+
+/// Whether a prop can be taken up (and so pulled): loose, its body free.
+pub fn takeable(level: &LevelInfo, prop: &Prop) -> bool {
+    level.scene.movables.get(prop.index).is_some_and(|m| m.interactable && !m.fixed) && prop.body.is_some() && !prop.hung
 }
 
 /// How far ahead the empty hands hold a prop (`Twk_EmptyHands.m_fMovableHoldDist`, -100 uu)

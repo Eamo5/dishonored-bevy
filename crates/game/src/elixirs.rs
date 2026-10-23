@@ -68,7 +68,7 @@ fn counters(
     match (wheel.open, alive) {
         // (`Open`: made afresh, both elements slid in)
         (true, None) => {
-            let movie = if data.is_daud() && timelines.get(MOVIE_DLC06).is_some() { MOVIE_DLC06 } else { MOVIE };
+            let movie = data.wheel_movies().iter().copied().find(|m| timelines.get(m).is_some()).unwrap_or(MOVIE);
             let Some(tl) = timelines.get(movie) else { return };
             let pad = crate::pad::using();
             let Some(c) = Clip::export(&tl, if pad { SYMBOL_PAD } else { SYMBOL }) else { return };
