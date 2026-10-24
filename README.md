@@ -669,6 +669,9 @@ are in the settings file, `pad_binding_set` 0-3):
   (`Snd_UI_Audiolog_Noise`) before and after; "Stop the audiograph" cuts it. Heard once, the
   card is filed in the journal's Logs under `AUDIOGRAPHS`, with its description and
   `PLAY AUDIOGRAPH` / `STOP AUDIOGRAPH` to replay it from there.
+- **Piero's Spiritual Remedies laid about the levels** (`DisElixirMana`, `Elixir_Mana_twk`: 117
+  in the campaign, more in the stories and the trials) are cooked and taken. Before, only
+  Sokolov's elixirs were, and mana remedies could only be bought or found in containers.
 - **Bone charms** (the 29 originals, found at random, worn up to the slot count), **stores**
   (Piero's workshop, Griff) with the original items, prices and blueprint requirements.
 Daud's stories have their own (`DLC06_Twk_GlobalStore` before each Knife of Dunwall mission,

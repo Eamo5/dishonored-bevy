@@ -1420,7 +1420,7 @@ impl<'a> Cooker<'a> {
                 "Trigger" | "DisTrigger" | "Trigger_LOS" | "Trigger_Dynamic" => self.trigger(&obj),
                 c if c.starts_with("AkAmbientSound") => self.ambient_sound(&obj),
                 // (and The Brigmore Witches' corrupted charms laid about: `DisDLC07WhaleBoneCharmCracked`)
-                c if c.contains("Pickup") || c == "DisElixirHealth" || c.starts_with("DisKey") || c == "DisWhaleBoneCharm" || c == "DisDLC07WhaleBoneCharmCracked" => self.pickup(&obj),
+                c if c.contains("Pickup") || c == "DisElixirHealth" || c.starts_with("DisKey") || c == "DisElixirMana" || c == "DisWhaleBoneCharm" || c == "DisDLC07WhaleBoneCharmCracked" => self.pickup(&obj),
                 _ => Ok(()),
             };
             if let Err(e) = r {
@@ -1565,7 +1565,8 @@ impl<'a> Cooker<'a> {
             actor_class.as_str(),
             "InterpActor" | "KActor" | "DishonoredMovable" | "DisDoor" | "KAsset" | "DisCrusher"
         ) || actor_class.contains("Pickup")
-            || actor_class == "DisElixirHealth";
+            || actor_class == "DisElixirHealth"
+            || actor_class == "DisElixirMana";
         let comp_lm = read_component_lightmap(self.assets, comp);
         let irrelevant: Vec<[u32; 4]> = match cch.get_pkg("IrrelevantLights") {
             Some((pkg, Value::Array { count, offset, .. })) => {
