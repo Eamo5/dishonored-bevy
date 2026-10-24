@@ -221,7 +221,27 @@ are in the settings file, `pad_binding_set` 0-3):
   with their badges, `(acquired)`, each level's words and the strategic tips (`RPG.int`'s
   `DisUISelectionType`), pale once acquired, the wheel scrolling them. Bone charms: the charms found, worn ones in their sockets, the slot bar
   (`ACTIVATED BONE CHARMS: n/m`), the help bar's `ACTIVATE` / `REMOVE` wearing the chosen
-  one or taking it off. Inventory: the original sub-tabs — `RESOURCES` (coins,
+  one or taking it off.
+  - Daud finds his own charms (each story's `m_pCharmListTweaks`: "Bird of Prey", "Void
+    Surge"...). Before, he found Corvo's.
+  - The Brigmore Witches' corrupted charms (`DisDLC07Tweaks_WhaleBoneCharmCracked`, the scripts'
+    random cells in Coldridge and the others) are their own pickup. Each is one of the
+    pawn's `m_pCrackedCharmListTweaks` (Vengeance, Tank, Zephyr, Splintering Bolts, Shivering
+    Silhouette, Statuesque, Power Slash, Witch's Skin, Leverage).
+  - Picking one up: its song, its sound, the HUD's "n/t Corrupted Charm found" and "New
+    Corrupted Charm added", the corrupted charms' tutorial note the first time, and the count
+    behind the statistics' "Corrupted Charms Found".
+  - In the journal it has its own picture (`DLC07_CrackedCharm`), with its benefit and penalty
+    on their own lines.
+  - Worn, every attribute it names changes as its modifier says (`SetVal`, `AddVal`,
+    `AddBasePercent`). These attributes now take effect too: the damage he takes
+    (`DamageTakenMultiplier`); mana spent before health (`UseManaForHealth`); swimming speed;
+    sword damage (`MeleeDamageBonus`); bolt damage (`ArrowDamageMultiplier`); bowmen's and
+    krusts' misses; how visible he is, and invisible standing still (`Visibility`,
+    `VisibilityNotMovingMultiplier`); and Pull's reach, speed and cost.
+  - Before, the corrupted charms were taken as Corvo's bone charms.
+  - Script: `take [LABEL]` takes the nearest pickup so named.
+  Inventory: the original sub-tabs — `RESOURCES` (coins,
   elixirs, runes), `KEY RING`, `GADGETS` (his blade, pistol, crossbow, the Heart; grenades,
   springrazors, rewire tools), `AMMO`, `UPGRADES` — as the 4 x 3 tilted cards with counts,
   the chosen one's picture, name and description beside them; an elixir chosen is drunk from

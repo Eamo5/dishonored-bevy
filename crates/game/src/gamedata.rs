@@ -83,6 +83,8 @@ impl Data {
             faction: p.faction,
             texts: Default::default(),
             darkness: std::mem::replace(&mut d.darkness, p.darkness),
+            // (a player without a charm list of his own keeps Corvo's)
+            charms: if p.charms.is_empty() { Vec::new() } else { std::mem::replace(&mut d.charms, p.charms) },
         }
     }
 
@@ -200,7 +202,7 @@ impl Data {
     /// Whether a bone charm worn, and a passive power owned, raise an attribute (the HUD's
     /// gauges show either: a whale bone charm's `Attribute_HealthMax` modifier, Vitality's).
     pub fn raised_by(&self, name: &str, powers: &BTreeMap<String, u8>, charms: &[String]) -> (bool, bool) {
-        let charm = charms.iter().any(|c| self.charm(c).is_some_and(|(d, _)| d.attribute == name));
+        let charm = charms.iter().any(|c| self.charm(c).is_some_and(|(d, _)| d.attribute == name || d.mods.iter().any(|m| m.0 == name)));
         let power = self.0.passives.iter().any(|p| {
             let lvl = powers.get(&p.name).copied().unwrap_or(0) as usize;
             lvl > 0 && p.levels.get(lvl).is_some_and(|l| l.mods.iter().any(|m| m.attribute == name))
@@ -210,7 +212,13 @@ impl Data {
     /// A player attribute: the difficulty's base value, modified by the passive powers owned
     /// (each level lists its full set of modifiers) and the bone charms worn.
     pub fn attribute(&self, name: &str, difficulty: u8, powers: &BTreeMap<String, u8>, charms: &[String]) -> f32 {
-        let base = self.0.attributes.get(name).map(|v| v[difficulty.min(3) as usize]).unwrap_or(0.0);
+        self.attribute_or(name, 0.0, difficulty, powers, charms)
+    }
+
+    /// An attribute whose base the player's data leaves to the game's code (`DamageTakenMultiplier`,
+    /// a multiplier at 1): that base where the data has none.
+    pub fn attribute_or(&self, name: &str, default: f32, difficulty: u8, powers: &BTreeMap<String, u8>, charms: &[String]) -> f32 {
+        let base = self.0.attributes.get(name).map(|v| v[difficulty.min(3) as usize]).unwrap_or(default);
         let mut v = base;
         for p in &self.0.passives {
             let lvl = powers.get(&p.name).copied().unwrap_or(0) as usize;
@@ -224,8 +232,17 @@ impl Data {
             }
         }
         for c in charms {
-            if let Some((def, i)) = self.charm(c).filter(|(d, _)| d.attribute == name) {
+            let Some((def, i)) = self.charm(c) else { continue };
+            if def.attribute == name {
                 v += def.levels[i].2;
+            }
+            // (a corrupted charm: its benefit's and its penalty's changes)
+            for (_, op, value) in def.mods.iter().filter(|m| m.0 == name) {
+                match op.as_str() {
+                    "SetVal" => v = *value,
+                    "AddBasePercent" => v += base * value / 100.0,
+                    _ => v += value,
+                }
             }
         }
         v
@@ -307,6 +324,18 @@ pub struct Attrs {
     pub bolt_capacity: u32,
     pub ammo_capacity: [u32; crate::gadgets::AMMO_TYPES],
     pub bolt_break_modifier: f32,
+    /// the chance a bowman's arrow and a krust's spit miss him (`ChanceNPCArrowMiss`,
+    /// `ChanceRiverKrustSpitMiss`: the corrupted Shivering Silhouette)
+    pub npc_arrow_miss: f32,
+    pub krust_spit_miss: f32,
+    /// what his light and stillness add to how he is seen (`Visibility`,
+    /// `VisibilityNotMovingMultiplier`: Shivering Silhouette, Statuesque)
+    pub visibility_bonus: f32,
+    pub visibility_still: f32,
+    /// his Pull's reach, speed and cost, as multipliers (`Pull*Multiplier`: Leverage)
+    pub pull_reach: f32,
+    pub pull_speed: f32,
+    pub pull_cost: f32,
 }
 
 impl Attrs {
@@ -426,6 +455,13 @@ impl Default for Attrs {
             bolt_capacity: 10,
             ammo_capacity: [10, 10, 10, 10, 10, 5, 5, 5, 5, 5, 5, 5],
             bolt_break_modifier: 0.0,
+            npc_arrow_miss: 0.0,
+            krust_spit_miss: 0.0,
+            visibility_bonus: 0.0,
+            visibility_still: 1.0,
+            pull_reach: 1.0,
+            pull_speed: 1.0,
+            pull_cost: 1.0,
         }
     }
 }
@@ -440,6 +476,12 @@ fn derive_attributes(data: Res<Data>, settings: Res<crate::settings::Settings>, 
     let d = settings.difficulty;
     let (powers, charms) = (stats.powers.clone(), stats.charms.clone());
     let a = |n: &str| data.attribute(n, d, &powers, &charms);
+    // (those the player's data leaves to the game's code: their base here)
+    let ab = |n: &str, base: f32| data.attribute_or(n, base, d, &powers, &charms);
+    // the damage he takes, and his mana spent on it first (the corrupted Tank, Zephyr,
+    // Witch's Skin: `DamageTakenMultiplier`, `UseManaForHealth`)
+    stats.damage_taken_bonus = ab("DamageTakenMultiplier", 1.0) - 1.0;
+    stats.mana_shield = ab("UseManaForHealth", 0.0) > 0.5;
     let ammo_capacity = data.ammo_capacities(&stats, d);
     let max_health = a("HealthMax");
     let max_mana = a("ManaMax");
@@ -519,23 +561,57 @@ fn derive_attributes(data: Res<Data>, settings: Res<crate::settings::Settings>, 
         adrenaline_rat: a("AdrenalineOnRatKill").max(0.0),
         carry: a("GroundSpeedCarryingCorpse") * UU,
         drop_mana: a("DropAssassinationManaBonus"),
-        swim: data.pawn("swim.m_fMaxSpeedNoStroke", 350.0) * UU,
+        swim: data.pawn("swim.m_fMaxSpeedNoStroke", 350.0) * UU * ab("SwimMaxSpeedNoStroke", 1.0).max(0.1),
         swim_fast: a("WaterSpeed") * UU,
         drown_damage: a("DrowningDamageAmount"),
         drown_step: a("DrowningDamageStep"),
         throw: a("ThrowStrength") * 0.01,
-        sword_damage: item("Sword_MeleeDamage", 10.0),
+        // (and Power Slash's `MeleeDamageBonus`)
+        sword_damage: item("Sword_MeleeDamage", 10.0) + ab("MeleeDamageBonus", 0.0),
         bullet: shot("bullet.", item("Pistol_RangedDamage", 10.0), item("Pistol_RangedHeadshotMultiplier", 1.2)),
-        bolt: shot("arrow.", item("Crossbow_RangedDamage", 20.0), item("Crossbow_RangedHeadshotMultiplier", 1.2)),
+        // (Splintering Bolts' `ArrowDamageMultiplier`: their damage again as much)
+        bolt: {
+            let mut b = shot("arrow.", item("Crossbow_RangedDamage", 20.0), item("Crossbow_RangedHeadshotMultiplier", 1.2));
+            b.damage *= 1.0 + ab("ArrowDamageMultiplier", 0.0).max(0.0);
+            b
+        },
         bolt_capacity: ammo_capacity[2],
         ammo_capacity,
         bolt_break_modifier: a("ArrowBreakingModifier"),
+        npc_arrow_miss: ab("ChanceNPCArrowMiss", 0.0).clamp(0.0, 1.0),
+        krust_spit_miss: ab("ChanceRiverKrustSpitMiss", 0.0).clamp(0.0, 1.0),
+        visibility_bonus: ab("Visibility", 0.0),
+        visibility_still: ab("VisibilityNotMovingMultiplier", 1.0).max(0.0),
+        pull_reach: (1.0 + ab("PullDistanceMultiplier", 0.0)).max(0.1),
+        pull_speed: (1.0 + ab("PullSpeedMultiplier", 0.0)).max(0.1),
+        pull_cost: (1.0 + ab("PullManaCostMultiplier", 0.0)).max(0.0),
     };
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A corrupted charm worn changes each of its attributes as its modifier says; a base the
+    /// data leaves out is the game's own.
+    #[test]
+    fn a_corrupted_charm_applies_its_benefit_and_its_penalty() {
+        let mut data = Data::default();
+        data.0.attributes.insert("GroundSpeed".into(), [400.0; 4]);
+        data.0.charms.push(dhcook::format::CharmDef {
+            attribute: String::new(),
+            levels: vec![("Tank".into(), String::new(), 0.0)],
+            corrupted: true,
+            mods: vec![("GroundSpeed".into(), "AddBasePercent".into(), -30.0), ("DamageTakenMultiplier".into(), "AddVal".into(), -0.3), ("ManaRegenAdditivePortion".into(), "SetVal".into(), 0.0)],
+        });
+        let worn = vec!["Tank".to_string()];
+        let none = BTreeMap::new();
+        assert!((data.attribute("GroundSpeed", 1, &none, &worn) - 280.0).abs() < 1e-3);
+        assert!((data.attribute_or("DamageTakenMultiplier", 1.0, 1, &none, &worn) - 0.7).abs() < 1e-4);
+        assert_eq!(data.attribute_or("ManaRegenAdditivePortion", 20.0, 1, &none, &worn), 0.0);
+        assert_eq!(data.attribute("GroundSpeed", 1, &none, &[]), 400.0);
+        assert_eq!(data.raised_by("DamageTakenMultiplier", &none, &worn), (true, false));
+    }
 
     #[test]
     fn a_mission_is_named_by_its_map_before_its_statistics_number() {
@@ -610,7 +686,7 @@ mod tests {
             data.0.attributes.insert(name.into(), [value; 4]);
         }
         for (attribute, name, value) in [("ChokeTime", "Strong Arms", -1.5), ("MeleeSpeed", "Whirlwind II", 0.2), ("SwordUnsheathedSpeedFactor", "Fleet Fighter", 0.1)] {
-            data.0.charms.push(dhcook::format::CharmDef { attribute: attribute.into(), levels: vec![(name.into(), String::new(), value)] });
+            data.0.charms.push(dhcook::format::CharmDef { attribute: attribute.into(), levels: vec![(name.into(), String::new(), value)], ..Default::default() });
         }
         let mut app = App::new();
         app.insert_resource(data).init_resource::<crate::settings::Settings>().init_resource::<PlayerStats>().init_resource::<Attrs>().add_systems(Update, derive_attributes);
@@ -642,7 +718,7 @@ mod tests {
         data.0.attributes.insert("ArrowCapacity".into(), [10.0; 4]);
         data.0.upgrades.push(dhcook::format::UpgradeDef { id: "Twk_Upgrade_QuiverCapacity2".into(), attributes: vec![("ArrowCapacity".into(), 10.0)], ..default() });
         data.0.upgrades.push(dhcook::format::UpgradeDef { id: "Twk_Upgrade_QuiverCapacity4".into(), attributes: vec![("ArrowCapacity".into(), 10.0)], ..default() });
-        data.0.charms.push(dhcook::format::CharmDef { attribute: "ArrowBreakingModifier".into(), levels: vec![("Reinforced Bolts".into(), String::new(), -0.5)] });
+        data.0.charms.push(dhcook::format::CharmDef { attribute: "ArrowBreakingModifier".into(), levels: vec![("Reinforced Bolts".into(), String::new(), -0.5)], ..Default::default() });
         let mut app = App::new();
         app.insert_resource(data).init_resource::<crate::settings::Settings>().init_resource::<PlayerStats>().init_resource::<Attrs>().add_systems(Update, derive_attributes);
         app.update();

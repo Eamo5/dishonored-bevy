@@ -303,7 +303,7 @@ fn heart_markers(
             .iter()
             .filter_map(|(p, t)| match p.kind {
                 crate::interact::PickupKind::Rune => Some((t.translation, false, p.label.as_str())),
-                crate::interact::PickupKind::BoneCharm => Some((t.translation, true, p.label.as_str())),
+                crate::interact::PickupKind::BoneCharm | crate::interact::PickupKind::CorruptedCharm => Some((t.translation, true, p.label.as_str())),
                 _ => None,
             })
             .collect()

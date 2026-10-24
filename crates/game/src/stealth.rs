@@ -66,7 +66,7 @@ fn player_visibility(
     time: Res<Time>,
     rapier: ReadRapierContext,
     wl: Option<Res<crate::world_light::WorldLighting>>,
-    (slide, auto): (Res<crate::player::Slide>, Res<crate::player::AutoCrouch>),
+    (slide, auto, attrs): (Res<crate::player::Slide>, Res<crate::player::AutoCrouch>, Option<Res<crate::gamedata::Attrs>>),
     player: Query<(&Transform, &Player)>,
     mut vis: ResMut<PlayerVisibility>,
     (mut last, mut raw_light): (Local<Option<[f32; 2]>>, Local<(f32, f32)>),
@@ -127,6 +127,14 @@ fn player_visibility(
     value = pv.light.apply(value, light);
     value = pv.speed.apply(value, speed);
     value += pv.bonus[stance];
+    // (his charms': Shivering Silhouette's `Visibility` more; Statuesque's
+    // `VisibilityNotMovingMultiplier`, none at all standing still)
+    if let Some(a) = attrs.as_ref() {
+        value += a.visibility_bonus;
+        if flat <= 0.3 && swim.under.is_none() && !swim.swimming() {
+            value *= a.visibility_still;
+        }
+    }
     if std::env::var("DH_VIS_LOG").is_ok() && raw_light.0 == 0.1 {
         info!("player visibility {value:.2}: light {light:.2}, speed {speed:.2}, stance {stance}");
     }

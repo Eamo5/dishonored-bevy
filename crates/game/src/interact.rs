@@ -39,6 +39,8 @@ pub enum PickupKind {
     Ammo(Vec<(u8, u32)>),
     Rune,
     BoneCharm,
+    /// a corrupted charm (The Brigmore Witches: `DisDLC07Tweaks_WhaleBoneCharmCracked`)
+    CorruptedCharm,
     /// a blueprint for Piero (`BP_..._AbsItm`)
     Blueprint(String),
     /// a weapon (its inventory item: `Twk_Inv_PistolEliteGuard_Player`, a sword) and the
@@ -191,7 +193,7 @@ pub fn sing(mut commands: Commands, mut ambients: ResMut<crate::audio::Ambients>
     for (e, p, t) in &pickups {
         let ev = match p.kind {
             PickupKind::Rune => "Snd_UI_Rune_Amb",
-            PickupKind::BoneCharm => "Snd_UI_Whale_Bone_Charms_Amb",
+            PickupKind::BoneCharm | PickupKind::CorruptedCharm => "Snd_UI_Whale_Bone_Charms_Amb",
             _ => continue,
         };
         let i = ambients.add(ev, t.translation);
@@ -358,6 +360,9 @@ fn classify(class: &str, tweak: &str, name: &str) -> (PickupKind, String) {
     if t.starts_with("bp_") || t.contains("blueprint") {
         let base = n.split("_twk").next().unwrap_or(&n).split("_AbsItm").next().unwrap_or(&n);
         return (PickupKind::Blueprint(format!("{base}_AbsItm")), "Blueprint".into());
+    }
+    if t.contains("crackedbonecharm") {
+        return (PickupKind::CorruptedCharm, "Corrupted Charm".into());
     }
     if t.contains("bonecharm") || t.contains("bone_charm") {
         return (PickupKind::BoneCharm, "Bone Charm".into());
@@ -750,6 +755,9 @@ pub fn use_focus(
     } else if !keys.just_pressed(use_key) {
         return;
     }
+    // (the corrupted charms still lying about, this one with them: the scripts make one of
+    // several, so the level's count is what is there)
+    let corrupted_left = pickups.iter().filter(|(p, _)| matches!(p.kind, PickupKind::CorruptedCharm)).count() as u32;
     if let Ok((mut p, song)) = pickups.get_mut(e) {
         if p.kind.at_capacity(&stats, &attrs) {
             timed.schedule(&[(0.0, "Snd_UI_Ingame_Max_Ammo".to_string())], None);
@@ -781,6 +789,8 @@ pub fn use_focus(
             PickupKind::Ammo(_) => "Snd_UI_Ingame_Ammo_Pickup",
             PickupKind::Rune => "Snd_UI_Rune_Pickup",
             PickupKind::BoneCharm => "Snd_UI_Ingame_Generic_Pickup",
+            // (its tweak's `m_pPickupSoundEvent`)
+            PickupKind::CorruptedCharm => "Snd_UI_Ingame_Charms_Pickup",
             PickupKind::Blueprint(_) => "Snd_UI_Ingame_Note_Open",
             PickupKind::Weapon(..) => "Snd_UI_Ingame_Ammo_Pickup",
         };
@@ -879,13 +889,41 @@ pub fn use_focus(
                 tw.push(data.hud_text("m_PressKeyToEquipBoneCharms", "New Bone Charm added<br />Press `GBA_Journal` to equip"), crate::tutwindow::IMG_CHARM);
                 // which charm: one not found yet, at random (as the original deals them)
                 let owned = stats.charms_owned.clone();
-                let left: Vec<&str> = data.0.charms.iter().filter_map(|c| c.levels.first()).map(|l| l.0.as_str()).filter(|n| !owned.iter().any(|o| o == n)).collect();
+                let left: Vec<&str> = data.0.charms.iter().filter(|c| !c.corrupted).filter_map(|c| c.levels.first()).map(|l| l.0.as_str()).filter(|n| !owned.iter().any(|o| o == n)).collect();
                 if !left.is_empty() {
                     let name = left[rand::random_range(0..left.len())].to_string();
                     plog.add(format!("Bone Charm: {name}"), Some("BoneCharms_Small"));
                     stats.charms_owned.push(name);
                 } else {
                     plog.add("Bone Charm", Some("BoneCharms_Small"));
+                }
+            }
+            PickupKind::CorruptedCharm => {
+                // (its own count, `ePlayerStat_CrackedCharmFound`, and the HUD's
+                // `m_CrackedBoneCharmFoundMessage`, `m_PressKeyToEquipCrackedBoneCharms`)
+                let found = {
+                    let c = stats.counters.entry("ePlayerStat_CrackedCharmFound".into()).or_default();
+                    *c += 1;
+                    *c
+                };
+                let total = (found + corrupted_left).saturating_sub(1).max(found);
+                msgs.push(data.hud_text("m_CrackedBoneCharmFoundMessage", "`c/`t Corrupted Charm found").replace("`c", &found.to_string()).replace("`t", &total.to_string()));
+                stats.new_charm = true;
+                tw.push(data.hud_text("m_PressKeyToEquipCrackedBoneCharms", "New Corrupted Charm added<br />Press `GBA_Journal` to equip"), crate::tutwindow::IMG_CHARM);
+                // which: one of the corrupted not found yet, at random
+                let owned = stats.charms_owned.clone();
+                let left: Vec<&str> = data.0.charms.iter().filter(|c| c.corrupted).filter_map(|c| c.levels.first()).map(|l| l.0.as_str()).filter(|n| !owned.iter().any(|o| o == n)).collect();
+                if !left.is_empty() {
+                    let name = left[rand::random_range(0..left.len())].to_string();
+                    plog.add(format!("Corrupted Charm: {name}"), Some("DLC07_CrackedCharm_Small"));
+                    stats.charms_owned.push(name);
+                } else {
+                    plog.add("Corrupted Charm", Some("DLC07_CrackedCharm_Small"));
+                }
+                // (the corrupted charms' tutorial, the first time: the journal's key reads it)
+                const CRACKED_NOTE: &str = "DTN_DLC07CrackedCharms";
+                if settings.tutorials && !stats.tutorials.iter().any(|t| t == CRACKED_NOTE) && crate::tutorials::received(&mut stats, CRACKED_NOTE) {
+                    msgs.push(format!("{} {}", crate::bindings::hint(crate::bindings::Act::Journal), data.text("DisGFxMoviePlayerMenuBase_Texts", "t_ReadTutorial")));
                 }
             }
             PickupKind::Blueprint(bp) => {

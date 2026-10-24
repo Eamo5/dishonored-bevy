@@ -719,7 +719,7 @@ fn apply_ai_fx(
                 }
                 let pk = crate::interact::make_pickup(level, &data, pickup as usize, entities);
                 if log {
-                    info!("level scripts: a factory makes {} at {at:.2}", pk.label);
+                    info!("level scripts: a factory makes {} at {at:.2} ({} meshes)", pk.label, pk.entities.len());
                 }
                 commands.spawn((pk, Transform::from_translation(at), DespawnOnExit(GameState::InGame)));
             }

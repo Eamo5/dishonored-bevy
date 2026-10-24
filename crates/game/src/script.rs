@@ -2035,6 +2035,19 @@ fn run_script(
                 info!("script: {} npc at {pos:.1}", cmd[0]);
             }
         }
+        "take" => {
+            // (tests) take [LABEL]: the nearest pickup whose label holds LABEL taken as if used
+            let named = cmd.get(1).cloned().unwrap_or_default().to_ascii_lowercase();
+            let here = t.translation;
+            commands.queue(move |w: &mut World| {
+                let mut q = w.query::<(Entity, &crate::interact::Pickup, &Transform)>();
+                let best = q.iter(w).filter(|(_, p, _)| p.label.to_ascii_lowercase().contains(&named)).min_by(|a, b| a.2.translation.distance(here).total_cmp(&b.2.translation.distance(here))).map(|(e, p, _)| (e, p.label.clone()));
+                if let Some((e, label)) = best {
+                    w.resource_mut::<crate::interact::ForceUse>().0 = Some(e);
+                    info!("script: take {label}");
+                }
+            });
+        }
         "pickup" | "door" | "use" | "body" => {
             let target = if cmd[0] == "pickup" {
                 pickups.iter().filter(|(_, pickup)| match cmd.get(1).map(String::as_str) {
@@ -2042,7 +2055,8 @@ fn run_script(
                     Some("mana") => matches!(pickup.kind, crate::interact::PickupKind::ManaElixir),
                     Some("ammo") => matches!(pickup.kind, crate::interact::PickupKind::Ammo(_)),
                     Some("rune") => matches!(pickup.kind, crate::interact::PickupKind::Rune),
-                    Some("charm") => matches!(pickup.kind, crate::interact::PickupKind::BoneCharm),
+                    Some("charm") => matches!(pickup.kind, crate::interact::PickupKind::BoneCharm | crate::interact::PickupKind::CorruptedCharm),
+                    Some("corrupted") => matches!(pickup.kind, crate::interact::PickupKind::CorruptedCharm),
                     Some(index) if index.parse::<u32>().is_ok() => pickup.index == index.parse::<u32>().unwrap(),
                     _ => true,
                 }).map(|(pt, _)| pt.translation).min_by(|a, b| a.distance(t.translation).total_cmp(&b.distance(t.translation)))

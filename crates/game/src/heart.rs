@@ -66,7 +66,7 @@ fn beat(
         if !Power::Heart.owned(&stats) {
             return;
         }
-        let nearest = pickups.iter().filter(|(p, _)| matches!(p.kind, PickupKind::Rune | PickupKind::BoneCharm)).map(|(_, t)| t.translation.distance(eye)).reduce(f32::min);
+        let nearest = pickups.iter().filter(|(p, _)| matches!(p.kind, PickupKind::Rune | PickupKind::BoneCharm | PickupKind::CorruptedCharm)).map(|(_, t)| t.translation.distance(eye)).reduce(f32::min);
         if std::env::var("DH_HEART_LOG").is_ok() {
             info!("heart: nearest target {nearest:?}, near {}, hints {}", heart.near_target, heart.hints_shown);
         }
@@ -89,7 +89,7 @@ fn beat(
     // the closest rune or charm, and whether Corvo faces it
     let mut best: Option<(f32, bool)> = None;
     for (p, t) in &pickups {
-        if !matches!(p.kind, PickupKind::Rune | PickupKind::BoneCharm) {
+        if !matches!(p.kind, PickupKind::Rune | PickupKind::BoneCharm | PickupKind::CorruptedCharm) {
             continue;
         }
         let to = t.translation - eye;

@@ -1091,7 +1091,8 @@ fn charms(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
     list_bar(cx, list_at, Vec2::new(651.1, 445.8), owned.len(), first, 8, 56.0);
     let origin = pg(-504.0, -215.5);
     let clipped = cx.clip_box(Rect::from_corners(origin, origin + Vec2::new(691.0, 445.5)), false);
-    let icon = cx.ui.file(cx.images, "itemsmall", "BoneCharms_Small");
+    // (a corrupted charm's own picture: `DLC07_CrackedCharm`)
+    let picture = |n: &str| if data.charm(n).is_some_and(|(c, _)| c.corrupted) { "DLC07_CrackedCharm" } else { "BoneCharms" };
     for v in 0..8 {
         let i = first + v;
         let y = -187.0 + 56.0 * v as f32;
@@ -1115,7 +1116,7 @@ fn charms(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
         });
         let Some(name) = name else { continue };
         if wearing {
-            if let Some(img) = icon.clone() {
+            if let Some(img) = cx.ui.file(cx.images, "itemsmall", &format!("{}_Small", picture(name))) {
                 cx.picture(clipped, origin, img, pg(x + 65.45, y), Vec2::splat(43.5), 0.0, 1.0);
             }
         }
@@ -1125,8 +1126,9 @@ fn charms(cx: &mut Ctx, js: &JState, data: &Data, stats: &PlayerStats) {
     if owned.is_empty() {
         empty_list(cx, pg(-505.0 + 326.0, -215.0 + 223.0), data.text(BASE, "t_EmptyList"));
     }
-    let desc = owned.get(sel).and_then(|n| data.charm(n)).map(|(c, i)| c.levels[i].1.clone()).unwrap_or_default();
-    let img = owned.get(sel).and_then(|_| cx.ui.file(cx.images, "items", "BoneCharms_Large"));
+    // (a corrupted charm's benefit and penalty on their own lines: its `<br/>`)
+    let desc = owned.get(sel).and_then(|n| data.charm(n)).map(|(c, i)| c.levels[i].1.replace("<br/>", "\n").replace("<br />", "\n")).unwrap_or_default();
+    let img = owned.get(sel).and_then(|n| cx.ui.file(cx.images, "items", &format!("{}_Large", picture(n))));
     item_details(cx, owned.get(sel).map(|n| (n.as_str(), desc.as_str(), img, None)));
 }
 

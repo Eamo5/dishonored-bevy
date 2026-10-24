@@ -5010,7 +5010,9 @@ pub(crate) fn npc_brain(
                             info!("{} raises its wrist bow {d:.1} m away", npc.name);
                             continue;
                         }
-                        let chance = shot_chance(&npc, &ctx, d, if npc.ranged == 1 { attrs.npc_gun_miss } else { 0.0 });
+                        // (his charms' share: Unnerving Target's for guns, Shivering Silhouette's for
+                        // bows too)
+                        let chance = shot_chance(&npc, &ctx, d, if npc.ranged == 1 { attrs.npc_gun_miss } else { attrs.npc_arrow_miss });
                         let hit = rand::random::<f32>() < chance;
                         info!("{} shoots {d:.1} m ({})", npc.name, if hit { "hit" } else { "miss" });
                         if npc.ranged == 2 {
@@ -5326,7 +5328,7 @@ pub(crate) fn npc_brain(
                             }
                             // an assassin's bolt, as its accuracy has it
                             if kind == Some(MoveKind::Ranged) {
-                                let hit = npc.sees_player && rand::random::<f32>() < shot_chance(&npc, &fire_context(&npc), d, 0.0);
+                                let hit = npc.sees_player && rand::random::<f32>() < shot_chance(&npc, &fire_context(&npc), d, attrs.npc_arrow_miss);
                                 info!("{} shoots {d:.1} m ({})", npc.name, if hit { "hit" } else { "miss" });
                                 if hit {
                                     hit_writer.write(PlayerHit { npc: e, from: pos, damage: npc.arms.ranged, kick: false, big: false, push: false, unblockable: false, missile: false });

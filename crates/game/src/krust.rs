@@ -846,7 +846,7 @@ fn krust_hits(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn krust_brain(
     mut commands: Commands,
-    (time, tc, settings): (Res<Time>, Res<TimeControl>, Res<crate::settings::Settings>),
+    (time, tc, settings, attrs): (Res<Time>, Res<TimeControl>, Res<crate::settings::Settings>, Option<Res<crate::gamedata::Attrs>>),
     level: Option<Res<LevelInfo>>,
     rapier: ReadRapierContext,
     stats: Res<PlayerStats>,
@@ -1073,11 +1073,14 @@ fn krust_brain(
                     if !k.fired && t >= FIRE_AT {
                         k.fired = true;
                         if let (Some(launch), Some(spew)) = (world(&joints, k.launch), world(&joints, k.spew)) {
+                            let ordered = k.order.is_some();
                             let (at, vel) = match k.order.take() {
                                 Some(o) => (o, Vec3::ZERO),
                                 None => aim.unwrap_or((me + Vec3::Y, Vec3::ZERO)),
                             };
-                            fire(&mut commands, def, settings.difficulty, launch.translation(), at, vel, k.collider);
+                            // (aimed at Daud: his charms' share of misses, Shivering Silhouette's)
+                            let miss = if !ordered { attrs.as_ref().map_or(0.0, |a| a.krust_spit_miss) } else { 0.0 };
+                            fire(&mut commands, def, settings.difficulty, launch.translation(), at, vel, k.collider, miss);
                             if log_on {
                                 info!("krust {}: spits from {:.2} at {at:.2}", def.name, launch.translation());
                             }
@@ -1139,7 +1142,7 @@ fn possessed_krust(
             if !k.fired && t >= FIRE_AT {
                 k.fired = true;
                 if let (Some(launch), Some(at)) = (world(&joints, k.launch), k.order.take()) {
-                    fire(&mut commands, def, settings.difficulty, launch.translation(), at, Vec3::ZERO, k.collider);
+                    fire(&mut commands, def, settings.difficulty, launch.translation(), at, Vec3::ZERO, k.collider, 0.0);
                     if std::env::var("DH_KRUST_LOG").is_ok() {
                         info!("possessed krust {} spits at {at:.2}", def.name);
                     }
@@ -1178,8 +1181,10 @@ fn possessed_krust(
 }
 
 /// Spit: led at a moving target, lifted against its slight gravity; now and then off the mark
-/// (`m_fChanceForAccurateProjectileAim`). Its speed grows with the distance.
-fn fire(commands: &mut Commands, def: &KrustDef, difficulty: u8, from: Vec3, at: Vec3, target_vel: Vec3, source: Entity) {
+/// (`m_fChanceForAccurateProjectileAim`, less the target's `miss`). Its speed grows with the
+/// distance.
+#[allow(clippy::too_many_arguments)]
+fn fire(commands: &mut Commands, def: &KrustDef, difficulty: u8, from: Vec3, at: Vec3, target_vel: Vec3, source: Entity, miss: f32) {
     let d = from.distance(at);
     let [d0, d1] = def.speed_distance;
     let k = if d1 > d0 { ((d - d0) / (d1 - d0)).clamp(0.0, 1.0) } else { 0.5 };
@@ -1189,7 +1194,7 @@ fn fire(commands: &mut Commands, def: &KrustDef, difficulty: u8, from: Vec3, at:
     if def.lead {
         aim += target_vel.with_y(0.0) * tt;
     }
-    if rand::random::<f32>() > def.accurate {
+    if rand::random::<f32>() > def.accurate * (1.0 - miss) {
         let a = rand::random::<f32>() * std::f32::consts::TAU;
         aim += Vec3::new(a.cos(), rand::random::<f32>() - 0.3, a.sin()) * (0.8 + d * 0.06);
     }

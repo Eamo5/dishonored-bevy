@@ -172,8 +172,9 @@ fn aim(
         } else if !mouse.pressed(MouseButton::Right) {
             // let go: it comes, if there is one and the mana for it
             match st.target {
-                Some(t) if stats.mana >= t.cost() => {
-                    stats.spend_mana(t.cost(), &attrs);
+                // (Leverage's `PullManaCostMultiplier`)
+                Some(t) if stats.mana >= t.cost() * attrs.pull_cost => {
+                    stats.spend_mana(t.cost() * attrs.pull_cost, &attrs);
                     powers.cast_seq = powers.cast_seq.wrapping_add(1);
                     powers.cast_power = Power::Pull;
                     powers.cooldown = 0.8;
@@ -188,7 +189,9 @@ fn aim(
                         }
                         Target::Person(e) => {
                             if let Ok((_, mut npc, nt, _)) = npcs.get_mut(e) {
+                                // (Leverage's `PullSpeedMultiplier`: faster across)
                                 let vel = fling(nt.translation, pt.translation, Reach::of(&data).min_distance);
+                                let vel = Vec3::new(vel.x * attrs.pull_speed, vel.y, vel.z * attrs.pull_speed);
                                 npc.velocity = vel;
                                 npc.knock = Some((vel, crate::npc::Throw::Blast));
                                 stagger.write(NpcStagger { npc: e, secs: 2.5, parried: false });
@@ -234,7 +237,9 @@ fn aim(
     // what it reaches for, while held
     if st.on {
         if let (Ok(ctx), Ok(cg), Some(level)) = (rapier.single(), cam.single(), level.as_ref()) {
-            let r = Reach::of(&data);
+            // (Leverage's `PullDistanceMultiplier`: farther)
+            let mut r = Reach::of(&data);
+            r.max *= attrs.pull_reach;
             let (eye, fwd) = (cg.translation(), cg.forward().as_vec3());
             let mut things: Vec<(Target, Vec3)> = pickups.iter().map(|(e, _, g)| (Target::Pickup(e), g.translation())).collect();
             for (e, prop) in &props {
@@ -273,6 +278,7 @@ fn aim(
 fn fly_pickups(
     time: Res<Time>,
     data: Res<crate::gamedata::Data>,
+    attrs: Option<Res<crate::gamedata::Attrs>>,
     mut st: ResMut<PullAim>,
     cam: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
     pickups: Query<&Pickup>,
@@ -284,7 +290,7 @@ fn fly_pickups(
     }
     let Ok(cg) = cam.single() else { return };
     let hand = cg.translation() + cg.forward().as_vec3() * 0.6 - Vec3::Y * 0.2;
-    let step = Reach::of(&data).pickup_speed * time.delta_secs();
+    let step = Reach::of(&data).pickup_speed * attrs.as_ref().map_or(1.0, |a| a.pull_speed) * time.delta_secs();
     let mut done = Vec::new();
     for &e in &st.flying {
         let Ok(p) = pickups.get(e) else {

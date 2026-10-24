@@ -2486,9 +2486,11 @@ impl Vm {
                 // `SpawnLocations`, the Ex's)
                 if input == 0 {
                     if let Some(KVal::Int(p)) = self.prop(op, "factory_pickup").cloned() {
+                        // (named "Spawn Location" in some: Coldridge's random cells' corrupted charm)
                         let at = self
                             .read(op, "Spawn Point")
                             .into_iter()
+                            .chain(self.read(op, "Spawn Location"))
                             .find_map(|v| if let Val::Actor(a) = v { g.actors.get(a as usize).map(|a| Vec3::from(a.position)) } else { None })
                             .or_else(|| self.read(op, "SpawnLocations").into_iter().find_map(|v| if let Val::Vec3(p) = v { Some(Vec3::from(dhcook::xform::ue_point(p))) } else { None }));
                         if let Some(at) = at {

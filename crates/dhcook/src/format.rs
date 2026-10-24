@@ -3544,6 +3544,11 @@ pub struct PlayerProfile {
     /// his chaos (Daud's own deeds and levels)
     #[serde(default)]
     pub darkness: DarknessDef,
+    /// his own bone charms (`m_pCharmListTweaks`: Daud's "Bird of Prey", "Void Surge"...), and
+    /// The Brigmore Witches' corrupted ones after them (`m_pCrackedCharmListTweaks`); none:
+    /// Corvo's
+    #[serde(default)]
+    pub charms: Vec<CharmDef>,
 }
 
 /// Chaos, the game's "darkness" (`DisDarknessManager`, from the player's pawn tweak): a score
@@ -3979,6 +3984,13 @@ pub struct CharmDef {
     pub attribute: String,
     /// (name, description, value) of each strength
     pub levels: Vec<(String, String, f32)>,
+    /// a corrupted charm (The Brigmore Witches: `DisDLC07Tweaks_WhaleBoneCharmCrackedList`): its
+    /// benefit and its penalty, each attribute's change (attribute, `SetVal` / `AddVal` /
+    /// `AddBasePercent`, value)
+    #[serde(default)]
+    pub corrupted: bool,
+    #[serde(default)]
+    pub mods: Vec<(String, String, f32)>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

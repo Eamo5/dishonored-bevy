@@ -1352,7 +1352,7 @@ mod tests {
             .init_resource::<PlayerStats>()
             .insert_resource(crate::settings::Settings { difficulty: 3, ..default() })
             .add_systems(Update, npc_grenades);
-        app.world_mut().resource_mut::<crate::gamedata::Data>().0.charms.push(dhcook::format::CharmDef { attribute: "GrenadeExplosionDelay".into(), levels: vec![("Clockwork Malfunction".into(), String::new(), 1.0)] });
+        app.world_mut().resource_mut::<crate::gamedata::Data>().0.charms.push(dhcook::format::CharmDef { attribute: "GrenadeExplosionDelay".into(), levels: vec![("Clockwork Malfunction".into(), String::new(), 1.0)], ..Default::default() });
         app.world_mut().resource_mut::<PlayerStats>().charms.push("Clockwork Malfunction".into());
         let owner = app.world_mut().spawn_empty().id();
         app.world_mut().write_message(NpcGrenade { owner, from: Vec3::ZERO, vel: Vec3::X, fuse: [3.0, 0.5], blast: dhcook::format::TrapBlast { damage: [10.0, 20.0, 30.0, 40.0], ..default() }, target: Vec3::X, danger: 0.0 });

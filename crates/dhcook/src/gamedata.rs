@@ -348,6 +348,21 @@ fn daud_profile(cooked: &Path, game: &Package, base: &GameData, pack: &crate::Da
         }
     }
     p.darkness = darkness(&pkg, &pawn);
+    // his bone charms (his own list), and the corrupted ones after them
+    if let Some(list) = pawn.object("m_pCharmListTweaks").filter(|o| *o > 0).and_then(|o| props(&pkg, o)) {
+        p.charms = charm_list(&pkg, &list);
+    }
+    if let Some(list) = pawn.object("m_pCrackedCharmListTweaks").filter(|o| *o > 0).and_then(|o| props(&pkg, o)) {
+        for c in struct_array(&pkg, &list, "m_CrackedCharms") {
+            for l in struct_array(&pkg, &c, "m_Levels").iter().take(1) {
+                let mods = struct_array(&pkg, l, "m_Attributes")
+                    .iter()
+                    .map(|a| (s(a, "m_AttributeName").trim().trim_start_matches("Attribute_").to_string(), a.name("m_AttributeType").unwrap_or("eDisAttributeModifierType_AddVal").trim_start_matches("eDisAttributeModifierType_").to_string(), a.float("m_fValue").unwrap_or(0.0)))
+                    .collect();
+                p.charms.push(CharmDef { attribute: String::new(), levels: vec![(s(l, "m_Name"), s(l, "m_Text"), 0.0)], corrupted: true, mods });
+            }
+        }
+    }
     // the campaign's start loadouts and mission statistics screens
     if let Ok(full) = Package::open(&dir.join(format!("{}.upk", pack.game_full))) {
         let mut tmp = GameData::default();
@@ -1093,11 +1108,18 @@ fn audiographs(cooked: &Path, startup: &Package, d: &mut GameData) {
 fn charms(startup: &Package) -> Vec<CharmDef> {
     let Some(idx) = startup.find_export("Twk_Pawn_Corvo.Twk_Pawn_Corvo_Release.pCharmListTweaks") else { return Vec::new() };
     let Some(p) = props(startup, idx) else { return Vec::new() };
-    struct_array(startup, &p, "m_Charms")
+    charm_list(startup, &p)
+}
+
+/// A charm list's charms (`DisTweaks_WhaleBoneCharmList.m_Charms`).
+fn charm_list(pkg: &Package, p: &Props) -> Vec<CharmDef> {
+    struct_array(pkg, p, "m_Charms")
         .iter()
         .map(|c| CharmDef {
-            attribute: s(c, "m_AttributeName").trim_start_matches("Attribute_").to_string(),
-            levels: struct_array(startup, c, "m_Levels").iter().map(|l| (s(l, "m_Name"), s(l, "m_Text"), l.float("m_fValue").unwrap_or(0.0))).collect(),
+            // (one ends in a space: Daud's "Attribute_SummonAssassinDamageBonus ")
+            attribute: s(c, "m_AttributeName").trim().trim_start_matches("Attribute_").to_string(),
+            levels: struct_array(pkg, c, "m_Levels").iter().map(|l| (s(l, "m_Name"), s(l, "m_Text"), l.float("m_fValue").unwrap_or(0.0))).collect(),
+            ..Default::default()
         })
         .collect()
 }

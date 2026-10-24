@@ -310,6 +310,12 @@ pub struct PlayerStats {
     /// bone charms worn / found (by name)
     pub charms: Vec<String>,
     pub charms_owned: Vec<String>,
+    /// what the charms worn make of the damage he takes (`attributes`, each frame): more or
+    /// less of it (`DamageTakenMultiplier` less 1), his mana spent first (`UseManaForHealth`)
+    #[serde(skip)]
+    pub damage_taken_bonus: f32,
+    #[serde(skip)]
+    pub mana_shield: bool,
     /// upgrades bought (`Twk_Upgrade_...`) and blueprints found (`BP_..._AbsItm`)
     pub upgrades: Vec<String>,
     /// other gear by store item (`Flare_Ammo_twk`, `RewireTool_twk`...)
@@ -445,6 +451,13 @@ impl PlayerStats {
     pub fn take_damage(&mut self, damage: f32) {
         if self.dead || !damage.is_finite() || damage <= 0.0 {
             return;
+        }
+        // (the corrupted charms' share: more or less of it, and his mana first)
+        let mut damage = damage * (1.0 + self.damage_taken_bonus).max(0.0);
+        if self.mana_shield {
+            let spent = damage.min(self.mana.max(0.0));
+            self.mana -= spent;
+            damage -= spent;
         }
         let lost = damage.min(self.health.max(0.0));
         self.health = (self.health - lost).max(0.0);
@@ -722,6 +735,8 @@ impl Default for PlayerStats {
             unarmed: false,
             sheathed: false,
             chapter: String::new(),
+            damage_taken_bonus: 0.0,
+            mana_shield: false,
             stash: None,
         }
     }

@@ -882,6 +882,7 @@ mod kill_tests {
         app.world_mut().resource_mut::<Data>().0.charms.push(dhcook::format::CharmDef {
             attribute: "RatsAttackRadiusReduction".into(),
             levels: vec![("Rat Scent".into(), String::new(), 1.0)],
+            ..Default::default()
         });
         app.world_mut().resource_mut::<PlayerStats>().charms.push("Rat Scent".into());
         let before = app.world().resource::<RatBites>().0;

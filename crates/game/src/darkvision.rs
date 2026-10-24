@@ -725,7 +725,7 @@ pub fn update_dark_vision(
     let mut sighted: HashMap<Entity, bool> = HashMap::default();
     if show && charms_only {
         for (p, t) in &pickups {
-            if matches!(p.kind, crate::interact::PickupKind::Rune | crate::interact::PickupKind::BoneCharm) && t.translation.distance(at) <= reach {
+            if matches!(p.kind, crate::interact::PickupKind::Rune | crate::interact::PickupKind::BoneCharm | crate::interact::PickupKind::CorruptedCharm) && t.translation.distance(at) <= reach {
                 for &m in &p.entities {
                     collect(m, 1, &mut want);
                 }
