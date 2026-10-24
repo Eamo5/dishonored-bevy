@@ -224,8 +224,9 @@ are in the settings file, `pad_binding_set` 0-3):
   one or taking it off.
   - Daud finds his own charms (each story's `m_pCharmListTweaks`: "Bird of Prey", "Void
     Surge"...). Before, he found Corvo's.
-  - The Brigmore Witches' corrupted charms (`DisDLC07Tweaks_WhaleBoneCharmCracked`, the scripts'
-    random cells in Coldridge and the others) are their own pickup. Each is one of the
+  - The Brigmore Witches' corrupted charms are their own pickup: those laid about the Drapers
+    Ward, its sewers and ship, and Brigmore (`DisDLC07WhaleBoneCharmCracked`, not cooked before),
+    and the one the scripts put in one of Coldridge's cells (its factory's `Spawn Location`). Each is one of the
     pawn's `m_pCrackedCharmListTweaks` (Vengeance, Tank, Zephyr, Splintering Bolts, Shivering
     Silhouette, Statuesque, Power Slash, Witch's Skin, Leverage).
   - Picking one up: its song, its sound, the HUD's "n/t Corrupted Charm found" and "New

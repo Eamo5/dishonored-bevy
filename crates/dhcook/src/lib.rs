@@ -1419,7 +1419,8 @@ impl<'a> Cooker<'a> {
                 c if c.ends_with("Volume") => self.volume(&obj),
                 "Trigger" | "DisTrigger" | "Trigger_LOS" | "Trigger_Dynamic" => self.trigger(&obj),
                 c if c.starts_with("AkAmbientSound") => self.ambient_sound(&obj),
-                c if c.contains("Pickup") || c == "DisElixirHealth" || c.starts_with("DisKey") || c == "DisWhaleBoneCharm" => self.pickup(&obj),
+                // (and The Brigmore Witches' corrupted charms laid about: `DisDLC07WhaleBoneCharmCracked`)
+                c if c.contains("Pickup") || c == "DisElixirHealth" || c.starts_with("DisKey") || c == "DisWhaleBoneCharm" || c == "DisDLC07WhaleBoneCharmCracked" => self.pickup(&obj),
                 _ => Ok(()),
             };
             if let Err(e) = r {

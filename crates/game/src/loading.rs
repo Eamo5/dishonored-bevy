@@ -270,7 +270,7 @@ fn prepare_mesh(m: &MeshFile) -> PreparedMesh {
 }
 
 fn is_pickup_class(c: &str) -> bool {
-    c.contains("Pickup") || c == "DisElixirHealth" || c.starts_with("DisKey") || c == "DisAudioLogPlayer" || c == "DisWhaleBoneCharm"
+    c.contains("Pickup") || c == "DisElixirHealth" || c.starts_with("DisKey") || c == "DisAudioLogPlayer" || c == "DisWhaleBoneCharm" || c == "DisDLC07WhaleBoneCharmCracked"
 }
 
 /// A world collider: shape, placement and the mesh section of each triangle.
