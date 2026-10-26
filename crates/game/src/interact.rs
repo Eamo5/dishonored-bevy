@@ -41,6 +41,10 @@ pub enum PickupKind {
     BoneCharm,
     /// a corrupted charm (The Brigmore Witches: `DisDLC07Tweaks_WhaleBoneCharmCracked`)
     CorruptedCharm,
+    /// something kept (its abstract item, by the key it is carried under): a mission's (the
+    /// heretic's brand, Lady Boyle's invitation, Daud's whale eye), a rewire tool, a trial's
+    /// statue or doll
+    Item(String),
     /// a blueprint for Piero (`BP_..._AbsItm`)
     Blueprint(String),
     /// a weapon (its inventory item: `Twk_Inv_PistolEliteGuard_Player`, a sword) and the
@@ -69,6 +73,34 @@ impl PickupKind {
 #[cfg(test)]
 mod capacity_tests {
     use super::*;
+
+    /// A trigger's item: coins by the purse, gear by its count under any of its names, notes by
+    /// being his; and given up only where it takes it.
+    #[test]
+    fn a_trigger_asks_for_its_item_and_takes_it_if_it_says() {
+        let mut stats = PlayerStats::default();
+        stats.coins = 3;
+        let coins = NeedsItem { item: "AbstractItems.Coins_AbsItm".into(), quantity: 1, remove: true };
+        assert!(coins.carried(&stats));
+        coins.give_up(&mut stats);
+        assert_eq!(stats.coins, 2);
+        let brand = NeedsItem { item: "HereticBrand_AbsItm".into(), quantity: 1, remove: false };
+        assert!(!brand.carried(&stats));
+        stats.items.insert("HereticBrand_AbsItm".into(), 1);
+        assert!(brand.carried(&stats));
+        brand.give_up(&mut stats);
+        assert_eq!(stats.items["HereticBrand_AbsItm"], 1);
+        let tool = NeedsItem { item: "DLC06_AbsItm_RewireTool".into(), quantity: 1, remove: true };
+        stats.items.insert(crate::gadgets::REWIRE.into(), 1);
+        assert!(tool.carried(&stats));
+        tool.give_up(&mut stats);
+        assert!(!tool.carried(&stats));
+        assert!(NeedsItem { item: "AbstractItems.Coins_AbsItm".into(), quantity: 0, remove: false }.carried(&PlayerStats::default()));
+        let card = NeedsItem { item: "AbstractInv_Graphs.DLC07_Mill_AG_LabKey".into(), quantity: 1, remove: false };
+        assert!(!card.carried(&stats));
+        stats.notes.push("ag:AbstractInv_Graphs.DLC07_Mill_AG_LabKey".into());
+        assert!(card.carried(&stats));
+    }
 
     #[test]
     fn scavenger_adds_a_round_to_kinds_of_more_than_one_on_its_roll() {
@@ -252,6 +284,58 @@ impl Door {
 /// The level's ways out to other maps, by script actor (`kismet::travel_actors`).
 #[derive(Resource, Default)]
 pub struct TravelActors(pub std::collections::HashSet<u32>);
+
+/// Used only with something carried (`DisTriggerAbstractItem`: the heretic's brand at Campbell's
+/// chair, Granny Rags' cameo at her furnace): the item, how many, whether they are given up; and
+/// only while the scripts have it on (`Vm::item_on`).
+#[derive(Component, Clone)]
+pub struct NeedsItem {
+    pub item: String,
+    pub quantity: u32,
+    pub remove: bool,
+}
+
+impl NeedsItem {
+    /// The item's name for matching: its last part (`AbstractItems.Coins_AbsItm`: `Coins_AbsItm`).
+    fn short(&self) -> &str {
+        self.item.rsplit('.').next().unwrap_or(&self.item)
+    }
+
+    fn coins(&self) -> bool {
+        self.short().eq_ignore_ascii_case("Coins_AbsItm")
+    }
+
+    /// Whether he carries it: coins by his purse, gear and things kept by their count, notes and
+    /// audiograph cards by being his.
+    pub fn carried(&self, stats: &PlayerStats) -> bool {
+        // (none asked: a plain trigger)
+        if self.quantity == 0 {
+            return true;
+        }
+        let short = self.short();
+        if self.coins() {
+            return stats.coins >= self.quantity;
+        }
+        let key = crate::gadgets::gear_key(short);
+        let counted: u32 = stats.items.iter().filter(|(k, _)| k.rsplit('.').next().is_some_and(|s| s.eq_ignore_ascii_case(key))).map(|(_, v)| *v).sum();
+        counted >= self.quantity || (self.quantity <= 1 && stats.notes.iter().any(|n| n.rsplit(['.', ':']).next().is_some_and(|s| s.eq_ignore_ascii_case(short))))
+    }
+
+    /// Given up as it is used (`m_bRemoveFromInventory`).
+    pub fn give_up(&self, stats: &mut PlayerStats) {
+        if !self.remove {
+            return;
+        }
+        if self.coins() {
+            stats.coins = stats.coins.saturating_sub(self.quantity);
+            return;
+        }
+        let key = crate::gadgets::gear_key(self.short()).to_string();
+        if let Some((_, c)) = stats.items.iter_mut().find(|(k, _)| k.rsplit('.').next().is_some_and(|s| s.eq_ignore_ascii_case(&key))) {
+            *c = c.saturating_sub(self.quantity);
+        }
+    }
+}
 
 /// Something the level scripts can be used on (levers, buttons, ...): `actor` indexes
 /// `scene.kismet.actors`.
@@ -480,11 +564,16 @@ pub fn make_pickup(level: &LevelInfo, data: &crate::gamedata::Data, pi: usize, e
             kind = PickupKind::Weapon(p.inv_item.clone(), ammo);
             label = own.map(str::to_string).unwrap_or_else(|| (if w.contains("sword") { "Sword" } else if w.contains("pistol") { "Pistol" } else { "Crossbow" }).to_string());
         }
+        // an abstract item that isn't money: kept (before, these were taken as coins, and the
+        // brand never reached Campbell's chair nor the rewire tools the panels)
+        if matches!(kind, PickupKind::Loot(_)) && !p.item.is_empty() && !p.coins && !p.item.starts_with("map:") {
+            kind = PickupKind::Item(crate::gadgets::gear_key(&p.item).to_string());
+        }
         // notes, keys, valuables and blueprints carry their own names
         if let Some((t, _)) = crate::journal::location_map(&p.item) {
             label = format!("Map: {t}");
         } else if let Some((name, _)) = data.0.abstract_items.get(&p.item).filter(|(n, _)| !n.is_empty()) {
-            if token || matches!(kind, PickupKind::Note | PickupKind::Loot(_) | PickupKind::Key(_) | PickupKind::Blueprint(_)) {
+            if token || matches!(kind, PickupKind::Note | PickupKind::Loot(_) | PickupKind::Key(_) | PickupKind::Blueprint(_) | PickupKind::Item(_)) {
                 label = name.clone();
             }
         }
@@ -538,7 +627,7 @@ fn find_focus(
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
     pickups: Query<(Entity, &Pickup, &Transform, Option<&crate::pickpocket::Pocket>)>,
     doors: Query<(Entity, &Door, &GlobalTransform, &LevelInstance)>,
-    usables: Query<(Entity, &Usable, &Transform)>,
+    usables: Query<(Entity, &Usable, &Transform, Option<&NeedsItem>)>,
     player: Query<&Player>,
     rapier: bevy_rapier3d::prelude::ReadRapierContext,
     level: Option<Res<LevelInfo>>,
@@ -549,7 +638,7 @@ fn find_focus(
         Query<(&crate::npc::Npc, &Transform), Without<Player>>,
         Res<PlayerStats>,
     ),
-    (bounds, kids, plants): (Query<(&bevy::camera::primitives::Aabb, &GlobalTransform)>, Query<&Children>, Query<(Entity, &crate::pickpocket::PutPocket, &Transform)>),
+    (bounds, kids, plants, vm): (Query<(&bevy::camera::primitives::Aabb, &GlobalTransform)>, Query<&Children>, Query<(Entity, &crate::pickpocket::PutPocket, &Transform)>, Option<Res<crate::kismet::Vm>>),
 ) {
     focus.0 = false;
     focus.1 = None;
@@ -678,7 +767,13 @@ fn find_focus(
             best = Some((score, e, text, say("name", "")));
         }
     }
-    for (e, u, t) in &usables {
+    for (e, u, t, need) in &usables {
+        // (one used with something carried: only while on, and with it in hand)
+        if let Some(n) = need {
+            if !vm.as_ref().is_some_and(|v| v.item_on(u.actor)) || !n.carried(&stats) {
+                continue;
+            }
+        }
         let to = t.translation - eye;
         let d = to.length();
         if d > 2.4 {
@@ -733,7 +828,7 @@ pub fn use_focus(
     mut noise: MessageWriter<Noise>,
     mut used: MessageWriter<Interaction>,
     mut pickups: Query<(&mut Pickup, Option<&Song>)>,
-    usables: Query<&Usable>,
+    usables: Query<(&Usable, Option<&NeedsItem>)>,
     mut doors: Query<(&mut Door, &GlobalTransform, &LevelInstance)>,
     player: Query<&Transform, With<Player>>,
     (level, mut timed, data, mut ambients, mut read, attrs): (Option<Res<LevelInfo>>, ResMut<crate::audio::TimedSounds>, Res<crate::gamedata::Data>, ResMut<crate::audio::Ambients>, MessageWriter<crate::journal::ReadNote>, Res<crate::gamedata::Attrs>),
@@ -792,6 +887,7 @@ pub fn use_focus(
             // (its tweak's `m_pPickupSoundEvent`)
             PickupKind::CorruptedCharm => "Snd_UI_Ingame_Charms_Pickup",
             PickupKind::Blueprint(_) => "Snd_UI_Ingame_Note_Open",
+            PickupKind::Item(_) => "Snd_UI_Ingame_Generic_Pickup",
             PickupKind::Weapon(..) => "Snd_UI_Ingame_Ammo_Pickup",
         };
         timed.schedule(&[(0.0, sound.to_string())], None);
@@ -801,6 +897,15 @@ pub fn use_focus(
                 stats.coins += v;
                 stats.coins_found += v;
                 plog.add(format!("{} +{v}", if p.label.is_empty() || p.label.starts_with('`') { "Coins" } else { p.label.as_str() }), Some("Money_Small"));
+            }
+            PickupKind::Item(key) => {
+                // kept, counted for the scripts (`DisSeqAct_GetAbstractItemQuantity`) and the
+                // triggers that ask for it; its journal picture in the pickup log
+                let n = level.as_ref().and_then(|l| l.scene.pickups.get(p.index as usize)).map(|sp| sp.quantity).filter(|q| *q > 0).unwrap_or(1);
+                *stats.items.entry(key.clone()).or_default() += n;
+                let item = level.as_ref().and_then(|l| l.scene.pickups.get(p.index as usize)).map(|sp| sp.item.clone()).unwrap_or_default();
+                let icon = if key == crate::gadgets::REWIRE { Some("RewireTool_Small".to_string()) } else { data.0.journal_items.get(&item).map(|j| format!("{}_Small", j.1)).filter(|i| i.len() > 6) };
+                plog.add_named(p.label.clone(), icon);
             }
             PickupKind::HealthElixir => {
                 stats.give_elixirs(false, 1, attrs.elixir_capacity(false));
@@ -980,7 +1085,11 @@ pub fn use_focus(
         used.write(Interaction::Pickup(p.index));
         return;
     }
-    if let Ok(u) = usables.get(e) {
+    if let Ok((u, need)) = usables.get(e) {
+        // (what it was used with given up, if it takes it: `m_bRemoveFromInventory`)
+        if let Some(n) = need {
+            n.give_up(&mut stats);
+        }
         used.write(Interaction::Usable(u.actor, 0));
         return;
     }

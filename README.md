@@ -669,6 +669,21 @@ are in the settings file, `pad_binding_set` 0-3):
   (`Snd_UI_Audiolog_Noise`) before and after; "Stop the audiograph" cuts it. Heard once, the
   card is filed in the journal's Logs under `AUDIOGRAPHS`, with its description and
   `PLAY AUDIOGRAPH` / `STOP AUDIOGRAPH` to replay it from there.
+- **Things kept, and the triggers used with them.**
+  - An abstract item that isn't money is now kept and counted by its name: the Heretic's Brand,
+    Lady Boyle's invitation, Granny Rags' cameo, the rat viscera, Daud's whale eye and engine
+    coil, the trials' statues and dolls. It shows in the pickup log with its journal picture.
+    Before, each was taken as a handful of coins.
+  - The 41 rewire tools lying about the levels (`RewireTool_AbsItm`, Daud's
+    `DLC06_AbsItm_RewireTool`) and those his stores sell (`DLC06_Pckp_RewireTool`) are carried as
+    the one kind of tool the security panels ask for. Before, the ones found were coins, and
+    Daud's bought ones rewired nothing.
+  - A trigger used with something carried (`DisTriggerAbstractItem`) is cooked with the item it
+    asks for (`m_pRequiredItem`, `m_Quantity`), whether it takes it (`m_bRemoveFromInventory`),
+    whether it starts on (`m_bEnabled`), and its words (its tweak's `m_InteractText`: "Heretic's
+    Brand" over High Overseer Campbell). It can be used only while the scripts have it on
+    (`SeqAct_Toggle`) and the item is carried. Before, Campbell's chair and Granny Rags' furnace
+    could not be used at all.
 - **Piero's Spiritual Remedies laid about the levels** (`DisElixirMana`, `Elixir_Mana_twk`: 117
   in the campaign, more in the stories and the trials) are cooked and taken. Before, only
   Sokolov's elixirs were, and mana remedies could only be bought or found in containers.

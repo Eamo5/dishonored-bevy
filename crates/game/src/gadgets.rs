@@ -84,6 +84,31 @@ mod hull_tests {
 pub const GRENADES: &str = "Grenade_Ammo_WithItem_twk";
 pub const STICKY: &str = "StickyGrenade_Ammo_WithItem_twk";
 pub const RAZORS: &str = "SpringRazor_Ammo_WithItem_twk";
+/// Rewire tools, by the key they are carried under: Corvo's store item (`RewireTool_twk`).
+pub const REWIRE: &str = "RewireTool_twk";
+
+/// The key gear is carried under: a rewire tool by any of its names (Daud's store's
+/// `DLC06_Pckp_RewireTool`, the pickups' `RewireTool_AbsItm`, `DLC06_AbsItm_RewireTool`)
+/// as Corvo's, so either player's tools rewire; anything else as itself.
+pub fn gear_key(item: &str) -> &str {
+    if item.to_ascii_lowercase().contains("rewiretool") {
+        REWIRE
+    } else {
+        item
+    }
+}
+
+#[cfg(test)]
+mod gear_tests {
+    #[test]
+    fn every_rewire_tool_is_carried_as_one_kind() {
+        for n in ["RewireTool_twk", "AbstractItems.RewireTool_AbsItm", "DLC06_AbsItm_RewireTool", "DLC06_Pckp_RewireTool"] {
+            assert_eq!(super::gear_key(n), super::REWIRE);
+        }
+        assert_eq!(super::gear_key("HereticBrand_AbsItm"), "HereticBrand_AbsItm");
+    }
+}
+
 pub const FLARES: &str = "Flare_Ammo_twk";
 pub const EXPLOSIVE: &str = "ExplosiveBullets_Ammo_twk";
 /// Daud's (The Knife of Dunwall).

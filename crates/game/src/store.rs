@@ -88,7 +88,7 @@ fn purchase(stats: &mut PlayerStats, attrs: &crate::gamedata::Attrs, it: &StoreI
             let base = id.trim_end_matches("_twk");
             stats.upgrades.push(format!("{base}_AbsItm"));
         }
-        id => *stats.items.entry(id.to_string()).or_default() += q,
+        id => *stats.items.entry(crate::gadgets::gear_key(id).to_string()).or_default() += q,
     }
 }
 
@@ -495,7 +495,7 @@ fn carried(stats: &PlayerStats, attrs: &crate::gamedata::Attrs, item: &str) -> O
         "Elixir_Health_twk" => (stats.health_elixirs, Some(attrs.elixir_capacity(false))),
         "Rune_twk" => (stats.runes, None),
         id if is_upgrade(id) || id.starts_with("BP_") || id.is_empty() => return None,
-        id => (stats.items.get(id).copied().unwrap_or(0), None),
+        id => (stats.items.get(crate::gadgets::gear_key(id)).copied().unwrap_or(0), None),
     })
 }
 

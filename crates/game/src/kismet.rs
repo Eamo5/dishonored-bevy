@@ -1015,6 +1015,9 @@ pub struct Vm {
     /// volumes (`scene.volumes`) whose placed mines the scripts destroy
     /// (`DisDLC06SeqAct_DestroyArcMines`: a scene's ground cleared before it plays)
     pub destroy_mines: Vec<u32>,
+    /// the triggers used with something carried that the scripts have on (`DisTriggerAbstractItem`'s
+    /// `m_bEnabled`, then `SeqAct_Toggle`): by actor
+    pub item_triggers: HashMap<u32, bool>,
     /// sections' pins pulled before their scene plays, by its op (`SCT_<pin>`)
     pins_pulled: HashMap<u32, Vec<String>>,
     /// characters (their actors) roused, fighting, fleeing or down: an ambient scene of theirs
@@ -1299,6 +1302,7 @@ impl Vm {
             head_meshes: Vec::new(),
             traces: Vec::new(),
             destroy_mines: Vec::new(),
+            item_triggers: g.actors.iter().enumerate().filter_map(|(i, a)| a.item_trigger.as_ref().map(|t| (i as u32, t.enabled))).collect(),
             pins_pulled: HashMap::new(),
             disturbed: HashSet::new(),
             story_end: false,
@@ -2196,6 +2200,18 @@ impl Vm {
                     if let Some(ka) = if let Val::Actor(a) = &t { g.actors.get(*a as usize) } else { None } {
                         if let Some(imp) = ka.impulse {
                             self.impulses.push((Vec3::from(ka.position), imp));
+                            continue;
+                        }
+                        // (a trigger used with something carried: on, off or the other)
+                        if ka.item_trigger.is_some() {
+                            if let Val::Actor(a) = t {
+                                let on = self.item_on(a);
+                                self.item_triggers.insert(a, match input {
+                                    0 => true,
+                                    1 => false,
+                                    _ => !on,
+                                });
+                            }
                             continue;
                         }
                     }
@@ -5260,6 +5276,11 @@ impl Vm {
         self.pump();
     }
 
+    /// Whether a trigger used with something carried is on (`item_triggers`).
+    pub fn item_on(&self, actor: u32) -> bool {
+        self.item_triggers.get(&actor).copied().unwrap_or(true)
+    }
+
     /// A trace answered (`SeqAct_Trace`): its distance (Unreal units), and "Obstructed" or
     /// "Not Obstructed".
     pub fn trace_done(&mut self, op: u32, obstructed: bool, distance: f32) {
@@ -5916,6 +5937,18 @@ fn setup(
         // (characters carry their own prompt: `talk_prompts`)
         // (animated usable objects have their own: `usables`)
         if !used || a.pickup.is_some() || a.class == "DisDoor" || a.spawner.is_some() || crate::usables::animated(&level, a.usable) {
+            continue;
+        }
+        // (one used with something carried: its own words, "Heretic's Brand", and what it asks)
+        if let Some(t) = a.item_trigger.as_ref() {
+            let label = t.text.trim().trim_start_matches("`GBA_Use`").trim();
+            commands.spawn((
+                Usable { actor: i as u32, label: if label.is_empty() { "Use".into() } else { label.to_string() }, name: t.name.clone() },
+                crate::interact::NeedsItem { item: t.item.clone(), quantity: t.quantity, remove: t.remove },
+                Transform::from_translation(Vec3::from(a.position)),
+                DespawnOnExit(GameState::InGame),
+            ));
+            n += 1;
             continue;
         }
         // (the HUD's own word for it: `m_InteractionTexts[27]`, "Use")

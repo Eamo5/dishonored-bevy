@@ -891,6 +891,21 @@ pub struct RatSpawner {
     pub params: std::collections::BTreeMap<String, f32>,
 }
 
+/// A trigger used with something carried (`DisTriggerAbstractItem`): the item it asks for
+/// (`m_pRequiredItem`, its path) and how many (`m_Quantity`; none: a plain trigger), whether they are taken
+/// (`m_bRemoveFromInventory`), whether it can be used from the start (`m_bEnabled`), its words
+/// (its tweak's interactable: `m_Name`, `m_InteractText`) and the reach of its cylinder (m).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ItemTrigger {
+    pub item: String,
+    pub quantity: u32,
+    pub remove: bool,
+    pub enabled: bool,
+    pub name: String,
+    pub text: String,
+    pub radius: f32,
+}
+
 /// A level actor referenced by the scripts and what it became in the scene.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct KActor {
@@ -951,6 +966,10 @@ pub struct KActor {
     /// (`m_pAllowedGroomTweaks`, `m_pAllowedBrideTweaks`: pawn tweak names)
     #[serde(default)]
     pub recipe: Option<(f32, f32, Vec<String>, Vec<String>)>,
+    /// a trigger used with something carried (`DisTriggerAbstractItem`: Campbell's chair and
+    /// the heretic's brand, Granny Rags' furnace and her cameo)
+    #[serde(default)]
+    pub item_trigger: Option<ItemTrigger>,
     /// the instances of actors attached to it (`Base`), which move with it: a gate's crusher
     #[serde(default)]
     pub riders: Vec<u32>,

@@ -1248,6 +1248,30 @@ impl<'a> Cooker<'a> {
                     self.actor_ref(&obj).recipe = Some((r, h, grooms, brides));
                     Ok(())
                 }
+                "DisTriggerAbstractItem" => {
+                    // a trigger used with something carried: its cylinder, and what it asks for
+                    // (the item as the pickups name theirs: its path less the package)
+                    let r = self.trigger(&obj);
+                    let ch = self.chain(&obj);
+                    let item = ch.obj_path("m_pRequiredItem").map(|p| p.split_once('.').map(|x| x.1.to_string()).unwrap_or(p)).unwrap_or_default();
+                    let words = ch.obj(self.assets, "m_pTweaks").and_then(|t| self.chain(&t).obj(self.assets, "m_pInteractableTweaks")).map(|it| self.chain(&it));
+                    let radius = ch.obj(self.assets, "CylinderComponent").map(|c| self.chain(&c)).and_then(|c| c.float("CollisionRadius")).unwrap_or(40.0) * UNIT;
+                    let t = ItemTrigger {
+                        item,
+                        quantity: match ch.get("m_Quantity") {
+                            // (unset: none needed, the trigger a plain one: the chest of Daud's gear)
+                            Some(Value::Int(q)) => (*q).max(0) as u32,
+                            _ => 0,
+                        },
+                        remove: ch.bool("m_bRemoveFromInventory").unwrap_or(true),
+                        enabled: ch.bool("m_bEnabled").unwrap_or(true),
+                        name: words.as_ref().and_then(|w| w.name("m_Name")).unwrap_or_default().to_string(),
+                        text: words.as_ref().and_then(|w| w.name("m_InteractText")).unwrap_or_default().to_string(),
+                        radius,
+                    };
+                    self.actor_ref(&obj).item_trigger = Some(t);
+                    r
+                }
                 "DisFish" => self.fish(&obj),
                 "DisWaterSource" => self.water_source(&obj),
                 "DishonoredUsableObject" | "DisAudioLogPlayer" => self.usable_object(&obj),
