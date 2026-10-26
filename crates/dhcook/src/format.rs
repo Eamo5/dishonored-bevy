@@ -2543,6 +2543,10 @@ pub struct Volume {
     pub push: Option<[f32; 3]>,
     #[serde(default)]
     pub priority: i32,
+    /// colliding with nothing as the level starts (`bCollideActors` false): its pain and push
+    /// wait for the scripts to turn its collision on (`SeqAct_ChangeCollision`)
+    #[serde(default)]
+    pub off: bool,
 }
 
 /// What a physics volume hurts: `DamagePerSec` every `PainInterval` (s), and as one enters with

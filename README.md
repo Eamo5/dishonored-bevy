@@ -2149,7 +2149,12 @@ fields no longer show their stand-in "WW" behind the title.
   onto it as it starts, facing its way, over `m_fTimeToBlendToStageMark` (0.2 s), and holds him
   there while it plays (`StatePlayerMasterSoiree`: movement disabled); one that carries him (a
   boat's) places him itself. Before, he stayed and walked wherever he was: the letter was
-  handed over from behind the Empress. The choke's line no longer shows while the scripts
+  handed over from behind the Empress.
+  A carrier or a stage mark based on a moving actor (its `Base`, cooked as the mover's
+  `riders`) now goes with it, and takes Corvo along. The lighthouse's lift (`LghC_ElevatorRises`)
+  carries him up the shaft in its `Faketeleport` group's hold. Before, the lift rose without him;
+  he was left at the foot of the shaft, and the fall volume the lift's arrival turns on ended the
+  game with "You fell to your death". The choke's line no longer shows while the scripts
   forbid the chokehold (`DisSeqAct_ToggleChoke`: the Tower's prologue).
   Stretched scene keys play as `InterpTrackStretchAnimControl` lays them out (0x00905740, as
   roshan's r614/blink research decoded it; `KTrack::AnimStretch`, scene version 159): the
@@ -2757,6 +2762,27 @@ against the install's own data where it carries them, then implemented independe
   `PainInterval`, and on entry) and push (`ZoneVelocity`: all of it falling, a little walking) now
   apply. These are Boyle's spiked fences, which hurt and shove Corvo off. The volume he is in is the
   highest `Priority` one around his centre.
+- **Volumes the scripts switch on and off.** A volume that starts colliding with nothing
+  (`bCollideActors` false, cooked as `off`) now does nothing until the scripts give it collision.
+  Its pain and push, its touch events and its blocking all wait for that.
+  - `SeqAct_ChangeCollision` on a volume sets it by Dishonored's `ECollisionType`. `BlockAll` and
+    `BlockMovement` block; the touching kinds only touch; `NoCollision` turns it off; the op's
+    unset default (`COLLIDE_CustomDefault`) gives back the actor's own. Before, an unset type was
+    read as `BlockAll`.
+  - `SeqAct_Toggle` on a volume or a trigger turns its collision on, off or over, as
+    `Volume.OnToggle`'s `SetCollision` does. On a forbidden zone (`DisForbiddenZone`) it enables
+    or disables the zone, keeping its factions: Boyle's guards turn on Corvo by the balloons once
+    they are popped. Before, these toggles went nowhere.
+  - `SeqAct_Destroy` on a volume or a trigger leaves it colliding with nothing. Before, the 30
+    triggers the stories destroy kept firing.
+  - `DynamicBlockingVolume`s are solid now, and switch with the scripts too. These are Boyle's
+    other boat made solid, the Tower's way barred while the Empress reads the letter, Streets1's
+    safety wall, the bridge's wheel, and the hub's. Before, only static `BlockingVolume`s were.
+  - The collision the scripts set is kept in saves and put back on load. So are the triggers
+    used with something carried. Before, a reload forgot both.
+  - The lighthouse's shaft (`PhysicsVolume_24`, a drowning volume that starts with no collision)
+    hurts only once the lift is up. The scripts give it `COLLIDE_TouchAll` then. Before, it
+    killed Corvo on the way up. The bridge's nine pain volumes now also wait for the scripts.
 - **Chaos** is the original's score (`DisDarknessManager`), replacing a guess from the share of
   people killed.
   - Deeds raise the score. Each of the player tweak's `m_Deeds` counts a statistic: kills of

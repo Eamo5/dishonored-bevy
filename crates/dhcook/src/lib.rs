@@ -5860,7 +5860,10 @@ impl<'a> Cooker<'a> {
                 Some(Value::Int(p)) => *p,
                 _ => 0,
             };
-            self.scene.volumes.push(Volume { kind: cls, name: actor.name().to_string(), hulls, water, stealth, zone, no_unpossess, pain, push, priority });
+            // (one that starts colliding with nothing, `bCollideActors` off: inert till the scripts
+            // change its collision; the lighthouse shaft's drowning volume, on once the lift is up)
+            let off = ach.bool("bCollideActors") == Some(false);
+            self.scene.volumes.push(Volume { kind: cls, name: actor.name().to_string(), hulls, water, stealth, zone, no_unpossess, pain, push, priority, off });
         }
         Ok(())
     }
@@ -7337,7 +7340,7 @@ impl<'a> Cooker<'a> {
         }
         let index = self.scene.volumes.len() as u32;
         self.actor_ref(actor).volume = Some(index);
-        self.scene.volumes.push(Volume { kind: actor.class(), name: actor.name().to_string(), hulls: vec![hull], water: None, stealth: None, zone: None, no_unpossess: false, pain: None, push: None, priority: 0 });
+        self.scene.volumes.push(Volume { kind: actor.class(), name: actor.name().to_string(), hulls: vec![hull], water: None, stealth: None, zone: None, no_unpossess: false, pain: None, push: None, priority: 0, off: false });
         Ok(())
     }
 

@@ -665,6 +665,24 @@ mod tower_save_tests {
         assert!(vm.tower_shots.is_empty());
         assert!(vm.tower_cmds.is_empty());
     }
+
+    /// A volume's collision as the scripts set it: kept in saves; touching collides but
+    /// blocks nothing; the actor's own default set again forgets the change.
+    #[test]
+    fn script_collision_survives_saves_and_reads_by_kind() {
+        let mut vm = Vm::new(Arc::new(Graph::default()), &[]);
+        assert!(!vm.collides(3, true) && vm.collides(4, false) && vm.blocks(4, false));
+        vm.collision.insert(3, "COLLIDE_TouchAll".into());
+        vm.collision.insert(4, "COLLIDE_NoCollision".into());
+        vm.collision.insert(5, "COLLIDE_BlockMovement".into());
+        let saved = serde_json::to_value(vm.save_state()).unwrap();
+        vm.collision.clear();
+        assert!(vm.restore_state(serde_json::from_value(saved).unwrap()));
+        assert!(vm.collides(3, true) && !vm.blocks(3, true));
+        assert!(!vm.collides(4, false) && !vm.blocks(4, false));
+        assert!(vm.blocks(5, true));
+        assert!(!collision_blocks("COLLIDE_BlockGameplay") && collision_blocks("COLLIDE_CustomDefault"));
+    }
 }
 
 /// The scripts' runtime state in a save game.
@@ -725,6 +743,18 @@ pub struct VmSave {
     arms_mesh: Option<String>,
     #[serde(default)]
     saving_off: bool,
+    /// the triggers used with something carried, on or off; the collision the scripts set
+    #[serde(default)]
+    item_triggers: HashMap<u32, bool>,
+    #[serde(default)]
+    collision: HashMap<u32, String>,
+}
+
+/// Whether a collision the scripts set (`ECollisionType`, Dishonored's) stops the player and the
+/// characters: `BlockAll`, `BlockMovement` (for the player alone too), or the actor's own. Touching
+/// ones, `BlockGameplay` (the old `BlockWeapons`) and `BlockNPCVision` let them through.
+pub fn collision_blocks(ct: &str) -> bool {
+    matches!(ct, "COLLIDE_BlockAll" | "COLLIDE_BlockMovement" | "COLLIDE_BlockMovement_PlayerOnly" | "COLLIDE_CustomDefault")
 }
 
 /// What a conversation's speaker is doing that ends it (`DisConvoEndReasonEnum`: death,
@@ -832,6 +862,8 @@ pub struct Vm {
     /// triggers the scripts attached to a character (`SeqAct_AttachToActor`): actor ->
     /// (its spawner, where the character was when it was attached, once known)
     pub touch_follow: HashMap<u32, (u32, Option<Vec3>)>,
+    /// volumes that start colliding with nothing (`bCollideActors` false), by actor
+    starts_off: HashSet<u32>,
     /// conversations being played: (speaker actor, dialogue tree, conversation, next step,
     /// time left)
     convs: Vec<(u32, usize, usize, usize, f32)>,
@@ -1018,6 +1050,9 @@ pub struct Vm {
     /// the triggers used with something carried that the scripts have on (`DisTriggerAbstractItem`'s
     /// `m_bEnabled`, then `SeqAct_Toggle`): by actor
     pub item_triggers: HashMap<u32, bool>,
+    /// what `SeqAct_ChangeCollision` set on actors (`COLLIDE_*`): kept in saves and put back,
+    /// and read by the physics volumes that start colliding with nothing
+    pub collision: HashMap<u32, String>,
     /// sections' pins pulled before their scene plays, by its op (`SCT_<pin>`)
     pins_pulled: HashMap<u32, Vec<String>>,
     /// characters (their actors) roused, fighting, fleeing or down: an ambient scene of theirs
@@ -1128,6 +1163,8 @@ pub struct Vm {
     /// forbidden zones' factions set (or cleared) by the scripts
     /// (`DisSeqAct_ForbiddenZoneOverride`): zones, owners, forbidden, set
     pub zone_overrides: Vec<(Vec<Val>, Vec<Val>, Vec<Val>, bool)>,
+    /// forbidden zones the scripts switch on or off (`SeqAct_Toggle`)
+    pub zone_toggles: Vec<(Val, bool)>,
     /// characters told to protect the neutral or not (`DisSeqAct_AIProtectNeutralsOverride`)
     pub protect_overrides: Vec<(Vec<Val>, Option<bool>)>,
     /// characters' flags: 0 ignoring physics' blows (`DisSeqAct_NPCIgnoreRBDamages`), 1 no
@@ -1211,6 +1248,7 @@ impl Vm {
             touch: Vec::new(),
             touching: HashSet::new(),
             touch_follow: HashMap::new(),
+            starts_off: HashSet::new(),
             convs: Vec::new(),
             tree_by_path: g.dialog_trees.iter().enumerate().map(|(i, t)| (t.path.clone(), i)).collect(),
             fired_convs: HashSet::new(),
@@ -1303,6 +1341,7 @@ impl Vm {
             traces: Vec::new(),
             destroy_mines: Vec::new(),
             item_triggers: g.actors.iter().enumerate().filter_map(|(i, a)| a.item_trigger.as_ref().map(|t| (i as u32, t.enabled))).collect(),
+            collision: HashMap::new(),
             pins_pulled: HashMap::new(),
             disturbed: HashSet::new(),
             story_end: false,
@@ -1368,6 +1407,7 @@ impl Vm {
             level_state_save: None,
             level_state_discards: Vec::new(),
             zone_overrides: Vec::new(),
+            zone_toggles: Vec::new(),
             protect_overrides: Vec::new(),
             npc_flags: Vec::new(),
             ambush_cmds: Vec::new(),
@@ -1441,6 +1481,11 @@ impl Vm {
             }
             for &p in &a.particles {
                 vm.particle_actor.insert(p, i);
+            }
+            // (a volume colliding with nothing as it starts: touches nobody, blocks nothing, till the
+            // scripts change it)
+            if a.volume.and_then(|v| scene_volumes.get(v as usize)).is_some_and(|v| v.off) {
+                vm.starts_off.insert(i);
             }
             let touched = vm.events_of.get(&i).map(|evs| evs.iter().any(|&e| g.ops[e as usize].class.contains("Touch"))).unwrap_or(false);
             if let (true, Some(vol)) = (touched, a.volume.and_then(|v| scene_volumes.get(v as usize))) {
@@ -2202,6 +2247,21 @@ impl Vm {
                             self.impulses.push((Vec3::from(ka.position), imp));
                             continue;
                         }
+                        // (a volume: colliding with things or not, as `Volume.OnToggle`'s
+                        // `SetCollision`; a forbidden zone enabled or not)
+                        if let (Some(_), Val::Actor(a), None, None) = (ka.volume, &t, ka.item_trigger.as_ref(), ka.fog) {
+                            let on = match input {
+                                0 => true,
+                                1 => false,
+                                _ => !self.collides(*a, self.starts_off.contains(a)),
+                            };
+                            if ka.class == "DisForbiddenZone" {
+                                self.zone_toggles.push((t.clone(), on));
+                            } else {
+                                self.collision.insert(*a, if !on { "COLLIDE_NoCollision" } else if ka.class.contains("Blocking") { "COLLIDE_BlockAll" } else { "COLLIDE_TouchAll" }.to_string());
+                            }
+                            continue;
+                        }
                         // (a trigger used with something carried: on, off or the other)
                         if ka.item_trigger.is_some() {
                             if let Val::Actor(a) = t {
@@ -2394,9 +2454,19 @@ impl Vm {
                 self.fire(op, 0);
             }
             "SeqAct_ChangeCollision" => {
-                let ct = self.ps(op, "CollisionType").unwrap_or_else(|| "COLLIDE_BlockAll".into());
+                // (unset: `COLLIDE_CustomDefault`, the actor's own collision back)
+                let ct = self.ps(op, "CollisionType").unwrap_or_else(|| "COLLIDE_CustomDefault".into());
                 let targets = self.read(op, "Target");
-                self.ai_fx.push(crate::script_world::AiFx::Collision { targets, block: ct.contains("Block") });
+                for t in &targets {
+                    if let Val::Actor(a) = t {
+                        if ct == "COLLIDE_CustomDefault" {
+                            self.collision.remove(a);
+                        } else {
+                            self.collision.insert(*a, ct.clone());
+                        }
+                    }
+                }
+                self.ai_fx.push(crate::script_world::AiFx::Collision { targets, block: collision_blocks(&ct) });
                 self.fire(op, 0);
             }
             "DisSeqAct_WallofLightControl" | "DisSeqAct_DefenceTower" => {
@@ -3210,6 +3280,12 @@ impl Vm {
                     if let Some(ka) = if let Val::Actor(a) = t { g.actors.get(a as usize) } else { None } {
                         if ka.class.starts_with("RB_") {
                             self.joints_broken.insert(ka.name.clone());
+                        }
+                        // (a volume gone collides with nothing more)
+                        if ka.volume.is_some() {
+                            if let Val::Actor(a) = t {
+                                self.collision.insert(a, "COLLIDE_NoCollision".into());
+                            }
                         }
                     }
                     self.effects.push(Effect::Destroy(t));
@@ -5160,6 +5236,8 @@ impl Vm {
             marker_flips: self.marker_flips.iter().cloned().collect(),
             arms_mesh: self.arms_mesh.clone(),
             saving_off: self.saving_off,
+            item_triggers: self.item_triggers.clone(),
+            collision: self.collision.clone(),
         }
     }
 
@@ -5213,6 +5291,13 @@ impl Vm {
         self.marker_flips = s.marker_flips.into_iter().collect();
         self.arms_mesh = s.arms_mesh;
         self.saving_off = s.saving_off;
+        // (older saves: the triggers as the level starts them)
+        self.item_triggers.extend(s.item_triggers);
+        // (the collision the scripts set, put back on what it was set on)
+        self.collision = s.collision;
+        for (a, ct) in &self.collision {
+            self.ai_fx.push(crate::script_world::AiFx::Collision { targets: vec![Val::Actor(*a)], block: collision_blocks(ct) });
+        }
         if let Some(i) = s.inert {
             self.inert = i;
         }
@@ -5274,6 +5359,18 @@ impl Vm {
             self.event(ev, 0, Some(Val::Player));
         }
         self.pump();
+    }
+
+    /// Whether a physics volume's actor collides now: as the scripts last set it
+    /// (`SeqAct_ChangeCollision`), else as the level starts it (`off`).
+    pub fn collides(&self, actor: u32, off: bool) -> bool {
+        self.collision.get(&actor).map_or(!off, |ct| ct != "COLLIDE_NoCollision")
+    }
+
+    /// Whether a blocking volume's actor blocks the player now: as the scripts last set its
+    /// collision (`collision_blocks`), else as the level starts it.
+    pub fn blocks(&self, actor: u32, off: bool) -> bool {
+        self.collision.get(&actor).map_or(!off, |ct| collision_blocks(ct))
     }
 
     /// Whether a trigger used with something carried is on (`item_triggers`).
@@ -6414,6 +6511,9 @@ fn world_events(
         let capsule = parry::shape::Capsule::new_y(p.body().half(), p.body().radius());
         let mut inside = HashSet::new();
         for (actor, hulls) in &vm.touch {
+            if !vm.collides(*actor, vm.starts_off.contains(actor)) {
+                continue;
+            }
             let at = probe - moved.get(actor).copied().unwrap_or(Vec3::ZERO);
             let pose = parry::math::Pose::translation(at.x, at.y, at.z);
             if hulls.iter().any(|h| parry::query::intersection_test(&parry::math::Pose::IDENTITY, h.raw.as_ref(), &pose, &capsule).unwrap_or_else(|_| h.contains_point(Vec3::ZERO, Quat::IDENTITY, at))) {
@@ -6452,7 +6552,7 @@ fn world_events(
         vm.down_spawners = npcs.iter().filter(|(_, n, _, _)| n.is_down()).map(|(_, _, f, _)| f.0).collect();
         for (_, _n, f, t) in &npcs {
             for &a in &watched {
-                let Some(hulls) = vm.touch.iter().find(|(x, _)| *x == a).map(|(_, h)| h) else { continue };
+                let Some(hulls) = vm.touch.iter().find(|(x, _)| *x == a).map(|(_, h)| h).filter(|_| vm.collides(a, vm.starts_off.contains(&a))) else { continue };
                 let at = t.translation - moved.get(&a).copied().unwrap_or(Vec3::ZERO);
                 if hulls.iter().any(|h| h.contains_point(Vec3::ZERO, Quat::IDENTITY, at)) {
                     now.insert((a, f.0));

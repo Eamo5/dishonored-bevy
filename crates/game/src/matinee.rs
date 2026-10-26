@@ -447,6 +447,20 @@ fn play_matinees(
         // a bone (a glass in the hand, a cigarette, a letter); what each carried group's
         // actors move by now (Bevy space). A prop carried by a prop keeps its place on it.
         let mut rides: HashMap<u32, Mat4> = HashMap::new();
+        // what the actors based on a moved one (`riders`, by instance) move by now: a stage mark
+        // standing in a lift (the lighthouse's) carries the player staged on it
+        let mut rider_moves: HashMap<u32, Mat4> = HashMap::new();
+        for (gi, actors) in binds {
+            let Some(KTrack::Move { pos, rot, relative }) = m.groups.get(*gi as usize).and_then(|gr| gr.tracks.iter().find(|tr| matches!(tr, KTrack::Move { .. }))) else { continue };
+            for &a in actors {
+                let Some(ka) = g.actors.get(a as usize).filter(|ka| !ka.riders.is_empty()) else { continue };
+                let init = *st.initial.entry(a).or_insert_with(|| actor_tm(ka));
+                let delta = ue_to_bevy(move_tm(pos, rot, *relative, init, t) * init.inverse());
+                for &i in &ka.riders {
+                    rider_moves.insert(i, delta);
+                }
+            }
+        }
         let first_actor = |gi: u32| binds.iter().find(|b| b.0 == gi).and_then(|b| b.1.first()).copied();
         for _ in 0..3 {
             for (gi, _) in binds {
@@ -504,6 +518,9 @@ fn play_matinees(
                                     _ => None,
                                 })
                             })
+                            // (a carrier based on a moved actor goes with it: the lighthouse lift's
+                            // `Faketeleport` carrying the player up the shaft)
+                            .or_else(|| owner.instances.iter().find_map(|i| rider_moves.get(i)).copied())
                             .map(|d| if k.2.to_ascii_lowercase().contains("root") { d * ue_to_bevy(owner_init) * local * rider_init.inverse() } else { d }),
                     };
                     if let Some(d) = delta {
@@ -544,6 +561,9 @@ fn play_matinees(
                                 }
                             }
                         }
+                    }
+                    for &i in &ka.riders {
+                        rider_moves.insert(i, delta);
                     }
                     for &i in ka.instances.iter().chain(&ka.riders) {
                         let Some(&(e, col)) = st.by_instance.get(&i) else { continue };
@@ -778,13 +798,27 @@ fn play_matinees(
                     }
                 }
             }
+            // (the mark carried by what it is based on: the lighthouse's lift rising with him;
+            // before, he stayed at its foot as it rose and fell to his death)
+            let mark_move = {
+                let mark = m.groups[pg].stage_mark.as_str();
+                (!mark.is_empty())
+                    .then(|| m.groups.iter().position(|gr| gr.name.eq_ignore_ascii_case(mark)))
+                    .flatten()
+                    .and_then(|mi| binds.iter().find(|b| b.0 == mi as u32))
+                    .and_then(|b| b.1.first())
+                    .and_then(|a| g.actors.get(*a as usize))
+                    .and_then(|a| a.instances.iter().find_map(|i| rider_moves.get(i)).copied())
+                    .unwrap_or(Mat4::IDENTITY)
+            };
             if let Some((sop, from, from_yaw, from_pitch, to, to_yaw, k)) = st.player_stage.filter(|s| s.0 == op && s.6 < 1.0) {
+                let to_now = mark_move.transform_point3(to);
                 // (over a few frames however long the first: the scripts' teleport in the scene's first
                 // frame, the Tower's to where the Empress's death was once staged, gives way to it)
                 let k = (k + dt.min(0.05) / 0.2).min(1.0);
                 if let Ok((mut pt, mut p)) = player.single_mut() {
                     let turn = (to_yaw - from_yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-                    pt.translation = from.lerp(to, k);
+                    pt.translation = from.lerp(to_now, k);
                     p.yaw = from_yaw + turn * k;
                     p.pitch = from_pitch * (1.0 - k);
                     p.velocity = Vec3::ZERO;
@@ -796,6 +830,7 @@ fn play_matinees(
             } else if let Some((_, _, _, _, to, to_yaw, _)) = st.player_stage.filter(|s| s.0 == op) {
                 // (then kept there while it plays, its keys laid out from it: the scripts'
                 // teleport of him as it began, to where the scene was once staged, gives way)
+                let to = mark_move.transform_point3(to);
                 if let Ok((mut pt, mut p)) = player.single_mut() {
                     if pt.translation.distance(to) > 0.05 {
                         pt.translation = to;

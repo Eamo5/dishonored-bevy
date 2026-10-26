@@ -30,6 +30,9 @@ struct Zone {
     pain: Option<dhcook::format::VolumePain>,
     push: Vec3,
     priority: i32,
+    /// the scripts' actor for it (its collision changed by them), and whether it starts off
+    actor: Option<u32>,
+    off: bool,
 }
 
 #[derive(Resource, Default)]
@@ -53,11 +56,13 @@ fn build_zones(level: Option<Res<LevelInfo>>, mut zones: ResMut<Zones>) {
         .scene
         .volumes
         .iter()
-        .filter(|v| v.pain.is_some() || v.push.is_some())
-        .map(|v| {
+        .enumerate()
+        .filter(|(_, v)| v.pain.is_some() || v.push.is_some())
+        .map(|(vi, v)| {
             let hulls: Vec<Collider> = v.hulls.iter().filter_map(|h| Collider::convex_hull(&h.iter().map(|p| Vec3::from(*p)).collect::<Vec<_>>())).collect();
             let (min, max) = v.hulls.iter().flatten().fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| (lo.min(Vec3::from(*p)), hi.max(Vec3::from(*p))));
-            Zone { hulls, min, max, pain: v.pain.clone(), push: v.push.map(Vec3::from).unwrap_or(Vec3::ZERO), priority: v.priority }
+            let actor = level.scene.kismet.actors.iter().position(|a| a.volume == Some(vi as u32)).map(|a| a as u32);
+            Zone { hulls, min, max, pain: v.pain.clone(), push: v.push.map(Vec3::from).unwrap_or(Vec3::ZERO), priority: v.priority, actor, off: v.off }
         })
         .collect();
     if !zones.list.is_empty() {
@@ -65,10 +70,15 @@ fn build_zones(level: Option<Res<LevelInfo>>, mut zones: ResMut<Zones>) {
     }
 }
 
-fn zone_effects(time: Res<Time>, tc: Res<TimeControl>, mut zones: ResMut<Zones>, mut push: ResMut<ZonePush>, mut stats: ResMut<PlayerStats>, player: Query<&Transform, With<Player>>) {
+fn zone_effects(time: Res<Time>, tc: Res<TimeControl>, mut zones: ResMut<Zones>, mut push: ResMut<ZonePush>, mut stats: ResMut<PlayerStats>, player: Query<&Transform, With<Player>>, vm: Option<Res<crate::kismet::Vm>>) {
     let Ok(pt) = player.single() else { return };
     let at = pt.translation;
-    let inside = |z: &Zone| at.cmpge(z.min).all() && at.cmple(z.max).all() && z.hulls.iter().any(|h| h.contains_point(Vec3::ZERO, Quat::IDENTITY, at));
+    // (one colliding with nothing does nothing: as it starts, or as the scripts set it)
+    let on = |z: &Zone| match (z.actor, vm.as_ref()) {
+        (Some(a), Some(vm)) => vm.collides(a, z.off),
+        _ => !z.off,
+    };
+    let inside = |z: &Zone| on(z) && at.cmpge(z.min).all() && at.cmple(z.max).all() && z.hulls.iter().any(|h| h.contains_point(Vec3::ZERO, Quat::IDENTITY, at));
     let current = zones.list.iter().enumerate().filter(|(_, z)| inside(z)).max_by_key(|(_, z)| z.priority).map(|(i, _)| i);
     push.0 = current.map(|i| zones.list[i].push).unwrap_or(Vec3::ZERO);
     let dt = time.delta_secs() * tc.world_scale();

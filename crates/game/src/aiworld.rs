@@ -191,6 +191,14 @@ fn script_commands(vm: Option<ResMut<crate::kismet::Vm>>, mut ai: ResMut<AiWorld
             }
         }
     }
+    // (`SeqAct_Toggle` on a zone: enabled or not, its factions kept)
+    for (target, on) in std::mem::take(&mut vm.zone_toggles) {
+        let Val::Actor(a) = target else { continue };
+        let Some(name) = g.actors.get(a as usize).map(|a| a.name.clone()) else { continue };
+        for z in ai.zones.iter_mut().filter(|z| z.name == name) {
+            z.enabled = on;
+        }
+    }
     for (targets, protect) in std::mem::take(&mut vm.protect_overrides) {
         let s = spawners(&targets);
         for (mut n, from) in &mut npcs {

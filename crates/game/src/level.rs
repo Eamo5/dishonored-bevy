@@ -91,11 +91,24 @@ pub struct LevelInstance {
 #[derive(Component)]
 pub struct StreamedVolume(pub String);
 
-/// Blocking volumes come and go with their sublevels.
-pub fn stream_volumes(mut commands: Commands, vm: Option<Res<crate::kismet::Vm>>, q: Query<(Entity, &StreamedVolume, Has<ColliderDisabled>)>) {
+/// A blocking volume the scripts can turn on and off (`SeqAct_Toggle`, `SeqAct_ChangeCollision`,
+/// `SeqAct_Destroy`: Boyle's boats made solid, the Tower's way barred once the letter is given,
+/// the bridge's wheel): its script actor, and whether it starts colliding with nothing.
+#[derive(Component)]
+pub struct ScriptVolume {
+    pub actor: Option<u32>,
+    pub off: bool,
+}
+
+/// Blocking volumes come and go with their sublevels, and as the scripts set them.
+#[allow(clippy::type_complexity)]
+pub fn stream_volumes(mut commands: Commands, vm: Option<Res<crate::kismet::Vm>>, q: Query<(Entity, Option<&StreamedVolume>, Option<&ScriptVolume>, Has<ColliderDisabled>), Or<(With<StreamedVolume>, With<ScriptVolume>)>>) {
     let Some(vm) = vm else { return };
-    for (e, s, off) in &q {
-        let out = vm.level_out(&s.0);
+    for (e, s, sv, off) in &q {
+        let out = s.is_some_and(|s| vm.level_out(&s.0)) || sv.is_some_and(|v| match v.actor {
+            Some(a) => !vm.blocks(a, v.off),
+            None => v.off,
+        });
         if out && !off {
             commands.entity(e).try_insert(ColliderDisabled);
         } else if !out && off {
@@ -1391,14 +1404,21 @@ fn spawn_level(
     lap("instances");
     // Blocking volumes become invisible convex colliders (with their sublevel, if streamed).
     for (vi, v) in scene.volumes.iter().enumerate() {
-        if v.kind != "BlockingVolume" {
+        if v.kind != "BlockingVolume" && v.kind != "DynamicBlockingVolume" {
             continue;
         }
         let streamed = crate::campaign::volume_level(&scene, vi as u32).map(str::to_string);
+        let actor = scene.kismet.actors.iter().position(|a| a.volume == Some(vi as u32)).map(|a| a as u32);
         for hull in &v.hulls {
             let pts: Vec<Vec3> = hull.iter().map(|p| Vec3::from(*p)).collect();
             if let Some(c) = Collider::convex_hull(&pts) {
                 let mut e = commands.spawn((c, RigidBody::Fixed, CollisionGroups::new(GROUP_WORLD, Group::ALL), Transform::IDENTITY, DespawnOnExit(GameState::InGame)));
+                if actor.is_some() || v.off {
+                    e.insert(ScriptVolume { actor, off: v.off });
+                    if v.off {
+                        e.insert(ColliderDisabled);
+                    }
+                }
                 if let Some(l) = &streamed {
                     e.insert(StreamedVolume(l.clone()));
                     if !loaded_levels.contains(&l.to_ascii_lowercase()) {
