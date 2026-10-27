@@ -2272,7 +2272,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
     };
     let health = cooked_health.unwrap_or(if tallboy { 80.0 } else { health });
     // (what it carries, where its type says)
-    let (has_sword, ranged) = match stats.filter(|s| !s.weapons.is_empty()).map(weapon_kinds) {
+    // (what its type's loadout holds, if cooked, even nothing: a weeping thug's bare hands, the
+    // Coldridge prisoners'; else its kind's)
+    let (has_sword, ranged) = match stats.map(weapon_kinds) {
         Some((blade, gun)) => (blade, if enemy { gun } else { 0 }),
         None => (has_sword, ranged),
     };
@@ -2664,6 +2666,30 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
     // (its fighting stance's clips by its blade's prefix, `m_ItemPrefix`)
     let prefix = blade_wep.map(|w| w.prefix.as_str()).unwrap_or("");
     let clips = vis.anims.as_ref().and_then(|lib| NpcClips::resolve(lib, prefix).map(|c| (lib.clone(), c)));
+    // DH_CLIP_CENSUS: each type's stances as resolved (what it would stand, fight and strike with)
+    if std::env::var_os("DH_CLIP_CENSUS").is_some() {
+        static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+        if SEEN.lock().is_ok_and(|mut s| s.get_or_insert_with(std::collections::HashSet::new).insert(vis.name.clone())) {
+            let name = |c: Option<ClipId>| match (vis.anims.as_ref(), c) {
+                (Some(lib), Some(c)) => lib.clip(c).name.clone(),
+                _ => "-".into(),
+            };
+            match &clips {
+                Some((_, c)) => info!(
+                    "clip census {}: prefix {prefix:?} blade {has_sword} ranged {ranged} idle {} walk {} alert {} {} run {} attacks {} equip {}",
+                    vis.name,
+                    name(c.idle),
+                    name(c.walk),
+                    name(c.idle_alert),
+                    name(c.walk_alert),
+                    name(c.run),
+                    c.attack.len(),
+                    name(c.equip)
+                ),
+                None => info!("clip census {}: no clips (sets {})", vis.name, vis.anims.as_ref().map_or(0, |l| l.set_count())),
+            }
+        }
+    }
     let rig = NpcRig {
         joints: joints.clone(),
         names: bones.iter().map(|b| b.name.clone()).collect(),

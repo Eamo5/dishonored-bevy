@@ -1788,6 +1788,12 @@ fields no longer show their stand-in "WW" behind the title.
     wide) keeps the others out of its line.
   - His cuts meet no blade (`m_bDisableVersus`): no blade locks with a saw.
   - Butchers are named "Whale Butcher" in the logs and scripts.
+- **A character carries what its loadout holds, even nothing** (`m_ContentInventoryLoadout`).
+  Before, a type whose loadout was empty was armed by its kind's guess: the weeping thugs of the
+  Distillery District and the Flooded District, Coldridge's prisoners in their cells, and the
+  trials' chain-kill targets drew swords they don't have. A type with no cooked stats still
+  falls back on its kind. Script: `DH_CLIP_CENSUS=1` logs each type's resolved stance clips
+  (prefix, idle, walk, fighting stance, run, blows, draw), to find any left without them.
 - **River krusts**: the Flooded District's shellfish (`DisRiverKrust`) play their tweak's
   states (`m_AnimSequences`): shut in the shell, opening when someone comes within range and
   in sight, spitting volleys of acid that arc and lead a moving target (damage by

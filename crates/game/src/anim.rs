@@ -89,6 +89,11 @@ impl CharAnims {
         out
     }
 
+    /// How many sets it has.
+    pub fn set_count(&self) -> usize {
+        self.sets.len()
+    }
+
     pub fn find(&self, name: &str) -> Option<ClipId> {
         self.by_name.get(&name.to_ascii_lowercase()).copied()
     }
