@@ -4175,6 +4175,12 @@ impl Vm {
                             } else if !forward && t <= 0.0 {
                                 t = len;
                             }
+                            // (one that always starts part way in, `bForceStartPos`: Play begins at
+                            // `ForceStartPosition`, as `USeqAct_Interp::Play` sets it; the
+                            // Brigmore ending's last stroke starts 5.25 s into its scene)
+                            if input == 0 && self.pb(op, "bForceStartPos") == Some(true) {
+                                t = self.pf(op, "ForceStartPosition").unwrap_or(0.0).clamp(0.0, len);
+                            }
                             // without cooked tracks (or for quick tests) the matinee only times out
                             let len = if matinee.is_none() && !full_matinee() { len.min(0.5) } else { len };
                             let looping = self.pb(op, "bLooping").unwrap_or(false);

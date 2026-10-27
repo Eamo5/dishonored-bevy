@@ -2191,6 +2191,13 @@ fields no longer show their stand-in "WW" behind the title.
   (`Animations`: an AnimNodeSequence at its time) is cooked in that pose, mesh and physics
   bodies: the Tower's lowered gangway was a 4 m wall at its reference pose, and Corvo fell
   into the waterlock.
+- **Scenes that start part way in** (`SeqAct_Interp`'s `bForceStartPos`) begin at their
+  `ForceStartPosition` when played from rest, jumping over what comes before, as
+  `USeqAct_Interp::Play` does. Those without a position (most of them: movers in Rothwild, the
+  bridge, Coldridge) now always play from their start rather than from where they last stopped.
+  The Brigmore ending's last stroke (`L_DLC07_Endgame_P`'s `SeqAct_Interp_1`) starts 5.25 s in.
+  Before, it played its first 5 seconds of lead-in too, and the trials' timed scenes (the
+  race's at 16 s) started from 0.
 - **A scene's camera shows neither the HUD nor his arms.** While a director's cut has the
   view, the gauges, the crosshair, the dock and Corvo's hands and weapons are put away, as a
   shot through a camera actor has none of them. The scene's subtitles stay; only the screens
