@@ -331,6 +331,15 @@ fn open_journal(journal: &mut Journal, paused: &mut Paused, cursor: &mut CursorO
     journal.dirty = true;
 }
 
+/// The tabs' own keys and their pages (`Dis_OpenJournalTab 1`..`4`: Notes, Powers, Bone Charms,
+/// Inventory).
+const TAB_KEYS: [(crate::bindings::Act, u8); 4] = [
+    (crate::bindings::Act::OpenNotes, PAGE_NOTES),
+    (crate::bindings::Act::OpenPowers, PAGE_POWERS),
+    (crate::bindings::Act::OpenBoneCharms, PAGE_CHARMS),
+    (crate::bindings::Act::OpenInventory, PAGE_INVENTORY),
+];
+
 #[allow(clippy::too_many_arguments)]
 fn toggle(
     mut commands: Commands,
@@ -374,18 +383,29 @@ fn toggle(
     }
     let _ = &data;
     // (a tutorial just received, its prompt up: the key reads it)
-    if !journal.open && keys.just_pressed(bind.key(crate::bindings::Act::Journal)) && menu.open.is_none() && !stats.dead && mission_end.is_none() {
+    if !journal.open && bind.just_pressed(crate::bindings::Act::Journal) && menu.open.is_none() && !stats.dead && mission_end.is_none() {
         if let Some((id, _)) = stats.tutorial_prompt.take() {
             read.write(ReadNote(format!("{}{id}", crate::tutorials::KEY)));
             return;
         }
     }
+    // the keyboard's own keys for the tabs (`GBA_OpenNotes`..`GBA_OpenInventory`:
+    // `Dis_OpenJournalTab 1`..`4`, bound to nothing by default): the journal opened on its tab, or
+    // turned to it; on it already, put away (our reading)
+    let tab = TAB_KEYS.into_iter().find(|(a, _)| bind.just_pressed(*a)).map(|(_, p)| p).filter(|p| pages(&stats).contains(p));
+    if let Some(p) = tab.filter(|p| journal.open && *p != journal.page) {
+        journal.flashing &= !(1 << place(&stats, journal.page));
+        journal.page = p;
+        journal.dirty = true;
+        sfx.write(PostEvent::named("UI_ChangeMainTab", None));
+        return;
+    }
     let want = if journal.open {
         // (its help bar's Exit too: `B`)
         let exit = crate::helpbar::clicked(&help).filter(|_| scripted.is_none()) == Some(Btn::B);
-        !(keys.just_pressed(bind.key(crate::bindings::Act::Journal)) || keys.just_pressed(KeyCode::Escape) || exit)
+        !(bind.just_pressed(crate::bindings::Act::Journal) || keys.just_pressed(KeyCode::Escape) || exit || tab.is_some())
     } else {
-        keys.just_pressed(bind.key(crate::bindings::Act::Journal)) && menu.open.is_none() && !stats.dead && mission_end.is_none() && !shut
+        (bind.just_pressed(crate::bindings::Act::Journal) || tab.is_some()) && menu.open.is_none() && !stats.dead && mission_end.is_none() && !shut
     };
     if want == journal.open {
         return;
@@ -402,6 +422,7 @@ fn toggle(
             None => (PAGE_MISSION, 0),
         };
         let (page, sub) = if pages(&stats).contains(&page) { (page, sub) } else { (PAGE_MISSION, 0) };
+        let (page, sub) = tab.map_or((page, sub), |t| (t, 0));
         journal.page = page;
         if page == PAGE_MISSION && journal.obj_tab != sub {
             journal.obj_tab = sub;

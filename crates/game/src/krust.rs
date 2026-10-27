@@ -219,6 +219,7 @@ mod cover_tests {
         app.init_resource::<KrustRestore>().init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<crate::hud::Paused>().init_resource::<crate::settings::Settings>()
             .insert_resource(LevelInfo { scene: dhcook::format::Scene { krusts: vec![KrustDef::default()], ..default() } })
+            .init_resource::<crate::bindings::Bindings>().add_systems(First, crate::bindings::update_acts)
             .add_message::<SpawnEffect>().add_systems(Update, (restore_krust_state, possessed_krust).chain());
         let skeleton = dhcook::format::SkeletonDef::default();
         let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![std::sync::Arc::new(dhcook::format::AnimFile {
@@ -322,6 +323,7 @@ mod cover_tests {
         app.init_resource::<ButtonInput<MouseButton>>().insert_resource(crate::hud::Paused(true))
             .init_resource::<crate::settings::Settings>()
             .insert_resource(LevelInfo { scene: dhcook::format::Scene { krusts: vec![KrustDef::default()], ..default() } })
+            .init_resource::<crate::bindings::Bindings>().add_systems(First, crate::bindings::update_acts)
             .add_message::<SpawnEffect>().add_systems(Update, possessed_krust);
         let skeleton = dhcook::format::SkeletonDef::default();
         let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![]));
@@ -1117,7 +1119,7 @@ fn krust_brain(
 #[allow(clippy::too_many_arguments)]
 fn possessed_krust(
     mut commands: Commands,
-    mouse: Res<ButtonInput<MouseButton>>,
+    bind: Res<crate::bindings::Bindings>,
     paused: Res<crate::hud::Paused>,
     (level, settings): (Option<Res<LevelInfo>>, Res<crate::settings::Settings>),
     rapier: ReadRapierContext,
@@ -1162,7 +1164,7 @@ fn possessed_krust(
             k.mode = Mode::Aggressive;
             play(&mut a, def, POSSESSED, false);
         }
-        if mouse.just_pressed(MouseButton::Left) {
+        if bind.just_pressed(crate::bindings::Act::Primary) {
             // at what Corvo aims at
             let Ok(c) = cam.single() else { continue };
             let (eye, dir) = (c.translation(), c.forward().as_vec3());

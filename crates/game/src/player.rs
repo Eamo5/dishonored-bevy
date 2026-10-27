@@ -689,16 +689,16 @@ fn player_move(
     let fwd = Quat::from_rotation_y(p.yaw) * Vec3::NEG_Z;
     let right = Quat::from_rotation_y(p.yaw) * Vec3::X;
     let mut wish = Vec3::ZERO;
-    if keys.pressed(bind.key(crate::bindings::Act::Forward)) {
+    if bind.pressed(crate::bindings::Act::Forward) {
         wish += fwd;
     }
-    if keys.pressed(bind.key(crate::bindings::Act::Back)) {
+    if bind.pressed(crate::bindings::Act::Back) {
         wish -= fwd;
     }
-    if keys.pressed(bind.key(crate::bindings::Act::Right)) {
+    if bind.pressed(crate::bindings::Act::Right) {
         wish += right;
     }
-    if keys.pressed(bind.key(crate::bindings::Act::Left)) {
+    if bind.pressed(crate::bindings::Act::Left) {
         wish -= right;
     }
     wish += fwd * vinput.forward;
@@ -709,7 +709,7 @@ fn player_move(
     // the scripts' cinematics hold Corvo where he is
     let held = cine.holds_movement();
     let wish = if held { Vec3::ZERO } else if analog { wish.clamp_length_max(1.0) } else { wish.normalize_or_zero() };
-    let jump_pressed = !held && (keys.just_pressed(bind.key(crate::bindings::Act::Jump)) || std::mem::take(&mut vinput.jump));
+    let jump_pressed = !held && (bind.just_pressed(crate::bindings::Act::Jump) || std::mem::take(&mut vinput.jump));
     // (held in the air with the world while Daud's Blink is aimed)
     let dt = if wish == Vec3::ZERO && !jump_pressed { dt * tc.aim_freeze.clamp(0.0, 1.0) } else { dt };
     // (his own pace through Bend Time: `m_PlayerDilation`)
@@ -718,20 +718,20 @@ fn player_move(
     if p.noclip {
         let look = Quat::from_rotation_y(p.yaw) * Quat::from_rotation_x(p.pitch) * Vec3::NEG_Z;
         let mut v = Vec3::ZERO;
-        if keys.pressed(bind.key(crate::bindings::Act::Forward)) {
+        if bind.pressed(crate::bindings::Act::Forward) {
             v += look;
         }
-        if keys.pressed(bind.key(crate::bindings::Act::Back)) {
+        if bind.pressed(crate::bindings::Act::Back) {
             v -= look;
         }
         v += wish.dot(right) * right;
-        if keys.pressed(bind.key(crate::bindings::Act::Jump)) {
+        if bind.pressed(crate::bindings::Act::Jump) {
             v += Vec3::Y;
         }
-        if keys.pressed(bind.key(crate::bindings::Act::Block)) {
+        if bind.pressed(crate::bindings::Act::Block) {
             v -= Vec3::Y;
         }
-        let speed = if keys.pressed(bind.key(crate::bindings::Act::Sprint)) { 30.0 } else { 8.0 };
+        let speed = if bind.pressed(crate::bindings::Act::Sprint) { 30.0 } else { 8.0 };
         t.translation += v * speed * dt;
         kcc.translation = None;
         p.velocity = Vec3::ZERO;
@@ -787,13 +787,13 @@ fn player_move(
     }
     // on a chain
     if let Some(chains) = climbables.as_deref() {
-        if !carry.carrying() && crate::climb::climb_move(&mut climb, chains, &mut p, &mut t, &mut kcc, &keys, &bind, (vinput.forward, jump_pressed), dt, &mut sfx, settings.camera_relative_climbing) {
+        if !carry.carrying() && crate::climb::climb_move(&mut climb, chains, &mut p, &mut t, &mut kcc, &bind, (vinput.forward, jump_pressed), dt, &mut sfx, settings.camera_relative_climbing) {
             return;
         }
     }
     // in the water
     if let (true, Some(waters)) = (swim.swimming(), waters.as_deref()) {
-        crate::swim::swim_move(&mut p, &t, &mut kcc, &mut col, &keys, &bind, vinput.forward, &attrs, &swim, waters, dt, host);
+        crate::swim::swim_move(&mut p, &t, &mut kcc, &mut col, &bind, vinput.forward, &attrs, &swim, waters, dt, host);
         return;
     }
     if kcc.snap_to_ground.is_none() {
@@ -877,7 +877,7 @@ fn player_move(
     // crouch toggle (Ctrl / C); a creature doesn't
     let feet = t.translation - Vec3::Y * p.body().depth();
     let fits = |b: Body| rapier.single().ok().is_none_or(|ctx| body_fits(&ctx, entity, feet, b));
-    let toggled = keys.just_pressed(bind.key(crate::bindings::Act::Crouch)) && host.is_none();
+    let toggled = bind.just_pressed(crate::bindings::Act::Crouch) && host.is_none();
     if toggled {
         if p.crouched && !p.rise {
             // need room to stand; without it he stays down until there is
@@ -935,7 +935,7 @@ fn player_move(
     }
 
     // (sprinting in any direction, as the original allows)
-    p.sprinting = keys.pressed(bind.key(crate::bindings::Act::Sprint)) && !p.crouched && wish != Vec3::ZERO && !carry.carrying() && host.is_none();
+    p.sprinting = bind.pressed(crate::bindings::Act::Sprint) && !p.crouched && wish != Vec3::ZERO && !carry.carrying() && host.is_none();
     // sideways or backwards (the original's: within 10 degrees of sideways going forward, 50
     // going back; else within 40 of straight back)
     let (ahead, side) = (wish.dot(fwd), wish.dot(right));
@@ -995,7 +995,7 @@ fn player_move(
         // `JumpZ_PowerJump` (`FixedNormalJump_FixedPowerJump`, as roshan's r614/blink research
         // decoded it); `power_jump` the time held, below 0 spent
         if p.power_jump >= 0.0 {
-            let held = keys.pressed(bind.key(crate::bindings::Act::Jump));
+            let held = bind.pressed(crate::bindings::Act::Jump);
             if !held {
                 p.power_jump = 0.0;
             } else if p.velocity.y > 1e-4 {
@@ -1018,7 +1018,7 @@ fn player_move(
     // go, it holds `m_fLeanReleaseTime` (0.2 s) before it eases back (the input's tick
     // 0x00AB3FF0 and `StatePlayerMasterLeaning` 0x00A76590, decoded for this rewrite; no lean
     // forward on PC as shipped)
-    let (left, right) = (keys.pressed(bind.key(crate::bindings::Act::LeanLeft)), keys.pressed(bind.key(crate::bindings::Act::LeanRight)));
+    let (left, right) = (bind.pressed(crate::bindings::Act::LeanLeft), bind.pressed(crate::bindings::Act::LeanRight));
     lean_hold.side = match (left, right) {
         (false, false) => 0.0,
         (true, false) => -1.0,
@@ -1238,7 +1238,7 @@ pub(crate) fn mantle_dest(ctx: &bevy_rapier3d::prelude::RapierContext, e: Entity
 fn mantle(
     time: Res<Time>,
     paused: Res<Paused>,
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
+    bind: Res<crate::bindings::Bindings>,
     rapier: ReadRapierContext,
     stats: Res<PlayerStats>,
     attrs: Res<crate::gamedata::Attrs>,
@@ -1276,7 +1276,7 @@ fn mantle(
     let found = mantle_dest(&ctx, e, &t, p.yaw, fall, p.body(), asked);
     spot.0 = found.is_some_and(|(_, h, _)| h > 0.9);
     // (the Jump press, or Jump held while falling: no forward needed; or a Blink's end)
-    let wants = asked.is_some() || keys.just_pressed(bind.key(crate::bindings::Act::Jump)) || (!p.grounded && keys.pressed(bind.key(crate::bindings::Act::Jump)));
+    let wants = asked.is_some() || bind.just_pressed(crate::bindings::Act::Jump) || (!p.grounded && bind.pressed(crate::bindings::Act::Jump));
     if !wants {
         return;
     }

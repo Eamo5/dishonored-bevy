@@ -149,7 +149,7 @@ fn carry_input(
     mut commands: Commands,
     paused: Res<crate::hud::Paused>,
     time: Res<Time>,
-    (keys, mouse, bind): (Res<ButtonInput<KeyCode>>, Res<ButtonInput<MouseButton>>, Res<crate::bindings::Bindings>),
+    bind: Res<crate::bindings::Bindings>,
     focus: Res<InteractFocus>,
     mut carry: ResMut<Carry>,
     (level, assets, mut restore): (Option<Res<LevelInfo>>, Option<Res<GameAssets>>, ResMut<CarryRestore>),
@@ -186,7 +186,7 @@ fn carry_input(
                 npcs.iter().find(|(_, npc, from, _)| from.0 == saved.spawner && npc.is_down()).map(|(e, _, _, _)| e)
             } else if choked.is_some() {
                 choked
-            } else { focus.1.filter(|_| keys.just_pressed(bind.key(crate::bindings::Act::Use))) };
+            } else { focus.1.filter(|_| bind.just_pressed(crate::bindings::Act::Use)) };
             let Some(e) = target else { return };
             let Ok((_, npc, from, children)) = npcs.get(e) else { return };
             if !npc.is_down() || p.locked || stats.dead {
@@ -247,7 +247,7 @@ fn carry_input(
         }
         CarryPhase::Hold => {
             // Use drops it, and so does attack: the carry has no throw
-            let drop = keys.just_pressed(bind.key(crate::bindings::Act::Use)) || mouse.just_pressed(MouseButton::Left);
+            let drop = bind.just_pressed(crate::bindings::Act::Use) || bind.just_pressed(crate::bindings::Act::Primary);
             if !drop || p.locked {
                 return;
             }

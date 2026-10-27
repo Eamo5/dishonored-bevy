@@ -332,7 +332,7 @@ fn highlight(rat: bool) -> (&'static str, Vec3) {
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn aim(
     mut commands: Commands,
-    (mouse, keys, bind, paused, cursor, scripted, time): (Res<ButtonInput<MouseButton>>, Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>, Res<crate::hud::Paused>, Single<&bevy::window::CursorOptions>, Option<Res<crate::script::Scripted>>, Res<Time>),
+    (bind, paused, cursor, scripted, time): (Res<crate::bindings::Bindings>, Res<crate::hud::Paused>, Single<&bevy::window::CursorOptions>, Option<Res<crate::script::Scripted>>, Res<Time>),
     (mut st, mut powers, mut stats, data, attrs, tune, settings, tc, held, mut possession, overrides): (
         ResMut<PossessAim>,
         ResMut<crate::powers::Powers>,
@@ -361,7 +361,7 @@ fn aim(
     st.cooldown = (st.cooldown - time.delta_secs()).max(0.0);
     let power = crate::powers::Power::Possess;
     // on the way in (its intro, the component's state 2), Use gives it up too: out again
-    if possession.host.is_some() && possession.intro > 0.0 && keys.just_pressed(bind.key(crate::bindings::Act::Use)) {
+    if possession.host.is_some() && possession.intro > 0.0 && bind.just_pressed(crate::bindings::Act::Use) {
         possession.intro = 0.0;
         possession.exit_requested = true;
         sfx.write(PostEvent::named("Snd_Power_Empty", None));
@@ -373,7 +373,7 @@ fn aim(
     let grabbed = cursor.grab_mode != bevy::window::CursorGrabMode::None || scripted.is_some();
     let can_act = grabbed && !stats.dead && !p.locked && !held.busy() && powers.blink.is_none() && tc.wheel >= 1.0 && possession.host.is_none();
     let selected = powers.selected == power;
-    if st.swallow && !mouse.pressed(MouseButton::Right) {
+    if st.swallow && !bind.pressed(crate::bindings::Act::Secondary) {
         st.swallow = false;
     }
     let refusal = data.text("DisTweaks_Possessable", "m_DisallowPossessionMessage");
@@ -389,14 +389,14 @@ fn aim(
     if st.on {
         if !selected || !can_act || !powers.aiming {
             end(&mut st, &mut powers, &mut msgs);
-        } else if keys.just_pressed(bind.key(crate::bindings::Act::Use)) {
+        } else if bind.just_pressed(crate::bindings::Act::Use) {
             // "Cancel Possess": its sound, and the power held back
             sfx.write(PostEvent::named("Snd_Power_Empty", None));
             st.cooldown = data.active("Possess").and_then(|a| a.params.get("m_fCancelCooldown")).copied().unwrap_or(1.0);
             st.cancel_seq = st.cancel_seq.wrapping_add(1);
-            st.swallow = mouse.pressed(MouseButton::Right);
+            st.swallow = bind.pressed(crate::bindings::Act::Secondary);
             end(&mut st, &mut powers, &mut msgs);
-        } else if !mouse.pressed(MouseButton::Right) {
+        } else if !bind.pressed(crate::bindings::Act::Secondary) {
             // let go: into the host aimed at, if he may take it
             let cost = power.mana(&data);
             if let Some((host, false)) = st.target {
@@ -413,7 +413,7 @@ fn aim(
             }
             end(&mut st, &mut powers, &mut msgs);
         }
-    } else if selected && can_act && !st.swallow && mouse.just_pressed(MouseButton::Right) && powers.cooldown <= 0.0 && st.cooldown <= 0.0 {
+    } else if selected && can_act && !st.swallow && bind.just_pressed(crate::bindings::Act::Secondary) && powers.cooldown <= 0.0 && st.cooldown <= 0.0 {
         let cost = power.mana(&data);
         if tune.inhibited {
             sfx.write(PostEvent::named("Snd_Power_Empty", None));

@@ -137,7 +137,7 @@ fn prompt(
             }
             fc.set("dpad", PropsTo::default().alpha(1.0));
             fc.set("dpad._keyPC_mc", PropsTo::default().scale(1.0));
-            set_icon(&mut fc, (!crate::pad::using()).then(|| crate::bindings::display(bind.key(crate::bindings::Act::HealthElixir))));
+            set_icon(&mut fc, (!crate::pad::using()).then(|| crate::bindings::display_bind(bind.bind(crate::bindings::Act::HealthElixir))));
             fc.tween_end(ARROW, false);
             fc.goto(ARROW, "red", false);
             fc.set(ARROW, PropsTo::default().alpha(1.0));

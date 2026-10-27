@@ -21,7 +21,11 @@ pub struct PadPlugin;
 
 impl Plugin for PadPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Pad>().init_resource::<VirtualPad>().add_systems(PreUpdate, pad_input.after(bevy::input::InputSystems).after(crate::helpbar::taps));
+        app.init_resource::<Pad>()
+            .init_resource::<VirtualPad>()
+            .add_systems(PreUpdate, pad_input.after(bevy::input::InputSystems).after(crate::helpbar::taps))
+            // (what the actions do this frame: after the pad's and the scripts' presses)
+            .add_systems(PreUpdate, crate::bindings::update_acts.after(pad_input));
     }
 }
 
@@ -54,7 +58,12 @@ pub fn button_for(a: Act) -> Option<&'static str> {
         Act::Journal => return Some("Back"),
         Act::Forward | Act::Back | Act::Left | Act::Right => return Some("LS"),
         Act::HealthElixir | Act::ManaElixir => return Some("DPadR"),
-        Act::QuickSave | Act::QuickLoad => return None,
+        Act::Primary => Cmd::Primary,
+        Act::Secondary => Cmd::Secondary,
+        Act::Wheel => Cmd::Wheel,
+        // (the pad's own shortcuts are the D-pad's four; the keyboard's own: quicksave, quickload,
+        // the journal's tabs)
+        _ => return None,
     };
     cmd_button(cmd)
 }
@@ -254,7 +263,7 @@ pub(crate) fn pad_input(
     pads: Query<&Gamepad>,
     (mut keys, mut mouse, mut taps): (ResMut<ButtonInput<KeyCode>>, ResMut<ButtonInput<MouseButton>>, ResMut<crate::helpbar::Taps>),
     motion: Res<bevy::input::mouse::AccumulatedMouseMotion>,
-    (bind, settings, time): (Res<Bindings>, Res<crate::settings::Settings>, Res<Time<Real>>),
+    (mut bind, settings, time): (ResMut<Bindings>, Res<crate::settings::Settings>, Res<Time<Real>>),
     (menu, journal, store, note, end): (Res<crate::menu::Menu>, Res<crate::journal::Journal>, Res<crate::store::Store>, Res<crate::notescreen::NoteScreen>, Option<Res<crate::mission::MissionEnd>>),
     (wheel, choice): (Res<crate::wheel::Wheel>, Res<crate::choice::Choice>),
 ) {
@@ -315,7 +324,7 @@ pub(crate) fn pad_input(
             want.push(Emu::Key(KeyCode::Escape));
         }
         if journal.open && pressed(B::Select) {
-            want.push(Emu::Key(bind.key(Act::Journal)));
+            bind.pad_hold(Act::Journal);
         }
         if pressed(B::RightTrigger) {
             want.push(Emu::Key(KeyCode::Tab));
@@ -369,14 +378,14 @@ pub(crate) fn pad_input(
                 continue;
             }
             match c {
-                Cmd::Jump => want.push(Emu::Key(bind.key(Act::Jump))),
-                Cmd::Sneak => want.push(Emu::Key(bind.key(Act::Crouch))),
-                Cmd::Use => want.push(Emu::Key(bind.key(Act::Use))),
-                Cmd::Block => want.push(Emu::Key(bind.key(Act::Block))),
-                Cmd::Zoom => want.push(Emu::Key(bind.key(Act::Zoom))),
-                Cmd::Wheel => want.push(Emu::Mouse(MouseButton::Middle)),
-                Cmd::Primary => want.push(Emu::Mouse(MouseButton::Left)),
-                Cmd::Secondary => want.push(Emu::Mouse(MouseButton::Right)),
+                Cmd::Jump => bind.pad_hold(Act::Jump),
+                Cmd::Sneak => bind.pad_hold(Act::Crouch),
+                Cmd::Use => bind.pad_hold(Act::Use),
+                Cmd::Block => bind.pad_hold(Act::Block),
+                Cmd::Zoom => bind.pad_hold(Act::Zoom),
+                Cmd::Wheel => bind.pad_hold(Act::Wheel),
+                Cmd::Primary => bind.pad_hold(Act::Primary),
+                Cmd::Secondary => bind.pad_hold(Act::Secondary),
                 Cmd::Sprint => pad.sprint = true,
                 Cmd::Lean => lean = true,
             }
@@ -386,9 +395,9 @@ pub(crate) fn pad_input(
         if wheel.open {
         } else if lean {
             if left.x < -0.5 {
-                want.push(Emu::Key(bind.key(Act::LeanLeft)));
+                bind.pad_hold(Act::LeanLeft);
             } else if left.x > 0.5 {
-                want.push(Emu::Key(bind.key(Act::LeanRight)));
+                bind.pad_hold(Act::LeanRight);
             }
         } else {
             pad.walk = left;
@@ -398,11 +407,11 @@ pub(crate) fn pad_input(
             pad.sprint = false;
         }
         if pad.sprint {
-            want.push(Emu::Key(bind.key(Act::Sprint)));
+            bind.pad_hold(Act::Sprint);
         }
         // Back the journal, Start the pause menu, the D-pad the pad's shortcuts
         if pressed(B::Select) {
-            want.push(Emu::Key(bind.key(Act::Journal)));
+            bind.pad_hold(Act::Journal);
         }
         if pressed(B::Start) {
             want.push(Emu::Key(KeyCode::Escape));
@@ -414,10 +423,10 @@ pub(crate) fn pad_input(
         // the wheel open: B a health elixir, X a mana one
         if wheel.open {
             if pressed(B::East) {
-                want.push(Emu::Key(bind.key(Act::HealthElixir)));
+                bind.pad_hold(Act::HealthElixir);
             }
             if pressed(B::West) {
-                want.push(Emu::Key(bind.key(Act::ManaElixir)));
+                bind.pad_hold(Act::ManaElixir);
             }
         }
         // the look: the turn's scale rising while the stick is held full

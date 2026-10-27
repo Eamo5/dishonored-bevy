@@ -263,7 +263,7 @@ fn audiograph_cards(level: Option<Res<LevelInfo>>, mut pb: ResMut<crate::audiogr
 /// [Use] at one: its stage's prompt, then into that stage.
 #[allow(clippy::too_many_arguments)]
 fn usable_focus(
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<Bindings>),
+    bind: Res<Bindings>,
     level: Option<Res<LevelInfo>>,
     mut focus: ResMut<InteractFocus>,
     mut rigs: Query<(&mut UsableRig, Option<&mut Animator>, Option<&InheritedVisibility>)>,
@@ -336,7 +336,7 @@ fn usable_focus(
     } else {
         crate::gamedata::readable(&say(if u.texts.contains_key("focus_locked") { "focus_locked" } else { "locked" }, "Locked"))
     };
-    if !keys.just_pressed(bind.key(Act::Use)) {
+    if !bind.just_pressed(Act::Use) {
         return;
     }
     if r.locked {
@@ -448,7 +448,7 @@ fn scrub(a: &mut Animator, clip: &str, at: f32) {
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn hold_usables(
     time: Res<Time>,
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<Bindings>),
+    bind: Res<Bindings>,
     level: Option<Res<LevelInfo>>,
     mut rigs: Query<(&mut UsableRig, Option<&mut Animator>), Without<crate::propanim::PropRig>>,
     mut remotes: Query<(&crate::propanim::PropRig, &mut Animator), Without<UsableRig>>,
@@ -489,7 +489,7 @@ fn hold_usables(
         if r.holding {
             // (still held: the button down, it before him and in reach)
             let held = free
-                && keys.pressed(bind.key(Act::Use))
+                && bind.pressed(Act::Use)
                 && view.is_some_and(|(eye, fwd)| {
                     let to = r.center - eye;
                     to.length() < REACH * 1.2 && to.normalize_or_zero().dot(fwd) > 0.7

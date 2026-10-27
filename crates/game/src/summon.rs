@@ -326,7 +326,7 @@ const REFUSAL: &str = "You cannot summon there.";
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn aim(
     mut commands: Commands,
-    (mouse, keys, bind, paused, cursor, scripted): (Res<ButtonInput<MouseButton>>, Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>, Res<crate::hud::Paused>, Single<&bevy::window::CursorOptions>, Option<Res<crate::script::Scripted>>),
+    (bind, paused, cursor, scripted): (Res<crate::bindings::Bindings>, Res<crate::hud::Paused>, Single<&bevy::window::CursorOptions>, Option<Res<crate::script::Scripted>>),
     (mut st, mut powers, mut stats, data, attrs, tune, settings, tc, held, possession): (
         ResMut<SummonAim>,
         ResMut<crate::powers::Powers>,
@@ -358,7 +358,7 @@ fn aim(
     let grabbed = cursor.grab_mode != bevy::window::CursorGrabMode::None || scripted.is_some();
     let can_act = grabbed && !stats.dead && !p.locked && !held.busy() && powers.blink.is_none() && tc.wheel >= 1.0 && possession.host.is_none();
     let selected = powers.selected == Power::SummonAssassin;
-    if st.swallow && !mouse.pressed(MouseButton::Right) {
+    if st.swallow && !bind.pressed(crate::bindings::Act::Secondary) {
         st.swallow = false;
     }
     // (the markers, made once)
@@ -378,13 +378,13 @@ fn aim(
     };
     if st.on {
         // put away, the hand taken, or Use ("Cancel Summon"): the aim ends without him
-        let cancel = !selected || !can_act || !powers.aiming || keys.just_pressed(bind.key(crate::bindings::Act::Use));
+        let cancel = !selected || !can_act || !powers.aiming || bind.just_pressed(crate::bindings::Act::Use);
         if cancel {
             sfx.write(PostEvent::named(&sound("m_pTargetingFailSoundEvent", "Snd_Pwr_Summon_Fail"), None));
             st.cancel_seq = st.cancel_seq.wrapping_add(1);
-            st.swallow = mouse.pressed(MouseButton::Right);
+            st.swallow = bind.pressed(crate::bindings::Act::Secondary);
             end(&mut st, &mut powers, &mut msgs);
-        } else if !mouse.pressed(MouseButton::Right) {
+        } else if !bind.pressed(crate::bindings::Act::Secondary) {
             // let go (0x00CFA1E0): summoned on a spot, else as cancelled
             let cost = Power::SummonAssassin.mana(&data);
             match st.spot.filter(|s| s.ok) {
@@ -404,7 +404,7 @@ fn aim(
             }
             end(&mut st, &mut powers, &mut msgs);
         }
-    } else if selected && can_act && !st.swallow && mouse.just_pressed(MouseButton::Right) && powers.cooldown <= 0.0 {
+    } else if selected && can_act && !st.swallow && bind.just_pressed(crate::bindings::Act::Secondary) && powers.cooldown <= 0.0 {
         let cost = Power::SummonAssassin.mana(&data);
         if tune.inhibited {
             sfx.write(PostEvent::named("Snd_Power_Empty", None));

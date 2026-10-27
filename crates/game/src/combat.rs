@@ -150,7 +150,7 @@ fn lock_blades(v: &mut Versus, e: Entity, npc: &mut Npc, at: Vec3, sfx: &mut Mes
 fn versus(
     time: Res<Time>,
     paused: Res<crate::hud::Paused>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    bind: Res<crate::bindings::Bindings>,
     mut v: ResMut<Versus>,
     data: Res<crate::gamedata::Data>,
     stats: Res<PlayerStats>,
@@ -171,7 +171,7 @@ fn versus(
         return;
     }
     v.t += time.delta_secs();
-    if mouse.just_pressed(MouseButton::Left) {
+    if bind.just_pressed(crate::bindings::Act::Primary) {
         v.presses += 1;
     }
     // Corvo faces it at a blade's length, his eyes level
@@ -662,8 +662,8 @@ pub(crate) fn kill_cam(mode: u8, last_foe: bool) -> bool {
 #[allow(clippy::too_many_arguments)]
 fn sword_input(
     time: Res<Time>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
+
+    bind: Res<crate::bindings::Bindings>,
     cursor: Single<&CursorOptions>,
     scripted: Option<Res<crate::script::Scripted>>,
     (mut stats, attrs, possession, paused): (ResMut<PlayerStats>, Res<crate::gamedata::Attrs>, Res<crate::possession::Possession>, Res<crate::hud::Paused>),
@@ -685,7 +685,7 @@ fn sword_input(
 ) {
     if paused.0 { return; }
     let Ok((pe, pt, mut p, mut sword)) = player.single_mut() else { return };
-    if std::env::var("DH_ATTACK_LOG").is_ok() && mouse.just_pressed(MouseButton::Left) {
+    if std::env::var("DH_ATTACK_LOG").is_ok() && bind.just_pressed(crate::bindings::Act::Primary) {
         info!("attack: versus {} busy {} carrying {} dead {} locked {} host {} unarmed {} sheathed {}", versus.npc.is_some(), held.busy(), carry.carrying(), stats.dead, p.locked, possession.host.is_some(), stats.unarmed, stats.sheathed);
     }
     // locked blades: the presses are the lock's
@@ -694,7 +694,7 @@ fn sword_input(
     }
     // (with a body on the shoulder only an assassination is possible)
     let carrying = carry.carrying();
-    if held.busy() || (carrying && !mouse.just_pressed(MouseButton::Left)) {
+    if held.busy() || (carrying && !bind.just_pressed(crate::bindings::Act::Primary)) {
         sword.blocking = false;
         return;
     }
@@ -704,7 +704,7 @@ fn sword_input(
     sword.recoil = (sword.recoil - dt).max(0.0);
     // held by a weeper: attacks are spent struggling free
     if let Ok(mut g) = grabbed_q.single_mut() {
-        if mouse.just_pressed(MouseButton::Left) && !stats.dead {
+        if bind.just_pressed(crate::bindings::Act::Primary) && !stats.dead {
             g.presses += 1;
             sfx.write(crate::audio::PostEvent::named("Snd_P_Clothes_Grab_01_Cue_ak", Some(pt.translation)));
         }
@@ -719,7 +719,7 @@ fn sword_input(
     // empty hands: attacking or blocking draws the sword (and does nothing more)
     if stats.sheathed {
         sword.blocking = false;
-        if grabbed && (mouse.just_pressed(MouseButton::Left) || keys.just_pressed(bind.key(crate::bindings::Act::Block))) {
+        if grabbed && (bind.just_pressed(crate::bindings::Act::Primary) || bind.just_pressed(crate::bindings::Act::Block)) {
             stats.sheathed = false;
         }
         return;
@@ -730,7 +730,7 @@ fn sword_input(
     // an assassination: an unaware victim in reach, from behind (or unaware of him at all);
     // its side as the victim sees Corvo, quick unless he's sneaking, the carried body's
     // variant with one on his shoulder
-    if grabbed && p.grounded && mouse.just_pressed(MouseButton::Left) && !keys.pressed(bind.key(crate::bindings::Act::Block)) {
+    if grabbed && p.grounded && bind.just_pressed(crate::bindings::Act::Primary) && !bind.pressed(crate::bindings::Act::Block) {
         let target = nearest_target(eye, fwd, 2.75, 0.55, npcs.iter().map(|(e, n, t)| (e, n, t)));
         if let Some((e, _)) = target {
             let (_, mut npc, nt) = npcs.get_mut(e).unwrap();
@@ -772,7 +772,7 @@ fn sword_input(
         return;
     }
     // a drop assassination: attacking while falling onto someone
-    if grabbed && mouse.pressed(MouseButton::Left) && !p.grounded && p.velocity.y < 0.0 && sword.swing == 0.0 {
+    if grabbed && bind.pressed(crate::bindings::Act::Primary) && !p.grounded && p.velocity.y < 0.0 && sword.swing == 0.0 {
         let feet = pt.translation - Vec3::Y * (crate::player::STAND_HALF + crate::player::RADIUS);
         let below = npcs
             .iter()
@@ -810,7 +810,7 @@ fn sword_input(
         }
     }
     // Blood Thirst: with adrenaline full, Block + Primary is an instant fatality
-    if grabbed && stats.power("BloodThirsty") > 0 && stats.adrenaline >= attrs.adrenaline_max && keys.pressed(bind.key(crate::bindings::Act::Block)) && mouse.just_pressed(MouseButton::Left) {
+    if grabbed && stats.power("BloodThirsty") > 0 && stats.adrenaline >= attrs.adrenaline_max && bind.pressed(crate::bindings::Act::Block) && bind.just_pressed(crate::bindings::Act::Primary) {
         if let Some((e, _)) = nearest_target(eye, fwd, 2.6, 0.5, npcs.iter()) {
             hits.write(NpcHit { npc: e, damage: 999.0, kind: HitKind::Fatality, from: pt.translation });
             stats.adrenaline = 0.0;
@@ -981,14 +981,14 @@ fn sword_input(
     if !grabbed {
         return;
     }
-    if mouse.just_pressed(MouseButton::Left) && sword.swing == 0.0 && !sword.blocking {
+    if bind.just_pressed(crate::bindings::Act::Primary) && sword.swing == 0.0 && !sword.blocking {
         sword.swing = 0.001;
         sword.hit_done = false;
         sword.swing_dir = if sword.swing_dir > 0.0 { -1.0 } else { 1.0 };
         sword.hold = 0.0;
     }
     // block: hold GBA_Block (Ctrl) (not while reeling from a parried blow or a kick)
-    if keys.pressed(bind.key(crate::bindings::Act::Block)) && sword.swing == 0.0 && sword.recoil <= 0.0 {
+    if bind.pressed(crate::bindings::Act::Block) && sword.swing == 0.0 && sword.recoil <= 0.0 {
         sword.hold += dt;
         if !sword.blocking {
             sword.block_t = 0.0;
@@ -1096,7 +1096,7 @@ fn chokehold(
     paused: Res<crate::hud::Paused>,
     switches: Res<crate::kismet::ScriptSwitches>,
     time: Res<Time>,
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
+    bind: Res<crate::bindings::Bindings>,
     stats: Res<PlayerStats>,
     (attrs, held, mut carry, possession): (Res<crate::gamedata::Attrs>, Res<crate::props::Held>, ResMut<crate::carry::Carry>, Res<crate::possession::Possession>),
     mut hits: MessageWriter<NpcHit>,
@@ -1121,7 +1121,7 @@ fn chokehold(
             Some(ChokeEnd::Win(w)) => {
                 let w = w + dt;
                 ch.end = Some(ChokeEnd::Win(w));
-                ch.use_held = if keys.pressed(bind.key(crate::bindings::Act::Use)) { ch.use_held + dt } else { 0.0 };
+                ch.use_held = if bind.pressed(crate::bindings::Act::Use) { ch.use_held + dt } else { 0.0 };
                 if ch.use_held >= AUTO_CARRY_HOLD {
                     carry.request = Some(ch.npc);
                     p.locked = false;
@@ -1145,7 +1145,7 @@ fn chokehold(
         // the hold must be kept through its loop: let go then and the victim breaks free (both
         // held through the Lose chain)
         let in_loop = ch.t > CHOKE_IN;
-        if in_loop && !keys.pressed(bind.key(crate::bindings::Act::Block)) && ch.t < ch.duration {
+        if in_loop && !bind.pressed(crate::bindings::Act::Block) && ch.t < ch.duration {
             if let Ok((_, mut npc, _)) = npcs.get_mut(ch.npc) {
                 npc.mode = Mode::Combat;
                 npc.alert = Alert::Combat;
@@ -1178,7 +1178,7 @@ fn chokehold(
     }
     // a nonlethal takedown: hold GBA_Block (Ctrl) behind an unaware enemy (the pickpocketing
     // prompt on Use stands beside it, as the original's do)
-    if p.locked || held.busy() || carry.carrying() || possession.host.is_some() || !keys.just_pressed(bind.key(crate::bindings::Act::Block)) {
+    if p.locked || held.busy() || carry.carrying() || possession.host.is_some() || !bind.just_pressed(crate::bindings::Act::Block) {
         return;
     }
     let Ok(cg) = cam.single() else { return };

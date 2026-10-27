@@ -183,7 +183,6 @@ pub fn swim_move(
     t: &Transform,
     kcc: &mut KinematicCharacterController,
     col: &mut Collider,
-    keys: &ButtonInput<KeyCode>,
     bind: &Bindings,
     forward: f32,
     attrs: &crate::gamedata::Attrs,
@@ -199,16 +198,16 @@ pub fn swim_move(
     let look = Quat::from_rotation_y(p.yaw) * Quat::from_rotation_x(p.pitch) * Vec3::NEG_Z;
     let right = Quat::from_rotation_y(p.yaw) * Vec3::X;
     let mut wish = Vec3::ZERO;
-    if keys.pressed(bind.key(Act::Forward)) {
+    if bind.pressed(Act::Forward) {
         wish += look;
     }
-    if keys.pressed(bind.key(Act::Back)) {
+    if bind.pressed(Act::Back) {
         wish -= look;
     }
-    if keys.pressed(bind.key(Act::Right)) {
+    if bind.pressed(Act::Right) {
         wish += right;
     }
-    if keys.pressed(bind.key(Act::Left)) {
+    if bind.pressed(Act::Left) {
         wish -= right;
     }
     wish += look * forward;
@@ -220,10 +219,10 @@ pub fn swim_move(
     if at_surface && wish.y < 0.0 && wish.y > -0.6 {
         wish.y = 0.0;
     }
-    if keys.pressed(bind.key(Act::Jump)) {
+    if bind.pressed(Act::Jump) {
         wish.y += 1.0;
     }
-    if keys.pressed(bind.key(Act::Crouch)) {
+    if bind.pressed(Act::Crouch) {
         wish.y -= 1.0;
     }
     let mut wish = wish.normalize_or_zero();
@@ -231,7 +230,7 @@ pub fn swim_move(
     if host.is_some_and(|b| !b.swim) {
         wish.y = wish.y.max(0.0);
     }
-    p.sprinting = keys.pressed(bind.key(Act::Sprint)) && wish != Vec3::ZERO && host.is_none();
+    p.sprinting = bind.pressed(Act::Sprint) && wish != Vec3::ZERO && host.is_none();
     let speed = match host {
         Some(b) => b.water,
         None if p.sprinting => attrs.swim_fast,

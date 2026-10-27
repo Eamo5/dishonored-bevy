@@ -512,7 +512,7 @@ fn tank_seats(
 #[allow(clippy::too_many_arguments)]
 fn insert_tank(
     paused: Res<crate::hud::Paused>,
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
+    bind: Res<crate::bindings::Bindings>,
     level: Option<Res<LevelInfo>>,
     devices: Res<Devices>,
     mut held: ResMut<crate::props::Held>,
@@ -540,7 +540,7 @@ fn insert_tank(
     focus.0 = true;
     focus.1 = None;
     focus.2 = format!("{} Insert Whale Oil Tank", crate::bindings::hint(crate::bindings::Act::Use));
-    if !keys.just_pressed(bind.key(crate::bindings::Act::Use)) {
+    if !bind.just_pressed(crate::bindings::Act::Use) {
         return;
     }
     // into its seat, at rest

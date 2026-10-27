@@ -35,7 +35,7 @@ impl Plugin for ScriptPlugin {
             app.init_resource::<Goto>();
             app.init_resource::<CamAt>();
             app.init_resource::<CamPos>();
-            app.add_systems(PreUpdate, (script_goto, run_script).chain().after(bevy::input::InputSystems).run_if(in_state(GameState::InGame)));
+            app.add_systems(PreUpdate, (script_goto, run_script).chain().after(bevy::input::InputSystems).before(crate::bindings::update_acts).run_if(in_state(GameState::InGame)));
             app.add_systems(PostUpdate, cam_at.after(bevy::transform::TransformSystems::Propagate).run_if(in_state(GameState::InGame)));
         }
     }
@@ -296,7 +296,8 @@ fn key_of(s: &str) -> Option<KeyCode> {
         "t" => KeyCode::KeyT,
         "j" => KeyCode::KeyJ,
         "tab" => KeyCode::Tab,
-        _ => return None,
+        // (any other bindable key by its name: `KeyG`, `F2`, `Numpad4`)
+        other => return crate::bindings::SUPPORTED.iter().copied().find(|k| crate::bindings::key_name(*k).eq_ignore_ascii_case(other) || crate::bindings::key_name(*k).eq_ignore_ascii_case(&format!("key{other}"))),
     })
 }
 
@@ -1850,6 +1851,22 @@ fn run_script(
         "rmb" => script.held.push((Input::Mouse(MouseButton::Right), 0.05)),
         "rmbhold" => script.held.push((Input::Mouse(MouseButton::Right), f(1))),
         "mmbhold" => script.held.push((Input::Mouse(MouseButton::Middle), f(1))),
+        "bind" => {
+            // (tests) bind ACT INPUT: an action (its `PSI_GBA_` name: Primary, OpenNotes, Shortcut_0)
+            // bound to a key, a mouse button or the wheel (their settings names: KeyG,
+            // RightMouseButton, MouseScrollUp, None) for this run, the settings file untouched
+            let (act, to) = (cmd.get(1).cloned().unwrap_or_default(), cmd.get(2).cloned().unwrap_or_default());
+            commands.queue(move |w: &mut World| {
+                let Some(a) = crate::bindings::Act::ALL.iter().copied().find(|a| a.psi().eq_ignore_ascii_case(&act)) else { return };
+                let mut s = w.resource::<crate::settings::Settings>().clone();
+                let Some(b) = crate::bindings::parse_bind(&to) else { return };
+                crate::bindings::Bindings::rebind(&mut s, a, b);
+                w.resource_mut::<crate::bindings::Bindings>().reload(&s);
+                let b = w.resource::<crate::bindings::Bindings>().clone();
+                crate::bindings::set_current(&b);
+                info!("script: {act} bound to {to}");
+            });
+        }
         "scroll" => {
             // (tests) scroll N: the mouse wheel turned N notches (up positive)
             let y = f(1);

@@ -152,12 +152,12 @@ fn put_pockets(
 /// [Use] on a pocket to plant in: it's done.
 fn plant(
     mut commands: Commands,
-    (keys, bind, paused): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>, Res<crate::hud::Paused>),
+    (bind, paused): (Res<crate::bindings::Bindings>, Res<crate::hud::Paused>),
     focus: Res<crate::interact::InteractFocus>,
     spots: Query<&PutPocket>,
     vm: Option<ResMut<crate::kismet::Vm>>,
 ) {
-    if paused.0 || !keys.just_pressed(bind.key(crate::bindings::Act::Use)) {
+    if paused.0 || !bind.just_pressed(crate::bindings::Act::Use) {
         return;
     }
     let (Some(e), Some(mut vm)) = (focus.1, vm) else { return };

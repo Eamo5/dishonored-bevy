@@ -2191,6 +2191,23 @@ fields no longer show their stand-in "WW" behind the title.
   (`Animations`: an AnimNodeSequence at its time) is cooked in that pose, mesh and physics
   bodies: the Tower's lowered gangway was a 4 m wall at its reference pose, and Corvo fell
   into the waterlock.
+- **The keyboard mapping lists the original's 36 actions** (`Settings.int`'s `PSI_GBA_*`, in its
+  order, with `DefaultInput.ini`'s `m_PCBindings` as the defaults). Before, it had 17, and the
+  sword, the left hand, the quick-access wheel, the shortcuts and the shortcut stepping were
+  fixed to their buttons.
+  - Sword Attack, Power/Gadget and the Quick-access Wheel are on the mouse's left, right and
+    middle buttons. Next and Previous Shortcut Item are on the wheel's turn. Shortcut 1 to 10
+    are on the number keys. The journal's own tabs (Notes, Powers Menu, Bone Charms Menu,
+    Inventory: `Dis_OpenJournalTab 1`..`4`) are bound to nothing, as the original ships them.
+  - Any of them can be rebound to a key, a mouse button (the left, right, middle and the two
+    thumb buttons) or the wheel's turn either way. A binding taken from another action gives it
+    the old one, as before. They read as the original names them ("Left Mouse Button", "Mouse
+    Scroll Up"), in the mapping and in the prompts.
+  - A journal tab's key opens the journal on its tab, turns to it if the journal is open, or
+    puts the journal away if it is already on it (that last is our reading).
+  - The game reads each action once a frame, from its binding and from the pad's control
+    scheme. Before, a rebound sword or left hand still answered only the mouse.
+  - Script: `bind ACT INPUT` rebinds an action for the run (`bind Primary KeyG`).
 - **Scenes that start part way in** (`SeqAct_Interp`'s `bForceStartPos`) begin at their
   `ForceStartPosition` when played from rest, jumping over what comes before, as
   `USeqAct_Interp::Play` does. Those without a position (most of them: movers in Rothwild, the

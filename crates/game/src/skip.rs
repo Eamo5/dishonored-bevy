@@ -217,7 +217,7 @@ fn skip_hold(
     vm: Option<ResMut<crate::kismet::Vm>>,
     mut hold: ResMut<SkipHold>,
 ) {
-    let held = keys.pressed(bind.key(crate::bindings::Act::Use)) || keys.pressed(KeyCode::Enter);
+    let held = bind.pressed(crate::bindings::Act::Use) || keys.pressed(KeyCode::Enter);
     if !held {
         hold.t = 0.0;
         hold.spent = false;

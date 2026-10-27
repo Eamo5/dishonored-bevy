@@ -43,7 +43,7 @@ fn spawn_taps(mut commands: Commands, level: Option<Res<LevelInfo>>) {
 #[allow(clippy::too_many_arguments)]
 fn tap_focus(
     time: Res<Time>,
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<Bindings>),
+    bind: Res<Bindings>,
     (level, data, settings): (Option<Res<LevelInfo>>, Res<crate::gamedata::Data>, Res<crate::settings::Settings>),
     mut focus: ResMut<InteractFocus>,
     mut taps: Query<(&mut Tap, &Transform)>,
@@ -77,7 +77,7 @@ fn tap_focus(
     focus.0 = true;
     focus.1 = None;
     focus.2 = format!("{} {}", hint(Act::Use), w.text);
-    if !keys.just_pressed(bind.key(Act::Use)) || tap.busy > 0.0 {
+    if !bind.just_pressed(Act::Use) || tap.busy > 0.0 {
         return;
     }
     tap.busy = w.duration.max(0.5);

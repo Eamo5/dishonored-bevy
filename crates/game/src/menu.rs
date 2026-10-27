@@ -582,7 +582,7 @@ impl Menu {
             },
             Action::Rebind(a) => {
                 let bind = crate::bindings::Bindings::from_settings(s);
-                OptView::Key(crate::bindings::display(bind.key(a)), self.capture == Some(a))
+                OptView::Key(crate::bindings::display_bind(bind.bind(a)), self.capture == Some(a))
             }
             _ => return None,
         })
@@ -1151,7 +1151,7 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
             let mut v: Vec<(String, Action)> = crate::bindings::Act::ALL
                 .iter()
                 .map(|a| {
-                    let key = if menu.capture == Some(*a) { "Press a key...".to_string() } else { crate::bindings::display(bind.key(*a)) };
+                    let key = if menu.capture == Some(*a) { "Press a key...".to_string() } else { crate::bindings::display_bind(bind.bind(*a)) };
                     (format!("{}   {key}", a.label()), Action::Rebind(*a))
                 })
                 .collect();
@@ -1361,6 +1361,7 @@ fn menu_input(
     (mut profile, movies, mut play): (ResMut<crate::challenge::ChallengeProfile>, Res<crate::movie::Movies>, MessageWriter<crate::movie::PlayMovie>),
     (note, mut read, mut sfx): (Res<crate::notescreen::NoteScreen>, MessageWriter<crate::journal::ReadNote>, MessageWriter<crate::audio::PostEvent>),
     (help, stats_up, taps, mut delete): (Query<(&Interaction, &crate::helpbar::HelpButton), Changed<Interaction>>, Option<Res<crate::mission::MissionEnd>>, Res<crate::helpbar::Taps>, MessageWriter<crate::save::DeleteSave>),
+    scroll: Option<Res<bevy::input::mouse::AccumulatedMouseScroll>>,
 ) {
     let Some(kind) = menu.open else { return };
     // (a mission's statistics over it: their keys are their own)
@@ -1382,7 +1383,15 @@ fn menu_input(
         if keys.just_pressed(KeyCode::Escape) {
             menu.capture = None;
             menu.dirty = true;
-        } else if let Some(k) = keys.get_just_pressed().copied().find(|k| crate::bindings::SUPPORTED.contains(k)) {
+        } else if let Some(k) = keys
+            .get_just_pressed()
+            .copied()
+            .find(|k| crate::bindings::SUPPORTED.contains(k))
+            .map(crate::bindings::Bind::Key)
+            // (the mouse's buttons and its wheel bind too, as the original's mapping takes them)
+            .or_else(|| mouse.get_just_pressed().copied().find(|m| crate::bindings::MOUSE.contains(m)).map(crate::bindings::Bind::Mouse))
+            .or_else(|| scroll.filter(|s| s.delta.y != 0.0).map(|s| if s.delta.y > 0.0 { crate::bindings::Bind::WheelUp } else { crate::bindings::Bind::WheelDown }))
+        {
             crate::bindings::Bindings::rebind(&mut settings, a, k);
             settings.save();
             menu.capture = None;

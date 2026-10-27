@@ -411,7 +411,7 @@ impl Grenade {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn grenade_focus(
     paused: Res<crate::hud::Paused>,
-    (keys, mouse, bind): (Res<ButtonInput<KeyCode>>, Res<ButtonInput<MouseButton>>, Res<crate::bindings::Bindings>),
+    bind: Res<crate::bindings::Bindings>,
     mut focus: ResMut<crate::interact::InteractFocus>,
     mut held: ResMut<crate::props::Held>,
     mut grenades: Query<(Entity, &mut Grenade, &Transform)>,
@@ -423,15 +423,14 @@ pub(crate) fn grenade_focus(
 ) {
     if paused.0 { return; }
     let (Ok((pe, p)), Ok(camera)) = (player.single(), cam.single()) else { return };
-    let use_key = bind.key(crate::bindings::Act::Use);
     if let Some(e) = held.0 {
         let Ok((_, mut grenade, _)) = grenades.get_mut(e) else { return };
         focus.0 = true;
         focus.1 = None;
         focus.2.clear();
         focus.3.clear();
-        let thrown = mouse.just_pressed(MouseButton::Left) && !stats.dead && possession.host.is_none();
-        if thrown || keys.just_pressed(use_key) || stats.dead || possession.host.is_some() {
+        let thrown = bind.just_pressed(crate::bindings::Act::Primary) && !stats.dead && possession.host.is_none();
+        if thrown || bind.just_pressed(crate::bindings::Act::Use) || stats.dead || possession.host.is_some() {
             grenade.release(camera.forward().as_vec3(), p.velocity, attrs.throw, thrown);
             held.0 = None;
             held.1 = 0.3;
@@ -465,7 +464,7 @@ pub(crate) fn grenade_focus(
     focus.1 = Some(e);
     focus.2 = format!("Tap {} Carry", crate::bindings::hint(crate::bindings::Act::Use));
     focus.3 = if grenades.get(e).is_ok_and(|g| g.1.kind == HitKind::Chokedust) { "Primed Chokedust" } else { "Armed Grenade" }.into();
-    if keys.just_pressed(use_key) {
+    if bind.just_pressed(crate::bindings::Act::Use) {
         if let Ok((_, mut grenade, _)) = grenades.get_mut(e) {
             grenade.take();
             held.0 = Some(e);
@@ -1189,7 +1188,7 @@ fn mines(
 pub(crate) fn mine_focus(
     mut commands: Commands,
     paused: Res<crate::hud::Paused>,
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
+    bind: Res<crate::bindings::Bindings>,
     mut focus: ResMut<crate::interact::InteractFocus>,
     held: Res<crate::props::Held>,
     mines: Query<(Entity, &Razor, &Transform)>,
@@ -1232,7 +1231,7 @@ pub(crate) fn mine_focus(
     focus.1 = Some(e);
     focus.2 = format!("{} Pick up", crate::bindings::hint(crate::bindings::Act::Use));
     focus.3 = kind.name().into();
-    if keys.just_pressed(bind.key(crate::bindings::Act::Use)) {
+    if bind.just_pressed(crate::bindings::Act::Use) {
         let (_, added) = give_ammo(&mut stats, &attrs, kind.ammo(), 1);
         if added > 0 {
             commands.entity(e).despawn();

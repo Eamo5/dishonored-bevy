@@ -821,7 +821,7 @@ fn find_focus(
 pub fn use_focus(
     mut commands: Commands,
     paused: Res<crate::hud::Paused>,
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
+    bind: Res<crate::bindings::Bindings>,
     focus: Res<InteractFocus>,
     mut stats: ResMut<PlayerStats>,
     mut msgs: ResMut<HudMessages>,
@@ -836,7 +836,6 @@ pub fn use_focus(
     mut force: ResMut<ForceUse>,
 ) {
     if paused.0 { return; }
-    let use_key = bind.key(crate::bindings::Act::Use);
     // (a pickup Pull drew to Daud's hand: taken as if used)
     let forced = force.0.take();
     let Some(e) = forced.or(focus.1) else { return };
@@ -844,10 +843,10 @@ pub fn use_focus(
     let tap = keyholes.contains(e) && doors.get(e).is_ok_and(|(d, _, _)| d.target < 0.5);
     if forced.is_some() {
     } else if tap {
-        if !keys.just_released(use_key) || peek.consumed {
+        if !bind.just_released(crate::bindings::Act::Use) || peek.consumed {
             return;
         }
-    } else if !keys.just_pressed(use_key) {
+    } else if !bind.just_pressed(crate::bindings::Act::Use) {
         return;
     }
     // (the corrupted charms still lying about, this one with them: the scripts make one of

@@ -168,7 +168,7 @@ fn pick(g: &ConvGraph, node: i32, group: &str, flags: &dyn Fn(&str) -> bool, seq
 
 #[allow(clippy::too_many_arguments)]
 fn whisper(
-    mouse: Res<ButtonInput<MouseButton>>,
+    bind: Res<crate::bindings::Bindings>,
     cursor: Single<&CursorOptions>,
     scripted: Option<Res<crate::script::Scripted>>,
     powers: Res<Powers>,
@@ -180,7 +180,7 @@ fn whisper(
     (mut sfx, mut subs): (MessageWriter<PostEvent>, MessageWriter<crate::barks::Subtitle>),
 ) {
     let grabbed = cursor.grab_mode != CursorGrabMode::None || scripted.is_some();
-    if powers.selected != Power::Heart || !grabbed || !mouse.just_pressed(MouseButton::Right) || heart.cooldown > 0.0 {
+    if powers.selected != Power::Heart || !grabbed || !bind.just_pressed(crate::bindings::Act::Secondary) || heart.cooldown > 0.0 {
         return;
     }
     let g = &data.0.heart;

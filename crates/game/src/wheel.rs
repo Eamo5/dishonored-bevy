@@ -156,7 +156,7 @@ struct AmmoText;
 #[allow(clippy::too_many_arguments)]
 fn wheel(
     mut commands: Commands,
-    mouse: Res<ButtonInput<MouseButton>>,
+    bind: Res<crate::bindings::Bindings>,
     motion: Res<AccumulatedMouseMotion>,
     stats: Res<PlayerStats>,
     mut w: ResMut<Wheel>,
@@ -171,7 +171,7 @@ fn wheel(
     real: Res<Time<bevy::time::Real>>,
 ) {
     // (the scripts may shut it: `DisSeqAct_TogglePowerWheel`)
-    let held = mouse.pressed(MouseButton::Middle) && !stats.dead && !vm.as_ref().is_some_and(|v| v.wheel_off);
+    let held = bind.pressed(crate::bindings::Act::Wheel) && !stats.dead && !vm.as_ref().is_some_and(|v| v.wheel_off);
     if held && !w.open {
         w.open = true;
         w.since = 0.0;

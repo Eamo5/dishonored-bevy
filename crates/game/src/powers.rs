@@ -12,7 +12,6 @@ use crate::npc::Npc;
 use crate::player::{Player, PlayerCamera, RADIUS, STAND_HALF};
 use crate::worlddamage::{Reach, WorldDamage};
 use crate::GameState;
-use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::mesh::MeshTag;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
@@ -688,7 +687,7 @@ fn restore_projectiles(mut commands: Commands, mut pending: ResMut<ProjectileRes
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn bolt_focus(
     mut commands: Commands,
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
+    bind: Res<crate::bindings::Bindings>,
     mut focus: ResMut<crate::interact::InteractFocus>,
     bolts: Query<(Entity, &Projectile, &Transform)>,
     positions: Query<&Transform>,
@@ -719,7 +718,7 @@ pub(crate) fn bolt_focus(
     focus.1 = Some(e);
     focus.2 = format!("{} Pick up", crate::bindings::hint(crate::bindings::Act::Use));
     focus.3 = "Bolt".into();
-    if keys.just_pressed(bind.key(crate::bindings::Act::Use)) {
+    if bind.just_pressed(crate::bindings::Act::Use) {
         if recover_bolt(&mut stats, &attrs) {
             // Consume the short pickup action, so the same Use press cannot
             // also grab a loose prop behind the disappearing bolt.
@@ -861,8 +860,7 @@ impl Shortcuts {
 
 #[allow(clippy::too_many_arguments)]
 fn select_power(
-    keys: Res<ButtonInput<KeyCode>>,
-    scroll: Res<AccumulatedMouseScroll>,
+    bind: Res<crate::bindings::Bindings>,
     stats: Res<PlayerStats>,
     mut powers: ResMut<Powers>,
     mut equipped: MessageWriter<PowerEquipped>,
@@ -883,20 +881,9 @@ fn select_power(
         slots.refresh(&stats, data.is_daud());
     }
     let mut sel = None;
-    let digits = [
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-        KeyCode::Digit5,
-        KeyCode::Digit6,
-        KeyCode::Digit7,
-        KeyCode::Digit8,
-        KeyCode::Digit9,
-        KeyCode::Digit0,
-    ];
-    for (i, k) in digits.iter().enumerate() {
-        if keys.just_pressed(*k) {
+    // (the shortcuts' bindings: the number keys by default, GBA_Shortcut_0..9)
+    for (i, k) in crate::bindings::Act::SHORTCUTS.iter().enumerate() {
+        if bind.just_pressed(*k) {
             if let Some(p) = wheel.hovered() {
                 // the wheel open: what it points at goes to the slot (or leaves it)
                 let on = slots.assign(i, p);
@@ -907,7 +894,7 @@ fn select_power(
                 slots.stepping = None;
             }
         }
-        if keys.just_released(*k) && slots.held == Some(i) {
+        if bind.just_released(*k) && slots.held == Some(i) {
             slots.held = None;
             if let Some(p) = slots.slots[i] {
                 sel = Some(p);
@@ -943,8 +930,10 @@ fn select_power(
     }
     // the mouse wheel steps through the filled slots from the last taken (not with a key held
     // or the wheel open), each step putting off the choice; it settles on the one shown
-    if scroll.delta.y.abs() > 0.0 && !wheel.open && slots.held.is_none() {
-        let way = if scroll.delta.y > 0.0 { -1 } else { 1 };
+    // (`GBA_NextItem` on the wheel's turn up, `GBA_PrevItem` down, by default)
+    let (next, prev) = (bind.just_pressed(crate::bindings::Act::NextItem), bind.just_pressed(crate::bindings::Act::PrevItem));
+    if (next || prev) && !wheel.open && slots.held.is_none() {
+        let way = if next { -1 } else { 1 };
         let from = slots.stepping.map(|(s, _)| s).unwrap_or(slots.last);
         if let Some(next) = slots.step(from, way) {
             slots.stepping = Some((next, SHORTCUT_SETTLE));
@@ -1086,7 +1075,7 @@ const UU: f32 = 0.01;
 #[allow(clippy::too_many_arguments)]
 fn use_power(
     mut commands: Commands,
-    (time, mouse, cursor, scripted, settings, hard): (Res<Time>, Res<ButtonInput<MouseButton>>, Single<&CursorOptions>, Option<Res<crate::script::Scripted>>, Res<crate::settings::Settings>, Res<crate::player::HardLanding>),
+    (time, cursor, scripted, settings, hard): (Res<Time>, Single<&CursorOptions>, Option<Res<crate::script::Scripted>>, Res<crate::settings::Settings>, Res<crate::player::HardLanding>),
     rapier: ReadRapierContext,
     (assets, data, attrs, tune, level_info, devices): (Option<Res<GameAssets>>, Res<Data>, Res<Attrs>, Res<crate::musicbox::Tune>, Option<Res<crate::level::LevelInfo>>, Option<Res<crate::security::Devices>>),
     mut powers: ResMut<Powers>,
@@ -1107,11 +1096,10 @@ fn use_power(
         MessageWriter<crate::decals::SpawnDecal>,
         MessageWriter<crate::gadgets::Gunshot>,
     ),
-    (mut aim, held, paused, keys, bind, mut fx, muzzles, mut tagged): (
+    (mut aim, held, paused, bind, mut fx, muzzles, mut tagged): (
         ResMut<crate::aim::Aim>,
         Res<crate::props::Held>,
         Res<crate::hud::Paused>,
-        Res<ButtonInput<KeyCode>>,
         Res<crate::bindings::Bindings>,
         MessageWriter<crate::particles::SpawnEffect>,
         Query<(Entity, &GlobalTransform, &crate::arms::Muzzle)>,
@@ -1158,14 +1146,14 @@ fn use_power(
     let level = sel.level(&stats);
     // possessing: the left hand only ends it
     if possession.host.is_some() {
-        if can_act && mouse.just_pressed(MouseButton::Right) {
+        if can_act && bind.just_pressed(crate::bindings::Act::Secondary) {
             possession.exit_requested = true;
             powers.swallow = true;
         }
         return;
     }
     if powers.swallow {
-        if mouse.pressed(MouseButton::Right) {
+        if bind.pressed(crate::bindings::Act::Secondary) {
             return;
         }
         powers.swallow = false;
@@ -1175,19 +1163,19 @@ fn use_power(
     let blink_vert = data.power_f("Blink", level, "m_VertDistance", 500.0) * UU;
     // (aiming Blink needs its mana, and waits out its cooldown after the last move or cancel)
     let blink_ready = stats.mana >= Power::Blink.mana(&data) && powers.blink_lock <= 0.0;
-    if sel == Power::Blink && can_act && mouse.pressed(MouseButton::Right) && (blink_ready || powers.aiming) {
+    if sel == Power::Blink && can_act && bind.pressed(crate::bindings::Act::Secondary) && (blink_ready || powers.aiming) {
         powers.aiming = true;
         let dest = blink_destination(&ctx, pe, pt.translation + Vec3::Y * crate::player::STAND_EYE, eye, dir, blink_range, blink_vert);
         powers.blink_target = dest.map(|d| d.0);
         powers.blink_body = dest.map_or(crate::player::Body::Stand, |d| d.1);
         powers.blink_spot = dest.map(|d| d.2);
-    } else if sel == Power::Blink && can_act && mouse.just_pressed(MouseButton::Right) && stats.mana < Power::Blink.mana(&data) {
+    } else if sel == Power::Blink && can_act && bind.just_pressed(crate::bindings::Act::Secondary) && stats.mana < Power::Blink.mana(&data) {
         out_of_mana(&mut powers, &mut sfx);
     }
     // Use while it is aimed: "Cancel Blink" (`m_InteractionTexts[22]`): the aim ends with its
     // fizzle (`m_pFizzleSoundEvent`, Daud's `Snd_Pwr_Transversal_Cancel`) and Blink waits its
     // cooldown as after a move; the hand held on does nothing more
-    if powers.aiming && sel == Power::Blink && keys.just_pressed(bind.key(crate::bindings::Act::Use)) {
+    if powers.aiming && sel == Power::Blink && bind.just_pressed(crate::bindings::Act::Use) {
         powers.aiming = false;
         powers.blink_target = None;
         powers.swallow = true;
@@ -1227,7 +1215,7 @@ fn use_power(
         }
     }
     let cost = sel.mana(&data);
-    if powers.aiming && sel == Power::Blink && mouse.just_released(MouseButton::Right) {
+    if powers.aiming && sel == Power::Blink && bind.just_released(crate::bindings::Act::Secondary) {
         powers.aiming = false;
         // (moved or not, Blink waits its cooldown after the move: `m_fCooldownTime`)
         powers.blink_lock = data.active("Blink").and_then(|a| a.params.get("m_fCooldownTime")).copied().unwrap_or(1.0) + 0.27;
@@ -1259,7 +1247,7 @@ fn use_power(
         return;
     }
     // the Heart's whispers are its own (heart.rs)
-    if !can_act || !mouse.just_pressed(MouseButton::Right) || powers.cooldown > 0.0 || matches!(sel, Power::Empty | Power::Blink | Power::Heart | Power::SummonAssassin | Power::Pull | Power::Possess) {
+    if !can_act || !bind.just_pressed(crate::bindings::Act::Secondary) || powers.cooldown > 0.0 || matches!(sel, Power::Empty | Power::Blink | Power::Heart | Power::SummonAssassin | Power::Pull | Power::Possess) {
         return;
     }
     // toggles end for free
@@ -1729,7 +1717,7 @@ fn transversal_freeze(
     data: Res<Data>,
     stats: Res<PlayerStats>,
     powers: Res<Powers>,
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
+    bind: Res<crate::bindings::Bindings>,
     mut tc: ResMut<TimeControl>,
 ) {
     let transversal = data.active("Blink").is_some_and(|a| a.params.get("Transversal").is_some_and(|v| *v > 0.5));
@@ -1738,7 +1726,7 @@ fn transversal_freeze(
     }
     let dt = time.delta_secs().min(0.1);
     let lvl = stats.power("Blink").max(1);
-    let moving = [crate::bindings::Act::Forward, crate::bindings::Act::Back, crate::bindings::Act::Left, crate::bindings::Act::Right, crate::bindings::Act::Jump].iter().any(|a| keys.pressed(bind.key(*a)));
+    let moving = [crate::bindings::Act::Forward, crate::bindings::Act::Back, crate::bindings::Act::Left, crate::bindings::Act::Right, crate::bindings::Act::Jump].iter().any(|a| bind.pressed(*a));
     let held = transversal && powers.aiming && powers.selected == Power::Blink && powers.blink.is_none() && !moving;
     if held {
         let down = data.power_f("Blink", lvl, "m_fBendTimeDownTime", 0.0);
@@ -2155,8 +2143,7 @@ fn cook_grenade(
     time: Res<Time>,
     paused: Res<crate::hud::Paused>,
     tc: Res<TimeControl>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
+    bind: Res<crate::bindings::Bindings>,
     mut powers: ResMut<Powers>,
     stats: Res<PlayerStats>,
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
@@ -2169,7 +2156,7 @@ fn cook_grenade(
         powers.cooking = None;
         return;
     }
-    if keys.just_pressed(bind.key(crate::bindings::Act::Use)) {
+    if bind.just_pressed(crate::bindings::Act::Use) {
         powers.cooking = None;
         powers.swallow = true;
         return;
@@ -2181,7 +2168,7 @@ fn cook_grenade(
         _ => crate::gadgets::Gadget::Grenade,
     };
     let (eye, dir) = (cg.translation(), cg.forward().as_vec3());
-    if t >= crate::gadgets::FUSE || !mouse.pressed(MouseButton::Right) {
+    if t >= crate::gadgets::FUSE || !bind.pressed(crate::bindings::Act::Secondary) {
         powers.cooking = None;
         powers.cooldown = 1.0;
         gadget.write(crate::gadgets::UseGadget { gadget: g, eye, dir, cooked: t.min(crate::gadgets::FUSE) });
@@ -2200,11 +2187,12 @@ mod elixir_input_tests {
     #[test]
     fn menu_number_keys_do_not_change_equipped_power() {
         let mut app = App::new();
-        app.init_resource::<ButtonInput<KeyCode>>().init_resource::<AccumulatedMouseScroll>()
+        app.init_resource::<ButtonInput<KeyCode>>().init_resource::<bevy::input::mouse::AccumulatedMouseScroll>()
             .init_resource::<PlayerStats>().init_resource::<Powers>().init_resource::<Data>()
             .init_resource::<crate::possession::Possession>().init_resource::<crate::choice::Choice>()
             .insert_resource(crate::hud::Paused(true))
             .init_resource::<Shortcuts>().init_resource::<crate::wheel::Wheel>().init_resource::<Time>()
+            .init_resource::<crate::bindings::Bindings>().add_systems(First, crate::bindings::update_acts)
             .add_message::<PowerEquipped>().add_message::<PostEvent>().add_systems(Update, select_power);
         app.world_mut().resource_mut::<PlayerStats>().weapons = true;
         app.world_mut().resource_mut::<Powers>().selected = Power::Empty;
@@ -2303,6 +2291,7 @@ mod elixir_input_tests {
             .init_resource::<crate::bindings::Bindings>().init_resource::<Attrs>()
             .init_resource::<HudMessages>().insert_resource(crate::hud::Paused(true))
             .insert_resource(stats)
+            .add_systems(First, crate::bindings::update_acts)
             .add_message::<PostEvent>().add_systems(Update, regenerate);
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyR);
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyT);
@@ -2330,7 +2319,7 @@ mod elixir_input_tests {
 fn regenerate(
     time: Res<Time>,
     paused: Res<crate::hud::Paused>,
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
+    bind: Res<crate::bindings::Bindings>,
     attrs: Res<Attrs>,
     mut stats: ResMut<PlayerStats>,
     mut sfx: MessageWriter<PostEvent>,
@@ -2357,12 +2346,12 @@ fn regenerate(
         stats.health = (stats.health + attrs.health_regen_rate * dt).min(attrs.health_regen_limit.min(stats.max_health));
     }
     *last_health = stats.health;
-    if keys.just_pressed(bind.key(crate::bindings::Act::HealthElixir)) {
+    if bind.just_pressed(crate::bindings::Act::HealthElixir) {
         if drink_elixir(&mut stats, &attrs, false, &mut sfx) {
             *last_health = stats.health;
         }
     }
-    if keys.just_pressed(bind.key(crate::bindings::Act::ManaElixir)) {
+    if bind.just_pressed(crate::bindings::Act::ManaElixir) {
         drink_elixir(&mut stats, &attrs, true, &mut sfx);
     }
 }

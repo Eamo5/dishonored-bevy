@@ -511,7 +511,7 @@ pub(crate) fn ago(t: u64) -> String {
 }
 
 fn quick_keys(
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<crate::bindings::Bindings>),
+    bind: Res<crate::bindings::Bindings>,
     menu: Res<crate::menu::Menu>,
     mut save: MessageWriter<SaveRequest>,
     mut load: MessageWriter<LoadRequest>,
@@ -520,10 +520,10 @@ fn quick_keys(
     if menu.open.is_some() {
         return;
     }
-    if keys.just_pressed(bind.key(crate::bindings::Act::QuickSave)) {
+    if bind.just_pressed(crate::bindings::Act::QuickSave) {
         save.write(SaveRequest(0));
     }
-    if keys.just_pressed(bind.key(crate::bindings::Act::QuickLoad)) && slots.slots.iter().any(|s| s.0 == 0) {
+    if bind.just_pressed(crate::bindings::Act::QuickLoad) && slots.slots.iter().any(|s| s.0 == 0) {
         load.write(LoadRequest(0));
     }
 }

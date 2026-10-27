@@ -95,7 +95,6 @@ pub fn climb_move(
     p: &mut Player,
     t: &mut Transform,
     kcc: &mut KinematicCharacterController,
-    keys: &ButtonInput<KeyCode>,
     bind: &Bindings,
     (forward, jump): (f32, bool),
     dt: f32,
@@ -105,7 +104,7 @@ pub fn climb_move(
     climb.cooldown = (climb.cooldown - dt).max(0.0);
     let fwd = Quat::from_rotation_y(p.yaw) * Vec3::NEG_Z;
     let pos = Vec2::new(t.translation.x, t.translation.z);
-    let want_fwd = keys.pressed(bind.key(Act::Forward)) || forward > 0.0;
+    let want_fwd = bind.pressed(Act::Forward) || forward > 0.0;
     let Some(i) = climb.on else {
         if climb.cooldown > 0.0 || p.crouched || (p.grounded && !want_fwd) {
             return false;
@@ -144,7 +143,7 @@ pub fn climb_move(
     if want_fwd {
         v.y += CLIMB_SPEED * way;
     }
-    if keys.pressed(bind.key(Act::Back)) {
+    if bind.pressed(Act::Back) {
         v.y -= CLIMB_SPEED * way;
     }
     // the hands stay on the chain: from its top to its end
@@ -155,7 +154,7 @@ pub fn climb_move(
     let feet = t.translation.y - STAND_HALF - RADIUS;
     let off_bottom = feet < c.bottom - 2.3 || (p.grounded && v.y < 0.0);
     // jump lets go (pushing off); use or crouch drops (`DUI_Context_ClimbableDrop`)
-    if jump || keys.just_pressed(bind.key(Act::Use)) || keys.just_pressed(bind.key(Act::Crouch)) || off_bottom {
+    if jump || bind.just_pressed(Act::Use) || bind.just_pressed(Act::Crouch) || off_bottom {
         climb.on = None;
         climb.cooldown = REGRAB;
         p.velocity = if jump { fwd.with_y(0.0).normalize_or_zero() * JUMP_OFF + Vec3::Y * crate::player::JUMP_SPEED } else { Vec3::ZERO };

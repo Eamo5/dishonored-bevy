@@ -653,7 +653,7 @@ fn setup_props(
 pub(crate) fn prop_focus(
     mut commands: Commands,
     mut taken: ResMut<PropsTaken>,
-    (keys, mouse, bind): (Res<ButtonInput<KeyCode>>, Res<ButtonInput<MouseButton>>, Res<Bindings>),
+    bind: Res<Bindings>,
     level: Option<Res<LevelInfo>>,
     rapier: ReadRapierContext,
     mut focus: ResMut<InteractFocus>,
@@ -670,7 +670,6 @@ pub(crate) fn prop_focus(
     if paused.0 { return; }
     let Some(level) = level else { return };
     let (Ok((pe, p)), Ok(c)) = (player.single(), cam.single()) else { return };
-    let use_key = bind.key(Act::Use);
     // Live grenades share the carrying context, but their fuse and release are
     // handled by `gadgets`. Do not clear that hold or take a prop behind one.
     if held.0.or(focus.1).is_some_and(|e| grenades.contains(e)) {
@@ -685,11 +684,11 @@ pub(crate) fn prop_focus(
         // (drop, throw: the context line's, `prompts`)
         focus.0 = true;
         focus.1 = None;
-        let throw = mouse.just_pressed(MouseButton::Left);
+        let throw = bind.just_pressed(Act::Primary);
         // (damage taken drops it too: the original's hurt handler, as roshan's r614/blink
         // research decoded it)
         let hurt = stats.damage_flash > 0.9;
-        if keys.just_pressed(use_key) || throw || hurt || stats.dead || possession.host.is_some() {
+        if bind.just_pressed(Act::Use) || throw || hurt || stats.dead || possession.host.is_some() {
             held.0 = None;
             held.1 = 0.3;
             prop.released = 0.35;
@@ -724,7 +723,7 @@ pub(crate) fn prop_focus(
     let Ok(ctx) = rapier.single() else { return };
     let filter = QueryFilter::default().exclude_collider(pe).groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP | GROUP_NPC));
     let Some((hit, toi)) = ctx.cast_ray(c.translation(), c.forward().as_vec3(), 2.2, true, filter) else { return };
-    if std::env::var("DH_PROP_LOG").is_ok() && keys.just_pressed(use_key) {
+    if std::env::var("DH_PROP_LOG").is_ok() && bind.just_pressed(Act::Use) {
         info!("prop focus: ray hits {hit} at {toi:.2} (strikeable {:?})", strikeables.get(hit).ok().map(|s| s.0));
     }
     let Some(e) = strikeables.get(hit).ok().map(|s| s.0) else { return };
@@ -744,7 +743,7 @@ pub(crate) fn prop_focus(
     // hold)
     focus.2 = format!("{} Carry", hint(Act::Use));
     focus.3 = name.to_string();
-    if keys.just_pressed(use_key) {
+    if bind.just_pressed(Act::Use) {
         held.0 = Some(e);
         taken.0.push(m.instance);
         if let Some(b) = prop.body {

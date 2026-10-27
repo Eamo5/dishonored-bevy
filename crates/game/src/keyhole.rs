@@ -121,7 +121,7 @@ fn spawn_mask(mut commands: Commands, mut ui: ResMut<crate::ui_images::UiImages>
 fn keyhole_input(
     time: Res<Time>,
     paused: Res<crate::hud::Paused>,
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<Bindings>),
+    bind: Res<Bindings>,
     level: Option<Res<LevelInfo>>,
     mut peek: ResMut<Peek>,
     mut focus: ResMut<InteractFocus>,
@@ -135,7 +135,6 @@ fn keyhole_input(
     if paused.0 { return; }
     let Some(level) = level else { return };
     let Ok((pt, mut p)) = player.single_mut() else { return };
-    let use_key = bind.key(Act::Use);
     let set_vis = |q: &mut Query<&mut Visibility, With<Mask>>, v: Visibility| {
         for mut m in q.iter_mut() {
             if *m != v {
@@ -150,7 +149,7 @@ fn keyhole_input(
         // (leaving it: the context line's, `prompts`)
         focus.0 = true;
         focus.1 = None;
-        if keys.just_pressed(use_key) || opened || stats.dead || stats.damage_flash > 0.9 {
+        if bind.just_pressed(Act::Use) || opened || stats.dead || stats.damage_flash > 0.9 {
             peek.at = None;
             p.locked = false;
             set_vis(&mut mask, Visibility::Hidden);
@@ -162,7 +161,7 @@ fn keyhole_input(
     if peek.pending.is_some() {
         return;
     }
-    if keys.just_pressed(use_key) {
+    if bind.just_pressed(Act::Use) {
         peek.consumed = false;
         peek.hold = 0.0;
     }
@@ -177,7 +176,7 @@ fn keyhole_input(
     if !focus.2.contains("Keyhole") {
         focus.2 = format!("{}\nHold {} Keyhole", focus.2, hint(Act::Use));
     }
-    if keys.pressed(use_key) && !peek.consumed {
+    if bind.pressed(Act::Use) && !peek.consumed {
         peek.hold += time.delta_secs();
         if peek.hold >= HOLD {
             let k = &level.scene.keyholes[kd.0];

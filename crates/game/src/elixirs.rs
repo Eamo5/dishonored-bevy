@@ -9,7 +9,7 @@
 //! (`key_mc` at `B`, `X`), the whole's middle half its size in from the safe area's bottom
 //! right (`SetPosition`).
 
-use crate::bindings::{display, Act, Bindings};
+use crate::bindings::{display_bind, Act, Bindings};
 use crate::flash::{Clip, Ease, FlashClip, MovieTimelines, PropsTo};
 use crate::gameplay::PlayerStats;
 use crate::wheel::Wheel;
@@ -124,8 +124,8 @@ fn counters(
         }
         fc.set_text(&format!("{part}.quantity.txt"), count.to_string());
         if st.pad.is_none() {
-            let key = bind.key(if i == 0 { Act::HealthElixir } else { Act::ManaElixir });
-            fc.set_text(&format!("{part}.keyPC_mc.txt"), display(key));
+            let key = bind.bind(if i == 0 { Act::HealthElixir } else { Act::ManaElixir });
+            fc.set_text(&format!("{part}.keyPC_mc.txt"), display_bind(key));
         }
         // one drunk: its stroke
         if count < st.shown[i] {

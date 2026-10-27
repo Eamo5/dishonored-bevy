@@ -635,12 +635,13 @@ mod projectile_tests {
             .init_resource::<crate::props::Held>().init_resource::<PlayerStats>().init_resource::<HudMessages>()
             .init_resource::<TrapLog>().insert_resource(attrs).add_message::<SpawnEffect>().init_resource::<crate::pickuplog::PickupLog>()
             .insert_resource(LevelInfo { scene: dhcook::format::Scene { traps: vec![dhcook::format::Trap { launcher: true, harvest: vec![(2, 1)], ..default() }], ..default() } })
+            .add_systems(First, crate::bindings::update_acts)
             .add_systems(Last, disarm_focus);
         app.world_mut().spawn((PlayerCamera, Transform::from_xyz(0.0, 0.4, 1.5)));
         app.world_mut().resource_mut::<PlayerStats>().bolts = 0;
         let trap = app.world_mut().spawn((TrapPart { index: 0, launcher: true, sprung: true, disarmed: false, harvested: false,
             firing: None, wire: (Vec3::ZERO, Vec3::ZERO), sockets: vec![], collider: None, away: false }, Transform::default())).id();
-        let key = app.world().resource::<Bindings>().key(Act::Use);
+        let key = app.world().resource::<Bindings>().key(Act::Use).unwrap();
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
         app.update();
         app.update();
@@ -664,12 +665,13 @@ mod projectile_tests {
             .init_resource::<crate::props::Held>().init_resource::<PlayerStats>().init_resource::<HudMessages>()
             .init_resource::<TrapLog>().init_resource::<crate::gamedata::Attrs>().add_message::<SpawnEffect>().init_resource::<crate::pickuplog::PickupLog>()
             .insert_resource(LevelInfo { scene: dhcook::format::Scene { traps: vec![dhcook::format::Trap { launcher: true, ..default() }], ..default() } })
+            .add_systems(First, crate::bindings::update_acts)
             .add_systems(Last, disarm_focus);
         app.world_mut().spawn((PlayerCamera, Transform::from_xyz(0.0, 0.4, 1.5)));
         let collider = app.world_mut().spawn((Collider::cuboid(0.3, 0.35, 0.3), Transform::from_xyz(0.0, 0.35, 0.0), CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
         let trap = app.world_mut().spawn((TrapPart { index: 0, launcher: true, sprung: false, disarmed: false, harvested: false,
             firing: None, wire: (Vec3::ZERO, Vec3::ZERO), sockets: vec![], collider: Some(collider), away: false }, Transform::default())).id();
-        let key = app.world().resource::<Bindings>().key(Act::Use);
+        let key = app.world().resource::<Bindings>().key(Act::Use).unwrap();
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
         app.update();
         assert!(!app.world().get::<TrapPart>(trap).unwrap().disarmed);
@@ -749,7 +751,7 @@ mod projectile_tests {
 /// r614/blink research decoded it; taken once anything was).
 #[allow(clippy::too_many_arguments)]
 fn disarm_focus(
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<Bindings>),
+    bind: Res<Bindings>,
     (paused, rapier): (Res<crate::hud::Paused>, ReadRapierContext),
     level: Option<Res<LevelInfo>>,
     mut focus: ResMut<InteractFocus>,
@@ -789,7 +791,7 @@ fn disarm_focus(
     focus.1 = None;
     let verb = if def.verb.is_empty() { "Disarm" } else { &def.verb };
     focus.2 = format!("{} {verb} {}", hint(Act::Use), def.label).trim_end().to_string();
-    if !keys.just_pressed(bind.key(Act::Use)) {
+    if !bind.just_pressed(Act::Use) {
         return;
     }
     let armed = !t.sprung && !t.disarmed;

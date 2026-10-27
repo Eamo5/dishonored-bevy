@@ -43,7 +43,7 @@ impl Default for Zoom {
 #[allow(clippy::too_many_arguments)]
 fn zoom_input(
     time: Res<Time>,
-    (keys, bind): (Res<ButtonInput<KeyCode>>, Res<Bindings>),
+    bind: Res<Bindings>,
     stats: Res<PlayerStats>,
     mut zoom: ResMut<Zoom>,
     player: Query<&Player>,
@@ -55,9 +55,9 @@ fn zoom_input(
     let before = zoom.level;
     if !has("Twk_Upgrade_Spyglass1") || stats.dead || p.sprinting || p.locked || menu.0 {
         zoom.level = 0;
-    } else if keys.just_pressed(bind.key(Act::Zoom)) {
+    } else if bind.just_pressed(Act::Zoom) {
         zoom.level = if zoom.level == 0 { 1 } else { 0 };
-    } else if zoom.level > 0 && has("Twk_Upgrade_Spyglass2") && keys.just_pressed(bind.key(Act::Use)) {
+    } else if zoom.level > 0 && has("Twk_Upgrade_Spyglass2") && bind.just_pressed(Act::Use) {
         zoom.level = if zoom.level == 1 { 2 } else { 1 };
     }
     if zoom.level != before {

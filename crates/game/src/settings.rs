@@ -245,7 +245,8 @@ fn apply_settings(
     if !settings.is_changed() && new_cams.is_empty() {
         return;
     }
-    *bind = crate::bindings::Bindings::from_settings(&settings);
+    // (what is held this frame kept)
+    bind.reload(&settings);
     crate::bindings::set_current(&bind);
     // the display (test runs keep their window): fullscreen at the desktop's size (borderless)
     // or in the video mode chosen; windowed at the size chosen
