@@ -1163,6 +1163,21 @@ fn run_script(
                 });
             }
         }
+        "stun" => {
+            // (tests) stun S [NAME]: the nearest living character (whose name holds NAME) staggered
+            // S seconds, as Corvo's parry leaves it
+            let (secs, named) = (f(1), cmd.get(2).cloned().unwrap_or_default());
+            if let Some((e, _, _)) = npc_ents.iter().filter(|(_, n, _)| !n.is_down() && (named.is_empty() || n.name.contains(&named))).min_by(|a, b| a.2.translation.distance(t.translation).total_cmp(&b.2.translation.distance(t.translation))) {
+                commands.queue(move |w: &mut World| {
+                    if let Some(mut n) = w.get_mut::<Npc>(e) {
+                        n.stagger = secs;
+                        n.attack_t = None;
+                        n.swing = None;
+                        info!("script: stun {} {secs} s", n.name);
+                    }
+                });
+            }
+        }
         "flinch" => {
             // (tests) flinch [NAME]: the nearest living character (whose name holds NAME) takes
             // a weak hit from ahead, its additive flinch laid over what it does

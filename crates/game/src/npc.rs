@@ -535,6 +535,9 @@ pub struct Arms {
     pub saw: Option<dhcook::format::NpcSaw>,
     /// a hound master's whistle for the wolfhounds (`aiworld::summon_hounds`)
     pub summon: Option<dhcook::format::NpcSummon>,
+    /// whether it can be left open to a finisher, and thrown off balance (choked mid-fight):
+    /// `DisDLC06Tweaks_VulnerabilityEx` (a saw butcher, Daud's Corvo: neither)
+    pub vulnerable: [bool; 2],
     /// how it paces its fight (its combat behaviour's)
     pub pacing: Option<dhcook::format::NpcPacing>,
     /// how danger zones steer it, and the one its aim lays (`danger`)
@@ -552,7 +555,7 @@ pub struct Arms {
 
 impl Default for Arms {
     fn default() -> Self {
-        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, witch: None, saw: None, summon: None, pacing: None, danger: Default::default(), turning: LocoTurn::default(), throwing: None, outer_only: Vec::new(), outer_place: None }
+        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, witch: None, saw: None, summon: None, vulnerable: [true; 2], pacing: None, danger: Default::default(), turning: LocoTurn::default(), throwing: None, outer_only: Vec::new(), outer_place: None }
     }
 }
 
@@ -717,6 +720,7 @@ impl Arms {
         a.witch = st.witch.clone();
         a.saw = st.saw.clone();
         a.summon = st.summon.clone();
+        a.vulnerable = st.vulnerable.unwrap_or([true; 2]);
         a.pacing = st.pacing.clone();
         a.danger = st.danger.clone();
         a.turning = LocoTurn::of(&st.loco);

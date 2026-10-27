@@ -1297,6 +1297,11 @@ pub struct NpcStats {
     /// a hound master's whistle for the wolfhounds (`DisTweaks_AIBehavior_SummonWolfhound`)
     #[serde(default)]
     pub summon: Option<NpcSummon>,
+    /// whether it can be left open to a finisher (killable) and thrown off balance (choked in a
+    /// fight), `DisDLC06Tweaks_VulnerabilityEx.m_VulnerabilitySetup[eDisVulnerabilityType]` (its
+    /// `m_pDLC06SharedTweaks`' `m_pVulnerabilityExTweaks`: a saw butcher, Daud's Corvo neither)
+    #[serde(default)]
+    pub vulnerable: Option<[bool; 2]>,
 }
 
 /// A hound master's whistle (`DisTweaks_AIBehavior_SummonWolfhound` among its brain's behaviours):

@@ -1788,6 +1788,13 @@ fields no longer show their stand-in "WW" behind the title.
     wide) keeps the others out of its line.
   - His cuts meet no blade (`m_bDisableVersus`): no blade locks with a saw.
   - Butchers are named "Whale Butcher" in the logs and scripts.
+- **Who can't be opened to a finisher or thrown off balance** (`DisDLC06Tweaks_VulnerabilityEx`,
+  the pawn's `m_pDLC06SharedTweaks.m_pVulnerabilityExTweaks`: `m_VulnerabilitySetup` by
+  `eDisVulnerabilityType`, Killable and OffBalance). The saw butchers and Corvo in Daud's last
+  fight (`DLC07_Pwn_Corvo_*`) support neither. Parried or broken in a sword lock, they reel, but
+  the next blow is an ordinary one, not a finisher, and they can't be choked mid-fight. Before,
+  any character left reeling died to the next blow. Script: `stun S [NAME]` staggers the nearest
+  character S seconds, as a parry does.
 - **Hound masters whistle for their wolfhounds** (`aiworld::summon_hounds`, the brain's
   `DisTweaks_AIBehavior_SummonWolfhound`). Before, overseers fought alone, and the backyard's
   kennel hounds came only when another hound called for help.

@@ -4496,6 +4496,11 @@ impl<'a> Cooker<'a> {
         st.gravehound = self.gravehound(pawn);
         st.pacing = self.pacing(pawn);
         st.summon = self.summon_hounds(pawn);
+        // (`DisDLC06Tweaks_VulnerabilityEx`: killable, off balance; unset, both)
+        if let Some(v) = self.tweak_obj(pawn, "m_pDLC06SharedTweaks").and_then(|s| self.tweak_obj(&s, "m_pVulnerabilityExTweaks")) {
+            let ok = |s: &mut Self, i: i32| !matches!(s.tweak_prop(&v, "m_VulnerabilitySetup", i, 0), Some((_, Value::Struct(_, p))) if Props(p.clone()).bool("m_bIsSupported") == Some(false));
+            st.vulnerable = Some([ok(self, 0), ok(self, 1)]);
+        }
         st.danger = self.danger_steering(pawn);
         st.loco = self.npc_loco(pawn);
         log::debug!(
