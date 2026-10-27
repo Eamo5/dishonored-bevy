@@ -5522,13 +5522,39 @@ impl Vm {
     }
 
     /// Skip the playing cut-scenes (matinees with director cuts) to their end.
+    /// (Not one marked unskippable, `m_bIsSkippable` false. Skipped, a scene's `OnSkipWhole` fires:
+    /// what its scripts clear away when it is skipped, the Hound Pits' loyalists' props and their
+    /// music; before, it was left as the scene's end left it.)
     pub fn skip_cinematics(&mut self) {
         let g = self.g.clone();
+        let mut skipped = Vec::new();
         for l in &mut self.latent {
-            if let Latent::Interp { t, len, rate, matinee: Some(m), .. } = l {
-                if *rate > 0.0 && g.matinees.get(*m as usize).is_some_and(|m| !m.cuts.is_empty()) {
+            if let Latent::Interp { op, t, len, rate, matinee: Some(m), .. } = l {
+                let skippable = !matches!(g.ops[*op as usize].props.get("m_bIsSkippable"), Some(KVal::Bool(false)));
+                if *rate > 0.0 && skippable && g.matinees.get(*m as usize).is_some_and(|m| !m.cuts.is_empty()) {
+                    let from = *t;
                     *t = (*len - 1e-3).max(0.0);
+                    skipped.push((*op, *m, from, *t));
                 }
+            }
+        }
+        for (op, m, from, to) in skipped {
+            // (its event keys jumped over still fire, as a jump forward fires them,
+            // `bFireEventsWhenJumpingForwards`: the Outsider's dream's platforms shown; its sounds
+            // and lines don't play)
+            for gr in &g.matinees[m as usize].groups {
+                for tr in &gr.tracks {
+                    if let dhcook::format::KTrack::Event(keys) = tr {
+                        for (k, name) in keys {
+                            if *k > from && *k <= to {
+                                self.fire_desc(op, name);
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(i) = self.output_index(op, "OnSkipWhole") {
+                self.fire(op, i);
             }
         }
     }

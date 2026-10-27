@@ -1396,6 +1396,12 @@ fields no longer show their stand-in "WW" behind the title.
   skip gauge's blue ring fills round at the bottom left; choking someone, the interaction
   gauge's red ring fills at the screen's middle (drawn with a small radial-wipe UI material
   standing in for the movie's `_mask_mc` wipe).
+  A skipped scene now fires the event keys it jumps over, as a jump forward fires them
+  (`InterpTrackEvent.bFireEventsWhenJumpingForwards`); its sounds and lines don't play. Then
+  its `OnSkipWhole` output fires: what its scripts do when it is skipped. A scene marked
+  `m_bIsSkippable` false isn't skipped. Before, a skip jumped straight to the end: skipping the
+  Outsider's first meeting missed its `UnhidePlatforms` key, so the dream's platforms never
+  appeared, and its mark's burn (`Tatoo_Appears`, `F_Firy_Amount`) was never set.
 - **Security**: walls of light, arc pylons and the whale oil tanks that power them; rewire
   tools turn them on their owners. The scripts hear a tank's charge spent
   (`DisSeqEvent_WhaleOilBattery` "Charge Used", and "All Charges Used" as it runs dry: the
