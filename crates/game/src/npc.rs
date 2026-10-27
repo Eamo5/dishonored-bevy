@@ -2579,7 +2579,13 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         let prop = blade_wep.map(|w| w.mesh.as_str()).filter(|m| assets.props.contains_key(*m)).unwrap_or(prop);
         blade = crate::trails::blade_of(scene, prop);
         saw_edge = scene.props.iter().find(|p| p.name == prop).and_then(|p| p.edge).map(Vec3::from);
-        if let (Some((hand, at)), Some(parts)) = (hand_r, assets.props.get(prop)) {
+        // (one with a rig of its own, its parts move: a butcher's saw's blade running)
+        let rig = scene.prop_rigs.get(prop).and_then(|&t| assets.npc_types.get(t as usize)).and_then(|v| v.as_ref());
+        if let (Some((hand, at)), Some(rv)) = (hand_r, rig) {
+            let r = crate::musicbox::spawn_rig(commands, rv, hand, at, slot);
+            commands.entity(r).insert(crate::saw::SawRig);
+            swords.push(r);
+        } else if let (Some((hand, at)), Some(parts)) = (hand_r, assets.props.get(prop)) {
             for (mesh, mat) in &parts.parts {
                 let mut ec = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), at));
                 mat.apply(&mut ec);

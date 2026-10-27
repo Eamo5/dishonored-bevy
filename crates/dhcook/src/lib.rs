@@ -240,6 +240,8 @@ struct Cooker<'a> {
     npc_type_ids: HashMap<String, Option<u32>>,
     /// the meshes characters' weapons are held as (`m_pEquippedMesh`), cooked as `wep:<path>` props
     weapon_meshes: std::collections::BTreeSet<String>,
+    /// and their own animation sets (`m_ItemAnimSets`: a butcher's saw's blade running), by mesh
+    weapon_sets: HashMap<String, Vec<Obj>>,
     ragdoll_ids: HashMap<String, Option<u32>>,
     skeleton_ids: HashMap<String, u32>,
     anim_set_ids: HashMap<String, Option<u32>>,
@@ -378,6 +380,7 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
         sun_guids: Vec::new(),
         npc_type_ids: HashMap::new(),
         weapon_meshes: Default::default(),
+        weapon_sets: HashMap::new(),
         ragdoll_ids: HashMap::new(),
         skeleton_ids: HashMap::new(),
         anim_set_ids: HashMap::new(),
@@ -4418,9 +4421,17 @@ impl<'a> Cooker<'a> {
             wep.prefix = name_of(self, "m_ItemPrefix", 0);
             wep.socket = name_of(self, "m_Sockets", 1);
             wep.holster = name_of(self, "m_Sockets", 2);
-            if let Some(m) = self.tweak_obj(&w, "m_pNPCSpecificTweaks").and_then(|n| self.tweak_obj(&n, "m_pEquippedMesh")).filter(|m| matches!(m.class().as_str(), "SkeletalMesh" | "StaticMesh")) {
+            let specific = self.tweak_obj(&w, "m_pNPCSpecificTweaks");
+            if let Some(m) = specific.as_ref().and_then(|n| self.tweak_obj(n, "m_pEquippedMesh")).filter(|m| matches!(m.class().as_str(), "SkeletalMesh" | "StaticMesh")) {
                 wep.mesh = format!("wep:{}", m.path());
                 self.weapon_meshes.insert(m.path());
+                // (its own sets: a butcher's saw's blade, `Saw_On`, `Saw_Off`)
+                if let (Some(n), true, false) = (specific.as_ref(), m.class() == "SkeletalMesh", self.weapon_sets.contains_key(&m.path())) {
+                    let sets: Vec<Obj> = self.tweak_objs(n, "m_ItemAnimSets").into_iter().filter(|s| s.class() == "AnimSet").collect();
+                    if !sets.is_empty() {
+                        self.weapon_sets.insert(m.path(), sets);
+                    }
+                }
             }
             let first_ammo = match self.tweak_prop(&w, "m_RangedAmmoTypes", 0, 0) {
                 Some((pkg, Value::Array { count, offset, size })) if count > 0 => parse_struct_array(&pkg, offset, size, count).ok().and_then(|a| a.into_iter().next()).map(|f| (pkg, f)),
@@ -7938,6 +7949,18 @@ impl<'a> Cooker<'a> {
                 [p[0], p[1], p[2], r[0], r[1], r[2], r[3]]
             });
             self.scene.props.push(PropDef { name: name.to_string(), mesh, materials, blade, muzzle, edge });
+        }
+        // the characters' weapons with sets of their own, skinned (a butcher's saw: its blade
+        // running, `Saw_On`)
+        let sets: Vec<(String, Vec<Obj>)> = self.weapon_sets.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        for (path, sets) in sets {
+            let Some(m) = self.assets.find(&path) else { continue };
+            match self.cook_device(&m, sets) {
+                Ok(id) => {
+                    self.scene.prop_rigs.insert(format!("wep:{path}"), id);
+                }
+                Err(e) => log::warn!("{path} rig: {e:#}"),
+            }
         }
         // the musical Overseers' music box, skinned: its crank turns, its levers and lid move,
         // in clips named as its wearer's arms' (`Overseer_MusicBox_as`: `MusicBox_PlayMusic_Loop`

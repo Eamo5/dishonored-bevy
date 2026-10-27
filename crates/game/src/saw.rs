@@ -27,6 +27,10 @@ impl Plugin for SawPlugin {
     }
 }
 
+/// A saw's own rig in a butcher's hand (its blade's chain and deflector: `DLC06_ButcherSaw_as`).
+#[derive(Component)]
+pub struct SawRig;
+
 /// The saw in a butcher's hand: its mesh (for its blade), its edge in the mesh's frame, the cut
 /// owed and the time since the last, and what shows it running.
 #[derive(Component)]
@@ -74,6 +78,7 @@ fn saw_cut(
     tc: Res<TimeControl>,
     settings: Res<crate::settings::Settings>,
     mut saws: Query<(Entity, &mut SawBlade, &Npc, &Transform)>,
+    mut rigs: Query<&mut crate::anim::Animator, With<SawRig>>,
     parts: Query<&GlobalTransform>,
     player: Query<&Transform, (With<Player>, Without<Npc>)>,
     (stats, possession): (Res<PlayerStats>, Res<crate::possession::Possession>),
@@ -89,6 +94,13 @@ fn saw_cut(
         let spraying = npc.attack_t.is_some() && npc.swing.as_ref().is_some_and(|s| s.kind == MoveKind::SawFire);
         let out = npc.mode == Mode::Combat && npc.alert == Alert::Combat && !npc.is_down();
         let running = out && npc.grounded && npc.stagger <= 0.0 && !spraying && possession.host != Some(e);
+        // (its blade's chain running, `m_SawEquippedIdleAnim` `Saw_On`, else still, `Saw_Off`)
+        if let Ok(mut anim) = rigs.get_mut(blade.saw) {
+            let want = if out { "Saw_On" } else { "Saw_Off" };
+            if let Some(c) = anim.lib.find(want).filter(|c| anim.current().is_none_or(|p| p.clip != *c)) {
+                anim.restart(c, true, 1.0, 0.1);
+            }
+        }
         // (its running look and drone, carried by its blade)
         match (out, blade.running) {
             (true, None) => {

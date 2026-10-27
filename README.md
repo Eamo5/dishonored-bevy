@@ -1770,7 +1770,9 @@ fields no longer show their stand-in "WW" behind the title.
     the cleaver butchers' `DLC06_ButcherCleaver`, the assassins' sword), held on its
     `m_Sockets[1]` (the saw in his left hand, `SawWpn`) and put away on `m_Sockets[2]`. The saw
     attachment that is only an invisible stand-in for its traces (`m_bIsInvisible`) is no longer
-    drawn.
+    drawn. A weapon with animation sets of its own (`m_ItemAnimSets`) is skinned with them: the
+    saw's chain and deflector run while he fights (`m_SawEquippedIdleAnim` `Saw_On`,
+    `DLC06_ButcherSaw_as`) and stop otherwise (`Saw_Off`).
   - Running, the saw cuts Corvo before its blade (`DisDLC06Tweaks_NPCSawCut`, "Continuous
     Blade"): within `m_fSawDamageRadius` (2 m) of its `BladeEdge`, in a wedge
     `m_fSawDamageOriginWidth` (0.85 m) wide opening at `m_fSawDamageAngleDeg` (40 degrees),
