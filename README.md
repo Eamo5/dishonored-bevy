@@ -2198,6 +2198,10 @@ fields no longer show their stand-in "WW" behind the title.
   The Brigmore ending's last stroke (`L_DLC07_Endgame_P`'s `SeqAct_Interp_1`) starts 5.25 s in.
   Before, it played its first 5 seconds of lead-in too, and the trials' timed scenes (the
   race's at 16 s) started from 0.
+  The 2,081 scenes with `bRewindOnPlay` (the characters' idle and distraction scenes, most of
+  them) start over when played from rest, rather than going on from where they were stopped.
+  The 73 that also have `bRewindIfAlreadyPlaying` start over when played while playing.
+  `PlayRate` is no longer raised to 0.01 at least (Coldridge's slow light is 0.008).
 - **A scene's camera shows neither the HUD nor his arms.** While a director's cut has the
   view, the gauges, the crosshair, the dock and Corvo's hands and weapons are put away, as a
   shot through a camera actor has none of them. The scene's subtitles stay; only the screens

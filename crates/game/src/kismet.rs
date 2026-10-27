@@ -4136,11 +4136,19 @@ impl Vm {
                                 _ => true,
                             },
                         };
-                        let play_rate = self.pf(op, "PlayRate").unwrap_or(1.0).max(0.01);
+                        // (one barely moving, `PlayRate` 0.008: Coldridge's drifting light)
+                        let play_rate = self.pf(op, "PlayRate").unwrap_or(1.0).max(1e-4);
+                        // (Play again while it plays: back to its start with
+                        // `bRewindOnPlay` and `bRewindIfAlreadyPlaying`, else on as it goes)
+                        let rewind = input == 0 && self.pb(op, "bRewindOnPlay") == Some(true);
+                        let restart = rewind && self.pb(op, "bRewindIfAlreadyPlaying") == Some(true);
                         if let Some(i) = existing {
-                            if let Latent::Interp { rate, paused, .. } = &mut self.latent[i] {
+                            if let Latent::Interp { rate, paused, t, .. } = &mut self.latent[i] {
                                 *rate = if forward { play_rate } else { -play_rate };
                                 *paused = false;
+                                if restart {
+                                    *t = 0.0;
+                                }
                             }
                         } else {
                             let data = self.link_vars(op, "Data");
@@ -4180,6 +4188,9 @@ impl Vm {
                             // Brigmore ending's last stroke starts 5.25 s into its scene)
                             if input == 0 && self.pb(op, "bForceStartPos") == Some(true) {
                                 t = self.pf(op, "ForceStartPosition").unwrap_or(0.0).clamp(0.0, len);
+                            } else if rewind {
+                                // (`bRewindOnPlay`: Play starts it over, not on from where it stopped)
+                                t = 0.0;
                             }
                             // without cooked tracks (or for quick tests) the matinee only times out
                             let len = if matinee.is_none() && !full_matinee() { len.min(0.5) } else { len };
