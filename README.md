@@ -2191,6 +2191,12 @@ fields no longer show their stand-in "WW" behind the title.
   (`Animations`: an AnimNodeSequence at its time) is cooked in that pose, mesh and physics
   bodies: the Tower's lowered gangway was a 4 m wall at its reference pose, and Corvo fell
   into the waterlock.
+- **A scene's camera shows neither the HUD nor his arms.** While a director's cut has the
+  view, the gauges, the crosshair, the dock and Corvo's hands and weapons are put away, as a
+  shot through a camera actor has none of them. The scene's subtitles stay; only the screens
+  over the game cover those. Before, the epilogue's tableaux (`L_Out_P`'s `Scene1_Cam` and the
+  rest, played without the scripts' cinematic mode) showed his health and mana, his blade and
+  his outstretched hand over the Outsider's last words.
 - **Scenes**: matinees move, show, hide and switch actors, cut cameras, fade, play the
   characters' animations and lines, and walk them to their marks (`InterpTrackLocomotion`, at
   the key's gait), turn them to face one another (`InterpTrackFaceTo`) and turn their heads to

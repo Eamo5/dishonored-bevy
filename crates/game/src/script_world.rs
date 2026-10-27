@@ -101,6 +101,10 @@ pub struct Cinematic {
     pub since: f32,
     /// the player's controls off (SeqAct_ToggleInput), outside any cinematic
     pub input_off: bool,
+    /// a scene's director camera has the view (`matinee::cinematic_camera`): the HUD and his
+    /// arms away while it does, as a shot through a camera actor shows neither (the epilogue's
+    /// tableaux)
+    pub director: bool,
 }
 
 impl Cinematic {
@@ -111,10 +115,10 @@ impl Cinematic {
         self.live() && self.hold || self.input_off
     }
     pub fn hides_hud(&self) -> bool {
-        self.live() && self.hide_hud
+        self.director || self.live() && self.hide_hud
     }
     pub fn hides_player(&self) -> bool {
-        self.live() && self.hide_player
+        self.director || self.live() && self.hide_player
     }
 }
 
@@ -776,7 +780,7 @@ fn apply_ai_fx(
             }
             AiFx::Cinematic { on, hide_hud, hold, hide_player } => {
                 let on = on.unwrap_or(!cine.on);
-                *cine = Cinematic { on, hide_hud, hold, hide_player, since: 0.0, input_off: cine.input_off };
+                *cine = Cinematic { on, hide_hud, hold, hide_player, since: 0.0, input_off: cine.input_off, director: cine.director };
             }
             AiFx::GameOver(reason) => {
                 if !stats.dead {

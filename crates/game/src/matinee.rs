@@ -1023,9 +1023,14 @@ fn cinematic_camera(
     mut player: Query<(&GlobalTransform, &mut Player)>,
     mut cams: Query<(&mut Transform, &mut Projection), With<PlayerCamera>>,
     mut view_models: Query<&mut Visibility, Or<(With<ArmsRoot>, With<ViewModel>)>>,
+    mut cine: ResMut<crate::script_world::Cinematic>,
 ) {
     let Ok((pgt, mut p)) = player.single_mut() else { return };
     let Ok((mut ct, mut proj)) = cams.single_mut() else { return };
+    // (the HUD and his arms away while the shot is the director's: those set each frame follow)
+    if cine.director != st.camera.is_some() {
+        cine.director = st.camera.is_some();
+    }
     match st.camera {
         Some((world, fov)) => {
             if st.saved.is_none() {

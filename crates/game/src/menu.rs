@@ -2059,7 +2059,7 @@ fn menu_world(
     mut menu: ResMut<Menu>,
     mut hidden: ResMut<HudHidden>,
     mut player: Query<&mut Player>,
-    mut hud: Query<&mut Visibility, Or<(With<HudRoot>, With<crate::gauges::GaugesRoot>, With<crate::kismet::SubtitleText>, With<crate::kismet::ObjectivesText>)>>,
+    mut hud: Query<(&mut Visibility, Has<crate::kismet::SubtitleText>), Or<(With<HudRoot>, With<crate::gauges::GaugesRoot>, With<crate::kismet::SubtitleText>, With<crate::kismet::ObjectivesText>)>>,
     mut view_models: Query<
         &mut Visibility,
         (Or<(With<crate::arms::ArmsRoot>, With<crate::combat::ViewModel>)>, Without<HudRoot>, Without<crate::gauges::GaugesRoot>, Without<crate::kismet::SubtitleText>, Without<crate::kismet::ObjectivesText>),
@@ -2086,8 +2086,9 @@ fn menu_world(
     }
     // (the HUD also hides in the scripts' cinematics)
     hidden.0 = covered || cine.hides_hud() || killcam.active();
-    for mut v in &mut hud {
-        let want = if hidden.0 { Visibility::Hidden } else { Visibility::Inherited };
+    for (mut v, subtitle) in &mut hud {
+        // (the words of a scene are heard through it: only the screens over the game cover them)
+        let want = if if subtitle { covered || killcam.active() } else { hidden.0 } { Visibility::Hidden } else { Visibility::Inherited };
         if *v != want {
             *v = want;
         }
