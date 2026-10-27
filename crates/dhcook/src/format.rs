@@ -1294,6 +1294,22 @@ pub struct NpcStats {
     /// a whale butcher's saw (`DisDLC06Tweaks_WepSaw`): its running blade and its spray
     #[serde(default)]
     pub saw: Option<NpcSaw>,
+    /// a hound master's whistle for the wolfhounds (`DisTweaks_AIBehavior_SummonWolfhound`)
+    #[serde(default)]
+    pub summon: Option<NpcSummon>,
+}
+
+/// A hound master's whistle (`DisTweaks_AIBehavior_SummonWolfhound` among its brain's behaviours):
+/// fighting, it calls up to `max` wolfhounds (`m_iMaxHoundsToSummon`), of its own squad only if
+/// `squad` (`m_bSquadTagMustMatch`), again after `interval` s (`m_fSummonInterval`), its whistle
+/// (`m_SFX_Whistle`) heard as far as its `loudness` (`m_SummonLoudness`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct NpcSummon {
+    pub max: u32,
+    pub squad: bool,
+    pub interval: f32,
+    pub whistle: String,
+    pub loudness: String,
 }
 
 /// A whale butcher's saw (`DisDLC06Tweaks_WepSaw`, its NPC contexts):

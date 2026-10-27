@@ -3874,6 +3874,33 @@ impl<'a> Cooker<'a> {
         Some(saw)
     }
 
+    /// A hound master's whistle: its brain's `DisTweaks_AIBehavior_SummonWolfhound` (at normal
+    /// difficulty), its fields as it or what it falls back on has them.
+    fn summon_hounds(&mut self, pawn: &Obj) -> Option<crate::format::NpcSummon> {
+        let brain = self.tweak_obj(pawn, "m_pBrainTweak")?;
+        let Some((pkg, Value::Array { count, offset, size })) = self.tweak_prop(&brain, "m_BehaviorTweak", 0, 0) else { return None };
+        let b = parse_struct_array(&pkg, offset, size, count)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|b| match b.get_idx("m_Difficulty", 1) {
+                Some(Value::Object(o)) if *o != 0 => self.assets.resolve(&pkg, *o),
+                _ => None,
+            })
+            .find(|b| b.class() == "DisTweaks_AIBehavior_SummonWolfhound")?;
+        let max = match self.tweak_prop(&b, "m_iMaxHoundsToSummon", 0, 0) {
+            Some((_, Value::Int(n))) => n.max(0) as u32,
+            _ => 5,
+        };
+        let squad = !matches!(self.tweak_prop(&b, "m_bSquadTagMustMatch", 0, 0), Some((_, Value::Bool(false))));
+        let interval = self.tweak_float(&b, "m_fSummonInterval", 0).unwrap_or(30.0);
+        let whistle = self.tweak_obj(&b, "m_SFX_Whistle").map(|o| o.name().to_string()).unwrap_or_default();
+        let loudness = match self.tweak_prop(&b, "m_SummonLoudness", 0, 0) {
+            Some((_, Value::Enum(e) | Value::Name(e))) => e,
+            _ => "EAINoiseLoudness3".into(),
+        };
+        Some(crate::format::NpcSummon { max, squad, interval, whistle, loudness })
+    }
+
     /// How a character paces its fight: its combat behaviour's (its brain's `m_BehaviorTweak`,
     /// at normal difficulty) `DisTweaks_AISubProcess_ManageAttacks` among its
     /// `m_SubProcessTweaks`.
@@ -4468,6 +4495,7 @@ impl<'a> Cooker<'a> {
         st.plague = self.npc_plague(pawn);
         st.gravehound = self.gravehound(pawn);
         st.pacing = self.pacing(pawn);
+        st.summon = self.summon_hounds(pawn);
         st.danger = self.danger_steering(pawn);
         st.loco = self.npc_loco(pawn);
         log::debug!(

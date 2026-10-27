@@ -1788,6 +1788,21 @@ fields no longer show their stand-in "WW" behind the title.
     wide) keeps the others out of its line.
   - His cuts meet no blade (`m_bDisableVersus`): no blade locks with a saw.
   - Butchers are named "Whale Butcher" in the logs and scripts.
+- **Hound masters whistle for their wolfhounds** (`aiworld::summon_hounds`, the brain's
+  `DisTweaks_AIBehavior_SummonWolfhound`). Before, overseers fought alone, and the backyard's
+  kennel hounds came only when another hound called for help.
+  - Fighting Corvo and knowing where he is, a hound master whistles (`m_SFX_Whistle`,
+    `Snd_AI_Overseer_Dog_Whistle`, heard as far as its `m_SummonLoudness`). Up to
+    `m_iMaxHoundsToSummon` wolfhounds then come at him, again every `m_fSummonInterval` (30 s)
+    while it fights.
+  - It calls its own squad's hounds, or any squad's without `m_bSquadTagMustMatch`. The
+    Overseer office's backyard masters use `TweaksBehavior_SummonWH_InterSquad`: three hounds,
+    any squad, so they bring the barracks' and the yard's. The office's and the kennel's own
+    masters call only their squad's, which has none.
+  - Hounds standing about come first, nearest first. Then come the kennels' hounds that wait for
+    a call (`m_bSpawnOnHearHelpRequest`), spawned as reinforcements are and sent at him.
+  - Our readings, since the original's pack process isn't decoded: the whistle's 50 m reach, and
+    sleeping hounds staying asleep.
 - **A character carries what its loadout holds, even nothing** (`m_ContentInventoryLoadout`).
   Before, a type whose loadout was empty was armed by its kind's guess: the weeping thugs of the
   Distillery District and the Flooded District, Coldridge's prisoners in their cells, and the

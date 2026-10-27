@@ -17,6 +17,7 @@
 //! - guards protecting the neutral (`DisTweaks_AIBrain.m_bProtectNeutrals`,
 //!   `DisSeqAct_AIProtectNeutralsOverride`): Corvo striking a neutral in their sight turns them
 //!   on him;
+//! - hound masters' whistles (`DisTweaks_AIBehavior_SummonWolfhound`): the wolfhounds called at Corvo;
 //! - reinforcements: spawners waiting for the alarm (`m_SpawnAtSuspicionLevel`) or their squad's
 //!   call for help (`m_bSpawnOnHearHelpRequest`) spawn then, unseen by Corvo and away from him
 //!   unless allowed (`m_bCanSpawnWhenVisible`, `m_bCanSpawnWhenPlayerNear`).
@@ -39,7 +40,7 @@ impl Plugin for AiWorldPlugin {
             .add_message::<FleePointReached>()
             .add_systems(OnEnter(GameState::InGame), build_ai_world.after(crate::level::LevelSpawnSet))
             .add_systems(Update, (script_commands, trespass, protect_neutrals).chain().before(crate::npc::npc_perception).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (tethers, ambushes, reinforcements).chain().after(crate::npc::npc_brain).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (tethers, ambushes, reinforcements, summon_hounds).chain().after(crate::npc::npc_brain).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -73,6 +74,8 @@ pub struct AiWorld {
     reinforced: HashSet<u32>,
     /// squads that called for help
     called: HashSet<String>,
+    /// the kennels' hounds a whistle called (by spawner), and where Corvo was
+    whistled: HashMap<u32, Vec3>,
 }
 
 fn inside(hulls: &[Collider], p: Vec3) -> bool {
@@ -409,5 +412,111 @@ fn reinforcements(
         ai.reinforced.insert(i);
         info!("reinforcement: {} ({})", sp.name, if by_help { "help called" } else { "alarm" });
         requests.write(SpawnRequest(i));
+    }
+}
+
+/// How far a hound master's whistle carries to the wolfhounds (m: our reading; the original's
+/// pack process isn't decoded).
+const WHISTLE_REACH: f32 = 50.0;
+
+/// Whether a character is a wolfhound (not one sleeping, nor a body the hounds ate).
+fn is_hound(n: &Npc) -> bool {
+    let p = n.pawn.to_ascii_lowercase();
+    p.contains("wolfhound") && !p.contains("asleep") && !p.contains("eaten")
+}
+
+/// A hound master's whistle (`DisTweaks_AIBehavior_SummonWolfhound`): fighting Corvo and knowing
+/// where he is, it whistles (`m_SFX_Whistle`, heard as far as `m_SummonLoudness`) and up to
+/// `m_iMaxHoundsToSummon` wolfhounds within its whistle's reach (of its squad, with
+/// `m_bSquadTagMustMatch`) come at him: those standing about first, the nearest first, then the
+/// kennels' waiting for a call (`m_bSpawnOnHearHelpRequest`), as reinforcements come. Again after
+/// `m_fSummonInterval` (30 s) while it fights. The backyard's hound masters call any squad's
+/// (`TweaksBehavior_SummonWH_InterSquad`, three); the office's and the kennel's their own.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn summon_hounds(
+    level: Option<Res<LevelInfo>>,
+    mut ai: ResMut<AiWorld>,
+    mut npcs: Query<(Entity, &mut Npc, &Transform, &FromSpawner)>,
+    player: Query<&Transform, (With<Player>, Without<Npc>)>,
+    (time, data): (Res<Time>, Res<crate::gamedata::Data>),
+    (mut requests, mut sfx, mut noise): (MessageWriter<SpawnRequest>, MessageWriter<crate::audio::PostEvent>, MessageWriter<crate::gameplay::Noise>),
+    mut timers: Local<HashMap<Entity, f32>>,
+) {
+    let dt = time.delta_secs();
+    let (Some(level), Ok(pt)) = (level, player.single()) else { return };
+    let ppos = pt.translation;
+    for t in timers.values_mut() {
+        *t -= dt;
+    }
+    let masters: Vec<(Entity, Vec3, String, dhcook::format::NpcSummon)> = npcs
+        .iter()
+        .filter(|(_, n, _, _)| !n.is_down() && n.mode == Mode::Combat && n.alert == Alert::Combat && n.last_seen.is_some())
+        .filter_map(|(e, n, t, _)| n.arms.summon.clone().map(|s| (e, t.translation, n.squad.to_ascii_lowercase(), s)))
+        .collect();
+    for (me, at, squad, s) in masters {
+        if timers.get(&me).is_some_and(|t| *t > 0.0) || s.max == 0 {
+            continue;
+        }
+        timers.insert(me, s.interval);
+        let of_squad = |q: &str| !s.squad || q.eq_ignore_ascii_case(&squad);
+        // the hounds about, not yet at him, nearest first
+        let mut near: Vec<(Entity, f32)> = npcs
+            .iter()
+            .filter(|(_, n, t, _)| is_hound(n) && !n.is_down() && n.alert != Alert::Combat && of_squad(&n.squad) && t.translation.distance(at) < WHISTLE_REACH)
+            .map(|(e, _, t, _)| (e, t.translation.distance(at)))
+            .collect();
+        near.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let mut called = 0;
+        for (e, _) in near.into_iter().take(s.max as usize) {
+            if let Ok((_, mut n, _, _)) = npcs.get_mut(e) {
+                n.alert = Alert::Combat;
+                n.awareness = 1.0;
+                n.last_seen = Some(ppos);
+                n.set_mode(Mode::Combat);
+                called += 1;
+            }
+        }
+        // then the kennels' waiting for a call
+        let present: HashSet<u32> = npcs.iter().map(|(_, _, _, f)| f.0).collect();
+        let mut waiting: Vec<(u32, f32)> = level
+            .scene
+            .spawners
+            .iter()
+            .enumerate()
+            .filter(|(i, sp)| sp.spawn_on_help && !sp.spawn_on_begin_play && !present.contains(&(*i as u32)) && !ai.reinforced.contains(&(*i as u32)) && of_squad(&sp.squad))
+            .filter(|(_, sp)| sp.npc_type.and_then(|t| level.scene.npc_types.get(t as usize)).is_some_and(|t| t.name.to_ascii_lowercase().contains("wolfhound")))
+            .map(|(i, sp)| (i as u32, Vec3::from(sp.position).distance(at)))
+            .filter(|(_, d)| *d < WHISTLE_REACH)
+            .collect();
+        waiting.sort_by(|a, b| a.1.total_cmp(&b.1));
+        for (i, _) in waiting.into_iter().take((s.max as usize).saturating_sub(called)) {
+            ai.reinforced.insert(i);
+            ai.whistled.insert(i, ppos);
+            requests.write(SpawnRequest(i));
+            called += 1;
+        }
+        if !s.whistle.is_empty() {
+            sfx.write(crate::audio::PostEvent::named(&s.whistle, Some(at)));
+        }
+        let radius = data.0.noise_loudness.get(&s.loudness).copied().unwrap_or(10.0);
+        noise.write(crate::gameplay::Noise { pos: at, radius, kind: crate::gameplay::NoiseKind::Threatening, corvo: false });
+        info!("hound master whistles: {called} wolfhounds called");
+    }
+    // the hounds whistled out of their kennels come at him as they appear
+    if !ai.whistled.is_empty() {
+        let whistled = std::mem::take(&mut ai.whistled);
+        for (_, mut n, _, f) in &mut npcs {
+            if let Some(&to) = whistled.get(&f.0) {
+                if !n.is_down() {
+                    n.alert = Alert::Combat;
+                    n.awareness = 1.0;
+                    n.last_seen = Some(to);
+                    n.set_mode(Mode::Combat);
+                }
+            }
+        }
+        // (not yet come: kept a while)
+        let present: HashSet<u32> = npcs.iter().map(|(_, _, _, f)| f.0).collect();
+        ai.whistled = whistled.into_iter().filter(|(i, _)| !present.contains(i)).collect();
     }
 }
