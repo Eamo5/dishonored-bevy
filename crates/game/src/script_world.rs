@@ -266,7 +266,7 @@ fn scripted_shots(
             sn.yaw = (-flat.x).atan2(-flat.z);
         }
         let hit = rand::random::<f32>() < q.4;
-        shots.write(crate::npc::NpcShot { from, to: at, bow: sn.ranged >= 2, miss: !hit });
+        shots.write(crate::npc::NpcShot { from, to: at, bow: sn.ranged >= 2, miss: !hit, saw: false });
         noise.write(crate::gameplay::Noise { corvo: false, pos: from, radius: 40.0, kind: crate::gameplay::NoiseKind::Danger });
         if hit {
             // (the pistol's 20; a character's bullet kills another outright:
@@ -1249,7 +1249,7 @@ fn script_blasts(
 ) {
     let Some(mut vm) = vm else { return };
     for (a, b, flare) in std::mem::take(&mut vm.projectiles) {
-        shots.write(crate::npc::NpcShot { from: a, to: b, bow: true, miss: false });
+        shots.write(crate::npc::NpcShot { from: a, to: b, bow: true, miss: false, saw: false });
         if flare {
             fx.write(crate::particles::SpawnEffect { secs: 6.0, ..crate::particles::SpawnEffect::at("flare_trail", b) });
         }

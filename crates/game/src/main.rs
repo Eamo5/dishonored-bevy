@@ -97,6 +97,7 @@ mod summon;
 mod gravehound;
 mod pull;
 mod tentacle;
+mod saw;
 mod witch;
 mod player;
 mod postfx;
@@ -254,7 +255,7 @@ fn main() -> AppExit {
             ue3mat::Ue3Plugin,
             particles::ParticlePlugin,
             trails::TrailsPlugin,
-            (ragdoll::RagdollPlugin, feet::FeetPlugin, summon::SummonPlugin, pull::PullPlugin, witch::WitchPlugin, tentacle::TentaclePlugin, gravehound::GravehoundPlugin),
+            (ragdoll::RagdollPlugin, feet::FeetPlugin, summon::SummonPlugin, pull::PullPlugin, witch::WitchPlugin, tentacle::TentaclePlugin, gravehound::GravehoundPlugin, saw::SawPlugin),
             powers::PowersPlugin,
             hud::HudPlugin,
             script::ScriptPlugin,

@@ -238,6 +238,8 @@ struct Cooker<'a> {
     lm_pair_ids: HashMap<String, u32>,
     sun_guids: Vec<[u32; 4]>,
     npc_type_ids: HashMap<String, Option<u32>>,
+    /// the meshes characters' weapons are held as (`m_pEquippedMesh`), cooked as `wep:<path>` props
+    weapon_meshes: std::collections::BTreeSet<String>,
     ragdoll_ids: HashMap<String, Option<u32>>,
     skeleton_ids: HashMap<String, u32>,
     anim_set_ids: HashMap<String, Option<u32>>,
@@ -375,6 +377,7 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
         lm_pair_ids: HashMap::new(),
         sun_guids: Vec::new(),
         npc_type_ids: HashMap::new(),
+        weapon_meshes: Default::default(),
         ragdoll_ids: HashMap::new(),
         skeleton_ids: HashMap::new(),
         anim_set_ids: HashMap::new(),
@@ -3535,11 +3538,16 @@ impl<'a> Cooker<'a> {
             let socket = s.name("m_Socket").unwrap_or_default().to_string();
             let Some(tw) = s.object("m_pAttachmentTweaks").and_then(|o| self.assets.resolve(&pkg, o)) else { continue };
             let tc = self.chain(&tw);
+            // (one not drawn and not to be broken: a butcher's saw's stand-in for its blade's
+            // traces, `m_bIsInvisible`; his saw is the one in his hand)
+            if tc.bool("m_bIsInvisible") == Some(true) && tc.float("m_Health").is_none() && tc.get("m_Steps").is_none() {
+                continue;
+            }
             let Some(mesh_obj) = tc.obj(self.assets, "m_pStaticMesh").filter(|m| m.class() == "StaticMesh") else { continue };
             let prop = format!("att:{}", tw.path());
             if !self.scene.props.iter().any(|p| p.name == prop) {
                 let Ok(Some((mesh, materials))) = self.cook_mesh(&mesh_obj) else { continue };
-                self.scene.props.push(PropDef { name: prop.clone(), mesh, materials, blade: None, muzzle: None });
+                self.scene.props.push(PropDef { name: prop.clone(), mesh, materials, blade: None, muzzle: None, edge: None });
             }
             // (damage types: class names)
             let types = |c: &Chain, name: &str| -> Vec<String> {
@@ -3580,7 +3588,7 @@ impl<'a> Cooker<'a> {
             let prop = format!("acc:{}", mesh.path());
             if !c.scene.props.iter().any(|p| p.name == prop) {
                 let Ok(Some((m, materials))) = c.cook_mesh(mesh) else { return None };
-                c.scene.props.push(PropDef { name: prop.clone(), mesh: m, materials, blade: None, muzzle: None });
+                c.scene.props.push(PropDef { name: prop.clone(), mesh: m, materials, blade: None, muzzle: None, edge: None });
             }
             Some(prop)
         };
@@ -3723,6 +3731,10 @@ impl<'a> Cooker<'a> {
     /// A blade move's kind from its context's class (the tweak's `DisTweaks_<x>`, or the
     /// context's own `DisItemContext_<x>`).
     fn melee_kind(class: &str) -> Option<&'static str> {
+        // (a whale butcher's saw's spray of shrapnel)
+        if class == "DisDLC06Tweaks_NPCFireSaw" {
+            return Some("SawFire");
+        }
         let x = class.strip_prefix("DisTweaks_").or_else(|| class.strip_prefix("DisItemContext_"))?;
         Some(match x {
             "NPCAttackShort" => "Short",
@@ -3810,6 +3822,56 @@ impl<'a> Cooker<'a> {
             return patterns.iter().map(|p| self.pattern_overrides(p)).collect();
         }
         Vec::new()
+    }
+
+    /// A whale butcher's saw (`DisDLC06Tweaks_WepSaw`): its running blade's cut
+    /// (`DisDLC06Tweaks_NPCSawCut`), its spray (`DisDLC06Tweaks_NPCFireSaw`), and the danger its
+    /// combat behaviour lays while it sprays (`DisDLC06Tweaks_AIBehavior_ButcherCombat`).
+    fn saw(&mut self, pawn: &Obj, w: &Obj) -> Option<crate::format::NpcSaw> {
+        let contexts = self.npc_contexts(w);
+        let cut = contexts.iter().find(|c| c.class() == "DisDLC06Tweaks_NPCSawCut")?.clone();
+        let mut saw = crate::format::NpcSaw::default();
+        for i in 0..4 {
+            saw.cut_dps[i] = self.tweak_float(&cut, "m_SawDamagePerSecond", i as i32).unwrap_or(0.0);
+        }
+        saw.radius = self.tweak_float(&cut, "m_fSawDamageRadius", 0).unwrap_or(200.0) * UNIT;
+        saw.angle = self.tweak_float(&cut, "m_fSawDamageAngleDeg", 0).unwrap_or(40.0);
+        saw.width = self.tweak_float(&cut, "m_fSawDamageOriginWidth", 0).unwrap_or(85.0) * UNIT;
+        saw.rate = match self.tweak_prop(&cut, "m_MaxSawDamageApplicationsPerSecond", 0, 0) {
+            Some((_, Value::Int(n))) => n as f32,
+            _ => 20.0,
+        };
+        let ranged = |s: &mut Self, tw: &Obj, n: &str, d: [f32; 2]| match s.tweak_prop(tw, n, 0, 0) {
+            Some((_, Value::Struct(_, r))) => {
+                let p = Props(r);
+                [p.float("m_fMinValue").unwrap_or(d[0]), p.float("m_fMaxValue").unwrap_or(d[1])]
+            }
+            _ => d,
+        };
+        if let Some(fire) = contexts.iter().find(|c| c.class() == "DisDLC06Tweaks_NPCFireSaw").cloned() {
+            saw.delay = ranged(self, &fire, "m_FiringDelay", [0.05, 0.1]);
+            saw.duration = self.tweak_float(&fire, "m_fAbortMaxFiringDuration", 0).unwrap_or(2.5);
+            let speed = ranged(self, &fire, "m_ProjectileSpeed", [10000.0, 10000.0]);
+            saw.speed = (speed[0] + speed[1]) * 0.5 * UNIT;
+            saw.spread = self.tweak_float(&fire, "m_fProjectileMaxSpread", 0).unwrap_or(100.0) * UNIT;
+        }
+        // (its combat behaviour, at normal difficulty)
+        if let Some(brain) = self.tweak_obj(pawn, "m_pBrainTweak") {
+            if let Some((pkg, Value::Array { count, offset, size })) = self.tweak_prop(&brain, "m_BehaviorTweak", 0, 0) {
+                let combat = parse_struct_array(&pkg, offset, size, count)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|b| match b.get_idx("m_Difficulty", 1) {
+                        Some(Value::Object(o)) if *o != 0 => self.assets.resolve(&pkg, *o),
+                        _ => None,
+                    })
+                    .find(|b| b.class() == "DisDLC06Tweaks_AIBehavior_ButcherCombat");
+                if let Some(b) = combat {
+                    saw.danger = [self.tweak_float(&b, "m_fSawDangerCapsuleLength", 0).unwrap_or(0.0) * UNIT, self.tweak_float(&b, "m_fSawDangerCapsuleRadius", 0).unwrap_or(0.0) * UNIT];
+                }
+            }
+        }
+        Some(saw)
     }
 
     /// How a character paces its fight: its combat behaviour's (its brain's `m_BehaviorTweak`,
@@ -4187,7 +4249,7 @@ impl<'a> Cooker<'a> {
                 let name = format!("acc:{}", mesh.path());
                 if !self.scene.props.iter().any(|p| p.name == name) {
                     let Ok(Some((m, materials))) = self.cook_mesh(&mesh) else { return None };
-                    self.scene.props.push(PropDef { name: name.clone(), mesh: m, materials, blade: None, muzzle: None });
+                    self.scene.props.push(PropDef { name: name.clone(), mesh: m, materials, blade: None, muzzle: None, edge: None });
                 }
                 Some(name)
             }),
@@ -4320,6 +4382,19 @@ impl<'a> Cooker<'a> {
                 wep.melee = self.dis_attribute(&a, "m_MeleeDamage").unwrap_or_default();
                 wep.ranged = self.dis_attribute(&a, "m_RangedDamage").unwrap_or_default();
             }
+            // (its clips' prefix, its look in the hand and where it is held and put away: a
+            // butcher's cleaver in his right hand, his saw in his left, never put away)
+            let name_of = |s: &mut Self, n: &str, i: i32| match s.tweak_prop(&w, n, i, 0) {
+                Some((_, Value::Name(x))) if x != "None" => x,
+                _ => String::new(),
+            };
+            wep.prefix = name_of(self, "m_ItemPrefix", 0);
+            wep.socket = name_of(self, "m_Sockets", 1);
+            wep.holster = name_of(self, "m_Sockets", 2);
+            if let Some(m) = self.tweak_obj(&w, "m_pNPCSpecificTweaks").and_then(|n| self.tweak_obj(&n, "m_pEquippedMesh")).filter(|m| matches!(m.class().as_str(), "SkeletalMesh" | "StaticMesh")) {
+                wep.mesh = format!("wep:{}", m.path());
+                self.weapon_meshes.insert(m.path());
+            }
             let first_ammo = match self.tweak_prop(&w, "m_RangedAmmoTypes", 0, 0) {
                 Some((pkg, Value::Array { count, offset, size })) if count > 0 => parse_struct_array(&pkg, offset, size, count).ok().and_then(|a| a.into_iter().next()).map(|f| (pkg, f)),
                 _ => None,
@@ -4359,7 +4434,10 @@ impl<'a> Cooker<'a> {
             if st.taunt.is_none() {
                 st.taunt = self.taunt_context(&w);
             }
-            if st.melee.is_empty() && matches!(w.class().as_str(), "DisTweaks_WepSword" | "DisTweaks_WepSwordOfAssassin" | "DisTweaks_Item_WolfhoundBite") {
+            if w.class() == "DisDLC06Tweaks_WepSaw" && st.saw.is_none() {
+                st.saw = self.saw(pawn, &w);
+            }
+            if st.melee.is_empty() && matches!(w.class().as_str(), "DisTweaks_WepSword" | "DisTweaks_WepSwordOfAssassin" | "DisTweaks_Item_WolfhoundBite" | "DisDLC06Tweaks_WepSaw") {
                 st.melee = self.melee_moves(&w);
                 st.attack_patterns = self.attack_patterns(pawn, "m_AttackPatterns");
                 st.outer_patterns = self.attack_patterns(pawn, "m_OuterSkirmishAttackPatterns");
@@ -7581,6 +7659,12 @@ impl<'a> Cooker<'a> {
             ("chokedust", "DLC06_VFX_Weapon.Effects.Chokedust.Chokedust_Explosion"),
             ("chokedust_trail", "DLC06_VFX_Weapon.Effects.Chokedust.Chokedust_Trail"),
             ("bolt_explosion", "vfx_characters.Effects.ps_TB_ArrowExplosion"),
+            // (the whale butchers' saws: running (`m_pSawEquippedPS` at `BladePivot`), sparking as
+            // they spray (`m_pFireLoopPS` at `Muzzle`) and the shrapnel's trail
+            // (`DLC06_Proj_SawProjectile.m_pTrailEffect`))
+            ("saw_running", "DLC06_VFX_Gameplay.Effects.Butcher.Butcher_Saw_Melee"),
+            ("saw_sparks", "DLC06_VFX_Gameplay.Effects.Butcher.Butcher_Projectile_Sparks"),
+            ("saw_shrapnel", "DLC06_VFX_Gameplay.Effects.Butcher.Butcher_Saw_Projectile_Trail"),
             // (the witches': vanishing and coming back (`m_pDisappearanceEffect`,
             // `m_pReappearanceEffect`), the scream, the magic's trail and where it strikes
             // (`DLC07_Proj_WitchMagic.m_pTrailEffect`), a tentacle called up; the tentacles'
@@ -7758,8 +7842,13 @@ impl<'a> Cooker<'a> {
                 }
             }
         }
+        // (the characters' weapons as each holds its own: a butcher's cleaver, his saw)
+        props.extend(self.weapon_meshes.iter().map(|p| (format!("wep:{p}"), p.clone())));
         for (name, path) in props.iter() {
             let (name, path) = (name.as_str(), path.as_str());
+            if self.scene.props.iter().any(|p| p.name == name) {
+                continue;
+            }
             let Some(obj) = self.assets.find(path) else {
                 // (the music box and the thugs' bottle are only on the maps that have them)
                 if name == "musicbox" || name == "thug_bottle" {
@@ -7769,6 +7858,13 @@ impl<'a> Cooker<'a> {
                 }
                 continue;
             };
+            // (a weapon that is a static mesh)
+            if obj.class() == "StaticMesh" {
+                if let Ok(Some((mesh, materials))) = self.cook_mesh(&obj) {
+                    self.scene.props.push(PropDef { name: name.to_string(), mesh, materials, blade: None, muzzle: None, edge: None });
+                }
+                continue;
+            }
             let d = match skeletal::read_skeletal_mesh(&obj.pkg, obj.idx) {
                 Ok(d) => d,
                 Err(e) => {
@@ -7802,11 +7898,13 @@ impl<'a> Cooker<'a> {
             // (a sword: its blade's ends, what its swings' trails span)
             let blade = keyhole_socket(&obj, "BladeExtent_BL").zip(keyhole_socket(&obj, "BladeExtent_UR")).map(|(a, b)| [a.to_array(), b.to_array()]);
             // (a gun: its muzzle, where its flash plays)
-            let muzzle = ["Spitfire", "Ps_Muzzle_Socket"].iter().find_map(|s| socket_frame(&obj, s)).map(|(p, r)| {
+            // (a saw's blade edge: where its cut is reckoned from)
+            let edge = keyhole_socket(&obj, "BladeEdge").map(|p| p.to_array());
+            let muzzle = ["Spitfire", "Ps_Muzzle_Socket", "Muzzle"].iter().find_map(|s| socket_frame(&obj, s)).map(|(p, r)| {
                 let (p, r) = (p.to_array(), r.to_array());
                 [p[0], p[1], p[2], r[0], r[1], r[2], r[3]]
             });
-            self.scene.props.push(PropDef { name: name.to_string(), mesh, materials, blade, muzzle });
+            self.scene.props.push(PropDef { name: name.to_string(), mesh, materials, blade, muzzle, edge });
         }
         // the musical Overseers' music box, skinned: its crank turns, its levers and lid move,
         // in clips named as its wearer's arms' (`Overseer_MusicBox_as`: `MusicBox_PlayMusic_Loop`

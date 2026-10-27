@@ -1759,6 +1759,35 @@ fields no longer show their stand-in "WW" behind the title.
   (`DisBehaviorStolen`, at its 100% occurrence; 4 s is our reading): if nothing has set it on
   edge it stops and checks its pockets (the guards' `Empty_CheckPockets`) and says so
   (`ROBBED`: "Hey, I got snaked.", "How did I lose that? It was right here.").
+- **Whale butchers' saws** (`saw.rs`; The Knife of Dunwall's `DLC06_Pwn_SawButcher`, holding
+  `DLC06_Inv_SawButcher`, a `DisDLC06Tweaks_WepSaw`). Before, a saw butcher stood in a T-pose
+  with his arms out whenever he fought, held no saw, and was named "Citizen".
+  - A character's fighting clips now follow its weapon's `m_ItemPrefix`. The saw's is `Saw_`:
+    `Saw_Idle`, `Saw_WalkN`, `Saw_RunN`, `Saw_Equip`, its short and medium cuts and its jump
+    attack. Before, the swordsmen's `Sword_` clips were asked for, and the butcher's skeleton had
+    none to play.
+  - Its weapon is drawn as its own `m_pNPCSpecificTweaks.m_pEquippedMesh` (`DLC06_ButcherSaw`;
+    the cleaver butchers' `DLC06_ButcherCleaver`, the assassins' sword), held on its
+    `m_Sockets[1]` (the saw in his left hand, `SawWpn`) and put away on `m_Sockets[2]`. The saw
+    attachment that is only an invisible stand-in for its traces (`m_bIsInvisible`) is no longer
+    drawn.
+  - Running, the saw cuts Corvo before its blade (`DisDLC06Tweaks_NPCSawCut`, "Continuous
+    Blade"): within `m_fSawDamageRadius` (2 m) of its `BladeEdge`, in a wedge
+    `m_fSawDamageOriginWidth` (0.85 m) wide opening at `m_fSawDamageAngleDeg` (40 degrees),
+    `m_SawDamagePerSecond` (5, 10, 20, 40 by difficulty), at most
+    `m_MaxSawDamageApplicationsPerSecond` (20) times a second. It doesn't cut while he is
+    staggered, down or spraying (`m_DamageDisabledStates`). A block doesn't stop it (our
+    reading). It runs with its effect (`m_pSawEquippedPS`, `Butcher_Saw_Melee`) and its drone.
+  - His spray of shrapnel (`DisDLC06Tweaks_NPCFireSaw`): 3 to 35 m off, within 10 degrees,
+    every 8 to 11 s. He raises the saw (`Saw_RangeAttack_In`), sprays a shot every
+    `m_FiringDelay` (0.05 to 0.1 s) for the loop (`m_fAbortMaxFiringDuration` 2.5 s at most),
+    turning after Corvo, and lowers it (`_Out`). Each shot (`DLC06_Proj_SawProjectile`, 4 damage
+    on normal) hits by his accuracy over its reach; its sparks (`m_pFireLoopPS`) fly at the
+    muzzle and its trail flies to its mark, or past it to where it strikes. While he sprays, his
+    combat behaviour's danger capsule (`DisDLC06Tweaks_AIBehavior_ButcherCombat`: 7.5 m long, 5 m
+    wide) keeps the others out of its line.
+  - His cuts meet no blade (`m_bDisableVersus`): no blade locks with a saw.
+  - Butchers are named "Whale Butcher" in the logs and scripts.
 - **River krusts**: the Flooded District's shellfish (`DisRiverKrust`) play their tweak's
   states (`m_AnimSequences`): shut in the shell, opening when someone comes within range and
   in sight, spitting volleys of acid that arc and lead a moving target (damage by

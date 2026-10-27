@@ -531,6 +531,8 @@ pub struct Arms {
     pub whiskey: Option<dhcook::format::NpcWhiskey>,
     /// a witch's spells (`witch`)
     pub witch: Option<dhcook::format::NpcWitch>,
+    /// a whale butcher's saw: its running blade and its spray (`saw`)
+    pub saw: Option<dhcook::format::NpcSaw>,
     /// how it paces its fight (its combat behaviour's)
     pub pacing: Option<dhcook::format::NpcPacing>,
     /// how danger zones steer it, and the one its aim lays (`danger`)
@@ -548,7 +550,7 @@ pub struct Arms {
 
 impl Default for Arms {
     fn default() -> Self {
-        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, witch: None, pacing: None, danger: Default::default(), turning: LocoTurn::default(), throwing: None, outer_only: Vec::new(), outer_place: None }
+        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, witch: None, saw: None, pacing: None, danger: Default::default(), turning: LocoTurn::default(), throwing: None, outer_only: Vec::new(), outer_place: None }
     }
 }
 
@@ -622,6 +624,9 @@ pub enum MoveKind {
     /// (`Sword_Gun_AttackUnderTable`)
     Under,
     UnderGun,
+    /// a whale butcher's saw spraying shrapnel at Corvo (`DisDLC06Tweaks_NPCFireSaw`: raised, held
+    /// spraying a shot a moment, lowered)
+    SawFire,
 }
 
 impl MoveKind {
@@ -639,6 +644,7 @@ impl MoveKind {
             "Right90" => MoveKind::Right90,
             "Left180" => MoveKind::Left180,
             "Right180" => MoveKind::Right180,
+            "SawFire" => MoveKind::SawFire,
             _ => MoveKind::Short,
         }
     }
@@ -660,11 +666,14 @@ impl MoveKind {
     }
 }
 
+/// The weapons characters fight hand to hand with: a sword, an assassin's, a whale butcher's saw.
+const BLADES: [&str; 3] = ["DisTweaks_WepSword", "DisTweaks_WepSwordOfAssassin", "DisDLC06Tweaks_WepSaw"];
+
 /// What a character's weapons are: a blade, a firearm or bow (and which: 1 pistol, 2 a
 /// tallboy's bow, 3 an assassin's wrist bow).
 pub fn weapon_kinds(st: &dhcook::format::NpcStats) -> (bool, u8) {
     let has = |c: &str| st.weapons.iter().any(|w| w.class == c);
-    let blade = has("DisTweaks_WepSword") || has("DisTweaks_WepSwordOfAssassin");
+    let blade = BLADES.iter().any(|c| has(c));
     let ranged = if has("DisTweaks_WepTallboyBow") {
         2
     } else if has("DisTweaks_WepPistol") {
@@ -683,11 +692,11 @@ impl Arms {
         let mut a = Arms::default();
         let at = |n: &str| st.attributes.get(n).map(|v| v[d]);
         // the blade (a tallboy's bow has its own blows), then the firearm or bow
-        let blade = ["DisTweaks_WepSword", "DisTweaks_WepSwordOfAssassin", "DisTweaks_WepTallboyBow", "DisTweaks_WepWhiskeyBottle"].iter().find_map(|c| st.weapons.iter().find(|w| w.class == *c));
+        let blade = ["DisTweaks_WepSword", "DisTweaks_WepSwordOfAssassin", "DisDLC06Tweaks_WepSaw", "DisTweaks_WepTallboyBow", "DisTweaks_WepWhiskeyBottle"].iter().find_map(|c| st.weapons.iter().find(|w| w.class == *c));
         if let Some(w) = blade {
             a.melee = w.melee[d];
         }
-        let gun = ["DisTweaks_WepPistol", "DisTweaks_WepTallboyBow", "DisTweaks_WepSwordOfAssassin", "DisDLC06Tweaks_WepWitchHand"].iter().find_map(|c| st.weapons.iter().find(|w| w.class == *c));
+        let gun = ["DisTweaks_WepPistol", "DisTweaks_WepTallboyBow", "DisTweaks_WepSwordOfAssassin", "DisDLC06Tweaks_WepWitchHand", "DisDLC06Tweaks_WepSaw"].iter().find_map(|c| st.weapons.iter().find(|w| w.class == *c));
         if let Some(w) = gun {
             a.ranged = if w.projectile_damage > 0.0 { w.projectile_damage } else { w.ranged[d] * w.projectile_mult };
         }
@@ -704,6 +713,7 @@ impl Arms {
         a.moves = st.melee.clone();
         a.whiskey = st.whiskey.clone();
         a.witch = st.witch.clone();
+        a.saw = st.saw.clone();
         a.pacing = st.pacing.clone();
         a.danger = st.danger.clone();
         a.turning = LocoTurn::of(&st.loco);
@@ -1048,6 +1058,9 @@ fn display_name(pawn: &str) -> &'static str {
         "Empress"
     } else if p.contains("sokolov") {
         "Sokolov"
+    } else if p.contains("butcher") {
+        // (The Knife of Dunwall's: `DLC06_Pwn_SawButcher`, `_CleaverButcher`)
+        "Whale Butcher"
     } else {
         "Citizen"
     }
@@ -2022,6 +2035,35 @@ pub struct NpcShot {
     pub to: Vec3,
     pub bow: bool,
     pub miss: bool,
+    /// a whale butcher's saw's shrapnel (`DLC06_Proj_SawProjectile`: unseen but for its trail)
+    pub saw: bool,
+}
+
+/// A piece of a saw's shrapnel in flight: where it is going, how fast (m/s).
+#[derive(Component)]
+pub struct Shrapnel {
+    to: Vec3,
+    speed: f32,
+    /// arrived: a moment before it is gone, its trail fading
+    linger: f32,
+}
+
+/// The shrapnel flies to its mark (its trail following it), and is gone.
+pub(crate) fn fly_shrapnel(mut commands: Commands, time: Res<Time>, tc: Res<crate::gameplay::TimeControl>, mut q: Query<(Entity, &mut Transform, &mut Shrapnel)>) {
+    let dt = time.delta_secs() * tc.world_scale();
+    for (e, mut t, mut s) in &mut q {
+        let left = s.to - t.translation;
+        let step = s.speed * dt;
+        if left.length() <= step {
+            t.translation = s.to;
+            s.linger -= dt;
+            if s.linger <= 0.0 {
+                commands.entity(e).try_despawn();
+            }
+        } else {
+            t.translation += left.normalize_or_zero() * step;
+        }
+    }
 }
 
 /// How far a missed bullet flies on (m).
@@ -2032,6 +2074,7 @@ const MISS_REACH: f32 = 80.0;
 /// to one side, and strikes the world as Corvo's do (its effect, its hole).
 #[allow(clippy::too_many_arguments)]
 fn npc_shots(
+    mut commands: Commands,
     mut shots: MessageReader<NpcShot>,
     mut sfx: MessageWriter<crate::audio::PostEvent>,
     mut fx: MessageWriter<crate::particles::SpawnEffect>,
@@ -2041,6 +2084,31 @@ fn npc_shots(
     (level, rapier, surfaces, mut decals): (Option<Res<LevelInfo>>, ReadRapierContext, Query<&crate::footsteps::ColliderSurfaces>, MessageWriter<crate::decals::SpawnDecal>),
 ) {
     for s in shots.read() {
+        // a saw's shrapnel: its spray's sound and sparks, and a piece flying on its trail to its
+        // mark, or past it to where it strikes
+        if s.saw {
+            sfx.write(crate::audio::PostEvent::named("AI_Butcher_Range_Fire", Some(s.from)));
+            let dir = (s.to + Vec3::Y * 0.6 - s.from).normalize_or(Vec3::NEG_Z);
+            fx.write(crate::particles::SpawnEffect { rot: Quat::from_rotation_arc(Vec3::X, dir), secs: 0.2, ..crate::particles::SpawnEffect::at("saw_sparks", s.from) });
+            let mut end = s.to + Vec3::Y * 0.6;
+            if s.miss {
+                let side = dir.cross(Vec3::Y).normalize_or(Vec3::X) * (rand::random::<f32>() - 0.5) * 2.0;
+                let way = (end + side * (0.5 + rand::random::<f32>() * 0.5) + Vec3::Y * (rand::random::<f32>() - 0.5) * 0.8 - s.from).normalize_or(dir);
+                end = s.from + way * MISS_REACH;
+                if let (Some(level), Ok(ctx)) = (level.as_ref(), rapier.single()) {
+                    let world = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
+                    if let Some((_, toi, surface, normal)) = crate::footsteps::ray_surface_normal(&ctx, &surfaces, s.from, way, MISS_REACH, world) {
+                        end = s.from + way * toi;
+                        let struck = crate::impacts::struck(surface);
+                        crate::impacts::spawn(&mut fx, &level.scene, crate::impacts::BULLET, struck, end, normal);
+                    }
+                }
+            }
+            let speed = 100.0;
+            let piece = commands.spawn((Transform::from_translation(s.from), Shrapnel { to: end, speed, linger: 0.3 }, DespawnOnExit(GameState::InGame))).id();
+            fx.write(crate::particles::SpawnEffect { follow: Some(piece), secs: s.from.distance(end) / speed + 0.6, ..crate::particles::SpawnEffect::at("saw_shrapnel", s.from) });
+            continue;
+        }
         let ev = if s.bow { "Snd_AI_TBoy_Bow_Fire" } else { "Snd_Weapon_Gun_Elite_Fire_cue_ak" };
         sfx.write(crate::audio::PostEvent::named(ev, Some(s.from)));
         if s.bow {
@@ -2434,8 +2502,17 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
             None => find(fallback).map(|i| (joints[i], default)),
         }
     };
-    let hand_r = socket("RightHandWpn", &["handAttachment_R_jnt", "hand_R_jnt"], Transform::IDENTITY);
-    let holster = socket("HolsterWpn", &["Holster_jnt"], HOLSTERED);
+    // (its blade held and put away where its weapon says, `m_Sockets`: a butcher's saw in his left
+    // hand, put away nowhere)
+    let blade_wep = stats.and_then(|s| BLADES.iter().find_map(|c| s.weapons.iter().find(|w| w.class == *c)));
+    let hand_r = blade_wep
+        .filter(|w| !w.socket.is_empty() && !w.socket.eq_ignore_ascii_case("RightHandWpn"))
+        .and_then(|w| socket(&w.socket, &[], Transform::IDENTITY))
+        .or_else(|| socket("RightHandWpn", &["handAttachment_R_jnt", "hand_R_jnt"], Transform::IDENTITY));
+    let holster = match blade_wep.map(|w| w.holster.as_str()) {
+        Some(h) if !h.is_empty() && !h.eq_ignore_ascii_case("HolsterWpn") => socket(h, &[], Transform::IDENTITY),
+        _ => socket("HolsterWpn", &["Holster_jnt"], HOLSTERED),
+    };
     for (pi, (mesh, mat)) in vis.parts.parts.iter().enumerate() {
         if skip("visuals") {
             break;
@@ -2475,6 +2552,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
     // weapon in the right hand (its blade, what its swings trail)
     let mut swords = Vec::new();
     let mut blade = None;
+    let mut saw_edge = None;
     if has_sword {
         let prop = if assassin {
             "assassin_sword"
@@ -2488,7 +2566,10 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
             "city_sword"
         };
         let prop = if assets.props.contains_key(prop) { prop } else { "city_sword" };
+        // (its own, where cooked: a butcher's cleaver, his saw)
+        let prop = blade_wep.map(|w| w.mesh.as_str()).filter(|m| assets.props.contains_key(*m)).unwrap_or(prop);
         blade = crate::trails::blade_of(scene, prop);
+        saw_edge = scene.props.iter().find(|p| p.name == prop).and_then(|p| p.edge).map(Vec3::from);
         if let (Some((hand, at)), Some(parts)) = (hand_r, assets.props.get(prop)) {
             for (mesh, mat) in &parts.parts {
                 let mut ec = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), at));
@@ -2580,7 +2661,9 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
     }
     // original animations
     let mut npc = npc;
-    let clips = vis.anims.as_ref().and_then(|lib| NpcClips::resolve(lib).map(|c| (lib.clone(), c)));
+    // (its fighting stance's clips by its blade's prefix, `m_ItemPrefix`)
+    let prefix = blade_wep.map(|w| w.prefix.as_str()).unwrap_or("");
+    let clips = vis.anims.as_ref().and_then(|lib| NpcClips::resolve(lib, prefix).map(|c| (lib.clone(), c)));
     let rig = NpcRig {
         joints: joints.clone(),
         names: bones.iter().map(|b| b.name.clone()).collect(),
@@ -2619,6 +2702,10 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         .id();
     if let (Some(&s0), Some(blade)) = (swords.first(), blade) {
         commands.entity(s0).insert(crate::trails::BladeTrail::new(blade, e, false));
+    }
+    // (a whale butcher's saw: its running blade, reckoned from its edge)
+    if let (Some(&s0), true) = (swords.first(), stats.is_some_and(|s| s.saw.is_some())) {
+        commands.entity(e).insert(crate::saw::SawBlade::new(s0, saw_edge.unwrap_or(Vec3::new(0.9, -0.4, 0.0))));
     }
     if let Some(r) = music_rig {
         commands.entity(r).insert(crate::musicbox::MusicBoxRig { owner: e });
@@ -2698,6 +2785,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 bottle_hand: gun_hand,
                 bottle_holster,
                 bottle_stage: None,
+            saw_stage: None,
                 ragdoll: ty.and_then(|t| t.ragdoll).and_then(|r| scene.ragdolls.get(r as usize)).is_some_and(|r| r.bodies.iter().filter(|b| bones.iter().any(|x| x.name.eq_ignore_ascii_case(&b.bone))).count() >= 2),
             },
         ));
@@ -5023,7 +5111,7 @@ pub(crate) fn npc_brain(
                             if hit {
                                 hit_writer.write(PlayerHit { npc: e, from: pos, damage: npc.arms.ranged, kick: false, big: false, push: false, unblockable: false, missile: false });
                             }
-                            shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: npc.ranged >= 2, miss: !hit });
+                            shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: npc.ranged >= 2, miss: !hit, saw: false });
                         }
                         npc.shots += 1;
                         // (a shot heard to `DisTweaks_NPCFireGun`'s `m_AINoiseLoudnessWhenFiring`,
@@ -5310,6 +5398,16 @@ pub(crate) fn npc_brain(
                         let (len, hit_at, reach, kick, big) = npc.swing.as_ref().map(|s| (s.len, s.hit, s.reach, matches!(s.kind, MoveKind::Bash | MoveKind::Jump), s.big)).unwrap_or((0.95, 0.55, 2.3, false, false));
                         let kind = npc.swing.as_ref().map(|s| s.kind);
                         let under = matches!(kind, Some(MoveKind::Under | MoveKind::UnderGun));
+                        // (spraying, a butcher turns his saw after Corvo, as far as its
+                        // `m_fAbortAllowedAngle` lets the spray go on: 90 degrees a second, our reading)
+                        if kind == Some(MoveKind::SawFire) {
+                            let want = (-(ppos - pos).x).atan2(-(ppos - pos).z);
+                            let mut turn = (want - npc.yaw).rem_euclid(TAU);
+                            if turn > PI {
+                                turn -= TAU;
+                            }
+                            npc.yaw += turn.clamp(-FRAC_PI_2 * dt, FRAC_PI_2 * dt);
+                        }
                         let blows = std::iter::once(hit_at).chain(npc.swing.as_ref().map(|s| s.more.clone()).unwrap_or_default());
                         for b in blows {
                             if !(t_att < b && t_new >= b) {
@@ -5333,10 +5431,23 @@ pub(crate) fn npc_brain(
                                 if hit {
                                     hit_writer.write(PlayerHit { npc: e, from: pos, damage: npc.arms.ranged, kick: false, big: false, push: false, unblockable: false, missile: false });
                                 }
-                                shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: true, miss: !hit });
+                                shots.write(NpcShot { from: pos + Vec3::Y * 0.5, to: ppos, bow: true, miss: !hit, saw: false });
                                 npc.shots += 1;
                                 // (a bow has no firing noise, as the crossbow: no
                                 // `m_AINoiseLoudnessWhenFiring`)
+                                continue;
+                            }
+                            // a whale butcher's saw's spray: a shot of shrapnel at each of its moments
+                            // (`DLC06_Proj_SawProjectile`, an arrow's: its accuracy over the move's
+                            // reach, as a bow's misses go)
+                            if kind == Some(MoveKind::SawFire) {
+                                let range = npc.arms.moves.iter().find(|m| m.kind == "SawFire").map_or([3.0, 35.0, 7.0], |m| m.range);
+                                let ctx = dhcook::format::FireContext { range, ..fire_context(&npc) };
+                                let hit = npc.sees_player && rand::random::<f32>() < shot_chance(&npc, &ctx, d, attrs.npc_arrow_miss);
+                                if hit {
+                                    hit_writer.write(PlayerHit { npc: e, from: pos, damage: npc.arms.ranged, kick: false, big: false, push: false, unblockable: true, missile: true });
+                                }
+                                shots.write(NpcShot { from: pos + Vec3::Y * 0.35 + npc.forward() * 0.9, to: ppos, bow: false, miss: !hit, saw: true });
                                 continue;
                             }
                             // a thing thrown with the bare hand at him
@@ -5387,7 +5498,7 @@ pub(crate) fn npc_brain(
                                 hit_writer.write(PlayerHit { npc: e, from: pos, damage, kick, big, push: false, unblockable: under, missile: false });
                             }
                             if shot {
-                                shots.write(NpcShot { from: pos + Vec3::Y * 0.2, to: ppos, bow: false, miss: !struck });
+                                shots.write(NpcShot { from: pos + Vec3::Y * 0.2, to: ppos, bow: false, miss: !struck, saw: false });
                                 noise.write(Noise { corvo: false, pos, radius: GUN_NOISE, kind: NoiseKind::Danger });
                             } else {
                                 noise.write(Noise { corvo: false, pos, radius: 8.0, kind: NoiseKind::Threatening });
@@ -5461,7 +5572,8 @@ pub(crate) fn npc_brain(
                                     if kind.side() != 0.0 {
                                         npc.yaw = (-(ppos - pos).x).atan2(-(ppos - pos).z);
                                     }
-                                    Swing { kind, big: rand::random::<f32>() < m.big, len, hit, reach: if kind == MoveKind::Bash { m.range[1] + 0.3 } else { 2.4 }, lunge, no_versus: false, more: Vec::new() }
+                                    // (a saw's cuts meet no blade: `DisDLC06Tweaks_NPCSawCut.m_bDisableVersus`)
+                                    Swing { kind, big: rand::random::<f32>() < m.big, len, hit, reach: if kind == MoveKind::Bash { m.range[1] + 0.3 } else { 2.4 }, lunge, no_versus: npc.arms.saw.is_some(), more: Vec::new() }
                                 }
                                 None => Swing { kind: MoveKind::Short, big: false, len: 0.95, hit: 0.55, reach: 2.3, lunge: 0.0, no_versus: false, more: Vec::new() },
                             });
@@ -6337,6 +6449,9 @@ pub struct NpcClips {
     cough: Vec<ClipId>,
     /// its pockets checked, robbed (`Empty_CheckPockets`: the guards')
     check_pockets: Vec<ClipId>,
+    /// a whale butcher's saw spraying shrapnel: raised, held spraying, lowered
+    /// (`Saw_RangeAttack_In`, `_Loop`, `_Out`)
+    saw_fire: [Option<ClipId>; 3],
     /// its aim offsets (`ADD_Sword_Gun_AimIdle_*`): up, centre and down rows, left to right
     gun_aim: [Option<ClipId>; 9],
     /// its look-at grids (`LOOK_MODES`), by stance and gait: the torso's and the head's
@@ -6345,7 +6460,7 @@ pub struct NpcClips {
 
 impl NpcClips {
     /// None unless the character can at least stand and walk.
-    pub fn resolve(lib: &CharAnims) -> Option<NpcClips> {
+    pub fn resolve(lib: &CharAnims, prefix: &str) -> Option<NpcClips> {
         let c = NpcClips {
             // humans first, then the wolfhound's own sets (Patrol_ / Attack_)
             // (sheathed, as a guard patrols: its empty hands' idle and patrol walk, measured on the
@@ -6505,6 +6620,7 @@ impl NpcClips {
             trigger_alarm: lib.all(&["Sword_TriggerAlarm"]),
             corpse_check: lib.all(&["Sword_CorpseCheck"]),
             under: [lib.find("Sword_Attack_UnderTable"), lib.find("Sword_Gun_AttackUnderTable")],
+            saw_fire: [None; 3],
             // (a wolfhound's: its barks, `Attack_IdleBark01`-`04`, each with its own bark)
             taunt: lib.all(&["Sword_TauntA", "Sword_TauntB", "Sword_TauntC", "Attack_IdleBark01", "Attack_IdleBark02", "Attack_IdleBark03", "Attack_IdleBark04"]),
             cough: lib.all(&["Empty_Idle_Cough"]),
@@ -6588,6 +6704,61 @@ impl NpcClips {
                 ..c
             },
             None => c,
+        };
+        // (a whale butcher's saw: his fighting stance and blows are its own, by its prefix,
+        // `m_ItemPrefix` `Saw_`: standing with it, walking, running, revving it up and down,
+        // its short and medium cuts, its spray (`_RangeAttack_In`, `_Loop`, `_Out`) and the
+        // rats' bite; the swordsmen's that it has no blade for, none: no parries, no dodges, no
+        // blade locks, `m_bDisableVersus`)
+        let c = match (prefix, lib.find(&format!("{prefix}Idle"))) {
+            (p, Some(idle)) if !p.is_empty() && !p.eq_ignore_ascii_case("Sword_") && !p.eq_ignore_ascii_case("Empty_") => {
+                let by = |n: &str| lib.find(&format!("{p}{n}"));
+                let all = |ns: &[&str]| ns.iter().filter_map(|n| by(n)).collect::<Vec<_>>();
+                let walk = by("WalkN");
+                let run = by("RunN");
+                let stance = LocoSet {
+                    idle: Some(idle),
+                    modes: [[None, None, walk.map(|w| (w, false)), None], [None, None, run.or(walk).map(|r| (r, false)), None]],
+                    ..c.loco[3].clone()
+                };
+                let short = all(&["AttackShort", "AttackShortB"]);
+                let medium = all(&["AttackMedium", "AttackMediumB"]);
+                let mut loco = c.loco.clone();
+                loco[2] = stance.clone();
+                loco[3] = stance;
+                NpcClips {
+                    idle_alert: Some(idle),
+                    walk_alert: walk.or(c.walk_alert),
+                    run: run.or(c.run),
+                    loco,
+                    attack: [short.clone(), medium.clone()].concat(),
+                    attack_short: short.clone(),
+                    attack_short_big: short,
+                    attack_medium: medium,
+                    attack_long: Vec::new(),
+                    attack_long_big: Vec::new(),
+                    attack_step_back: None,
+                    attack_turn: Default::default(),
+                    jump_attack: by("JumpAttack"),
+                    equip: by("Equip").or(c.equip),
+                    equip_combat: by("Equip").or(c.equip_combat),
+                    unequip: by("UnEquip").or(c.unequip),
+                    patrol_to_sword: None,
+                    sword_to_patrol: None,
+                    parry_win: Vec::new(),
+                    parry_lost: Vec::new(),
+                    versus: Default::default(),
+                    dodge_in: Default::default(),
+                    dodge_out: [None; 2],
+                    riposte: Default::default(),
+                    dodge: Default::default(),
+                    dodge_attack: [None; 2],
+                    swarm: [c.swarm[0], ["SwarmAttack_In", "SwarmAttack_Loop", "SwarmAttack_Out"].map(|n| by(n))],
+                    saw_fire: ["RangeAttack_In", "RangeAttack_Loop", "RangeAttack_Out"].map(|n| by(n)),
+                    ..c
+                }
+            }
+            _ => c,
         };
         (c.idle.is_some() && c.walk.is_some()).then_some(c)
     }
@@ -6679,6 +6850,8 @@ pub struct NpcAnim {
     bottle_hand: Option<(Entity, Transform)>,
     bottle_holster: Option<(Entity, Transform)>,
     bottle_stage: Option<u8>,
+    /// a saw's spray under way: its clip (raised, held, lowered) and when it is lowered
+    saw_stage: Option<(u8, f32)>,
 }
 
 /// The pause before a blade strikes under a hideout again, after its strike's clip (s:
@@ -7528,6 +7701,7 @@ fn npc_select_anim(
                     MoveKind::Right180 => pick(&clips.attack_turn[3]),
                     MoveKind::Under => clips.under[0],
                     MoveKind::UnderGun => clips.under[1],
+                    MoveKind::SawFire => clips.saw_fire[0].or(clips.saw_fire[1]),
                     MoveKind::WhiskeyFire => clips.bottle_fire[0].or(clips.bottle_fire[1]),
                     MoveKind::ThrowWhiskey => clips.bottle_throw,
                     MoveKind::Throw => pick(&clips.throw_rock),
@@ -7628,6 +7802,32 @@ fn npc_select_anim(
                     st.last_alert = npc.alert;
                     continue;
                 }
+                // a whale butcher's saw's spray: raised (`Saw_RangeAttack_In`), held spraying
+                // (`_Loop`: a shot each `m_FiringDelay`, for the loop or `m_fAbortMaxFiringDuration`
+                // at most), lowered (`_Out`)
+                let saw = npc.arms.saw.clone();
+                if let (Some(c), Some(s), Some(saw)) = (own.filter(|_| kind == MoveKind::SawFire), npc.swing.as_mut(), saw) {
+                    let dur = |x: Option<ClipId>| x.map_or(0.0, |x| lib.duration(x));
+                    let [up, hold, down] = clips.saw_fire;
+                    let start = if up.is_some() { dur(up) } else { 0.0 };
+                    let spray = dur(hold).clamp(0.5, saw.duration.max(0.5));
+                    let mut shots = Vec::new();
+                    let mut at = start;
+                    while at < start + spray {
+                        shots.push(at);
+                        at += saw.delay[0] + rand::random::<f32>() * (saw.delay[1] - saw.delay[0]).max(0.0);
+                    }
+                    if let Some((first, rest)) = shots.split_first() {
+                        s.hit = *first;
+                        s.more = rest.to_vec();
+                    }
+                    s.len = start + spray + dur(down);
+                    st.saw_stage = Some((if up.is_some() { 0 } else { 1 }, start + spray));
+                    anim.restart(c, up.is_none(), 1.0, 0.1);
+                    st.last_mode = npc.mode;
+                    st.last_alert = npc.alert;
+                    continue;
+                }
                 // (under a table: each of the clip's blows, its zones' ends or its shots, the clip
                 // as authored)
                 if let (Some(c), Some(s)) = (own.filter(|_| matches!(kind, MoveKind::Under | MoveKind::UnderGun)), npc.swing.as_mut()) {
@@ -7677,6 +7877,20 @@ fn npc_select_anim(
                         _ => anim.restart(c, false, lib.duration(c) / len, 0.08),
                     }
                 }
+            } else if let Some((k, until)) = st.saw_stage.filter(|k| k.0 < 2) {
+                // (the spray held, then the saw lowered)
+                let t_att = npc.attack_t.unwrap_or(0.0);
+                if k == 0 && anim.finished() {
+                    if let Some(c) = clips.saw_fire[1] {
+                        anim.restart(c, true, 1.0, 0.05);
+                    }
+                    st.saw_stage = Some((1, until));
+                } else if k == 1 && t_att >= until {
+                    if let Some(c) = clips.saw_fire[2] {
+                        anim.restart(c, false, 1.0, 0.1);
+                    }
+                    st.saw_stage = Some((2, until));
+                }
             } else if let Some(k) = st.bottle_stage.filter(|k| *k < 2) {
                 // (the fire breath's next clip)
                 if anim.finished() {
@@ -7691,6 +7905,7 @@ fn npc_select_anim(
             continue;
         }
         st.attacking = false;
+        st.saw_stage = None;
         // (its bottle back on its hip)
         if st.bottle_stage.take().is_some() {
             hang(&mut commands, &st.bottle, st.bottle_holster.or(st.bottle_hand));

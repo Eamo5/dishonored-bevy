@@ -23,7 +23,7 @@ use std::path::Path;
 // 158: spawners' flags from their class's defaults (travel spawners make nobody at the start).
 // 159: scene keys laid out along their sequences' soiree markers (KTrack::AnimStretch).
 // 160: scene sections' ways (KTrack::PinModes); the story packs' spawners and krusts.
-pub const SCENE_VERSION: u32 = 160;
+pub const SCENE_VERSION: u32 = 161;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -996,6 +996,9 @@ pub struct PropDef {
     /// and turn (a quaternion: x, y, z, w)
     #[serde(default)]
     pub muzzle: Option<[f32; 7]>,
+    /// a saw's blade edge in the mesh's frame (`BladeEdge`: where its cut is reckoned from)
+    #[serde(default)]
+    pub edge: Option<[f32; 3]>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -1288,6 +1291,32 @@ pub struct NpcStats {
     /// how its locomotion turns and speeds up
     #[serde(default)]
     pub loco: NpcLoco,
+    /// a whale butcher's saw (`DisDLC06Tweaks_WepSaw`): its running blade and its spray
+    #[serde(default)]
+    pub saw: Option<NpcSaw>,
+}
+
+/// A whale butcher's saw (`DisDLC06Tweaks_WepSaw`, its NPC contexts):
+/// - its running blade (`DisDLC06Tweaks_NPCSawCut`, "Continuous Blade"): damage a second by
+///   difficulty (`m_SawDamagePerSecond`) to what is within `radius` (m) of the blade's edge and
+///   `angle` (degrees) of the butcher's facing, from a front `width` (m) wide, at most `rate`
+///   times a second;
+/// - its spray of shrapnel (`DisDLC06Tweaks_NPCFireSaw`, `DLC06_Proj_SawProjectile`): a shot each
+///   `delay` s (min, max) for `duration` s at most, at `speed` m/s, `spread` m wide at its mark;
+/// - the danger it lays while it sprays (`DisDLC06Tweaks_AIBehavior_ButcherCombat`:
+///   `m_fSawDangerCapsuleLength`, `_Radius`, m).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct NpcSaw {
+    pub cut_dps: [f32; 4],
+    pub radius: f32,
+    pub angle: f32,
+    pub width: f32,
+    pub rate: f32,
+    pub delay: [f32; 2],
+    pub duration: f32,
+    pub speed: f32,
+    pub spread: f32,
+    pub danger: [f32; 2],
 }
 
 /// How a character's locomotion turns and speeds up (its pawn tweak's
@@ -1649,6 +1678,19 @@ pub struct NpcWeapon {
     pub projectile: String,
     pub projectile_damage: f32,
     pub projectile_mult: f32,
+    /// the prefix of its holder's clips while it is out (`m_ItemPrefix`: `Sword_`, a butcher's
+    /// saw's `Saw_`)
+    #[serde(default)]
+    pub prefix: String,
+    /// its look in the hand (`m_pNPCSpecificTweaks.m_pEquippedMesh`, cooked as the prop
+    /// `wep:<path>`), the socket it is held on (`m_Sockets[1]`) and the one it is put away on
+    /// (`m_Sockets[2]`: the holster; a saw's, the same hand)
+    #[serde(default)]
+    pub mesh: String,
+    #[serde(default)]
+    pub socket: String,
+    #[serde(default)]
+    pub holster: String,
 }
 
 /// A character's eyes (its pawn's `m_pVisionTweak`, `DisTweaks_Vision`) and how its attention
