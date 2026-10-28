@@ -196,6 +196,11 @@ fn summoned(
     }
 }
 
+/// An assassin's reach for a river krust (`DLC07_Bhvr_Assassin_RiverKrustCombat_Default`'s
+/// `m_CombatRange`, 650-1750 uu) and the krust's throw (`m_RiverKrustImpulse` 700 uu/s along the pull).
+const KRUST_RANGE: [f32; 2] = [6.5, 17.5];
+const KRUST_THROW: f32 = 7.0;
+
 /// The Brigmore Witches' assassins' own Pull on their foe (`DisDLC07Tweaks_NPCPullSpell`, their
 /// hand's), with Daud's Arcane Bond and Pull both at their second level
 /// (`m_RequiredArcaneBondLevel`, `m_RequiredLeaderPullPowerLevel`): a foe 3.5-25 m off, within
@@ -218,6 +223,7 @@ fn assassin_pulls(
     (mut commands, mut sfx, mut stop, mut hits): (Commands, MessageWriter<crate::audio::PostEvent>, MessageWriter<crate::audio::StopEvent>, MessageWriter<crate::gameplay::NpcHit>),
     player_pull: Option<Res<crate::pull::PullAim>>,
     mut witches: Query<&mut crate::witch::Witch>,
+    mut krusts: Query<(&mut crate::krust::Krust, &GlobalTransform)>,
 ) {
     let Some(level) = level else { return };
     let ctx = rapier.single().ok();
@@ -304,6 +310,37 @@ fn assassin_pulls(
                 }
             }
             continue;
+        }
+        // a river krust in its reach: torn off its wall (its behaviour against them,
+        // `DLC07_Bhvr_Assassin_RiverKrustCombat_Default`: from `m_CombatRange` 6.5-17.5 m, in
+        // sight, its `DoPullSpell`; thrown along `m_RiverKrustImpulse`, 7 m/s toward it)
+        if !down && s.pull_cd <= 0.0 && able(&spell) && foe.is_none() {
+            let krust = krusts.iter_mut().filter(|(k, g)| k.alive() && !k.pulled() && {
+                let d = g.translation().distance(pos);
+                (KRUST_RANGE[0]..=KRUST_RANGE[1]).contains(&d)
+            }).find(|(_, g)| {
+                let eye = pos + Vec3::Y * 0.6;
+                let at = g.translation();
+                let l = at.distance(eye);
+                ctx.as_ref().is_some_and(|c| c.cast_ray(eye, (at - eye) / l.max(1e-3), (l - 0.5).max(0.0), true, walls).is_none())
+            });
+            if let Some((mut k, g)) = krust {
+                let toward = (pos - g.translation()).with_y(0.0).normalize_or_zero();
+                let secs = level.scene.krusts.get(k.index() as usize).map_or(1.3, |d| if d.pull_duration > 0.0 { d.pull_duration } else { 1.3 });
+                k.pull(secs, toward * KRUST_THROW);
+                s.pull_cd = 3.0 + rand::random::<f32>() * 3.0;
+                sfx.write(crate::audio::PostEvent::named("AI_Assassin_Pwr_Attract_Loop", Some(pos)));
+                if let Ok((mut n, _)) = npcs.get_mut(me) {
+                    let to = (g.translation() - pos).with_y(0.0);
+                    if to.length() > 0.1 {
+                        n.yaw = (-to.x).atan2(-to.z);
+                    }
+                }
+                if std::env::var_os("DH_SUMMON_LOG").is_some() {
+                    info!("summon: assassin pulls a river krust off its wall");
+                }
+                continue;
+            }
         }
         // a foe to take: from afar, before it, in sight
         let Some(f) = foe.filter(|_| !down && s.pull_cd <= 0.0 && able(&spell)) else { continue };

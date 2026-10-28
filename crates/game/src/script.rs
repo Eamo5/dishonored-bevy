@@ -754,6 +754,17 @@ fn run_script(
                 info!("script: enemy grenade at {from:.2}, fuse {fuse}");
             });
         }
+        "summon" => {
+            // (tests) summon [D] [LEVEL]: one of Daud's assassins summoned D m (3) ahead on the
+            // floor there, for no enemy
+            let d = cmd.get(1).and_then(|v| v.parse::<f32>().ok()).unwrap_or(3.0);
+            let level = cmd.get(2).and_then(|v| v.parse::<u8>().ok()).unwrap_or(1);
+            let fwd = Quat::from_rotation_y(p.yaw) * Vec3::NEG_Z;
+            let at = t.translation + fwd * d - Vec3::Y * (crate::player::STAND_HALF + crate::player::RADIUS);
+            commands.queue(move |w: &mut World| {
+                w.write_message(crate::summon::Summon { at, target: None, level });
+            });
+        }
         "lob" => {
             // (tests) lob [NAME]: the nearest standing character with grenades (whose name or pawn
             // holds NAME) lobs its own at Corvo, as its fight would
