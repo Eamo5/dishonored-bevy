@@ -1868,6 +1868,10 @@ fields no longer show their stand-in "WW" behind the title.
     camera. Event tracks now keep their flags (`bFireEventsWhenForwards`, `_Backwards`,
     `_JumpingForwards`): a scene played fires only the tracks that fire its way, and a skipped
     one only those that fire when jumped over.
+  - Its scripts set its sound's place (`SeqAct_AkSetState`: both packs' menus put the Rothwild
+    slaughterhouse's dockside, `State_DLC06_LVL_SlaughterExt_Dock_01`, for the ambience they
+    play). Before, the scripts' Wwise states were ignored (the only op of all the maps' scripts
+    the rewrite did not run), and the ambience played its default variant.
   - Its own missions (`t_Missions`, its movie's `m_missions`; the map's camera to its missions
     view, `ToMissionsScreen` / `FromMissionsScreen`): The Knife of Dunwall's three and The
     Brigmore Witches' four, as the game numbers them (`m_MissionImages` 12-14, 16-19), each

@@ -36,7 +36,7 @@ impl Plugin for GameAudioPlugin {
             .add_systems(Update, apply_speakers)
             .add_systems(
                 Update,
-                (attach_listener, run_ambients, run_timed, play_events, follow_sounds, advance_playlists, finish_voices, stop_events, run_fades, attenuate, pause_voices).chain().after(apply_speakers).run_if(in_state(GameState::InGame)),
+                (attach_listener, script_states, run_ambients, run_timed, play_events, follow_sounds, advance_playlists, finish_voices, stop_events, run_fades, attenuate, pause_voices).chain().after(apply_speakers).run_if(in_state(GameState::InGame)),
             );
     }
 }
@@ -622,6 +622,17 @@ fn reset_audio_state(mut states: ResMut<WwiseStates>, mut music: ResMut<Music>, 
     states.0.clear();
     timed.0.clear();
     music.current = None;
+}
+
+/// The states the level scripts set (`SeqAct_AkSetState`), by their names' ids.
+fn script_states(vm: Option<ResMut<crate::kismet::Vm>>, mut states: ResMut<WwiseStates>) {
+    let Some(mut vm) = vm else { return };
+    if vm.wwise_states.is_empty() {
+        return;
+    }
+    for (group, state) in std::mem::take(&mut vm.wwise_states) {
+        states.0.insert(event_id(&group), event_id(&state));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

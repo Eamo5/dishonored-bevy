@@ -1067,6 +1067,8 @@ pub struct Vm {
     pub pull_blocked: HashSet<u32>,
     /// Pull's character pulls begun (0) and over (1), for DisDLC07SeqEvent_NPCPulled's outputs
     pub npc_pulled: Vec<usize>,
+    /// Wwise states the scripts set (`SeqAct_AkSetState`: group, state), for the audio to take
+    pub wwise_states: Vec<(String, String)>,
     /// characters the scripts let Daud plant something on (`DisDLC06SeqAct_NPCAddPutPocketInteraction`:
     /// Timsh, the forged document): (spawner, its words); and those he planted it on, by actor
     pub put_pockets: Vec<(u32, String)>,
@@ -1375,6 +1377,7 @@ impl Vm {
             input_off: false,
             pull_blocked: HashSet::new(),
             npc_pulled: Vec::new(),
+            wwise_states: Vec::new(),
             put_pockets: Vec::new(),
             put_pocketed: Vec::new(),
             shakes: Vec::new(),
@@ -3414,6 +3417,13 @@ impl Vm {
                         }
                     }
                     self.effects.push(Effect::Damage(t, if heal { -amount } else { amount }, sleep));
+                }
+                self.fire(op, 0);
+            }
+            // a Wwise state set (the story packs' front ends: their sound's place)
+            "SeqAct_AkSetState" => {
+                if let (Some(group), Some(state)) = (self.ps(op, "StateGroup"), self.ps(op, "State")) {
+                    self.wwise_states.push((group, state));
                 }
                 self.fire(op, 0);
             }
