@@ -749,9 +749,29 @@ fn run_script(
                 w.write_message(crate::gadgets::NpcGrenade {
                     owner, from, vel: Vec3::ZERO, fuse: [fuse, 0.5],
                     blast: dhcook::format::TrapBlast { radius: 3.5, full: 3.0, player_radius: 6.0, player_full: 1.5, damage: [50.0; 4], danger: 3.5 * 3.0, ..default() },
-                    target: from, danger: 0.0,
+                    target: from, danger: 0.0, look: default(),
                 });
                 info!("script: enemy grenade at {from:.2}, fuse {fuse}");
+            });
+        }
+        "lob" => {
+            // (tests) lob [NAME]: the nearest standing character with grenades (whose name or pawn
+            // holds NAME) lobs its own at Corvo, as its fight would
+            let at = t.translation;
+            let named = cmd.get(1).cloned().unwrap_or_default();
+            commands.queue(move |w: &mut World| {
+                let mut npcs = w.query::<(Entity, &Npc, &Transform)>();
+                let thrower = npcs
+                    .iter(w)
+                    .filter(|(_, n, _)| !n.is_down() && !n.arms.grenades.is_empty() && (named.is_empty() || n.name.contains(&named) || n.pawn.contains(&named)))
+                    .min_by(|a, b| a.2.translation.distance_squared(at).total_cmp(&b.2.translation.distance_squared(at)))
+                    .map(|(e, n, t)| (e, n.arms.grenades[0].clone(), t.translation));
+                let Some((owner, g, pos)) = thrower else { return };
+                let toward = (at - pos).with_y(0.0).normalize_or_zero();
+                let from = pos + Vec3::Y * 0.6 + toward * 0.5;
+                let vel = crate::gadgets::aim_throw(from, at - Vec3::Y * 0.8, g.speed);
+                w.write_message(crate::gadgets::NpcGrenade { owner, from, vel, fuse: g.fuse, blast: g.blast.clone(), target: at, danger: g.danger, look: g.look.clone() });
+                info!("script: lob {} ({:?})", g.look.mesh, g.look.linger);
             });
         }
         "bottle" => {

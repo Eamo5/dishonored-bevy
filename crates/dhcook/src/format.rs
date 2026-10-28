@@ -23,7 +23,7 @@ use std::path::Path;
 // 158: spawners' flags from their class's defaults (travel spawners make nobody at the start).
 // 159: scene keys laid out along their sequences' soiree markers (KTrack::AnimStretch).
 // 160: scene sections' ways (KTrack::PinModes); the story packs' spawners and krusts.
-pub const SCENE_VERSION: u32 = 161;
+pub const SCENE_VERSION: u32 = 162;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -1661,6 +1661,28 @@ pub struct GrenadeThrow {
     /// the danger zone its throw lays from the thrower to its target (`m_fGrenadeDangerZone`, m)
     #[serde(default)]
     pub danger: f32,
+    /// its grenade's look in flight, and a blast that lingers
+    #[serde(default)]
+    pub look: GrenadeLook,
+}
+
+/// A character's grenade as it flies and goes off (its projectile: `m_pGrenadeTweaks`,
+/// `m_pTrailEffect`): its mesh (the prop `wep:<path>`, `m_pSkeletalMesh`) and trail; and where
+/// its blast lingers (`DisDLC06Tweaks_Explosion`: the Dead Eels' acid bottles, `DLC07_Proj_AcidBottle`)
+/// how long (`m_fExplosionDuration`, s; 0: a plain blast), how often it looks for whom it catches
+/// (`m_fDamageInterval`), the danger it leaves for longer (`m_fAdditionalDangerTime`), the rats it
+/// kills (`m_fRatKillRadius`, m), how loud it is (`m_AINoiseLoudness`) and the lens effect on Corvo
+/// caught in it (`m_pCameraEffectTweaks`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct GrenadeLook {
+    pub mesh: String,
+    pub trail: Option<u32>,
+    pub linger: f32,
+    pub interval: f32,
+    pub extra_danger: f32,
+    pub rat_kill: f32,
+    pub loudness: String,
+    pub lens: Option<u32>,
 }
 
 /// A part a character carries on a socket of its skeleton (its pawn's `m_pAttachmentsTweaks`: a

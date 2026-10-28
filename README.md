@@ -1807,6 +1807,24 @@ fields no longer show their stand-in "WW" behind the title.
   the next blow is an ordinary one, not a finisher, and they can't be choked mid-fight. Before,
   any character left reeling died to the next blow. Script: `stun S [NAME]` staggers the nearest
   character S seconds, as a parry does.
+- **The Dead Eels' acid bottles** (`gadgets.rs`; The Brigmore Witches' `DLC07_Inv_Grenade_Thug`,
+  throwing `DLC07_Proj_AcidBottle`). Before, the Dead Eels, Lizzy Stride and Edgar Wakefield
+  threw an overseer's grenade: its mesh, one blast of 30 damage and the grenade's fireball.
+  - A character's grenade now flies as its projectile's own mesh
+    (`m_pGrenadeTweaks.m_pSkeletalMesh`: the acid bottle is `DLC07_KrustSpitBottle`; the
+    overseers' stays `Grenade`), with its trail (`m_pTrailEffect`, `DLC07_AcidBottle_Trail`).
+  - A blast that lingers (`DisDLC06Tweaks_Explosion`, the class Daud's chokedust uses) leaves
+    its cloud for `m_fExplosionDuration` (3 s). Every `m_fDamageInterval` (0.33 s) it catches
+    the characters within `m_fDamageRadius` (3 m) and Corvo within `m_fPlayerDamageRadius`
+    (4 m), in sight of it. Each is caught once (the explosion's `m_DamagedActors`: our reading),
+    for `m_RadialDamage` (30). Corvo caught sees its lens effect (`m_pCameraEffectTweaks`,
+    `DLC07_CamEffect_AcidBottle_AOE`: the green haze).
+  - It plays its own effect and sound (`DLC07_AcidBottle_Explosion`,
+    `Snd_AI_Thug_Proj_Acid_Expl`), kills the rats within `m_fRatKillRadius` (4 m), is heard as
+    far as `m_AINoiseLoudness` (`EAINoiseLoudness2`), and keeps its danger zone up
+    `m_fAdditionalDangerTime` (5 s) longer. Saves keep a bottle in flight as a bottle.
+  - Script: `lob [NAME]` makes the nearest character with grenades lob its own at Corvo;
+    `DH_GADGET_LOG` logs what each grenade strikes.
 - **Characters warn Corvo before turning on him for a blow** (the brain's `m_pReactionTweaks`,
   `DisTweaks_AIBrain_Reaction`: `m_Response_HurtByPlayerAlly` for one of his side,
   `m_Response_HurtByPlayerNeutral` for the others; each `TweakAIResponse`'s fields over the class

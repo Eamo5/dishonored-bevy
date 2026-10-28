@@ -5065,7 +5065,7 @@ pub(crate) fn npc_brain(
                         let from = pos + Vec3::Y * 0.6 + toward * 0.5;
                         let vel = crate::gadgets::aim_throw(from, ppos - Vec3::Y * 0.8, g.speed);
                         info!("{} throws a grenade ({}) {d:.1} m away", npc.name, g.kind.trim_start_matches("DisTweaks_"));
-                        grenades.write(crate::gadgets::NpcGrenade { owner: e, from, vel, fuse: g.fuse, blast: g.blast.clone(), target: ppos, danger: g.danger });
+                        grenades.write(crate::gadgets::NpcGrenade { owner: e, from, vel, fuse: g.fuse, blast: g.blast.clone(), target: ppos, danger: g.danger, look: g.look.clone() });
                         noise.write(Noise { corvo: false, pos, radius: 20.0, kind: NoiseKind::Threatening });
                         if g.jump > 0.0 {
                             // (`m_fJumpClearance`)

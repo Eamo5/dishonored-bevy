@@ -545,7 +545,7 @@ pub(crate) fn save_game(
     (krusts, props, traps, usables, prop_bodies): (Res<crate::krust::KrustLog>, Query<(Entity, &crate::props::Prop, &Transform), Without<Player>>, Res<crate::traps::TrapLog>, Res<crate::usables::UsableLog>, Query<(&bevy_rapier3d::prelude::Velocity, &bevy_rapier3d::prelude::GravityScale, &bevy_rapier3d::prelude::RigidBody)>),
     (overrides, devices, grenades, razors, held, npc_ids, projectiles, swarms, rats, bites, possession, possess_overrides, fish, krust_hosts, fish_meals): (
         Res<crate::script_world::SpawnerOverrides>, Res<crate::security::Devices>,
-        Query<(Entity, &crate::gadgets::Grenade, &Transform)>, Query<(&crate::gadgets::Razor, &Transform)>,
+        Query<(Entity, &crate::gadgets::Grenade, &Transform, Option<&crate::gadgets::Lingering>)>, Query<(&crate::gadgets::Razor, &Transform)>,
         Res<crate::props::Held>, Query<(Entity, &FromSpawner), With<Npc>>,
         Query<(&crate::powers::Projectile, &Transform)>,
         Query<(&crate::swarm::Swarm, &Transform)>,

@@ -4253,6 +4253,7 @@ impl<'a> Cooker<'a> {
                 fuse: [3.0, 1.0],
                 blast: TrapBlast { radius: 3.5, full: 1.0, player_radius: 6.0, player_full: 1.5, damage: [50.0; 4], effect: None, sound: String::new(), danger: 3.5 },
                 danger: f(self, "m_fGrenadeDangerZone", 0.0) * UNIT,
+                look: Default::default(),
             };
             // its grenade
             if let Some(proj) = self.tweak_obj(&c, "m_pProjectileType") {
@@ -4260,8 +4261,26 @@ impl<'a> Cooker<'a> {
                     t.fuse = [self.tweak_float(&comp, "m_fDetonationDelay", 0).unwrap_or(3.0), self.tweak_float(&comp, "m_fMinDetonationDelayAfterHit", 0).unwrap_or(1.0)];
                     if let Some(x) = self.tweak_obj(&comp, "m_pExplosionTweaks") {
                         t.blast = self.blast(&x);
+                        // (one that lingers, `DisDLC06Tweaks_Explosion`: the Dead Eels' acid)
+                        if x.class() == "DisDLC06Tweaks_Explosion" {
+                            t.look.linger = self.tweak_float(&x, "m_fExplosionDuration", 0).unwrap_or(0.0);
+                            t.look.interval = self.tweak_float(&x, "m_fDamageInterval", 0).unwrap_or(0.2);
+                            t.look.extra_danger = self.tweak_float(&comp, "m_fAdditionalDangerTime", 0).unwrap_or(0.0);
+                            t.look.rat_kill = self.tweak_float(&x, "m_fRatKillRadius", 0).unwrap_or(0.0) * UNIT;
+                            t.look.loudness = match self.tweak_prop(&x, "m_AINoiseLoudness", 0, 0) {
+                                Some((_, Value::Enum(e) | Value::Name(e))) => e,
+                                _ => String::new(),
+                            };
+                            t.look.lens = self.tweak_obj(&x, "m_pCameraEffectTweaks").and_then(|c| self.tweak_obj(&c, "m_DefaultParticleSystem")).and_then(|ps| self.particle_system(&ps));
+                        }
                     }
                 }
+                // (its look in flight: its own mesh, `m_pGrenadeTweaks.m_pSkeletalMesh`, and trail)
+                if let Some(m) = self.tweak_obj(&proj, "m_pGrenadeTweaks").and_then(|g| self.tweak_obj(&g, "m_pSkeletalMesh")).filter(|m| m.class() == "SkeletalMesh") {
+                    t.look.mesh = format!("wep:{}", m.path());
+                    self.weapon_meshes.insert(m.path());
+                }
+                t.look.trail = self.tweak_obj(&proj, "m_pTrailEffect").and_then(|ps| self.particle_system(&ps));
             }
             out.push(t);
         }

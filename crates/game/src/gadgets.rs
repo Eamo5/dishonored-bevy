@@ -29,7 +29,7 @@ impl Plugin for GadgetsPlugin {
             .add_systems(Update, grenade_focus.after(crate::interact::FocusSet).before(crate::props::prop_focus).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
             .add_systems(Update, mine_focus.after(grenade_focus).before(crate::props::prop_focus).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
             .add_systems(Update, restore_gadgets.after(crate::save::restore_npcs).before(grenade_focus).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (use_gadget, npc_grenades, grenades_struck, fly_grenades, razors, mines, choke_clouds, explode).chain().after(grenade_focus).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (use_gadget, npc_grenades, grenades_struck, fly_grenades, razors, mines, choke_clouds, acid_clouds, explode).chain().after(grenade_focus).run_if(in_state(GameState::InGame)))
             .add_systems(Update, scripted_mine_clearing.run_if(in_state(GameState::InGame)));
     }
 }
@@ -311,6 +311,33 @@ pub struct NpcGrenade {
     /// what it is thrown at, and the danger zone the throw lays to it (`danger`)
     pub target: Vec3,
     pub danger: f32,
+    /// its look in flight, and a blast that lingers (the Dead Eels' acid bottles)
+    pub look: dhcook::format::GrenadeLook,
+}
+
+/// A grenade whose blast lingers (`DisDLC06Tweaks_Explosion`: the Dead Eels' acid bottles): its look
+/// and blast's own effect and sound.
+#[derive(Component, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Lingering {
+    look: dhcook::format::GrenadeLook,
+    effect: Option<u32>,
+    sound: String,
+}
+
+/// A lingering blast where it went off (`DisDLC06Explosion`): for `left` s, every `interval` it
+/// catches the characters within its reach and Corvo within his, each once (`m_DamagedActors`),
+/// that seen from it.
+#[derive(Component)]
+pub struct AcidCloud {
+    /// reach to characters, to Corvo, damage
+    reach: [f32; 3],
+    left: f32,
+    interval: f32,
+    tick: f32,
+    had: Vec<Entity>,
+    corvo_had: bool,
+    lens: Option<u32>,
+    kind: HitKind,
 }
 
 /// What pulls a thrown grenade down (m/s², the original's 1500 uu/s²).
@@ -523,6 +550,9 @@ struct GrenadeSave {
     held: bool,
     #[serde(default)]
     danger: f32,
+    /// a blast that lingers, and the grenade's own look (a Dead Eel's acid bottle)
+    #[serde(default)]
+    lingering: Option<Lingering>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -544,19 +574,19 @@ pub struct GadgetRestore(pub Option<GadgetsSave>);
 
 impl GadgetsSave {
     pub(crate) fn capture<'a>(
-        grenades: impl IntoIterator<Item = (Entity, &'a Grenade, &'a Transform)>,
+        grenades: impl IntoIterator<Item = (Entity, &'a Grenade, &'a Transform, Option<&'a Lingering>)>,
         razors: impl IntoIterator<Item = (&'a Razor, &'a Transform)>,
         npcs: impl IntoIterator<Item = (Entity, u32)>,
         held: Option<Entity>,
     ) -> Self {
         let npcs: std::collections::HashMap<_, _> = npcs.into_iter().collect();
         Self {
-            grenades: grenades.into_iter().map(|(e, g, t)| GrenadeSave {
+            grenades: grenades.into_iter().map(|(e, g, t, l)| GrenadeSave {
                 position: t.translation.to_array(), rotation: t.rotation.to_array(), velocity: g.vel.to_array(),
                 fuse: g.fuse, fuse_total: g.fuse_total, after_hit: g.after_hit, sticky: g.sticky,
                 stuck: g.stuck.map(|(e, offset)| (npcs.get(&e).copied(), offset.to_array())),
                 blast: g.blast, owner: g.owner.and_then(|e| npcs.get(&e).copied()),
-                throwback: g.throwback, kind: g.kind, held: held == Some(e), danger: g.danger,
+                throwback: g.throwback, kind: g.kind, held: held == Some(e), danger: g.danger, lingering: l.cloned(),
             }).collect(),
             razors: razors.into_iter().map(|(r, t)| RazorSave {
                 position: t.translation.to_array(), rotation: t.rotation.to_array(), armed: r.armed, triggered: r.triggered,
@@ -615,7 +645,11 @@ fn restore_gadgets(
             held.0 = Some(e.id());
             held.1 = 0.0;
         }
-        model(&mut e, if g.kind == HitKind::Chokedust { "chokedust" } else { "grenade" }, Sphere::new(0.06).into());
+        let look = g.lingering.as_ref().map(|l| l.look.mesh.clone()).filter(|m| assets.as_ref().is_some_and(|a| a.props.contains_key(m.as_str())));
+        model(&mut e, look.as_deref().unwrap_or(if g.kind == HitKind::Chokedust { "chokedust" } else { "grenade" }), Sphere::new(0.06).into());
+        if let Some(l) = g.lingering {
+            e.insert(l);
+        }
     }
     for r in saved.razors {
         let mut e = commands.spawn((
@@ -746,7 +780,8 @@ fn use_gadget(
 }
 
 /// The characters' grenades: out of the hand, the grenade's own model.
-fn npc_grenades(mut commands: Commands, mut throws: MessageReader<NpcGrenade>, assets: Option<Res<GameAssets>>, mut sfx: MessageWriter<PostEvent>, data: Res<crate::gamedata::Data>, stats: Res<PlayerStats>, settings: Res<crate::settings::Settings>) {
+#[allow(clippy::too_many_arguments)]
+fn npc_grenades(mut commands: Commands, mut throws: MessageReader<NpcGrenade>, assets: Option<Res<GameAssets>>, mut sfx: MessageWriter<PostEvent>, data: Res<crate::gamedata::Data>, stats: Res<PlayerStats>, settings: Res<crate::settings::Settings>, mut fx: MessageWriter<SpawnEffect>) {
     for g in throws.read() {
         sfx.write(PostEvent::named("Snd_Grenade_Throw", Some(g.from)));
         let b = &g.blast;
@@ -770,13 +805,24 @@ fn npc_grenades(mut commands: Commands, mut throws: MessageReader<NpcGrenade>, a
             Visibility::default(),
             DespawnOnExit(GameState::InGame),
         ));
-        if let Some(parts) = assets.as_ref().and_then(|a| a.props.get("grenade")) {
+        // (its own mesh, `m_pGrenadeTweaks.m_pSkeletalMesh`: an overseer's grenade, a Dead Eel's acid
+        // bottle)
+        let props = assets.as_ref().map(|a| &a.props);
+        if let Some(parts) = props.and_then(|p| p.get(g.look.mesh.as_str()).or_else(|| p.get("grenade"))) {
             ec.with_children(|c| {
                 for (mesh, mat) in &parts.parts {
                     let mut m = c.spawn((Mesh3d(mesh.clone()), bevy::mesh::MeshTag(0), Transform::IDENTITY));
                     mat.apply(&mut m);
                 }
             });
+        }
+        if g.look.linger > 0.0 {
+            ec.insert(Lingering { look: g.look.clone(), effect: b.effect, sound: b.sound.clone() });
+        }
+        let id = ec.id();
+        // (its trail, `m_pTrailEffect`)
+        if let Some(sys) = g.look.trail {
+            fx.write(SpawnEffect { follow: Some(id), system: Some(sys), secs: fuse, ..SpawnEffect::at("", Vec3::ZERO) });
         }
     }
 }
@@ -826,7 +872,7 @@ fn fly_grenades(
     time: Res<Time>,
     tc: Res<TimeControl>,
     rapier: ReadRapierContext,
-    mut q: Query<(Entity, &mut Grenade, &mut Transform)>,
+    mut q: Query<(Entity, &mut Grenade, &mut Transform, Option<&Lingering>)>,
     npcs: Query<(Entity, &Transform), (With<Npc>, Without<Grenade>)>,
     player: Query<Entity, With<Player>>,
     mut blasts: MessageWriter<Explosion>,
@@ -834,12 +880,13 @@ fn fly_grenades(
     mut held: ResMut<crate::props::Held>,
     cam: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
     (mut clouds, mut hits, mut zones): (MessageWriter<ChokeDust>, MessageWriter<NpcHit>, ResMut<crate::danger::DangerZones>),
+    (mut fx, mut rats, mut noise, data): (MessageWriter<SpawnEffect>, MessageWriter<crate::swarm::KillRats>, MessageWriter<Noise>, Res<crate::gamedata::Data>),
 ) {
     let dt = time.delta_secs() * tc.projectile_scale();
     let Ok(ctx) = rapier.single() else { return };
     let pe = player.single().ok();
     let all = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP | GROUP_NPC | crate::level::GROUP_PLAYER));
-    for (e, mut g, mut t) in &mut q {
+    for (e, mut g, mut t, lingering) in &mut q {
         let in_hand = held.0 == Some(e);
         if in_hand {
             if let Ok(camera) = cam.single() {
@@ -860,6 +907,27 @@ fn fly_grenades(
             };
             if g.kind == HitKind::Chokedust {
                 clouds.write(ChokeDust { at, radius: b[0], secs: b[4] });
+            } else if let Some(l) = lingering {
+                // (a blast that lingers: its cloud, its own effect and sound, the rats about it
+                // dead, the danger left a while longer, `m_fAdditionalDangerTime`)
+                let look = &l.look;
+                commands.spawn((
+                    AcidCloud { reach: [b[0], b[2], b[4]], left: look.linger, interval: look.interval.max(0.05), tick: 0.0, had: Vec::new(), corvo_had: false, lens: look.lens, kind: g.kind },
+                    Transform::from_translation(at),
+                    DespawnOnExit(GameState::InGame),
+                ));
+                if !l.sound.is_empty() {
+                    sfx.write(PostEvent::named(&l.sound, Some(at)));
+                }
+                if let Some(sys) = l.effect {
+                    fx.write(SpawnEffect { system: Some(sys), secs: look.linger + 2.0, ..SpawnEffect::at("", at) });
+                }
+                if look.rat_kill > 0.0 {
+                    rats.write(crate::swarm::KillRats { at, radius: look.rat_kill, by_player: !matches!(g.kind, HitKind::EnemyExplosion | HitKind::ByOthers), source: at });
+                }
+                let loud = data.0.noise_loudness.get(&look.loudness).copied().unwrap_or(15.0);
+                noise.write(Noise { corvo: !matches!(g.kind, HitKind::EnemyExplosion | HitKind::ByOthers), pos: at, radius: loud, kind: NoiseKind::Threatening });
+                zones.sphere(e, look.linger + look.extra_danger, at, g.danger);
             } else {
                 blasts.write(Explosion { at, radius: b[0], full: b[1], damage: b[4], effect: "grenade", player: Some([b[2], b[3]]), kind: g.kind, silent: false });
                 // (stuck to someone: `m_fAttachedDamage` 75 more to them)
@@ -901,6 +969,9 @@ fn fly_grenades(
             continue;
         }
         if let Some((hit, h)) = ctx.cast_ray_and_get_normal(t.translation, step / len, len + 0.06, true, filter) {
+            if std::env::var_os("DH_GADGET_LOG").is_some() {
+                info!("grenade strikes {hit:?} at {:.2} (speed {:.1})", h.point, g.vel.length());
+            }
             t.translation = h.point + h.normal * 0.06;
             // (laid again where it strikes)
             zones.sphere(e, g.fuse, t.translation, g.danger);
@@ -1292,6 +1363,70 @@ fn choke_clouds(
     }
 }
 
+/// Lingering blasts (the Dead Eels' acid): every `interval` while they last, each character within
+/// reach and in sight of it, and Corvo within his, is caught once (`m_DamagedActors`), its damage
+/// falling off past the full reach as a blast's does; Corvo caught sees its lens effect
+/// (`m_pCameraEffectTweaks`: `DLC07_CamEffect_AcidBottle_AOE`).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn acid_clouds(
+    mut commands: Commands,
+    time: Res<Time>,
+    tc: Res<TimeControl>,
+    rapier: ReadRapierContext,
+    mut clouds: Query<(Entity, &mut AcidCloud, &Transform)>,
+    npcs: Query<(Entity, &Npc, &Transform), Without<AcidCloud>>,
+    player: Query<&Transform, (With<Player>, Without<AcidCloud>)>,
+    (mut hits, mut stats, attrs, vm): (MessageWriter<NpcHit>, ResMut<PlayerStats>, Res<crate::gamedata::Attrs>, Option<ResMut<crate::kismet::Vm>>),
+) {
+    let dt = time.delta_secs() * tc.world_scale();
+    let ctx = rapier.single().ok();
+    let walls = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+    let seen = |from: Vec3, to: Vec3| {
+        let d = to - from;
+        let l = d.length();
+        l < 0.3 || ctx.as_ref().is_none_or(|c| c.cast_ray(from, d / l, l - 0.2, true, walls).is_none())
+    };
+    let mut lens = None;
+    for (e, mut c, t) in &mut clouds {
+        let at = t.translation + Vec3::Y * 0.3;
+        c.tick -= dt;
+        if c.tick <= 0.0 {
+            c.tick = c.interval;
+            let [reach, corvo_reach, damage] = c.reach;
+            let full = reach * 0.99;
+            let fall = |d: f32, r: f32, f: f32| if d <= f { 1.0 } else { (1.0 - (d - f) / (r - f).max(0.01)).max(0.0) };
+            for (ne, n, nt) in &npcs {
+                let d = nt.translation.distance(at);
+                if n.is_down() || c.had.contains(&ne) || d > reach || !seen(at, nt.translation) {
+                    continue;
+                }
+                c.had.push(ne);
+                hits.write(NpcHit { npc: ne, damage: damage * fall(d, reach, full), kind: c.kind, from: at });
+            }
+            if let Ok(pt) = player.single() {
+                let d = pt.translation.distance(at);
+                if !c.corvo_had && !stats.dead && d < corvo_reach && seen(at, pt.translation) {
+                    c.corvo_had = true;
+                    stats.take_damage(attrs.armored(damage * fall(d, corvo_reach, corvo_reach * 0.99)));
+                    stats.damage_flash = 1.0;
+                    stats.hit_from = Some(at);
+                    if stats.health <= 0.0 {
+                        stats.dead = true;
+                    }
+                    lens = lens.or(c.lens);
+                }
+            }
+        }
+        c.left -= dt;
+        if c.left <= 0.0 {
+            commands.entity(e).despawn();
+        }
+    }
+    if let (Some(sys), Some(mut vm)) = (lens, vm) {
+        vm.lens.push((crate::hudfx::GAMEPLAY_LENS + 0x500, Some((sys, false, 0.0))));
+    }
+}
+
 /// An explosion's flash on the original-shader surfaces (UE3 brightness).
 const FLASH_BRIGHTNESS: f32 = 6.0;
 
@@ -1371,7 +1506,7 @@ mod tests {
     #[test]
     fn enemy_grenades_use_difficulty_and_clockwork_malfunction() {
         let mut app = App::new();
-        app.add_message::<NpcGrenade>().add_message::<PostEvent>()
+        app.add_message::<NpcGrenade>().add_message::<PostEvent>().add_message::<SpawnEffect>()
             .init_resource::<crate::gamedata::Data>()
             .init_resource::<PlayerStats>()
             .insert_resource(crate::settings::Settings { difficulty: 3, ..default() })
@@ -1379,7 +1514,7 @@ mod tests {
         app.world_mut().resource_mut::<crate::gamedata::Data>().0.charms.push(dhcook::format::CharmDef { attribute: "GrenadeExplosionDelay".into(), levels: vec![("Clockwork Malfunction".into(), String::new(), 1.0)], ..Default::default() });
         app.world_mut().resource_mut::<PlayerStats>().charms.push("Clockwork Malfunction".into());
         let owner = app.world_mut().spawn_empty().id();
-        app.world_mut().write_message(NpcGrenade { owner, from: Vec3::ZERO, vel: Vec3::X, fuse: [3.0, 0.5], blast: dhcook::format::TrapBlast { damage: [10.0, 20.0, 30.0, 40.0], ..default() }, target: Vec3::X, danger: 0.0 });
+        app.world_mut().write_message(NpcGrenade { owner, from: Vec3::ZERO, vel: Vec3::X, fuse: [3.0, 0.5], blast: dhcook::format::TrapBlast { damage: [10.0, 20.0, 30.0, 40.0], ..default() }, target: Vec3::X, danger: 0.0, look: default() });
         app.update();
         let mut q = app.world_mut().query::<&Grenade>();
         let g = q.single(app.world()).unwrap();
@@ -1408,7 +1543,7 @@ mod tests {
         sticky.stuck = Some((wall, Vec3::Y * 0.11));
         let pose = Transform::from_translation(Vec3::new(2.0, 3.0, 4.0)).with_rotation(Quat::from_rotation_y(0.7));
         let razor = Razor { armed: 0.3, triggered: Some(0.2), mine: Some(MineKind::Stun), shots: 1, wait: 0.4 };
-        let saved = GadgetsSave::capture([(attached, &enemy, &pose), (carried, &returned, &pose), (fixed, &sticky, &pose)], [(&razor, &pose)], [(owner, 17)], Some(carried));
+        let saved = GadgetsSave::capture([(attached, &enemy, &pose, None), (carried, &returned, &pose, None), (fixed, &sticky, &pose, None)], [(&razor, &pose)], [(owner, 17)], Some(carried));
         let bytes = serde_json::to_vec(&saved).unwrap();
         let saved: GadgetsSave = serde_json::from_slice(&bytes).unwrap();
 
