@@ -1876,6 +1876,16 @@ pub struct Attention {
     /// Corvo seen appearing by magic (`m_IncreaseForMagic`)
     #[serde(default)]
     pub magic: (f32, u8),
+    /// an ally's fight within the group's reach, unseen (`m_IncreaseForAllyCombatTarget`), an ally
+    /// seen searching and seen panicking (`m_IncreaseForAllySearchTarget`, `_AllyPanicTarget`)
+    #[serde(default = "ally_default")]
+    pub ally: [(f32, u8); 3],
+}
+
+/// The allies' increases as the default tweak has them (`Twk_Attn_Default_Neutral`: a fight +1 to
+/// investigating; a search, a panic, to turning to look).
+fn ally_default() -> [(f32, u8); 3] {
+    [(1.0, 3), (0.0, 2), (0.0, 2)]
 }
 
 /// One of Corvo's health effects (`DisPlayerHealthEffect`): below its share of his health, a

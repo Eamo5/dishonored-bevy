@@ -4041,10 +4041,11 @@ pub(crate) fn npc_perception(
                     npc.allies_seen.push((*o, *what, now));
                     let Some((_, at, _, _, proxy)) = doing.iter().find(|x| x.0 == *o) else { continue };
                     let spot = proxy.unwrap_or(*at);
-                    let Some(att) = level.as_ref().and_then(|l| attention_of(&npc, &l.scene)) else { continue };
                     if *what != 2 {
                         npc.suspecting = true;
                     }
+                    // (the profile it now uses: a panic seen has it suspect)
+                    let Some(att) = level.as_ref().and_then(|l| attention_of(&npc, &l.scene)) else { continue };
                     if log {
                         info!("{} sees an ally {} (Corvo thought at {spot:.1})", npc.name, ["", "fighting", "searching", "panicking"][*what as usize]);
                     }
@@ -4056,9 +4057,11 @@ pub(crate) fn npc_perception(
                         npc.set_mode(Mode::Combat);
                         break;
                     }
-                    let floor = if npc.suspecting { att.levels[2][0] } else { att.levels[1][0] };
-                    if npc.awareness < floor {
-                        npc.awareness = floor;
+                    // (`m_IncreaseForAllySearchTarget`, `_AllyPanicTarget`: the suspecting profile's to
+                    // investigating, the unsuspecting's to turning to look)
+                    let before = npc.awareness;
+                    raise_attention(&mut npc, att, att.ally[if *what == 2 { 1 } else { 2 }], if *what == 2 { 9 } else { 11 });
+                    if npc.awareness > before {
                         npc.last_seen = Some(spot);
                         if npc.awareness >= att.levels[2][0] && !matches!(npc.mode, Mode::Investigate | Mode::Search) {
                             npc.alert = Alert::Suspicious;
@@ -5796,8 +5799,16 @@ pub(crate) fn npc_brain(
                 npc.last_seen = Some(foe);
                 npc.set_mode(Mode::Combat);
             } else if let Some(att) = level.as_ref().and_then(|l| attention_of(&npc, &l.scene)) {
+                // (`m_IncreaseForAllyCombatTarget`: the unsuspecting's +1 to investigating, the
+                // suspecting's to investigating alone)
                 let cap = (att.levels[3][0] - 0.001).min(att.max);
-                npc.awareness = npc.awareness.max((npc.awareness + 1.0).max(att.levels[2][0]).min(cap));
+                let (amount, lvl) = att.ally[0];
+                let floor = match lvl {
+                    0 => 0.0,
+                    1..=4 => att.levels[lvl as usize - 1][0],
+                    _ => att.max,
+                };
+                npc.awareness = npc.awareness.max((npc.awareness + amount).max(floor).min(cap));
                 npc.last_seen = Some(at);
                 if npc.mode != Mode::Investigate {
                     npc.alert = Alert::Suspicious;

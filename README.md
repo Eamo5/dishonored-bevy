@@ -3255,8 +3255,13 @@ against the install's own data where it carries them, then implemented independe
   walks to the rest, at 0.8 of its pace (`SearchSword` / `SearchEmpty`).
 - **A fight spreads.** A guard starting to fight carries to its allies within
   `m_fGroupDistance` (10 m): those who see it join it (`SeeAllyCombat` may reach busted); the
-  others' attention rises by 1, at least to investigating but never busted
-  (`AllyCombatTarget`), and they come to look.
+  others' attention rises as their attention tweak says (`m_IncreaseForAllyCombatTarget`),
+  never to busted, and they come to look. Before, it rose by 1 for everyone. Now an
+  unsuspecting guard's rises by 1 to at least investigating, but a suspecting one's only to
+  investigating (`Twk_Attn_Guard_Suspecting` keeps its own, with no amount). An ally seen
+  searching or panicking raises it as its tweak's `m_IncreaseForAllySearchTarget` and
+  `_AllyPanicTarget` say (unsuspecting: to turning to look; suspecting: to investigating), as the
+  rewrite had written them out by hand before.
 - **The blade's sweep.** Corvo's swing meets everyone in its reach, each once
   (`m_AlreadyHitActors`): the nearest takes the blow as chosen (an assassination, a finisher,
   the blades locking, a parry or the cut), the others its cut, unless they parry it.
