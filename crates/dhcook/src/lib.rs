@@ -3877,6 +3877,47 @@ impl<'a> Cooker<'a> {
         Some(saw)
     }
 
+    /// How a character answers Corvo's acts (its brain's `m_pReactionTweaks`,
+    /// `DisTweaks_AIBrain_Reaction`): each `m_Response_<name>` (`TweakAIResponse`), its fields over
+    /// the class default's.
+    fn responses(&mut self, pawn: &Obj) -> Vec<crate::format::NpcResponse> {
+        const NAMES: [&str; 6] = ["HurtByPlayerAlly", "HurtByPlayerNeutral", "WitnessPickpocket", "CarryAllyCorpse", "CarryNeutralCorpse", "CarryEnemyCorpse"];
+        let Some(brain) = self.tweak_obj(pawn, "m_pBrainTweak") else { return Vec::new() };
+        let Some(rt) = self.tweak_obj(&brain, "m_pReactionTweaks") else { return Vec::new() };
+        let defaults = self.class_defaults(&rt.class());
+        let mut out = Vec::new();
+        for name in NAMES {
+            let prop = format!("m_Response_{name}");
+            let mut fields: Vec<upk::props::Prop> = match defaults.as_ref().and_then(|d| d.get(&prop)) {
+                Some(Value::Struct(_, s)) => s.clone(),
+                _ => Vec::new(),
+            };
+            if let Some((_, Value::Struct(_, s))) = self.tweak_prop(&rt, &prop, 0, 0) {
+                for f in s {
+                    fields.retain(|x| x.name != f.name);
+                    fields.push(f);
+                }
+            }
+            if fields.is_empty() {
+                continue;
+            }
+            let p = Props(fields);
+            let hook = |n: &str| p.name(n).filter(|h| *h != "DDH_INVALID").map(|h| h.trim_start_matches("DDH_").to_string()).unwrap_or_default();
+            out.push(crate::format::NpcResponse {
+                name: name.into(),
+                enabled: p.bool("m_bEnabled").unwrap_or(true),
+                warnings: p.int("m_iNumWarningsBeforeReaction").unwrap_or(0).max(0) as u32,
+                expire: p.bool("m_bWarningsExpire").unwrap_or(false),
+                duration: p.float("m_fWarnDuration").unwrap_or(0.0),
+                threshold: p.float("m_fResponseThreshold").unwrap_or(0.0),
+                warn_hook: hook("m_WarningDialogHook"),
+                hook: hook("m_ReactionDialogHook"),
+                hostile: p.name("m_eCategory").is_none_or(|c| c == "ResponseCategory_Hostile"),
+            });
+        }
+        out
+    }
+
     /// A hound master's whistle: its brain's `DisTweaks_AIBehavior_SummonWolfhound` (at normal
     /// difficulty), its fields as it or what it falls back on has them.
     fn summon_hounds(&mut self, pawn: &Obj) -> Option<crate::format::NpcSummon> {
@@ -4507,6 +4548,7 @@ impl<'a> Cooker<'a> {
         st.gravehound = self.gravehound(pawn);
         st.pacing = self.pacing(pawn);
         st.summon = self.summon_hounds(pawn);
+        st.responses = self.responses(pawn);
         // (`DisDLC06Tweaks_VulnerabilityEx`: killable, off balance; unset, both)
         if let Some(v) = self.tweak_obj(pawn, "m_pDLC06SharedTweaks").and_then(|s| self.tweak_obj(&s, "m_pVulnerabilityExTweaks")) {
             let ok = |s: &mut Self, i: i32| !matches!(s.tweak_prop(&v, "m_VulnerabilitySetup", i, 0), Some((_, Value::Struct(_, p))) if Props(p.clone()).bool("m_bIsSupported") == Some(false));

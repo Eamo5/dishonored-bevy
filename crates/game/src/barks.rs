@@ -166,6 +166,19 @@ const SEARCH_HOOKS: [&str; 4] = ["SEARCH", "SEARCH_GROUP", "ATTENTION_INVESTIGAT
 /// r614/blink research decoded them): a suspicion level's (`SuspicionLevel`, `SuspicionDist`)
 /// by whether it suspects anything, a notice's (`Notice`) by whether it saw or heard; others
 /// all their lines.
+/// A dialog hook's name from the data (a character's brain's lines: `NOTICE_ALLY_BETRAYAL_WARNING`)
+/// kept for its bark requests, each name once.
+pub fn hook_name(name: &str) -> &'static str {
+    static NAMES: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    let mut names = NAMES.lock().unwrap();
+    if let Some(n) = names.iter().find(|n| **n == name) {
+        return n;
+    }
+    let n: &'static str = Box::leak(name.to_string().into_boxed_str());
+    names.push(n);
+    n
+}
+
 fn hook_output(class: &str, npc: &Npc) -> Option<usize> {
     match class {
         "SuspicionLevel" | "SuspicionDist" => Some(npc.suspecting as usize),

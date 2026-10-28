@@ -1803,6 +1803,23 @@ fields no longer show their stand-in "WW" behind the title.
   the next blow is an ordinary one, not a finisher, and they can't be choked mid-fight. Before,
   any character left reeling died to the next blow. Script: `stun S [NAME]` staggers the nearest
   character S seconds, as a parry does.
+- **Characters warn Corvo before turning on him for a blow** (the brain's `m_pReactionTweaks`,
+  `DisTweaks_AIBrain_Reaction`: `m_Response_HurtByPlayerAlly` for one of his side,
+  `m_Response_HurtByPlayerNeutral` for the others; each `TweakAIResponse`'s fields over the class
+  default's). Before, any fighter he struck, and any neutral he hurt, turned on him at once,
+  and his allies never did.
+  - A struck character first gives its `m_iNumWarningsBeforeReaction` warnings, each with its
+    `m_WarningDialogHook` line (`NOTICE_ALLY_BETRAYAL_WARNING`: Havelock's "Stop at once!",
+    Samuel's "Come to your senses, man!"). Warnings are forgotten `m_fWarnDuration` after the
+    last where `m_bWarningsExpire`.
+  - Then it answers: its `m_ReactionDialogHook` line, and, for `ResponseCategory_Hostile`, it
+    takes him for an enemy. A `ResponseCategory_Harmless` answer stays a line (Griff, Granny
+    Rags, Emily, the Overseers' Martin).
+  - Most allies warn once and forget it in 10 s. The Hound Pits' people, Havelock and Emily
+    forget it in a tenth of a second, so they never turn. Neutrals turn at the first blow (no
+    warnings), except the whiskey thugs and the bridge's, who warn once.
+  - A blow counts at `m_fResponseThreshold` (1) damage or more; one at someone who can fight
+    counts whatever it does (our reading). Script: `strike D [NAME]` deals a sword blow of D.
 - **Hound masters whistle for their wolfhounds** (`aiworld::summon_hounds`, the brain's
   `DisTweaks_AIBehavior_SummonWolfhound`). Before, overseers fought alone, and the backyard's
   kennel hounds came only when another hound called for help.

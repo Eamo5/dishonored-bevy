@@ -1302,6 +1302,27 @@ pub struct NpcStats {
     /// `m_pDLC06SharedTweaks`' `m_pVulnerabilityExTweaks`: a saw butcher, Daud's Corvo neither)
     #[serde(default)]
     pub vulnerable: Option<[bool; 2]>,
+    /// how it answers Corvo's acts (its brain's `m_pReactionTweaks`: `m_Response_<name>`)
+    #[serde(default)]
+    pub responses: Vec<NpcResponse>,
+}
+
+/// A character's answer to an act of Corvo's (`TweakAIResponse`): of `name` (`HurtByPlayerAlly`,
+/// `HurtByPlayerNeutral`, `WitnessPickpocket`...), whether it answers at all; the warnings it
+/// gives first (`m_iNumWarningsBeforeReaction`, their `warn_hook` line), forgotten `duration` s
+/// after the last when they `expire`; the act's least weight (`m_fResponseThreshold`); then its
+/// answer, its line (`hook`) and whether it turns on him (`m_eCategory` Hostile, else Harmless).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct NpcResponse {
+    pub name: String,
+    pub enabled: bool,
+    pub warnings: u32,
+    pub expire: bool,
+    pub duration: f32,
+    pub threshold: f32,
+    pub warn_hook: String,
+    pub hook: String,
+    pub hostile: bool,
 }
 
 /// A hound master's whistle (`DisTweaks_AIBehavior_SummonWolfhound` among its brain's behaviours):

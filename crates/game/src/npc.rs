@@ -328,6 +328,9 @@ pub struct Npc {
     pub magic_pending: Option<(f32, bool)>,
     pub magic_react: Option<(f32, bool)>,
     pub magic_bark: Option<bool>,
+    /// Corvo's blows it has warned him about (`TweakAIResponse.m_iNumWarningsBeforeReaction`), and
+    /// when the last was (s, the game's clock)
+    pub warned: (u32, f32),
     /// what it says this frame of a body Corvo carries (busted, not his enemy: the body one of
     /// its side's 0, neutral to it 1, its enemy's 2)
     pub carry_bark: Option<u8>,
@@ -535,6 +538,8 @@ pub struct Arms {
     pub saw: Option<dhcook::format::NpcSaw>,
     /// a hound master's whistle for the wolfhounds (`aiworld::summon_hounds`)
     pub summon: Option<dhcook::format::NpcSummon>,
+    /// how it answers Corvo's acts (its brain's `m_pReactionTweaks`)
+    pub responses: Vec<dhcook::format::NpcResponse>,
     /// whether it can be left open to a finisher, and thrown off balance (choked mid-fight):
     /// `DisDLC06Tweaks_VulnerabilityEx` (a saw butcher, Daud's Corvo: neither)
     pub vulnerable: [bool; 2],
@@ -555,7 +560,7 @@ pub struct Arms {
 
 impl Default for Arms {
     fn default() -> Self {
-        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, witch: None, saw: None, summon: None, vulnerable: [true; 2], pacing: None, danger: Default::default(), turning: LocoTurn::default(), throwing: None, outer_only: Vec::new(), outer_place: None }
+        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, fire: None, taunt: None, plague: None, whiskey: None, witch: None, saw: None, summon: None, vulnerable: [true; 2], responses: Vec::new(), pacing: None, danger: Default::default(), turning: LocoTurn::default(), throwing: None, outer_only: Vec::new(), outer_place: None }
     }
 }
 
@@ -721,6 +726,7 @@ impl Arms {
         a.saw = st.saw.clone();
         a.summon = st.summon.clone();
         a.vulnerable = st.vulnerable.unwrap_or([true; 2]);
+        a.responses = st.responses.clone();
         a.pacing = st.pacing.clone();
         a.danger = st.danger.clone();
         a.turning = LocoTurn::of(&st.loco);
@@ -2393,6 +2399,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         magic_react: None,
         magic_bark: None,
         carry_bark: None,
+        warned: (0, 0.0),
         suspecting: false,
         check_cd: 0.0,
         reacting: 0.0,
@@ -2879,6 +2886,7 @@ fn npc_hits(
     (level, mut vm): (Option<Res<LevelInfo>>, Option<ResMut<crate::kismet::Vm>>),
     (mut takedowns, marks, tc): (MessageWriter<crate::gameplay::PlayerTakedown>, Query<(Option<&HeadHit>, Option<&DropHeight>, Option<&LegHit>)>, Res<crate::gameplay::TimeControl>),
     (data, mut knocks, attrs, parts): (Res<crate::gamedata::Data>, MessageWriter<crate::npcparts::KnockOff>, Res<crate::gamedata::Attrs>, Query<&crate::npcparts::NpcAttached>),
+    time: Res<Time>,
 ) {
     // how much sooner a sleep dart takes hold (`SleepDelayReduction`: the Combat Sleep Darts
     // upgrade)
@@ -2959,9 +2967,49 @@ fn npc_hits(
         // neutral to him takes him for an enemy once he does it harm (`IncomingDamage`'s
         // hatred, 0x00B23780, decoded for this rewrite)
         let corvo_side = dhcook::format::is_player_faction(&npc.faction) || level.as_ref().and_then(|l| l.scene.allies.get(&npc.faction)).is_some_and(|a| a.iter().any(|f| dhcook::format::is_player_faction(f)));
-        if !npc.enemy && (npc.fighter() || h.damage > 0.0 && !corvo_side) && !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats | HitKind::Assassinate | HitKind::Fatality | HitKind::Choke | HitKind::SleepDart | HitKind::WallOfLight | HitKind::EnemyWallOfLight | HitKind::StunMine) {
-            npc.enemy = true;
-            stances.wronged(npc.spawner);
+        // (as its brain answers it, `m_Response_HurtByPlayerAlly` for one of his side, else
+        // `_Neutral`: the warnings it gives first, `m_iNumWarningsBeforeReaction` with their line,
+        // forgotten `m_fWarnDuration` after the last where they `m_bWarningsExpire`; then its
+        // answer's line, and, `ResponseCategory_Hostile`, it turns on him. The Hound Pits' people
+        // and Emily forget a warning in a tenth of a second: they never turn. Without its brain's
+        // answers, as before)
+        let by_corvo = !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats | HitKind::Assassinate | HitKind::Fatality | HitKind::Choke | HitKind::SleepDart | HitKind::WallOfLight | HitKind::EnemyWallOfLight | HitKind::StunMine);
+        if !npc.enemy && by_corvo && (npc.fighter() || h.damage > 0.0) {
+            let key = if corvo_side { "HurtByPlayerAlly" } else { "HurtByPlayerNeutral" };
+            match npc.arms.responses.iter().find(|r| r.name == key).cloned() {
+                Some(r) => {
+                    let weight = if npc.fighter() { h.damage.max(r.threshold) } else { h.damage };
+                    if r.enabled && weight >= r.threshold {
+                        let now = time.elapsed_secs();
+                        if r.expire && now - npc.warned.1 > r.duration {
+                            npc.warned.0 = 0;
+                        }
+                        if npc.warned.0 < r.warnings {
+                            npc.warned = (npc.warned.0 + 1, now);
+                            if !r.warn_hook.is_empty() {
+                                npc.bark_req = (npc.bark_req.0.wrapping_add(1), crate::barks::hook_name(&r.warn_hook));
+                            }
+                            if std::env::var_os("DH_HIT_LOG").is_some() {
+                                info!("hit {}: warns Corvo ({key}, {} of {})", npc.name, npc.warned.0, r.warnings);
+                            }
+                        } else {
+                            npc.warned = (0, now);
+                            if !r.hook.is_empty() {
+                                npc.bark_req = (npc.bark_req.0.wrapping_add(1), crate::barks::hook_name(&r.hook));
+                            }
+                            if r.hostile {
+                                npc.enemy = true;
+                                stances.wronged(npc.spawner);
+                            }
+                        }
+                    }
+                }
+                None if npc.fighter() || !corvo_side => {
+                    npc.enemy = true;
+                    stances.wronged(npc.spawner);
+                }
+                None => {}
+            }
         }
         // (struck by Corvo or another: it suspects, its attention reactions' `AttackedBy`)
         if !matches!(h.kind, HitKind::Rats | HitKind::WallOfLight | HitKind::EnemyWallOfLight) {
