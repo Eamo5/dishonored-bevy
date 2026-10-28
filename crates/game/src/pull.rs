@@ -53,19 +53,21 @@ pub enum Target {
     Person(Entity),
     /// the dead or unconscious
     Body(Entity),
+    /// a river krust, torn off its wall
+    Krust(Entity),
 }
 
 impl Target {
     /// Its mana (`m_ManaCosts`: a pawn's 40, living or dead; a pickup's or a prop's 20).
     fn cost(self) -> f32 {
         match self {
-            Target::Person(_) | Target::Body(_) => 40.0,
+            Target::Person(_) | Target::Body(_) | Target::Krust(_) => 40.0,
             _ => 20.0,
         }
     }
     fn entity(self) -> Entity {
         match self {
-            Target::Pickup(e) | Target::Prop(e) | Target::Person(e) | Target::Body(e) => e,
+            Target::Pickup(e) | Target::Prop(e) | Target::Person(e) | Target::Body(e) | Target::Krust(e) => e,
         }
     }
 }
@@ -208,6 +210,7 @@ fn aim(
     mut vm: Option<ResMut<crate::kismet::Vm>>,
     (mut sfx, mut used, mut stagger, mut grab, mut lit): (MessageWriter<PostEvent>, MessageWriter<crate::powers::PowerUsed>, MessageWriter<NpcStagger>, MessageWriter<crate::props::PullProp>, ResMut<crate::highlight::ExtraHighlight>),
     (mut commands, mut carry, ragdolls, consumed): (Commands, ResMut<crate::carry::Carry>, Query<(), With<crate::ragdoll::Ragdoll>>, Query<(), Or<(With<crate::npc::ConsumedBody>, With<crate::npc::Ashes>)>>),
+    mut krusts: Query<(Entity, &mut crate::krust::Krust), Without<crate::possession::Possessed>>,
 ) {
     if paused.0 {
         return;
@@ -272,6 +275,18 @@ fn aim(
                                 if let Some(vm) = vm.as_mut() {
                                     vm.npc_pulled.push(0);
                                 }
+                            }
+                        }
+                        Target::Krust(e) => {
+                            // (torn at, then off its wall: thrown at him along the pull,
+                            // `m_RiverKrustImpulse` -750 along it, 500 up, in the pull's frame: our
+                            // reading of the frame)
+                            if let (Ok((_, mut k)), Ok(g)) = (krusts.get_mut(e), bodies.get(e)) {
+                                let p = |key: &str, d: f32| data.active("Pull").and_then(|a| a.params.get(key)).copied().unwrap_or(d);
+                                let toward = (pt.translation - g.translation()).with_y(0.0).normalize_or_zero();
+                                let throw = toward * -p("m_RiverKrustImpulse.x", -750.0) * 0.01 + Vec3::Y * p("m_RiverKrustImpulse.z", 500.0) * 0.01;
+                                let secs = level.as_ref().and_then(|l| l.scene.krusts.get(k.index() as usize)).map_or(1.3, |d| if d.pull_duration > 0.0 { d.pull_duration } else { 1.3 });
+                                k.pull(secs, throw);
                             }
                         }
                         Target::Body(e) => {
@@ -355,6 +370,16 @@ fn aim(
                         // (the dead and the unconscious, where they lie: their middle above the
                         // floor)
                         things.push((Target::Body(e), t.translation - Vec3::Y * 0.6));
+                    }
+                }
+            }
+            // (the river krusts, living, on their walls)
+            if level_n >= 2 {
+                for (e, k) in &krusts {
+                    if k.alive() && !k.pulled() {
+                        if let Ok(g) = bodies.get(k.collider()) {
+                            things.push((Target::Krust(e), g.translation()));
+                        }
                     }
                 }
             }

@@ -1482,7 +1482,9 @@ impl<'a> Cooker<'a> {
             let cls = pkg.class_name(i);
             // the river krusts' shells and the fish are animated by the game, not placed as
             // level meshes
-            if cls.ends_with("SkeletalMeshComponent") && matches!(pkg.class_name(outer).as_str(), "DisRiverKrust" | "DisFish" | "DisTripwire" | "DisProjectileLauncher") {
+            // (and their subclasses': The Brigmore Witches' `DisDLC07RiverKrust`, its fish)
+            let outer_cls = pkg.class_name(outer);
+            if cls.ends_with("SkeletalMeshComponent") && ["DisRiverKrust", "DisFish", "DisTripwire", "DisProjectileLauncher"].iter().any(|b| self.class_is(&outer_cls, b)) {
                 continue;
             }
             let comp = Obj { pkg: pkg.clone(), idx: i };
@@ -6194,6 +6196,7 @@ impl<'a> Cooker<'a> {
             stalk,
             pearl,
             pearl_name,
+            pull_duration: f("m_fPullDuration", 0.0),
             position: ue_point(ch.vector("Location").unwrap_or([0.0; 3])),
             rotation: ch.rotator("Rotation").unwrap_or([0; 3]),
             scale: ds,

@@ -116,6 +116,10 @@ pub struct Krust {
     /// where it looked from and what blocked its view (diagnostics)
     eye: Vec3,
     blocked: Option<Vec3>,
+    /// torn at by Pull (`RiverKrustState_BeingPulled`): seconds left, and the throw it comes away
+    /// with; then flying off its wall, dead, till it lands
+    pulled: Option<(f32, Vec3)>,
+    flight: Option<(Vec3, f32)>,
 }
 
 impl Krust {
@@ -140,6 +144,18 @@ impl Krust {
     pub fn body(&self) -> Entity {
         self.collider
     }
+    /// Torn at by Pull for `secs` (`m_fPullDuration`), then off its wall with `throw` (m/s).
+    pub fn pull(&mut self, secs: f32, throw: Vec3) {
+        if self.alive() && self.pulled.is_none() {
+            self.pulled = Some((secs, throw));
+        }
+    }
+
+    /// Being torn at, or flying off its wall.
+    pub fn pulled(&self) -> bool {
+        self.pulled.is_some() || self.flight.is_some()
+    }
+
     pub fn describe(&self) -> String {
         format!(
             "#{} {:?} state {} hp {:.1} volley {:.1} shots {} pearl {} lost {:.1} eye {:.2} blocked {:?}",
@@ -168,7 +184,7 @@ mod cover_tests {
             near_t: 0.0, away_t: 0.0, exit_delay: 0.0, volley: 0.0, shots: 0, fired: false,
             death_fx: false, reaction: 0.0, lost: 0.0, order: None, launch: socket, spew: socket,
             vision: socket, center: Entity::PLACEHOLDER, pearl: None, pearl_pickup: None,
-            pearl_lying: false, collider, eye: Vec3::ZERO, blocked: None,
+            pearl_lying: false, collider, eye: Vec3::ZERO, blocked: None, pulled: None, flight: None,
         }
     }
 
@@ -211,6 +227,38 @@ mod cover_tests {
             assert!(k.blocked.is_none());
             assert_eq!(k.lost, 0.0);
         }
+    }
+
+    /// Pulled, it shuts and is torn at for its `m_fPullDuration`, then comes off its wall dead,
+    /// flying the way it was thrown.
+    #[test]
+    fn a_pulled_krust_is_torn_off_its_wall_after_its_pull_duration() {
+        let mut app = App::new();
+        app.init_resource::<Time>().init_resource::<TimeControl>()
+            .init_resource::<crate::settings::Settings>().init_resource::<PlayerStats>()
+            .init_resource::<crate::possession::Possession>().init_resource::<KrustLog>()
+            .add_message::<PostEvent>().add_message::<StopEvent>().add_message::<SpawnEffect>()
+            .insert_resource(LevelInfo { scene: dhcook::format::Scene { krusts: vec![KrustDef { pull_duration: 1.3, ..default() }], ..default() } })
+            .add_systems(Update, krust_brain);
+        let skeleton = dhcook::format::SkeletonDef::default();
+        let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![]));
+        let mut k = test_krust(Entity::PLACEHOLDER);
+        k.pull(1.3, Vec3::new(-7.5, 5.0, 0.0));
+        let entity = app.world_mut().spawn((k, Animator::new(lib, &skeleton, vec![]), GlobalTransform::IDENTITY, Transform::IDENTITY)).id();
+        let step = |app: &mut App| {
+            app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(500));
+            app.update();
+        };
+        step(&mut app);
+        step(&mut app);
+        let k = app.world().get::<Krust>(entity).unwrap();
+        assert!(k.alive() && k.pulled(), "still torn at");
+        step(&mut app);
+        let k = app.world().get::<Krust>(entity).unwrap();
+        assert!(!k.alive() && k.dead(), "torn off, dead");
+        assert_eq!(app.world().resource::<KrustLog>().dead.get(&0), Some(&false));
+        let t = app.world().get::<Transform>(entity).unwrap();
+        assert!(t.translation.x < -1.0, "flying the way it was thrown: {}", t.translation);
     }
 
     #[test]
@@ -303,7 +351,7 @@ mod cover_tests {
         let lib = std::sync::Arc::new(crate::anim::CharAnims::new(&skeleton, vec![]));
         let mut k = test_krust(Entity::PLACEHOLDER);
         k.order = Some(Vec3::X * 10.0);
-        let entity = app.world_mut().spawn((k, Animator::new(lib, &skeleton, vec![]), GlobalTransform::IDENTITY)).id();
+        let entity = app.world_mut().spawn((k, Animator::new(lib, &skeleton, vec![]), GlobalTransform::IDENTITY, Transform::IDENTITY)).id();
         app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(100));
         app.update();
         let k = app.world().get::<Krust>(entity).unwrap();
@@ -646,6 +694,8 @@ fn spawn_krust(commands: &mut Commands, assets: &GameAssets, vis: &crate::level:
         collider,
         eye: Vec3::ZERO,
         blocked: None,
+        pulled: None,
+        flight: None,
     };
     if let Some(lib) = vis.anims.clone() {
         let mut a = Animator::new(lib, &vis.skeleton, joints);
@@ -856,7 +906,7 @@ fn krust_brain(
     possession: Res<crate::possession::Possession>,
     mut log: ResMut<KrustLog>,
     player: Query<(&Transform, &Player)>,
-    mut krusts: Query<(&mut Krust, &mut Animator, &GlobalTransform), Without<crate::possession::Possessed>>,
+    mut krusts: Query<(Entity, &mut Krust, &mut Animator, &GlobalTransform, &mut Transform), (Without<crate::possession::Possessed>, Without<Player>)>,
     joints: Query<&GlobalTransform>,
     pickups: Query<(), With<Pickup>>,
     (mut sfx, mut stop, mut fx): (MessageWriter<PostEvent>, MessageWriter<StopEvent>, MessageWriter<SpawnEffect>),
@@ -864,7 +914,7 @@ fn krust_brain(
     names: Query<(Option<&crate::level::LevelInstance>, Option<&Name>, Option<&Collider>)>,
 ) {
     let scale = tc.world_scale().max(0.0);
-    for (_, mut anim, _) in &mut krusts { anim.time_scale = scale; }
+    for (_, _, mut anim, _, _) in &mut krusts { anim.time_scale = scale; }
     let dt = time.delta_secs() * scale;
     if dt <= 0.0 { return; }
     let Some(level) = level else { return };
@@ -873,8 +923,66 @@ fn krust_brain(
     let walls = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     let log_on = std::env::var("DH_KRUST_LOG").is_ok();
     let mut any_open = false;
-    for (mut k, mut a, g) in &mut krusts {
+    for (e, mut k, mut a, g, mut root) in &mut krusts {
         let Some(def) = level.scene.krusts.get(k.index as usize) else { continue };
+        // ---- torn at by Pull (`RiverKrustState_BeingPulled`): shut and shaking for
+        // `m_fPullDuration`, then torn off its wall, dead, thrown at Daud
+        if let Some((left, throw)) = k.pulled {
+            if left > dt {
+                k.pulled = Some((left - dt, throw));
+                if k.state != DEFENSIVE_HIT_REACT || a.finished() {
+                    k.state = DEFENSIVE_HIT_REACT;
+                    play(&mut a, def, DEFENSIVE_HIT_REACT, false);
+                }
+                continue;
+            }
+            k.pulled = None;
+            k.hp = 0.0;
+            let death = DEATH_OF[k.state.min(16)];
+            k.state = death;
+            k.death_fx = false;
+            play(&mut a, def, death, false);
+            stop.write(StopEvent(event_id(LOOP_SOUND)));
+            commands.entity(k.collider).remove::<Strikeable>();
+            commands.entity(e).remove::<crate::possession::Host>();
+            log.dead.insert(k.index, false);
+            sfx.write(PostEvent::named("River_Krust_Death", Some(g.translation())));
+            k.flight = Some((throw, 0.0));
+            if log_on {
+                info!("krust {} torn off by Pull, thrown at {throw:.2}", def.name);
+            }
+        }
+        // ---- torn off: flying, falling, till it lands on what is below
+        if let Some((v, age)) = k.flight {
+            let mut v = v - Vec3::Y * GRAVITY * dt;
+            let age = age + dt;
+            let step = v * dt;
+            // (from its middle, its shell's height above its root: what it sat on not struck)
+            let from = root.translation + Vec3::Y * 0.4;
+            // (tearing out of its rock, the first moment it passes through it)
+            let hit = ctx.as_ref().filter(|_| age > 0.2).and_then(|c| {
+                let l = step.length();
+                (l > 1e-5).then(|| c.cast_ray_and_get_normal(from, step / l, l + 0.15, true, walls.exclude_collider(k.collider))).flatten()
+            });
+            match hit {
+                // (a floor met falling: there it lies)
+                Some((_, h)) if v.y <= 0.0 && h.normal.y > 0.5 => {
+                    root.translation = h.point + h.normal * 0.05;
+                    k.flight = None;
+                }
+                // (a wall: it drops from it)
+                Some(_) => {
+                    v.x = 0.0;
+                    v.z = 0.0;
+                    v.y = v.y.min(0.0);
+                    k.flight = Some((v, age));
+                }
+                None => {
+                    root.translation += step;
+                    k.flight = Some((v, age));
+                }
+            }
+        }
         // ---- dead: the death plays out, the pearl can be taken
         if k.dead() {
             let t = a.current().map(|c| c.t).unwrap_or(0.0);

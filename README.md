@@ -1818,6 +1818,12 @@ fields no longer show their stand-in "WW" behind the title.
   map (`FNoLightMapPolicy`), their original shader. A sweep of every map's surfaces
   (`DH_FALLBACK_LOG`: each surface drawn without its original shader, by material and actor)
   found 41 of them in 11 maps.
+- **The Brigmore Witches' river krusts drawn twice** (`dhcook`). Their actors are a subclass
+  (`DisDLC07RiverKrust`), which the cook did not recognise as a krust when it skipped the
+  game-animated shells' mesh components. Each Draper's Ward sewer and Brigmore estate krust
+  also left a frozen copy of its shell in the level, open, which stayed on the wall after the
+  krust was killed or moved. The cook now skips the components of these classes' subclasses
+  too (the krusts', the fish's, the tripwires' and the launchers').
 - **Mesh sections without a material** (`dhcook`). 168 surfaces in 29 maps (the Overseers'
   office dividers' backs, `over_int_divider_01`'s second section; others in the Distillery
   District, the Golden Cat, the Flooded District, the Knife of Dunwall's maps) have no material
@@ -2820,6 +2826,11 @@ fields no longer show their stand-in "WW" behind the title.
       below or above him they lie (`DeadPullUpForceSettings`: 15 m/s² from 10 m below, 10 level
       with him, none from 10 m above). Reaching him, a body goes onto his shoulder ("Corpses
       and unconscious bodies are automatically carried").
+    - River krusts are Pull's too (its `m_ManaCosts` name them, 40). Before, they could not be
+      taken. Now a krust is torn at (`RiverKrustState_BeingPulled`: shut in its shell, shaking)
+      for its `m_fPullDuration` (1.3 s), then comes off its wall dead and is thrown at him
+      (`m_RiverKrustImpulse`: 7.5 m/s toward him, 5 up, our reading of its frame), falling where
+      it lands with its pearl to take.
     - Our reading where the tweaks are silent: the held one goes straight to him (it was in his
       sight); the hold lasts until he lets go; a body's pull is capped at a person's speed and
       spread over its whole ragdoll; the shield covers 0.6 m either side of the line to him.

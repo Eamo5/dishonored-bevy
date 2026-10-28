@@ -2848,6 +2848,9 @@ pub struct Krust {
     pub pearl: Option<(u32, Vec<u32>)>,
     #[serde(default)]
     pub pearl_name: String,
+    /// how long Pull tears at it before it comes away (`m_fPullDuration`: The Brigmore Witches')
+    #[serde(default)]
+    pub pull_duration: f32,
 }
 
 /// A part of a tripwire trap: a wire across the way (`DisTripwire` + `DisTweaks_Tripwire`) or a
