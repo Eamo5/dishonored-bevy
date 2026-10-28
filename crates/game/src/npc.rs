@@ -305,6 +305,9 @@ pub struct Npc {
     pub shot_hit: bool,
     /// choking in a cloud of chokedust (its stun's length: `stagger`)
     pub dusted: bool,
+    /// coughing on a Dead Eel's acid: its smoke clips played once through (its `stagger` set to
+    /// their length as they start)
+    pub cough_once: bool,
     /// its bearing about Corvo while it waits outside the ring of those at him (radians)
     pub flank: Option<f32>,
     pub taunt_hold: f32,
@@ -2423,6 +2426,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         ranged_threat: (0.0, -1.0),
         shot_hit: false,
         dusted: false,
+        cough_once: false,
         flank: None,
         taunt_hold: 0.0,
         search_run: false,
@@ -3097,7 +3101,7 @@ fn npc_hits(
                 if npc.hostile() && npc.mode != Mode::Combat {
                     npc.set_mode(Mode::Search);
                 }
-                sfx.write(crate::audio::PostEvent::named("Snd_DLC06_AI_Cough_Male", Some(pos + Vec3::Y)));
+                // (its coughing is its clips' own: `Civ_Weeper_Cough_Male_Short`...)
             }
             HitKind::Fire => {
                 // `NPCImmolationTime`: they burn, flailing in the flames (`DisNPCAnim_Immolate`),
@@ -3124,6 +3128,23 @@ fn npc_hits(
                     commands.entity(e).try_insert(Electrocuted::new(true));
                 }
                 noise.write(Noise { corvo: !wall, pos, radius: 3.0, kind: NoiseKind::DeathRattle });
+            }
+            // a Dead Eel's acid: hurt, it coughs where it stands (its damage type's
+            // `eDisPawnHitReactionType_DLC07_Cough`: `DisDLC07NPCAnim_Coughing`, the smoke clips
+            // once through, `Generic_SmokeBomb_In`, `_Loop`, `_Out`); a death no one's
+            HitKind::Acid => {
+                npc.health = (npc.health - h.damage).max(npc.min_health);
+                npc.hurt_t = 0.0;
+                npc.attack_t = None;
+                if npc.health <= 0.0 {
+                    npc.set_mode(Mode::Dead);
+                } else {
+                    npc.dusted = true;
+                    npc.cough_once = true;
+                    npc.stagger = npc.stagger.max(0.5);
+                    npc.hit_react = 0.35;
+                }
+                noise.write(Noise { corvo: false, pos, radius: 8.0, kind: NoiseKind::Threatening });
             }
             HitKind::ByOthers | HitKind::EnemyExplosion => {
                 // another NPC's blow (or the level's rats): it fights back
@@ -8282,6 +8303,10 @@ fn npc_select_anim(
                     }
                 }
                 Some(l) => {
+                    // (coughing on acid: the chain once through, as long as its clips are)
+                    if std::mem::take(&mut npc.cough_once) && st.dust_phase == 0 {
+                        npc.stagger = npc.stagger.max(d_in.map_or(0.0, |c| lib.duration(c)) + lib.duration(l) + out_len);
+                    }
                     match (st.dust_phase, d_in) {
                         (0, Some(c)) => {
                             anim.restart(c, false, 1.0, 0.15);

@@ -1807,6 +1807,17 @@ fields no longer show their stand-in "WW" behind the title.
   the next blow is an ordinary one, not a finisher, and they can't be choked mid-fight. Before,
   any character left reeling died to the next blow. Script: `stun S [NAME]` staggers the nearest
   character S seconds, as a parry does.
+- **The Knife of Dunwall's and The Brigmore Witches' sounds and voices** (`dhcook::audio`,
+  `AUDIO_DLC`). Before, the audio cook took only the Dunwall City Trials' banks and seven of
+  Daud's kit's. In the two Daud campaigns, every line the DLC added was silent, with only its
+  subtitle: the Brigmore Witches' Dead Eels' ship had sound for 940 of its 1931 lines. So were
+  the butchers' saws, the witches, the acid bottles and the rest of the DLC's world.
+  - The cook now takes every package of DLC06 and DLC07: their 52 and 135 sound packages and
+    their English voice packages (`Bk_*.INT`, 176 and 214).
+  - The game's own banks still come first. An event or a medium the DLC ship again (DLC07
+    carries DLC06's banks too) keeps the first one read.
+  - Checked: every line of the Dead Eels' ship, Brigmore Manor and the Tower's DLC map now has
+    its sound.
 - **The Dead Eels' acid bottles** (`gadgets.rs`; The Brigmore Witches' `DLC07_Inv_Grenade_Thug`,
   throwing `DLC07_Proj_AcidBottle`). Before, the Dead Eels, Lizzy Stride and Edgar Wakefield
   threw an overseer's grenade: its mesh, one blast of 30 damage and the grenade's fireball.
@@ -1823,6 +1834,11 @@ fields no longer show their stand-in "WW" behind the title.
     `Snd_AI_Thug_Proj_Acid_Expl`), kills the rats within `m_fRatKillRadius` (4 m), is heard as
     far as `m_AINoiseLoudness` (`EAINoiseLoudness2`), and keeps its danger zone up
     `m_fAdditionalDangerTime` (5 s) longer. Saves keep a bottle in flight as a bottle.
+  - A character caught in it coughs where it stands, as its damage type has it
+    (`DisDLC07DamageType_DeadEelsBottleExplosion`'s `eDisPawnHitReactionType_DLC07_Cough`: the
+    DLC's anim definitions play `DisDLC07NPCAnim_Coughing` as `Generic_SmokeBomb_In`, `_Loop`
+    and `_Out` once through, their own sounds with them, `Civ_Weeper_Cough_Male_Short`). It isn't
+    knocked down, and a death in it is no one's (`m_bInstigatorGetsBlame` false).
   - Script: `lob [NAME]` makes the nearest character with grenades lob its own at Corvo;
     `DH_GADGET_LOG` logs what each grenade strikes.
 - **Characters warn Corvo before turning on him for a blow** (the brain's `m_pReactionTweaks`,
@@ -2649,8 +2665,8 @@ fields no longer show their stand-in "WW" behind the title.
     spot, `_Out` and `Snd_Pwr_Summon_Out`; let go nowhere, put away, or given up with Use
     (`[F] Cancel Summon`), `_Cancel` and `Snd_Pwr_Summon_Fail`. The first assassin about starts
     `Snd_Pwr_Summon_Active`, the last gone stops it. The sounds are the DLC's own banks for
-    Daud's kit (his powers, gadgets, wristbow and hand, his assassins' blades, its interface),
-    cooked ahead of the rest of the DLC. He makes a threatening noise and goes after 5 s out
+    Daud's kit (his powers, gadgets, wristbow and hand, his assassins' blades, its interface).
+    He makes a threatening noise and goes after 5 s out
     of a fight; one at a time; with Arcane Bond II he moves through bent time. As he goes he
     turns to Daud and salutes (`DLC06_TweaksBehavior_AssnSalute`): having fought and within
     `m_fWinAnimMaxRange` (20 m), the winner's `Sword_DepartureSalute` (`m_WinAnim`), else

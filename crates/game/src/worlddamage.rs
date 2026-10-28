@@ -153,6 +153,7 @@ pub fn hit_type(kind: HitKind, dist: f32, attrs: &Attrs) -> &'static str {
         HitKind::ArcMine => "DisDLC06DamageType_ArcMineShot",
         HitKind::StunMine => "DisDLC06DamageType_ArcMineStunShot",
         HitKind::Chokedust => "DisDLC06DamageType_SmokeGrenadeExplosion",
+        HitKind::Acid => "DisDLC07DamageType_DeadEelsBottleExplosion",
         _ => "DishonoredDamageType",
     }
 }

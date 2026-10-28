@@ -337,7 +337,6 @@ pub struct AcidCloud {
     had: Vec<Entity>,
     corvo_had: bool,
     lens: Option<u32>,
-    kind: HitKind,
 }
 
 /// What pulls a thrown grenade down (m/s², the original's 1500 uu/s²).
@@ -912,7 +911,7 @@ fn fly_grenades(
                 // dead, the danger left a while longer, `m_fAdditionalDangerTime`)
                 let look = &l.look;
                 commands.spawn((
-                    AcidCloud { reach: [b[0], b[2], b[4]], left: look.linger, interval: look.interval.max(0.05), tick: 0.0, had: Vec::new(), corvo_had: false, lens: look.lens, kind: g.kind },
+                    AcidCloud { reach: [b[0], b[2], b[4]], left: look.linger, interval: look.interval.max(0.05), tick: 0.0, had: Vec::new(), corvo_had: false, lens: look.lens },
                     Transform::from_translation(at),
                     DespawnOnExit(GameState::InGame),
                 ));
@@ -1401,7 +1400,7 @@ fn acid_clouds(
                     continue;
                 }
                 c.had.push(ne);
-                hits.write(NpcHit { npc: ne, damage: damage * fall(d, reach, full), kind: c.kind, from: at });
+                hits.write(NpcHit { npc: ne, damage: damage * fall(d, reach, full), kind: HitKind::Acid, from: at });
             }
             if let Ok(pt) = player.single() {
                 let d = pt.translation.distance(at);

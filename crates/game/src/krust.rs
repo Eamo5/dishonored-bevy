@@ -764,6 +764,7 @@ fn damage_type(kind: HitKind) -> &'static str {
         HitKind::ArcMine => "DisDLC06DamageType_ArcMineShot",
         HitKind::StunMine => "DisDLC06DamageType_ArcMineStunShot",
         HitKind::Chokedust => "DisDLC06DamageType_SmokeGrenadeExplosion",
+        HitKind::Acid => "DisDLC07DamageType_DeadEelsBottleExplosion",
     }
 }
 

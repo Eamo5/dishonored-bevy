@@ -160,6 +160,10 @@ pub enum HitKind {
     Chokedust,
     /// Corvo sliding into someone: unharmed (`m_SlideDamageInfo` 0 to characters), it stumbles
     Slide,
+    /// a Dead Eel's acid (`DisDLC07DamageType_DeadEelsBottleExplosion`): it coughs
+    /// (`eDisPawnHitReactionType_DLC07_Cough`), no knockdown, and its kills are no one's
+    /// (`m_bInstigatorGetsBlame` false)
+    Acid,
 }
 
 /// Corvo took someone down (killed, or knocked out): who, how, for the challenges' scoring
