@@ -414,6 +414,17 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
         alpha_cutoff: 0.5,
         ..Default::default()
     });
+    // (a section without a material is drawn with the engine's default material, as UE3's
+    // `GetMaterial` falls back to `GEngine->DefaultMaterial`: `EngineMaterials.DefaultMaterial`)
+    if let Some(o) = assets.find("EngineMaterials.DefaultMaterial") {
+        let rm = resolve_material(assets, &o);
+        let mut def = c.build_material(&o, &rm);
+        if def.ue3.is_some() {
+            def.name = "default".into();
+            c.scene.materials[0] = def;
+            c.mat_ids.insert(o.key(), 0);
+        }
+    }
     let persistent = assets.package(map).with_context(|| format!("map package {map} not found"))?;
     let mut levels = vec![persistent.clone()];
     if c.opts.include_streaming {

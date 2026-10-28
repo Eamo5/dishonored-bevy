@@ -1817,8 +1817,14 @@ fields no longer show their stand-in "WW" behind the title.
   as UE3 takes the policy a shader map has, they are drawn with its program without a light
   map (`FNoLightMapPolicy`), their original shader. A sweep of every map's surfaces
   (`DH_FALLBACK_LOG`: each surface drawn without its original shader, by material and actor)
-  found 41 of them in 11 maps; rechecked on the Hound Pits, the Trials' train, the Lighthouse
-  and Draper's Ward, none are left.
+  found 41 of them in 11 maps.
+- **Mesh sections without a material** (`dhcook`). 168 surfaces in 29 maps (the Overseers'
+  office dividers' backs, `over_int_divider_01`'s second section; others in the Distillery
+  District, the Golden Cat, the Flooded District, the Knife of Dunwall's maps) have no material
+  set. They were drawn in a flat grey of our own. UE3 draws such a section with the engine's
+  default material (`GEngine->DefaultMaterial`, `EngineMaterials.DefaultMaterial`), and so
+  do we now: its own shader map, with its `DefaultDiffuse` and `DefaultNormal`.
+  - Checked: the sweep of every map now finds no surface drawn without its original shader.
 - **The story packs' own front ends** (`dlcmenu.rs`, `menu.rs`'s `DLC_PACKS`). Before, The
   Knife of Dunwall and The Brigmore Witches were only lines on the main menu's Downloadable
   Content page that started their first map. Their saves were mixed with Corvo's, and leaving
