@@ -2392,6 +2392,18 @@ fields no longer show their stand-in "WW" behind the title.
   floating until his scene takes him. Before, he was given no animation at all, so his shrines'
   scenes (`SeqAct_Interp` on `TheOutsider`) could not move him: picking up a rune in Draper's
   Ward's sewers, he stood in his bind pose on the shrine as he spoke.
+  A character a scene plays is posed while within 80 m of Corvo, as the others are. Before, one
+  the scene took while it stood frozen far off (the characters stop posing beyond 80 m) stayed
+  frozen, since a scene's characters are left out of the usual animation: walking up to the
+  party at Lady Boyle's, Lord Shaw and the guests at their scenes (`Posture_IdleLeft` with
+  `Gesture_ArmCrossed`) stood in T-poses, and so did the scenes' people in most levels.
+  The postures themselves now cook too: a clip with fewer joints than its set has tracks
+  (`Npc_EliteGuard_Postures_as`: 18 of 19, all but `Torso_jnt`, the last in Edge order) was
+  thrown out, though the joints it leaves keep the pose below, as roshan's r614/blink research
+  found. The posture sets of the guards, the women, the weepers and the packs' characters
+  lost such clips, so in 28 maps the scenes' standing and talking postures
+  (`Posture_IdleLeft`, `_TalkCenter`, `_WallBack`...: 83 of the 120 clips scenes asked for and
+  their characters lacked) did not play.
   A scene's player group with a stage mark (`InterpGroupPlayer.m_StageMarkGroup`) blends Corvo
   onto it as it starts, facing its way, over `m_fTimeToBlendToStageMark` (0.2 s), and holds him
   there while it plays (`StatePlayerMasterSoiree`: movement disabled); one that carries him (a

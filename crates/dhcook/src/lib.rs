@@ -9076,7 +9076,8 @@ fn anim_layout_hash(names: &[String], root: Option<usize>, rotation: glam::Quat,
             h = (h ^ x as u32).wrapping_mul(0x0100_0193);
         }
     };
-    eat(b"anim-layout-v3/");
+    // (v4: clips with fewer joints than their set's tracks kept)
+    eat(b"anim-layout-v4/");
     for n in names {
         eat(n.to_ascii_lowercase().as_bytes());
         eat(b"/");
@@ -9207,8 +9208,11 @@ fn cook_anim_set(set: &Obj, layout: &AnimLayout, path: &Path) -> Result<bool> {
         let (Ok(_), Ok(len)) = (r.i32(), r.i32()) else { continue };
         let Ok(blob) = r.bytes(len.max(0) as usize) else { continue };
         let a = match edge::EdgeAnim::decode(blob) {
-            // A zero-track sequence can still carry duration and sound notifies.
-            Ok(a) if a.num_joints == 0 || a.num_joints == layout.names.len() => a,
+            // A zero-track sequence can still carry duration and sound notifies. One with fewer
+            // joints than the set has tracks leaves out the last ones in Edge order, which it
+            // doesn't animate (the elite guards' `Npc_EliteGuard_Postures_as`: 18 of 19, all but
+            // `Torso_jnt`), as roshan's r614/blink research found: they keep the pose below.
+            Ok(a) if a.num_joints <= layout.names.len() => a,
             _ => {
                 skipped += 1;
                 continue;

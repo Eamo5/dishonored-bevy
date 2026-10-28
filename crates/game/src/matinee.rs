@@ -396,6 +396,7 @@ fn play_matinees(
     scene_arms.0 = None;
     fade.0 = None;
     let mut scripted: HashSet<Entity> = HashSet::new();
+    let ppos = player.single().ok().map(|(t, _)| t.translation);
     if plays.is_empty() {
         // scenes over: their characters go back to their own behaviour
         for (e, _) in st.npc_keys.drain() {
@@ -686,6 +687,13 @@ fn play_matinees(
                                 continue;
                             }
                             scripted.insert(e);
+                            // (posed while within the characters' 80 m, as their own animation
+                            // is: one frozen far off as its scene took it stayed so, in its bind
+                            // pose, once Corvo came near, the scene's clips playing on unseen)
+                            let far = ppos.is_some_and(|p| p.distance_squared(ntf.translation) > 80.0 * 80.0);
+                            if animator.frozen != far {
+                                animator.frozen = far;
+                            }
                             // the stage mark: where the scene puts the character
                             if !group.stage_mark.is_empty() && st.staged.insert((op, e)) {
                                 let mark = m.groups.iter().position(|gr| gr.name.eq_ignore_ascii_case(&group.stage_mark));

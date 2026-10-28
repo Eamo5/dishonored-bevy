@@ -513,6 +513,18 @@ fn main() -> Result<()> {
         Some("meshinfo") => {
             // dhtool meshinfo <cooked .mesh>: attribute counts
             let m = dhcook::format::MeshFile::read(std::path::Path::new(&args[2]))?;
+            // (with a vertex x past ARG3: the joints the outermost vertices follow, an arm's)
+            if let Some(xmin) = args.get(3).and_then(|v| v.parse::<f32>().ok()) {
+                let mut w: std::collections::BTreeMap<u16, f32> = Default::default();
+                for (v, p) in m.positions.iter().enumerate() {
+                    if p[0].abs() > xmin || p[2].abs() > xmin {
+                        for k in 0..4 { *w.entry(m.joints[v][k]).or_default() += m.weights[v][k]; }
+                    }
+                }
+                let mut top: Vec<_> = w.into_iter().filter(|x| x.1 > 0.0).collect();
+                top.sort_by(|a, b| b.1.total_cmp(&a.1));
+                println!("outer joints {:?}", &top[..top.len().min(8)]);
+            }
             println!(
                 "positions {} normals {} tangents {} uv0 {} uv1 {} colors {} joints {} sections {:?}",
                 m.positions.len(), m.normals.len(), m.tangents.len(), m.uv0.len(), m.uv1.len(), m.colors.len(), m.joints.len(), m.sections
@@ -1106,7 +1118,8 @@ fn main() -> Result<()> {
                 let raw = r.i32()?;
                 let n = r.i32()? as usize;
                 let blob = r.bytes(n)?.to_vec();
-                println!("{s} {name} frames={frames} len={len} raw={raw} blob={n}");
+                let joints = dhcook::edge::EdgeAnim::decode(&blob).map(|a| a.num_joints as i64).unwrap_or(-1);
+                println!("{s} {name} frames={frames} len={len} raw={raw} blob={n} joints={joints}");
                 std::fs::write(out.join(format!("{name}.bin")), &blob)?;
             }
         }

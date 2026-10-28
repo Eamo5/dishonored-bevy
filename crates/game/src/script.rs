@@ -2282,7 +2282,8 @@ fn run_script(
             }
             let mut list: Vec<_> = npcs.iter().map(|(n, nt, _)| (nt.translation.distance(t.translation), n, nt.translation)).collect();
             list.sort_by(|a, b| a.0.total_cmp(&b.0));
-            for (d, n, pos) in list.iter().take(4) {
+            let shown = std::env::var("DH_NPC_LIST").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+            for (d, n, pos) in list.iter().take(shown) {
                 info!(
                     "script:   npc {} d={:.1} pos={:.1} mode={:?} alert={:?} aware={:.2} hp={:.0} sees={} down={:.2} enemy={} open={:?} pawn={}",
                     n.name, d, pos, n.mode, n.alert, n.awareness, n.health, n.sees_player, n.down_t, n.enemy, n.open, n.pawn
