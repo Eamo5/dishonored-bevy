@@ -325,12 +325,41 @@ pub struct Transition {
     pub stats: PlayerStats,
 }
 
-pub fn transition_path() -> PathBuf {
+/// The Knife of Dunwall's ends kept, one by its chaos (`m_bDLC06ToDLC07HighChaosFound`,
+/// `_LowChaosFound`: the Brigmore Witches' new game offers each), and the one kept before there
+/// were two (read as its own chaos's).
+pub fn transition_path(high: bool) -> PathBuf {
+    saves_dir().join(if high { "dlc06_transition_high.json" } else { "dlc06_transition_low.json" })
+}
+
+fn legacy_transition_path() -> PathBuf {
     saves_dir().join("dlc06_transition.json")
 }
 
+/// Which of The Knife of Dunwall's ends The Brigmore Witches' new game takes up
+/// (`MM_TransitionFromDLC06_Screen`): unasked (whichever there is, the latest), none (`t_noDLC06Save`,
+/// a new game), or the one of that chaos.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TransitionChoice {
+    Unasked,
+    Nothing,
+    Chaos(bool),
+}
+
+pub static TRANSITION_CHOICE: std::sync::Mutex<TransitionChoice> = std::sync::Mutex::new(TransitionChoice::Unasked);
+
+/// The ends found (low chaos, high chaos).
+pub fn transitions_found() -> [bool; 2] {
+    let legacy = read_at(&legacy_transition_path()).map(|t| t.high_chaos);
+    [transition_path(false).exists() || legacy == Some(false), transition_path(true).exists() || legacy == Some(true)]
+}
+
+fn read_at(path: &std::path::Path) -> Option<Transition> {
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+}
+
 pub fn write_transition(t: &Transition) {
-    let path = transition_path();
+    let path = transition_path(t.high_chaos);
     match serde_json::to_vec(t) {
         Ok(d) => {
             if let Err(e) = replace_save(&path, |f| std::io::Write::write_all(f, &d)) {
@@ -341,8 +370,19 @@ pub fn write_transition(t: &Transition) {
     }
 }
 
+/// The end the new game takes up, as chosen (unasked: the one there is, the newest of two).
 pub fn read_transition() -> Option<Transition> {
-    serde_json::from_slice(&std::fs::read(transition_path()).ok()?).ok()
+    let of = |high: bool| read_at(&transition_path(high)).or_else(|| read_at(&legacy_transition_path()).filter(|t| t.high_chaos == high));
+    let choice = *TRANSITION_CHOICE.lock().unwrap();
+    match choice {
+        TransitionChoice::Nothing => None,
+        TransitionChoice::Chaos(high) => of(high),
+        TransitionChoice::Unasked => {
+            let age = |high: bool| std::fs::metadata(transition_path(high)).and_then(|m| m.modified()).ok();
+            let first = age(true) > age(false);
+            of(first).or_else(|| of(!first)).or_else(|| read_at(&legacy_transition_path()))
+        }
+    }
 }
 
 fn slot_path(slot: usize) -> PathBuf {

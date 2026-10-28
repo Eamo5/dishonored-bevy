@@ -1832,6 +1832,12 @@ fields no longer show their stand-in "WW" behind the title.
   - In its missions the pause menu offers `t_BackToDLC06MainMenu` ("Exit the Mission", to its
     own front end) and `t_ExitDLC06` (out of the pack), each asked first with the pack's name
     put in (`§DLC06_NAME§`). Its story's end goes back to its own front end.
+  - The Knife of Dunwall's end is now kept by its chaos, low and high apart
+    (`m_bDLC06ToDLC07HighChaosFound`, `_LowChaosFound`). Before, a second ending overwrote the
+    first. The Brigmore Witches' new game, with an end found, asks which progression to take up
+    (`MM_TransitionFromDLC06_Screen`: `t_transitionFromDLC06Desc`, Low Chaos, High Chaos, or
+    `t_noDLC06Save`), asking to be sure (`t_useDLC06Save_q`, `t_useNoDLC06Save_q`). Its scripts'
+    `DisDLC07SeqAct_ImportTransitionPlayerData` then takes up that one, or none.
 - **The Knife of Dunwall's and The Brigmore Witches' sounds and voices** (`dhcook::audio`,
   `AUDIO_DLC`). Before, the audio cook took only the Dunwall City Trials' banks and seven of
   Daud's kit's. In the two Daud campaigns, every line the DLC added was silent, with only its

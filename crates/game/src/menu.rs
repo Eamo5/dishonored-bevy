@@ -119,6 +119,9 @@ enum Page {
     Missions,
     /// the pause menu's help (`t_Help`: the tutorial notes received, `helpscreen`)
     Help,
+    /// The Brigmore Witches' new game, a Knife of Dunwall end found: which to take up
+    /// (`MM_TransitionFromDLC06_Screen`)
+    Transition,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -220,6 +223,8 @@ enum Action {
     DlcCredits(usize),
     /// a story pack's last difficulty, not yet open (`t_LastDifficultyUnlockCondition`)
     LockedDifficulty,
+    /// The Knife of Dunwall's end of that chaos taken up, or none (a new game)
+    UseTransition(Option<bool>),
     /// the trials' welcome read (`APressed`: `OnWelcomeDisclaimerClosed`), their credits
     /// (`DLC05_Credits`: `CreditsDLC05`)
     WelcomeDone,
@@ -1344,6 +1349,20 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
         }
         // (the help's rows: above)
         (_, Page::Help) => Vec::new(),
+        // (`MM_TransitionFromDLC06_Menu`: each end found by its chaos, then none)
+        (_, Page::Transition) => {
+            let t = "DisGFxMoviePlayerMainMenu_Texts";
+            let [low, high] = crate::save::transitions_found();
+            let mut v = Vec::new();
+            if low {
+                v.push((data.text(t, "t_LowChaos"), Action::UseTransition(Some(false))));
+            }
+            if high {
+                v.push((data.text(t, "t_HighChaos"), Action::UseTransition(Some(true))));
+            }
+            v.push((data.text("DisGFxMoviePlayerMenuBase_Texts", "t_noDLC06Save"), Action::UseTransition(None)));
+            v
+        }
     }
 }
 
@@ -1918,6 +1937,15 @@ fn menu_input(
                     Some(pack) => data.text("DisGFxMoviePlayerMainMenu_Texts", "t_Q_NewGame_DLC07").replace("\u{a7}DLC07_NAME\u{a7}", &data.text("DisGFxMoviePlayerBase_Texts", DLC_PACKS[pack].name)),
                     None => data.text("DisGFxMoviePlayerMainMenu_Texts", "t_Q_NewGame"),
                 }),
+                // (`t_useDLC06Save_q`, `t_useNoDLC06Save_q`)
+                Action::UseTransition(c) => {
+                    let q = data.text(base, if c.is_some() { "t_useDLC06Save_q" } else { "t_useNoDLC06Save_q" });
+                    let save = match c {
+                        Some(true) => data.text("DisGFxMoviePlayerMainMenu_Texts", "t_HighChaos"),
+                        _ => data.text("DisGFxMoviePlayerMainMenu_Texts", "t_LowChaos"),
+                    };
+                    Some(pack_words(&data, 0, q.replace("\u{a7}SAVE\u{a7}", &save)))
+                }
                 Action::LeaveTrials if kind == MenuKind::Pause => Some(data.text("DisGFxMoviePlayerBase_Texts", "t_Q_ExitDLC05_IG")),
                 Action::LeaveTrials => Some(data.text("DisDLC05MoviePlayerChallengeMenu_Texts", "t_Q_DLC05_BackToMain")),
                 Action::RestartChallenge => Some(data.text("DisGFxMoviePlayerBase_Texts", "t_Q_RestartChallenge")),
@@ -1999,10 +2027,23 @@ fn menu_input(
             settings.save();
             menu.dirty = true;
         }
-        Action::Difficulty(d) => {
-            *campaign = Default::default();
+        // (The Brigmore Witches', a Knife of Dunwall end found: which to take up, first)
+        Action::Difficulty(d) if menu.campaign_map == Some(DLC_PACKS[1].first) && crate::save::transitions_found().iter().any(|f| *f) => {
             settings.difficulty = d;
             settings.save();
+            menu.go(Page::Transition);
+        }
+        Action::Difficulty(_) | Action::UseTransition(_) => {
+            *crate::save::TRANSITION_CHOICE.lock().unwrap() = match action {
+                Action::UseTransition(Some(high)) => crate::save::TransitionChoice::Chaos(high),
+                Action::UseTransition(None) => crate::save::TransitionChoice::Nothing,
+                _ => crate::save::TransitionChoice::Unasked,
+            };
+            *campaign = Default::default();
+            if let Action::Difficulty(d) = action {
+                settings.difficulty = d;
+                settings.save();
+            }
             // (a story pack's from its first map; the game's own with the intro while the Tower
             // loads)
             let start = menu.campaign_map.take();
@@ -2217,6 +2258,11 @@ fn menu_build(
             };
             if let Some(h) = heading {
                 col.spawn((Text::new(h), TextFont { font: title_font.clone(), font_size: bevy::text::FontSize::Px(30.0), ..default() }, TextColor(gold), Node { margin: UiRect::bottom(px(14)), ..default() }));
+            }
+            // (the found end's words, `t_transitionFromDLC06Desc`, its line breaks the movie's)
+            if menu.page == Page::Transition {
+                let words = pack_words(&data, 0, data.text("DisGFxMoviePlayerMenuBase_Texts", "t_transitionFromDLC06Desc")).replace("<br/>", "\n");
+                col.spawn((Text::new(words), TextFont { font: title_font.clone(), font_size: bevy::text::FontSize::Px(24.0), ..default() }, TextColor(white), Node { max_width: px(760), margin: UiRect::bottom(px(18)), ..default() }));
             }
             for (i, (label, _)) in menu.items.iter().enumerate() {
                 let selected = i == menu.sel && menu.page != Page::Title;
