@@ -442,13 +442,17 @@ fn spawn_loading_ui(
     // a hint of the mission's set, as the original's loading screens give
     let hint = hint_set(&config.map)
         .and_then(|s| data.0.hints.get(s))
-        .filter(|h| !h.is_empty() && !config.map.eq_ignore_ascii_case(crate::menu::MENU_MAP))
+        .filter(|h| !h.is_empty() && !config.map.eq_ignore_ascii_case(crate::menu::MENU_MAP) && crate::menu::dlc_menu_of(&config.map).is_none())
         .map(|h| crate::gamedata::readable(&h[rand::random_range(0..h.len())]));
     let menu = config.map.eq_ignore_ascii_case(crate::menu::MENU_MAP);
     let art = if backdrop.is_some() { None } else { mission_art(&config.map).and_then(|a| ui_png(&mut images, &format!("missions/MissionsScreen_{a}_Large.png"))) };
     let strip = ui_png(&mut images, "loading/ChapterTitleBg.png");
     // (the map's own name, `[MapNames]`, as the original's `DisBinkOverlayManager` gives it)
-    let title = if menu { "DISHONORED".to_string() } else { data.map_name(&config.map).map(str::to_string).unwrap_or_else(|| crate::save::mission_name(&config.map)) };
+    // (a story pack's front end: its name)
+    let pack_menu = crate::menu::dlc_menu_of(&config.map).map(|i| data.text("DisGFxMoviePlayerBase_Texts", crate::menu::DLC_PACKS[i].name).to_uppercase());
+    let title = if menu { "DISHONORED".to_string() } else if let Some(t) = pack_menu {
+        t
+    } else { data.map_name(&config.map).map(str::to_string).unwrap_or_else(|| crate::save::mission_name(&config.map)) };
     let gold = Color::srgb(0.86, 0.80, 0.66);
     // (its interface blending in gamma space, as the game's: `CompositingSpace::Srgb`)
     let cam = commands.spawn((LoadingUi, Camera2d, Camera { order: 100, ..default() }, bevy::camera::CompositingSpace::Srgb)).id();

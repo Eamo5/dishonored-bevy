@@ -7715,9 +7715,24 @@ pub fn apply_effects(
                 // its own front end: the main menu)
                 if vm.story_end && map.to_ascii_lowercase().contains("gamefull") {
                     info!("level scripts: the story is over, to the main menu");
-                    commands.queue(|w: &mut World| {
+                    // (a story pack's: back to its own front end, its last difficulty open now,
+                    // `t_LastDifficultyUnlockCondition`, kept in the user's settings)
+                    let pack = crate::menu::DLC_PACKS.iter().position(|p| map.eq_ignore_ascii_case(p.full));
+                    commands.queue(move |w: &mut World| {
+                        let menu_map = match pack {
+                            Some(i) => {
+                                let mut s = w.resource_mut::<crate::settings::Settings>();
+                                if !s.dlc_master[i] {
+                                    s.dlc_master[i] = true;
+                                    s.save();
+                                }
+                                let m = crate::menu::DLC_PACKS[i].menu;
+                                if crate::loading::cache_dir().join("maps").join(format!("{}.json", m.to_ascii_lowercase())).exists() { m } else { crate::menu::MENU_MAP }
+                            }
+                            None => crate::menu::MENU_MAP,
+                        };
                         let mut config = w.resource_mut::<crate::Config>();
-                        config.map = crate::menu::MENU_MAP.into();
+                        config.map = menu_map.into();
                         config.spawn_index = None;
                         w.resource_mut::<NextState<crate::GameState>>().set(crate::GameState::Loading);
                     });

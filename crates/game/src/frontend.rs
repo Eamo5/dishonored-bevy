@@ -477,7 +477,12 @@ fn new_game(dt: f32, s: f32, off: Vec2, open: f32, menu: &Menu, fe: &mut Fronten
         node.height = Val::Px(NG_BTN_H * s);
     }
     // the description of the one chosen
-    let words = data.text("DisGFxMoviePlayerMainMenu_Texts", &format!("t_difficulty{chosen}Desc"));
+    // (a story pack's own, `t_difficulty<n>_DLC06Desc`; its last, not yet open: what opens it)
+    let words = match menu.dlc() {
+        Some(_) if menu.item_locked(chosen) => data.text("DisDLC06MoviePlayerMainMenu_Texts", "t_LastDifficultyUnlockCondition"),
+        Some(_) => data.text("DisGFxMoviePlayerMainMenu_Texts", &format!("t_difficulty{chosen}_DLC06Desc")),
+        None => data.text("DisGFxMoviePlayerMainMenu_Texts", &format!("t_difficulty{chosen}Desc")),
+    };
     for (mut text, mut f, mut col, mut node, mut ut, cn) in desc.iter_mut() {
         if text.0 != words {
             text.0 = words.clone();

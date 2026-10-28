@@ -9452,6 +9452,9 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         ("UI_Note_DLC06_SF", ""),
         ("UI_Note_DLC07_SF", ""),
         ("UI_HUD_DLC07_SF", ""),
+        // (their own front ends, in their menu maps: Daud's logo and the difficulties' cards)
+        ("DLC06_Dishonored_MainMenu", "UI_MainMenu_DLC06."),
+        ("L_DLC07_MainMenu", "UI_MainMenu_DLC07."),
     ] {
         // (the game's packages, or the DLC's)
         let path = std::iter::once(cooked.to_path_buf()).chain(crate::resolver::dlc_dirs(cooked)).map(|d| d.join(format!("{pkg_name}.upk"))).find(|p| p.exists());

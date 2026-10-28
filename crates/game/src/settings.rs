@@ -103,6 +103,9 @@ pub struct Settings {
     pub pad_auto_aim_strength: f32,
     pub pad_friction: bool,
     pub pad_friction_strength: f32,
+    /// the story packs' last difficulty open (`t_LastDifficultyUnlockCondition`: Master Assassin,
+    /// once the campaign is done; `ProfileSaveWarning`: kept in the user's settings), by pack
+    pub dlc_master: [bool; 2],
 }
 
 /// The display's sizes to choose from (its video modes, smallest first), as the window system
@@ -190,6 +193,7 @@ impl Default for Settings {
             pad_auto_aim_strength: 100.0,
             pad_friction: true,
             pad_friction_strength: 100.0,
+            dlc_master: [false; 2],
         }
     }
 }

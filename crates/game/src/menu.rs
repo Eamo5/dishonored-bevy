@@ -21,9 +21,49 @@ pub const MENU_MAP: &str = "Dishonored_MainMenu";
 pub const TRIALS_MAP: &str = "L_DLC05_MainMenu_P";
 /// The first mission (the prologue at the Tower).
 pub const FIRST_MAP: &str = "L_Tower_P";
-/// The story packs' first maps (`missions`: The Knife of Dunwall's mission 11, The Brigmore
-/// Witches' 16), with their names (`t_DLC06_Name`, `t_DLC07_Name`)
-pub const DLC_CAMPAIGNS: [(&str, &str); 2] = [("DLC06_Tower_P", "t_DLC06_Name"), ("L_DLC07_BaseIntro_P", "t_DLC07_Name")];
+/// A story pack: its first map (`missions`: The Knife of Dunwall's mission 11, The Brigmore
+/// Witches' 16), its name (`t_DLC06_Name`), its own front end's map and movie (the map its whole
+/// game package opens on, `DisDLC06GameInfo.m_DLC06MainMenuCommand`; `UI_MainMenu_DLC06`) and the
+/// movie's logo, its maps' prefix, its whole game package (what its end starts) and its credits
+/// (its menu tweak's `m_TrailerName`).
+pub struct DlcPack {
+    pub first: &'static str,
+    pub name: &'static str,
+    pub menu: &'static str,
+    pub movie: &'static str,
+    pub logo: u16,
+    pub prefix: &'static str,
+    pub full: &'static str,
+    pub credits: &'static str,
+}
+
+pub const DLC_PACKS: [DlcPack; 2] = [
+    DlcPack { first: "DLC06_Tower_P", name: "t_DLC06_Name", menu: "DLC06_Dishonored_MainMenu", movie: "MainMenu_DLC06", logo: 79, prefix: "dlc06_", full: "dlc06_dishonoredgamefull_p", credits: "CreditsDLC06" },
+    DlcPack { first: "L_DLC07_BaseIntro_P", name: "t_DLC07_Name", menu: "L_DLC07_MainMenu", movie: "MainMenu_DLC07", logo: 94, prefix: "l_dlc07_", full: "l_dlc07_gamefull_p", credits: "CreditsDLC07" },
+];
+
+/// The story pack a map is of (its own front end's too).
+pub fn dlc_of(map: &str) -> Option<usize> {
+    let m = map.to_ascii_lowercase();
+    DLC_PACKS.iter().position(|p| m.starts_with(p.prefix))
+}
+
+/// A story pack's front end, if this map is one.
+pub fn dlc_menu_of(map: &str) -> Option<usize> {
+    DLC_PACKS.iter().position(|p| map.eq_ignore_ascii_case(p.menu))
+}
+
+/// A story pack's words with its names put in (`§DLC06_NAME§`, `§DLC07_NAME§`: the DLC's texts
+/// speak of the pack they are shown in as `DLC06`).
+fn pack_words(data: &crate::gamedata::Data, pack: usize, s: String) -> String {
+    let name = data.text("DisGFxMoviePlayerBase_Texts", DLC_PACKS[pack].name);
+    s.replace("\u{a7}DLC06_NAME\u{a7}", &name).replace("\u{a7}DLC07_NAME\u{a7}", &data.text("DisGFxMoviePlayerBase_Texts", DLC_PACKS[1].name))
+}
+
+/// The newest save of a campaign (none: the game's own; else a story pack's).
+fn latest_of(slots: &SaveSlots, pack: Option<usize>) -> Option<usize> {
+    slots.list().into_iter().map(|(i, _)| i).find(|&i| slots.info(i).is_some_and(|(map, ..)| dlc_of(map) == pack))
+}
 
 /// Whether a map is cooked (its scene in the cache).
 fn map_cooked(map: &str) -> bool {
@@ -36,7 +76,7 @@ impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Menu>().init_resource::<HudHidden>()
             .add_systems(OnEnter(GameState::InGame), enter_level.after(LevelSpawnSet))
-            .add_systems(Update, (open_pause, menu_input, menu_build, menu_world, open_sounds).chain().in_set(MenuSet).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (open_pause, menu_input, menu_build, menu_world, open_sounds, dlc_scene).chain().in_set(MenuSet).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -174,6 +214,12 @@ enum Action {
     LeaveTrials,
     /// a story pack's campaign begun anew (its first map), once a difficulty is chosen
     NewCampaign(&'static str),
+    /// into a story pack's own front end (its menu map), and out to the game's; its credits
+    DlcMenu(usize),
+    LeaveDlc,
+    DlcCredits(usize),
+    /// a story pack's last difficulty, not yet open (`t_LastDifficultyUnlockCondition`)
+    LockedDifficulty,
     /// the trials' welcome read (`APressed`: `OnWelcomeDisclaimerClosed`), their credits
     /// (`DLC05_Credits`: `CreditsDLC05`)
     WelcomeDone,
@@ -229,6 +275,8 @@ pub struct Menu {
     /// the campaign a difficulty is being chosen for (a story pack's first map; none: the
     /// game's own)
     campaign_map: Option<&'static str>,
+    /// the story pack whose front end or game this is (`DLC_PACKS`; none: the game's own)
+    dlc: Option<usize>,
 }
 
 /// How an option row shows its value (`OptionsStepperB_widget`, `OptionsStepper_widget`,
@@ -338,7 +386,7 @@ pub const OPT_CATEGORIES: [(&str, &[&str]); 4] = [
 
 impl Default for Menu {
     fn default() -> Self {
-        Menu { open: None, page: Page::Main, stack: Vec::new(), sel: 0, dirty: true, gamma: None, pad_map: None, video: None, video_click: None, items: Vec::new(), started: false, capture: None, opt_cat: 0, opt_sub: 0, confirm: None, confirm_click: None, pending_challenge: None, gallery_view: None, board_row: None, board_over_results: false, tutorials: Vec::new(), campaign_map: None }
+        Menu { open: None, page: Page::Main, stack: Vec::new(), sel: 0, dirty: true, gamma: None, pad_map: None, video: None, video_click: None, items: Vec::new(), started: false, capture: None, opt_cat: 0, opt_sub: 0, confirm: None, confirm_click: None, pending_challenge: None, gallery_view: None, board_row: None, board_over_results: false, tutorials: Vec::new(), campaign_map: None, dlc: None }
     }
 }
 
@@ -349,6 +397,8 @@ impl Menu {
         let labels = || self.items.iter().map(|i| i.0.clone()).collect();
         match (self.open, self.page) {
             (Some(MenuKind::Main), Page::Title) => Some((0, Vec::new())),
+            // (a story pack's own home: `dlcmenu`)
+            (Some(MenuKind::Main), Page::Main) if self.dlc_home() => Some((crate::dlcmenu::CODE, labels())),
             (Some(MenuKind::Main), Page::Main) => Some((1, labels())),
             (Some(MenuKind::Main), Page::Difficulty) => Some((2, labels())),
             (Some(MenuKind::Pause), Page::Main) => Some((3, labels())),
@@ -475,6 +525,21 @@ impl Menu {
         }
     }
     /// The item chosen with the keys.
+    /// The story pack whose front end or game this is.
+    pub fn dlc(&self) -> Option<usize> {
+        self.dlc
+    }
+
+    /// An item not yet open (a story pack's last difficulty).
+    pub fn item_locked(&self, i: usize) -> bool {
+        matches!(self.items.get(i), Some((_, Action::LockedDifficulty)))
+    }
+
+    /// In a story pack's own front end.
+    pub fn dlc_home(&self) -> bool {
+        self.dlc.is_some() && self.open == Some(MenuKind::Main)
+    }
+
     pub fn selected(&self) -> usize {
         self.sel
     }
@@ -681,6 +746,29 @@ impl Menu {
     }
 }
 
+/// A story pack's front end's scene follows its menu, as its movie player fires its map's remote
+/// events: into the new game's screen (`ToNewGameScreen`), each difficulty as it is chosen
+/// (`MainMenu_UIDiffEasy`, `_Normal`, `_Hard`, `_VeryHard`: Daud's figure for it shown, its sound),
+/// and back out (`MainMenu_FromNewGameScreen<n>`, by the one chosen).
+fn dlc_scene(menu: Res<Menu>, vm: Option<ResMut<Vm>>, mut was: Local<Option<(Page, usize)>>) {
+    const DIFF: [&str; 4] = ["Easy", "Normal", "Hard", "VeryHard"];
+    let now = menu.dlc_home().then_some((menu.page, menu.sel));
+    if now == *was {
+        return;
+    }
+    let before = std::mem::replace(&mut *was, now);
+    let (Some(mut vm), Some((page, sel))) = (vm, now) else { return };
+    match (before.map(|b| b.0), page) {
+        (Some(Page::Difficulty), Page::Difficulty) => vm.remote_event(&format!("MainMenu_UIDiff{}", DIFF[sel.min(3)])),
+        (_, Page::Difficulty) => {
+            vm.remote_event("ToNewGameScreen");
+            vm.remote_event(&format!("MainMenu_UIDiff{}", DIFF[sel.min(3)]));
+        }
+        (Some(Page::Difficulty), _) => vm.remote_event(&format!("MainMenu_FromNewGameScreen{}", before.map_or(1, |b| b.1.min(3)))),
+        _ => {}
+    }
+}
+
 #[derive(Component)]
 struct MenuRoot;
 
@@ -690,7 +778,20 @@ pub struct MenuItem(pub usize);
 fn enter_level(level: Option<Res<LevelInfo>>, mut menu: ResMut<Menu>, vm: Option<ResMut<Vm>>, mut launch: ResMut<crate::challenge::ChallengeLaunch>, profile: Res<crate::challenge::ChallengeProfile>) {
     let main = level.as_ref().is_some_and(|l| l.scene.name.eq_ignore_ascii_case(MENU_MAP));
     let trials = level.as_ref().is_some_and(|l| l.scene.name.eq_ignore_ascii_case(TRIALS_MAP));
+    let name = level.as_ref().map(|l| l.scene.name.clone()).unwrap_or_default();
     *menu = Menu::default();
+    menu.dlc = dlc_of(&name);
+    // a story pack's own front end (its map's scripts bring its camera in: `MainMenu_Play`)
+    if let Some(i) = dlc_menu_of(&name) {
+        menu.open = Some(MenuKind::Main);
+        menu.page = Page::Main;
+        menu.started = true;
+        menu.campaign_map = Some(DLC_PACKS[i].first);
+        if let Some(mut vm) = vm {
+            vm.remote_event("MainMenu_Play");
+        }
+        return;
+    }
     if trials {
         // Dunwall City Trials' home (or, back from a challenge's results, its challenges)
         menu.open = Some(MenuKind::Main);
@@ -909,6 +1010,23 @@ fn adjust(s: &mut Settings, o: Opt, dir: f32, flip: bool) {
 mod modal_tests {
     use super::*;
 
+    /// The story packs' maps, front ends and texts are told apart.
+    #[test]
+    fn story_packs_are_known_by_their_maps() {
+        assert_eq!(dlc_of("DLC06_Slaughter_Int_P"), Some(0));
+        assert_eq!(dlc_of("DLC06_Dishonored_MainMenu"), Some(0));
+        assert_eq!(dlc_of("L_DLC07_Coldridge_P"), Some(1));
+        assert_eq!(dlc_of("L_DLC05_Arena_P"), None);
+        assert_eq!(dlc_of("L_Tower_P"), None);
+        assert_eq!(dlc_menu_of("l_dlc07_mainmenu"), Some(1));
+        assert_eq!(dlc_menu_of("DLC06_Tower_P"), None);
+        let mut data = crate::gamedata::Data::default();
+        data.0.texts.insert("DisGFxMoviePlayerBase_Texts.t_DLC06_Name".into(), "The Knife of Dunwall".into());
+        data.0.texts.insert("DisGFxMoviePlayerBase_Texts.t_DLC07_Name".into(), "The Brigmore Witches".into());
+        assert_eq!(pack_words(&data, 0, "Exit \u{a7}DLC06_NAME\u{a7}".into()), "Exit The Knife of Dunwall");
+        assert_eq!(pack_words(&data, 1, "Exit \u{a7}DLC06_NAME\u{a7}".into()), "Exit The Brigmore Witches");
+    }
+
     #[test]
     fn option_tabs_cannot_redirect_a_pending_restore_or_key_capture() {
         let mut menu = Menu::default();
@@ -949,9 +1067,29 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
             .filter_map(|(i, id)| crate::tutorials::note(data, id).map(|n| (crate::tutorials::title(data, &n.name), Action::ReadTutorial(i))))
             .collect();
     }
-    let has_saves = slots.any();
+    // (the saves of the campaign at hand: the game's own, or the story pack's)
+    let has_saves = latest_of(slots, menu.dlc).is_some();
     match (menu.open, menu.page) {
         (_, Page::Title) => vec![("Press any key".into(), Action::Page(Page::Main))],
+        // a story pack's home (`MM_Home_Menu`): its campaign's, its credits (`t_Credits`), and back
+        // to the game's (`t_BackToMainMenu`)
+        (Some(MenuKind::Main), Page::Main) if menu.dlc.is_some() => {
+            let pack = menu.dlc.unwrap_or(0);
+            let base = "DisGFxMoviePlayerMainMenu_Texts";
+            let own = "DisDLC06MoviePlayerMainMenu_Texts";
+            let mut v = Vec::new();
+            if has_saves {
+                v.push(("Continue".into(), Action::Continue));
+            }
+            v.push((data.text(base, "t_NewGame"), Action::NewCampaign(DLC_PACKS[pack].first)));
+            if has_saves {
+                v.push(("Load".into(), Action::Page(Page::Load)));
+            }
+            v.push(("Options".into(), Action::Page(Page::Options)));
+            v.push((data.text(own, "t_Credits"), Action::DlcCredits(pack)));
+            v.push((data.text(own, "t_BackToMainMenu"), Action::LeaveDlc));
+            v
+        }
         (Some(MenuKind::Main), Page::Main) => {
             let mut v = Vec::new();
             // (the original's words: `t_ContinueGame`, `t_NewGame`, `t_LoadGame`, `t_Options`,
@@ -966,7 +1104,7 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
                 v.push(("Load".into(), Action::Page(Page::Load)));
             }
             // (`t_DownloadableContent_Caps`: the installed DLC)
-            if !data.0.challenges.is_empty() || DLC_CAMPAIGNS.iter().any(|(m, _)| map_cooked(m)) {
+            if !data.0.challenges.is_empty() || DLC_PACKS.iter().any(|p| map_cooked(p.first)) {
                 v.push(("Downloadable Content".into(), Action::Page(Page::Dlc)));
             }
             v.push(("Options".into(), Action::Page(Page::Options)));
@@ -979,9 +1117,11 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
             if !data.0.challenges.is_empty() {
                 v.push((data.text("DisDLC05MoviePlayerChallengeMenu_Texts", "t_DLC05_Name"), Action::Trials));
             }
-            for (map, name) in DLC_CAMPAIGNS {
-                if map_cooked(map) {
-                    v.push((data.text("DisGFxMoviePlayerBase_Texts", name), Action::NewCampaign(map)));
+            // (each into its own front end, where cooked; else straight to its new game)
+            for (i, p) in DLC_PACKS.iter().enumerate() {
+                if map_cooked(p.first) {
+                    let to = if map_cooked(p.menu) { Action::DlcMenu(i) } else { Action::NewCampaign(p.first) };
+                    v.push((data.text("DisGFxMoviePlayerBase_Texts", p.name), to));
                 }
             }
             v.push(("Back".into(), Action::Back));
@@ -1049,17 +1189,39 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
             v.push((data.text(b, "t_ExitDLC05"), Action::LeaveTrials));
             v
         }
-        (_, Page::Main) => vec![
-            ("Resume".into(), Action::Resume),
-            ("Save Game".into(), Action::Page(Page::Save)),
-            ("Load Game".into(), Action::Page(Page::Load)),
-            ("Options".into(), Action::Page(Page::Options)),
-            (data.text("DisGFxMoviePlayerMenuBase_Texts", "t_Help"), Action::Page(Page::Help)),
-            ("Back to Main Menu".into(), Action::QuitToMenu),
-            ("Back to Windows".into(), Action::QuitGame),
-        ],
+        (_, Page::Main) => {
+            let base = "DisGFxMoviePlayerMenuBase_Texts";
+            let mut v = vec![
+                ("Resume".into(), Action::Resume),
+                ("Save Game".into(), Action::Page(Page::Save)),
+                ("Load Game".into(), Action::Page(Page::Load)),
+                ("Options".into(), Action::Page(Page::Options)),
+                (data.text(base, "t_Help"), Action::Page(Page::Help)),
+            ];
+            // (a story pack's: out of the mission to its own front end, `t_BackToDLC06MainMenu`, and
+            // out of it, `t_ExitDLC06`)
+            match menu.dlc {
+                Some(pack) => {
+                    v.push((data.text(base, "t_BackToDLC06MainMenu"), Action::QuitToMenu));
+                    v.push((pack_words(data, pack, data.text(base, "t_ExitDLC06")), Action::LeaveDlc));
+                }
+                None => v.push(("Back to Main Menu".into(), Action::QuitToMenu)),
+            }
+            v.push(("Back to Windows".into(), Action::QuitGame));
+            v
+        }
         // (Back is the help bar's: `SecondaryScreen`)
-        (_, Page::Difficulty) => ["Easy", "Normal", "Hard", "Very Hard"].iter().enumerate().map(|(i, n)| (n.to_string(), Action::Difficulty(i as u8))).collect(),
+        // (a story pack's own words, `t_difficulty<n>_DLC06`: Novice to Master Assassin, the last open once
+        // its campaign is done)
+        (_, Page::Difficulty) => match menu.dlc {
+            Some(pack) => (0..4u8)
+                .map(|i| {
+                    let name = data.text("DisGFxMoviePlayerMainMenu_Texts", &format!("t_difficulty{i}_DLC06"));
+                    (name, if i == 3 && !settings.dlc_master[pack] { Action::LockedDifficulty } else { Action::Difficulty(i) })
+                })
+                .collect(),
+            None => ["Easy", "Normal", "Hard", "Very Hard"].iter().enumerate().map(|(i, n)| (n.to_string(), Action::Difficulty(i as u8))).collect(),
+        },
         (_, Page::Options) => {
             // (a setting's name; the video settings' link's, the menus' tweak's)
             let label = |k: &str| if k.starts_with("m_") { data.text("Twk_GFxMoviePlayerMenuBase", k) } else { data.text("Settings.ProfileSettingIDs", k) };
@@ -1160,7 +1322,8 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
             v
         }
         // the saves, newest first (`savescreen` draws them; Escape goes back)
-        (_, Page::Load) => slots.list().into_iter().map(|(i, desc)| (desc, Action::Load(i))).collect(),
+        // (the campaign's at hand: the game's own, or the story pack's)
+        (_, Page::Load) => slots.list().into_iter().filter(|(i, _)| slots.info(*i).is_some_and(|(map, ..)| dlc_of(map) == menu.dlc)).map(|(i, desc)| (desc, Action::Load(i))).collect(),
         // the missions as the exe lists them (`OnMissionsClicked`): up to the furthest started,
         // each by its start's save (`SGS_DisMission0..8`), locked without it
         (_, Page::Missions) => {
@@ -1744,9 +1907,17 @@ fn menu_input(
             let question = match action {
                 Action::Save(slot) if slots.describe(slot).is_some() => Some(data.text(base, "t_Q_SaveGame")),
                 Action::Load(_) => Some(data.text(base, if kind == MenuKind::Main { "t_Q_LoadGameMainMenu" } else { "t_Q_LoadGame" })),
-                Action::QuitToMenu => Some(data.text(base, "t_Q_BackToMainMenu")),
+                Action::QuitToMenu => Some(match menu.dlc {
+                    Some(pack) => pack_words(&data, pack, data.text(base, "t_Q_BackToDLC06MainMenu")),
+                    None => data.text(base, "t_Q_BackToMainMenu"),
+                }),
+                Action::LeaveDlc => Some(pack_words(&data, menu.dlc.unwrap_or(0), data.text(base, if kind == MenuKind::Pause { "t_Q_ExitDLC06_IG" } else { "t_Q_ExitDLC06" }))),
                 Action::QuitGame => Some(data.text(base, if kind == MenuKind::Main { "t_Q_QuitGame" } else { "t_Q_BackToWindows" })),
-                Action::Difficulty(_) if slots.any() => Some(data.text("DisGFxMoviePlayerMainMenu_Texts", "t_Q_NewGame")),
+                // (a story pack's speaks of its own autosaves, `t_Q_NewGame_DLC07`)
+                Action::Difficulty(_) if latest_of(&slots, menu.dlc).is_some() => Some(match menu.dlc {
+                    Some(pack) => data.text("DisGFxMoviePlayerMainMenu_Texts", "t_Q_NewGame_DLC07").replace("\u{a7}DLC07_NAME\u{a7}", &data.text("DisGFxMoviePlayerBase_Texts", DLC_PACKS[pack].name)),
+                    None => data.text("DisGFxMoviePlayerMainMenu_Texts", "t_Q_NewGame"),
+                }),
                 Action::LeaveTrials if kind == MenuKind::Pause => Some(data.text("DisGFxMoviePlayerBase_Texts", "t_Q_ExitDLC05_IG")),
                 Action::LeaveTrials => Some(data.text("DisDLC05MoviePlayerChallengeMenu_Texts", "t_Q_DLC05_BackToMain")),
                 Action::RestartChallenge => Some(data.text("DisGFxMoviePlayerBase_Texts", "t_Q_RestartChallenge")),
@@ -1757,7 +1928,7 @@ fn menu_input(
             match action {
                 Action::Adjust(Opt::Brightness | Opt::VideoSettings | Opt::PadScheme) => ui(&mut sfx, "UI_Validation"),
                 Action::Adjust(_) => {}
-                Action::LockedChallenge(_) | Action::LockedGallery(_) | Action::LockedMission(_) => ui(&mut sfx, "UI_Failure"),
+                Action::LockedChallenge(_) | Action::LockedGallery(_) | Action::LockedMission(_) | Action::LockedDifficulty => ui(&mut sfx, "UI_Failure"),
                 Action::Back => ui(&mut sfx, "UI_Back"),
                 _ => ui(&mut sfx, "UI_Validation"),
             }
@@ -1842,7 +2013,7 @@ fn menu_input(
             next.set(GameState::Loading);
         }
         Action::Continue => {
-            if let Some(slot) = slots.latest() {
+            if let Some(slot) = latest_of(&slots, menu.dlc) {
                 load.write(LoadRequest(slot));
                 menu.open = None;
             } else if kind == MenuKind::GameOver {
@@ -1868,7 +2039,11 @@ fn menu_input(
             menu.dirty = true;
         }
         Action::QuitToMenu => {
-            config.map = MENU_MAP.into();
+            // (out of a story pack's mission: to its own front end)
+            config.map = match menu.dlc.map(|p| DLC_PACKS[p].menu).filter(|m| map_cooked(m)) {
+                Some(m) => m.into(),
+                None => MENU_MAP.into(),
+            };
             config.spawn_index = None;
             menu.open = None;
             next.set(GameState::Loading);
@@ -1885,7 +2060,22 @@ fn menu_input(
                 next.set(GameState::Loading);
             }
         }
-        Action::LockedChallenge(_) | Action::LockedGallery(_) | Action::LockedMission(_) => {}
+        Action::LockedChallenge(_) | Action::LockedGallery(_) | Action::LockedMission(_) | Action::LockedDifficulty => {}
+        Action::DlcMenu(pack) => {
+            config.map = DLC_PACKS[pack].menu.into();
+            config.spawn_index = None;
+            menu.open = None;
+            next.set(GameState::Loading);
+        }
+        Action::LeaveDlc => {
+            config.map = MENU_MAP.into();
+            config.spawn_index = None;
+            menu.open = None;
+            next.set(GameState::Loading);
+        }
+        Action::DlcCredits(pack) => {
+            play.write(crate::movie::PlayMovie { name: DLC_PACKS[pack].credits.into(), looping: false, skippable: true, layer: crate::movie::MovieLayer::Fullscreen });
+        }
         Action::GalleryView(_) => {
             menu.gallery_view = Some(menu.sel);
             menu.dirty = true;

@@ -58,6 +58,7 @@ mod challenge;
 mod dlc05hud;
 mod dlc05brief;
 mod dlc05menu;
+mod dlcmenu;
 mod dlc05results;
 mod dlc05score;
 mod kuwahara;
@@ -272,7 +273,7 @@ fn main() -> AppExit {
             worlddamage::WorldDamagePlugin,
             breath::BreathPlugin))
         .add_plugins((audiorooms::AudioRoomsPlugin, npcparts::NpcPartsPlugin, achievements::AchievementsPlugin, reflections::ReflectionsPlugin, blood::BloodPlugin, decals::DecalsPlugin))
-        .add_plugins((flares::FlaresPlugin, challenge::ChallengePlugin, dlc05hud::Dlc05HudPlugin, dlc05results::Dlc05ResultsPlugin, dlc05menu::Dlc05MenuPlugin, dlc05brief::Dlc05BriefPlugin, dlc05score::Dlc05ScorePlugin))
+        .add_plugins((flares::FlaresPlugin, challenge::ChallengePlugin, dlc05hud::Dlc05HudPlugin, dlc05results::Dlc05ResultsPlugin, dlc05menu::Dlc05MenuPlugin, dlc05brief::Dlc05BriefPlugin, dlc05score::Dlc05ScorePlugin, dlcmenu::DlcMenuPlugin))
         .add_plugins((menu::MenuPlugin, save::SavePlugin, settings::SettingsPlugin, mission::MissionPlugin, ppgraph::PostGraphPlugin, watchtower::WatchTowerPlugin, highlight::HighlightPlugin, stealth::StealthPlugin, hudfx::HudFxPlugin, skip::SkipPlugin, pickuplog::PickupLogPlugin, targetcard::TargetCardPlugin, gauges::GaugesPlugin, zones::ZonesPlugin))
         .add_plugins((flash::FlashPlugin, awareness::AwarenessPlugin, location::LocationPlugin, crosshair::CrosshairPlugin, intwindow::IntWindowPlugin, hudtext::HudTextPlugin, softshadow::SoftShadowPlugin, tallboy::TallboyPlugin, plague::PlaguePlugin, objnotify::ObjNotifyPlugin, oxygen::OxygenPlugin, playerstate::PlayerStatePlugin, grenadeind::GrenadeIndPlugin, prompts::PromptsPlugin, tutwindow::TutWindowPlugin))
         .add_plugins((gamedata::GameDataPlugin, journal::JournalPlugin, possession::PossessionPlugin, store::StorePlugin, swarm::SwarmPlugin, gadgets::GadgetsPlugin, whiskey::WhiskeyPlugin, thrown::ThrownPlugin, campaign::CampaignPlugin, heart::HeartPlugin, security::SecurityPlugin, wheel::WheelPlugin, travel::TravelPlugin, magic::MagicPlugin))
