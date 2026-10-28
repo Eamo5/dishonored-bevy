@@ -2901,6 +2901,16 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 ragdoll: ty.and_then(|t| t.ragdoll).and_then(|r| scene.ragdolls.get(r as usize)).is_some_and(|r| r.bodies.iter().filter(|b| bones.iter().any(|x| x.name.eq_ignore_ascii_case(&b.bone))).count() >= 2),
             },
         ));
+    } else if let Some(lib) = vis.anims.clone() {
+        // (sets with no walking or standing of their own: the Outsider's, his float and his
+        // gestures. Still animated, so his scenes play on him; floating meanwhile. Before, he had
+        // no animation at all and stood in his bind pose through his shrines' scenes)
+        let mut animator = Animator::new(lib.clone(), &vis.skeleton, joints.clone());
+        animator.upper_mask = upper_body(&vis.skeleton.bones);
+        if let Some(c) = lib.first(&["Empty_Float_Low", "Empty_Float_1M"]) {
+            animator.play(c, true, 1.0, 0.0);
+        }
+        commands.entity(e).insert(animator);
     }
     commands.entity(e).insert(npc);
     if corpse {

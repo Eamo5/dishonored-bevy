@@ -2365,6 +2365,12 @@ fields no longer show their stand-in "WW" behind the title.
   arms each time his head bobbed (`Outsider_Gesture_ArmsCrossed` under `Gesture_HeadBob_*`, over
   `Empty_Float_Low`), and Sokolov in The Knife of Dunwall's opening dropped his hand from his
   chest as his other arm moved. `DH_MATINEE_LOG` logs the clips stacked.
+  A character whose sets have no standing or walking of their own (The Brigmore Witches'
+  Outsider, `DLC07_Pwn_Outsider`: `Npc_Outsider_empty_as` holds only his floats,
+  `Empty_Float_Low` and `Empty_Float_1M`, beside his gestures) is now animated all the same,
+  floating until his scene takes him. Before, he was given no animation at all, so his shrines'
+  scenes (`SeqAct_Interp` on `TheOutsider`) could not move him: picking up a rune in Draper's
+  Ward's sewers, he stood in his bind pose on the shrine as he spoke.
   A scene's player group with a stage mark (`InterpGroupPlayer.m_StageMarkGroup`) blends Corvo
   onto it as it starts, facing its way, over `m_fTimeToBlendToStageMark` (0.2 s), and holds him
   there while it plays (`StatePlayerMasterSoiree`: movement disabled); one that carries him (a
