@@ -1148,6 +1148,21 @@ fn run_script(
                 info!("script: lookhere {}", n.name);
             }
         }
+        "faceme" => {
+            // (tests) faceme [NAME]: the nearest standing character (whose name or pawn holds NAME)
+            // turned to face Corvo, and kept so where it stands
+            let named = cmd.get(1).cloned().unwrap_or_default();
+            if let Some((e, _, nt)) = npc_ents.iter().filter(|(_, n, _)| !n.is_down() && (named.is_empty() || n.name.contains(&named) || n.pawn.contains(&named))).min_by(|a, b| a.2.translation.distance(t.translation).total_cmp(&b.2.translation.distance(t.translation))) {
+                let to = (t.translation - nt.translation).with_y(0.0);
+                let yaw = (-to.x).atan2(-to.z);
+                commands.queue(move |w: &mut World| {
+                    if let Some(mut n) = w.get_mut::<Npc>(e) {
+                        n.yaw = yaw;
+                        n.home_yaw = yaw;
+                    }
+                });
+            }
+        }
         "lose" => {
             // (tests) lose [NAME]: the nearest character fighting Corvo (whose name holds NAME)
             // loses him, searching where it saw him last (as its brain does)

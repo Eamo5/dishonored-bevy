@@ -328,9 +328,9 @@ pub struct Npc {
     pub magic_pending: Option<(f32, bool)>,
     pub magic_react: Option<(f32, bool)>,
     pub magic_bark: Option<bool>,
-    /// Corvo's blows it has warned him about (`TweakAIResponse.m_iNumWarningsBeforeReaction`), and
-    /// when the last was (s, the game's clock)
-    pub warned: (u32, f32),
+    /// the warnings it has given Corvo (`TweakAIResponse.m_iNumWarningsBeforeReaction`) and when the
+    /// last was (s, the game's clock), by its answers (`RESPONSES`)
+    pub warned: [(u32, f32); 3],
     /// what it says this frame of a body Corvo carries (busted, not his enemy: the body one of
     /// its side's 0, neutral to it 1, its enemy's 2)
     pub carry_bark: Option<u8>,
@@ -676,6 +676,24 @@ impl MoveKind {
     }
 }
 
+/// An answer's step (`TweakAIResponse`) with its warnings given so far and when the last was:
+/// whether it is a warning, and its line.
+fn answer<'a>(w: &mut (u32, f32), r: &'a dhcook::format::NpcResponse, now: f32) -> (bool, &'a str) {
+    if r.expire && now - w.1 > r.duration {
+        w.0 = 0;
+    }
+    if w.0 < r.warnings {
+        *w = (w.0 + 1, now);
+        (true, r.warn_hook.as_str())
+    } else {
+        *w = (0, now);
+        (false, r.hook.as_str())
+    }
+}
+
+/// The answers to Corvo's acts the characters keep warnings for (`m_Response_<name>`).
+pub const RESPONSES: [&str; 3] = ["HurtByPlayerAlly", "HurtByPlayerNeutral", "WitnessPickpocket"];
+
 /// The weapons characters fight hand to hand with: a sword, an assassin's, a whale butcher's saw.
 const BLADES: [&str; 3] = ["DisTweaks_WepSword", "DisTweaks_WepSwordOfAssassin", "DisDLC06Tweaks_WepSaw"];
 
@@ -809,6 +827,24 @@ impl Npc {
     pub fn may_panic(&self) -> bool {
         self.brain_flags & BRAIN_NO_CIVILIAN_PANIC == 0
     }
+    /// Its answer to an act of Corvo's (`TweakAIResponse`): a warning first, with its line, while it
+    /// has warnings to give (forgotten `m_fWarnDuration` after the last where they expire); then its
+    /// answer, with its line. Whether it turns on him (`ResponseCategory_Hostile`).
+    pub fn respond(&mut self, r: &dhcook::format::NpcResponse, now: f32) -> bool {
+        let Some(slot) = RESPONSES.iter().position(|n| *n == r.name) else { return false };
+        if !r.enabled {
+            return false;
+        }
+        let (warning, line) = answer(&mut self.warned[slot], r, now);
+        if warning && std::env::var_os("DH_HIT_LOG").is_some() {
+            info!("{}: warns Corvo ({}, {} of {})", self.name, r.name, self.warned[slot].0, r.warnings);
+        }
+        if !line.is_empty() {
+            self.bark_req = (self.bark_req.0.wrapping_add(1), crate::barks::hook_name(line));
+        }
+        !warning && r.hostile
+    }
+
     pub fn is_down(&self) -> bool {
         matches!(self.mode, Mode::Unconscious | Mode::Dead)
     }
@@ -2399,7 +2435,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         magic_react: None,
         magic_bark: None,
         carry_bark: None,
-        warned: (0, 0.0),
+        warned: [(0, 0.0); 3],
         suspecting: false,
         check_cd: 0.0,
         reacting: 0.0,
@@ -2979,29 +3015,9 @@ fn npc_hits(
             match npc.arms.responses.iter().find(|r| r.name == key).cloned() {
                 Some(r) => {
                     let weight = if npc.fighter() { h.damage.max(r.threshold) } else { h.damage };
-                    if r.enabled && weight >= r.threshold {
-                        let now = time.elapsed_secs();
-                        if r.expire && now - npc.warned.1 > r.duration {
-                            npc.warned.0 = 0;
-                        }
-                        if npc.warned.0 < r.warnings {
-                            npc.warned = (npc.warned.0 + 1, now);
-                            if !r.warn_hook.is_empty() {
-                                npc.bark_req = (npc.bark_req.0.wrapping_add(1), crate::barks::hook_name(&r.warn_hook));
-                            }
-                            if std::env::var_os("DH_HIT_LOG").is_some() {
-                                info!("hit {}: warns Corvo ({key}, {} of {})", npc.name, npc.warned.0, r.warnings);
-                            }
-                        } else {
-                            npc.warned = (0, now);
-                            if !r.hook.is_empty() {
-                                npc.bark_req = (npc.bark_req.0.wrapping_add(1), crate::barks::hook_name(&r.hook));
-                            }
-                            if r.hostile {
-                                npc.enemy = true;
-                                stances.wronged(npc.spawner);
-                            }
-                        }
+                    if weight >= r.threshold && npc.respond(&r, time.elapsed_secs()) {
+                        npc.enemy = true;
+                        stances.wronged(npc.spawner);
                     }
                 }
                 None if npc.fighter() || !corvo_side => {
@@ -8892,6 +8908,28 @@ fn upper_body(bones: &[dhcook::format::BoneDef]) -> Option<std::sync::Arc<Vec<bo
 fn ease(x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
     x * x * (3.0 - 2.0 * x)
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::answer;
+    use dhcook::format::NpcResponse;
+
+    /// Warnings first, forgotten once they expire; then the answer.
+    #[test]
+    fn warnings_come_first_and_expire() {
+        let r = NpcResponse { name: "HurtByPlayerAlly".into(), enabled: true, warnings: 1, expire: true, duration: 10.0, threshold: 1.0, warn_hook: "W".into(), hook: "H".into(), hostile: true };
+        let mut w = (0, 0.0);
+        assert_eq!(answer(&mut w, &r, 1.0), (true, "W"));
+        assert_eq!(answer(&mut w, &r, 5.0), (false, "H"));
+        // (the answer given, the next blow warns again; one long after the last too)
+        assert_eq!(answer(&mut w, &r, 6.0), (true, "W"));
+        assert_eq!(answer(&mut w, &r, 30.0), (true, "W"));
+        // (forgotten in a tenth of a second: the Hound Pits' people never answer)
+        let hub = NpcResponse { duration: 0.1, ..r };
+        let mut w = (0, 0.0);
+        assert!((0..5).all(|i| answer(&mut w, &hub, i as f32).0));
+    }
 }
 
 #[cfg(test)]

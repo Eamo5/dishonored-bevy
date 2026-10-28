@@ -176,14 +176,39 @@ const ROBBED_AFTER: f32 = 4.0;
 /// A pocket emptied while its wearer stands (`DisBehaviorStolen`, `m_fOccurencePercentage` 1):
 /// the wearer misses it a while later (`Npc::robbed`). One the scripts only take off its belt
 /// isn't a theft.
-fn notice_thefts(pockets: Query<(Entity, &Pocket)>, pickups: Query<(), With<Pickup>>, mut npcs: Query<&mut Npc>, mut worn: Local<std::collections::HashMap<Entity, Entity>>) {
+///
+/// Those who see Corvo take it answer as their brains have it (`m_Response_WitnessPickpocket`):
+/// most mutter (`NOTICE_SUSPICIOUS_ACTIVITY`); Lady Boyle's party guards warn him once, and seen at it
+/// again within a minute, turn on him (`COMBAT_BLIND_ATTACK`).
+#[allow(clippy::type_complexity)]
+fn notice_thefts(
+    pockets: Query<(Entity, &Pocket)>,
+    pickups: Query<(), With<Pickup>>,
+    mut npcs: Query<&mut Npc>,
+    mut worn: Local<std::collections::HashMap<Entity, Entity>>,
+    (time, mut stances): (Res<Time>, ResMut<crate::script_world::SpawnerOverrides>),
+) {
     for (pe, npc) in std::mem::take(&mut *worn) {
         if pickups.contains(pe) {
             continue;
         }
+        let standing = npcs.get(npc).is_ok_and(|n| !n.is_down());
         if let Ok(mut n) = npcs.get_mut(npc) {
             if !n.is_down() && n.robbed.is_none() {
                 n.robbed = Some(ROBBED_AFTER);
+            }
+        }
+        if !standing {
+            continue;
+        }
+        for mut w in npcs.iter_mut() {
+            if w.is_down() || w.enemy || !w.sees_player {
+                continue;
+            }
+            let Some(r) = w.arms.responses.iter().find(|r| r.name == "WitnessPickpocket").cloned() else { continue };
+            if w.respond(&r, time.elapsed_secs()) {
+                w.enemy = true;
+                stances.wronged(w.spawner);
             }
         }
     }

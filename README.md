@@ -1820,6 +1820,11 @@ fields no longer show their stand-in "WW" behind the title.
     warnings), except the whiskey thugs and the bridge's, who warn once.
   - A blow counts at `m_fResponseThreshold` (1) damage or more; one at someone who can fight
     counts whatever it does (our reading). Script: `strike D [NAME]` deals a sword blow of D.
+  - Those who see him pickpocket someone answer with `m_Response_WitnessPickpocket`. Most only
+    mutter (`NOTICE_SUSPICIOUS_ACTIVITY`, harmless). Lady Boyle's party guards
+    (`BrainTweaks_Guard_Elite_Party`, `_ShawGuard`) warn him once, and seen at it again within a
+    minute, turn on him (`COMBAT_BLIND_ATTACK`). Before, no one minded. Script: `faceme [NAME]`
+    turns a character to face Corvo.
 - **Hound masters whistle for their wolfhounds** (`aiworld::summon_hounds`, the brain's
   `DisTweaks_AIBehavior_SummonWolfhound`). Before, overseers fought alone, and the backyard's
   kennel hounds came only when another hound called for help.
