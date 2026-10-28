@@ -1050,7 +1050,7 @@ fn display_name(pawn: &str) -> &'static str {
         "Wolfhound"
     } else if p.contains("daud") {
         "Daud"
-    } else if p.contains("assassin") {
+    } else if p.contains("assassin") || p.contains("summonedassn") {
         "Assassin"
     } else if p.contains("weeper") {
         "Weeper"

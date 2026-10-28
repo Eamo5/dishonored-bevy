@@ -2607,7 +2607,11 @@ fields no longer show their stand-in "WW" behind the title.
     `Snd_Pwr_Summon_Active`, the last gone stops it. The sounds are the DLC's own banks for
     Daud's kit (his powers, gadgets, wristbow and hand, his assassins' blades, its interface),
     cooked ahead of the rest of the DLC. He makes a threatening noise and goes after 5 s out
-    of a fight; one at a time; with Arcane Bond II he moves through bent time. His passives (Shadow Kill, Celerity, Vitality, Blood Thirsty, Arcane Bond), his
+    of a fight; one at a time; with Arcane Bond II he moves through bent time. As he goes he
+    turns to Daud and salutes (`DLC06_TweaksBehavior_AssnSalute`): having fought and within
+    `m_fWinAnimMaxRange` (20 m), the winner's `Sword_DepartureSalute` (`m_WinAnim`), else
+    `Sword_DepartureSalute_NoFight` (`m_LoseAnim`), and vanishes once it is done. Before, he
+    vanished where he stood. The summoned are named "Assassin", not "Citizen". His passives (Shadow Kill, Celerity, Vitality, Blood Thirsty, Arcane Bond), his
     attributes and his pawn's numbers are his own.
   - *Arms*: his own first-person mesh (`DLC06_Skm_Player_Daud`) with his clips over Corvo's
     (summoning, Void Gaze, the wristbow raised and fired), his sword, and the wristbow on his

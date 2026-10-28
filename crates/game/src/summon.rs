@@ -58,6 +58,10 @@ pub struct Summon {
     pub level: u8,
 }
 
+/// How near Daud a summoned assassin that fought gives the winner's salute as it goes
+/// (`DLC06_TweaksBehavior_AssnSalute`'s `m_fWinAnimMaxRange`, 2000 uu).
+const WIN_SALUTE_RANGE: f32 = 20.0;
+
 /// A summoned assassin: the enemy he was sent for (until he has it), how long he has been out
 /// of a fight.
 #[derive(Component)]
@@ -65,6 +69,10 @@ pub struct Summoned {
     foe: Option<Entity>,
     fresh: bool,
     idle: f32,
+    /// it has fought (its departure's salute the winner's)
+    fought: bool,
+    /// saluting as it goes: how long before it is gone
+    leaving: Option<f32>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -103,7 +111,7 @@ fn summon(
         let yaw = (-to.x).atan2(-to.z);
         commands.entity(e).insert((
             Transform::from_translation(r.at + Vec3::Y * (NPC_CENTER + 0.05)).with_rotation(Quat::from_rotation_y(yaw)),
-            Summoned { foe: r.target, fresh: true, idle: 0.0 },
+            Summoned { foe: r.target, fresh: true, idle: 0.0, fought: false, leaving: None },
         ));
         fx.write(crate::particles::SpawnEffect::at("summon_trigger", r.at));
         noise.write(Noise { corvo: false, pos: r.at, radius: 4.0, kind: NoiseKind::Threatening });
@@ -123,20 +131,22 @@ fn summoned(
     data: Res<crate::gamedata::Data>,
     stats: Res<PlayerStats>,
     mut aim: ResMut<SummonAim>,
-    mut q: Query<(Entity, &mut Npc, &mut Summoned, &Transform)>,
+    mut q: Query<(Entity, &mut Npc, &mut Summoned, &Transform, Option<&crate::anim::Animator>)>,
     mut sfx: MessageWriter<crate::audio::PostEvent>,
     mut fx: MessageWriter<crate::particles::SpawnEffect>,
+    player: Query<&Transform, (With<crate::player::Player>, Without<Summoned>)>,
 ) {
+    let daud = player.single().ok().map(|t| t.translation);
     let timeout = data.active("SummonAssassin").and_then(|a| a.params.get("m_fNoCombatTimeout")).copied().unwrap_or(5.0);
     let bond = stats.power("ArcaneBond");
-    let about = q.iter().filter(|(_, n, _, _)| !n.is_down()).count();
+    let about = q.iter().filter(|(_, n, _, _, _)| !n.is_down()).count();
     if (about > 0) != (aim.about > 0) {
         let (key, d) = if about > 0 { ("m_StartActiveAssassinsSoundEvent", "Snd_Pwr_Summon_Active") } else { ("m_StopActiveAssassinsSoundEvent", "Snd_Pwr_Summon_Active_Stop") };
         let level = Power::SummonAssassin.level(&stats);
         sfx.write(crate::audio::PostEvent::named(data.power_sound("SummonAssassin", level, key).unwrap_or(d), None));
     }
     aim.about = about;
-    for (e, mut npc, mut s, t) in &mut q {
+    for (e, mut npc, mut s, t, anim) in &mut q {
         if s.fresh {
             s.fresh = false;
             npc.foe = s.foe.take();
@@ -146,12 +156,38 @@ fn summoned(
         if npc.is_down() {
             continue;
         }
+        // saluting as it goes, then gone
+        if let Some(left) = s.leaving.as_mut() {
+            *left -= time.delta_secs();
+            if *left <= 0.0 {
+                sfx.write(crate::audio::PostEvent::named("AI_Assassin_Pwr_Teleport_Start", Some(t.translation)));
+                fx.write(crate::particles::SpawnEffect::at("summon_trigger", t.translation - Vec3::Y * NPC_CENTER));
+                commands.entity(e).try_despawn();
+            }
+            continue;
+        }
         let fighting = npc.foe.is_some() || npc.mode == Mode::Combat;
+        s.fought |= fighting;
         s.idle = if fighting { 0.0 } else { s.idle + time.delta_secs() };
         if s.idle > timeout {
-            sfx.write(crate::audio::PostEvent::named("AI_Assassin_Pwr_Teleport_Start", Some(t.translation)));
-            fx.write(crate::particles::SpawnEffect::at("summon_trigger", t.translation - Vec3::Y * NPC_CENTER));
-            commands.entity(e).try_despawn();
+            // (its salute to Daud as it goes, `DisDLC06Tweaks_AIBehavior_AssassinSalute`: the
+            // winner's, `m_WinAnim` `Sword_DepartureSalute`, having fought and within
+            // `m_fWinAnimMaxRange` (20 m) of him, else `m_LoseAnim`, `_NoFight`)
+            let near = daud.is_some_and(|d| d.distance(t.translation) <= WIN_SALUTE_RANGE);
+            let clip = if s.fought && near { "Sword_DepartureSalute" } else { "Sword_DepartureSalute_NoFight" };
+            let len = anim.and_then(|a| a.lib.find(clip).map(|c| a.lib.duration(c)));
+            if let (Some(_), Some(d)) = (len, daud) {
+                let to = (d - t.translation).with_y(0.0);
+                if to.length() > 0.1 {
+                    npc.yaw = (-to.x).atan2(-to.z);
+                }
+                npc.target = None;
+                commands.entity(e).try_insert(crate::npc::FinisherClip(clip.to_string(), false));
+            }
+            if std::env::var_os("DH_SUMMON_LOG").is_some() {
+                info!("summon: assassin departs ({clip}, {:.1} s)", len.unwrap_or(0.0));
+            }
+            s.leaving = Some(len.unwrap_or(0.0));
         }
     }
 }
