@@ -1761,6 +1761,24 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
         }
     }
     d.noise_loudness = noise_loudness(cooked, &game);
+    // a character set on fire: the incendiary bolt's (`Twk_Proj_Arrow_Flare.m_ImmolationParams`;
+    // a thug's bottle's is the same)
+    if let Some(Value::Struct(_, sub)) = startup.find_export("Twk_Projectiles.Twk_Proj_Arrow_Flare").and_then(|i| props(&startup, i)).and_then(|p| p.get("m_ImmolationParams").cloned()) {
+        let p = Props(sub);
+        let name = |k: &str, d: &str| match p.get(k) {
+            Some(Value::Enum(e)) | Some(Value::Name(e)) => e.clone(),
+            _ => d.to_string(),
+        };
+        d.immolation = crate::format::Immolation {
+            avoid: p.float("m_fAvoidanceRadius").unwrap_or(0.0) * crate::xform::UNIT,
+            noise_period: p.float("m_fNoisePeriod").unwrap_or(0.0),
+            loudness: name("m_NoiseLoudness", "EAINoiseSilent"),
+            context: name("m_NoiseContext", "EAINoiseContext_Danger"),
+            damage: p.float("m_fDamage").unwrap_or(0.0),
+            damage_period: p.float("m_fDamagePeriod").unwrap_or(0.0),
+            damage_radius: p.float("m_fDamageRadius").unwrap_or(0.0) * crate::xform::UNIT,
+        };
+    }
     arms(&game, &startup, &mut d);
     d.aim_assist = aim_assist(&game, &startup);
     // the crosshair's slide onto the aim assist's target (`Twk_GFxMoviePlayerHUD`'s

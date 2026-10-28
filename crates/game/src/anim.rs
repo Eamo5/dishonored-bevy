@@ -112,6 +112,11 @@ impl CharAnims {
         &self.sets[id.set as usize].clips[id.clip as usize]
     }
 
+    /// Every clip's name, set by set.
+    pub fn names(&self) -> Vec<String> {
+        self.sets.iter().flat_map(|set| set.clips.iter()).map(|c| c.name.clone()).collect()
+    }
+
     /// The first clip whose name starts with `prefix` and ends with `suffix` (any case), by its
     /// own name.
     pub fn find_like(&self, prefix: &str, suffix: &str) -> Option<String> {

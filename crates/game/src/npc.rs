@@ -54,7 +54,7 @@ impl Plugin for NpcPlugin {
                     npc_hits,
                     last_survivors,
                     age_corpses,
-                    (ash_marked, electrocute, burn_ashes).chain(),
+                    (ash_marked, electrocute, burning, burn_ashes).chain(),
                     npc_shots,
                     npc_hearing,
                     npc_perception.run_if(|| !skip("perception")),
@@ -278,6 +278,8 @@ pub struct Npc {
     pub stop_roll: [f32; 4],
     /// in a conversation now (one played by the level's scripts: its speaker or one answering)
     pub in_convo: bool,
+    /// spawned dead in this pose (its spawner's `m_DeadPoseAnimName`)
+    pub dead_pose: Option<String>,
     /// its walk begun or ended with its clip; what it wished to go this frame (its path's way, at
     /// its pace), and its path: how far to its goal and to the path's next point
     pub pace: Option<Pace>,
@@ -1290,8 +1292,9 @@ fn ash_marked(
 /// last value; the material's mask leaves nothing below 0.5, so the fade can't start lower.)
 /// One set on fire standing (an incendiary bolt's): it burns with its own clip
 /// (`DisNPCAnim_Immolate`: `Generic_Immolation`) until nothing is left.
+/// (Burning, it makes its noise every `m_fNoisePeriod`: the seconds to the next.)
 #[derive(Component)]
-pub struct Immolated;
+pub struct Immolated(pub f32);
 
 #[derive(Component)]
 pub struct Electrocuted {
@@ -1378,6 +1381,42 @@ fn electrocute(
         if el.t >= gone {
             // nothing left to find
             commands.entity(e).try_remove::<Electrocuted>().try_insert(Ashes(1.0));
+        }
+    }
+}
+
+/// One burning (`ImmolationParams`, the incendiary bolt's): the others keep `m_fAvoidanceRadius` (2 m)
+/// from it, a danger zone laid afresh each moment it burns, and it makes its noise every
+/// `m_fNoisePeriod` (1 s: a danger, `EAINoiseLoudness3`, 30 m). Before, it made one noise (14 m) as
+/// it caught, and the others walked through it.
+fn burning(
+    time: Res<Time>,
+    data: Res<crate::gamedata::Data>,
+    mut q: Query<(Entity, &mut Immolated, &Ashes, &GlobalTransform)>,
+    mut zones: ResMut<crate::danger::DangerZones>,
+    mut noise: MessageWriter<Noise>,
+) {
+    let imm = &data.0.immolation;
+    let dt = time.delta_secs();
+    for (e, mut b, ashes, g) in &mut q {
+        // (burnt away: nothing left burning)
+        if ashes.0 > 0.6 {
+            continue;
+        }
+        let pos = g.translation();
+        if imm.avoid > 0.0 {
+            zones.sphere(e, 0.1, pos, imm.avoid);
+        }
+        b.0 -= dt;
+        if b.0 <= 0.0 {
+            b.0 = if imm.noise_period > 0.0 { imm.noise_period } else { f32::INFINITY };
+            let radius = data.0.noise_loudness.get(&imm.loudness).copied().unwrap_or(14.0);
+            let kind = match imm.context.as_str() {
+                "EAINoiseContext_Threatening" => NoiseKind::Threatening,
+                "EAINoiseContext_Anomaly" => NoiseKind::Anomaly,
+                _ => NoiseKind::Danger,
+            };
+            noise.write(Noise { corvo: false, pos, radius: if radius > 0.0 { radius } else { 14.0 }, kind });
         }
     }
 }
@@ -2354,7 +2393,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         None => (has_sword, ranged),
     };
     let arms = stats.map(|s| Arms::of(s, difficulty, si as u64)).unwrap_or_default();
-    let corpse = crate::level::is_corpse_type(&vis.name);
+    // (a corpse's type, or spawned dead: `m_bSpawnDead`)
+    let corpse = crate::level::is_corpse_type(&vis.name) || sp.dead_pose.is_some();
     // (its spawner sets it out on patrol, `m_bPatrolUponStartup`: it takes up a route as it
     // starts; the others wait for the scripts)
     let patrol = crate::patrol::Patrol { on: sp.patrol && !corpse, dir: 1, ..Default::default() };
@@ -2435,6 +2475,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         pulled: None,
         stop_roll: std::array::from_fn(|_| rand::random::<f32>() * 2.0 - 1.0),
         in_convo: false,
+        dead_pose: sp.dead_pose.clone(),
         pace: None,
         turning: false,
         wish: Vec3::ZERO,
@@ -2772,7 +2813,12 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                     c.attack.len(),
                     name(c.equip)
                 ),
-                None => info!("clip census {}: no clips (sets {})", vis.name, vis.anims.as_ref().map_or(0, |l| l.set_count())),
+                None => info!(
+                    "clip census {}: no clips (sets {}: {:?})",
+                    vis.name,
+                    vis.anims.as_ref().map_or(0, |l| l.set_count()),
+                    vis.anims.as_ref().map(|l| l.names().into_iter().filter(|n| !n.contains("Slave") && !n.starts_with("ADD_")).take(30).collect::<Vec<_>>()).unwrap_or_default()
+                ),
             }
         }
     }
@@ -2907,7 +2953,23 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         // no animation at all and stood in his bind pose through his shrines' scenes)
         let mut animator = Animator::new(lib.clone(), &vis.skeleton, joints.clone());
         animator.upper_mask = upper_body(&vis.skeleton.bones);
-        if let Some(c) = lib.first(&["Empty_Float_Low", "Empty_Float_1M"]) {
+        // (a corpse's sets: lying in its pose, its spawner's or one of its set's on its back, held at
+        // its end; before, the placed bodies stood in their bind pose)
+        let pose = if corpse {
+            npc.dead_pose.as_deref().and_then(|n| lib.find(n)).or_else(|| {
+                let backs = lib.all(&["Corpses_DeathPose_OnBack1", "Corpses_DeathPose_OnBack2", "Corpses_DeathPose_OnBack3", "Generic_DeathPose_OnBack1"]);
+                backs.get(si % backs.len().max(1)).copied()
+            })
+        } else {
+            None
+        };
+        if let Some(c) = pose {
+            let looping = lib.clip(c).name.to_ascii_lowercase().contains("loop");
+            animator.play(c, looping, 1.0, 0.0);
+            if !looping {
+                animator.seek(lib.duration(c));
+            }
+        } else if let Some(c) = lib.first(&["Empty_Float_Low", "Empty_Float_1M"]) {
             animator.play(c, true, 1.0, 0.0);
         }
         commands.entity(e).insert(animator);
@@ -3145,10 +3207,9 @@ fn npc_hits(
                 npc.health = 0.0;
                 npc.set_mode(Mode::Dead);
                 stats.killed(&npc.pawn, npc.civilian());
-                commands.entity(e).try_insert((Ashes(-0.9), Immolated));
+                commands.entity(e).try_insert((Ashes(-0.9), Immolated(0.0)));
                 sfx.write(crate::audio::PostEvent::named("Amb_Fire_Alcohol_Immolation", Some(pos + Vec3::Y)));
                 fx.write(crate::particles::SpawnEffect { follow: Some(e), secs: 1.6, ..crate::particles::SpawnEffect::at("immolation", Vec3::ZERO) });
-                noise.write(Noise { corvo: false, pos, radius: 14.0, kind: NoiseKind::Danger });
             }
             HitKind::Assassinate | HitKind::Fatality | HitKind::WallOfLight | HitKind::EnemyWallOfLight => {
                 npc.health = 0.0;
@@ -7755,7 +7816,7 @@ fn npc_select_anim(
                 let (clip, settle) = if let Some(c) = own_death {
                     (Some(c), None)
                 } else if npc.corpse {
-                    (pick(&clips.corpse).or(clips.lie_back), None)
+                    (npc.dead_pose.as_deref().and_then(|n| lib.find(n)).or(pick(&clips.corpse)).or(clips.lie_back), None)
                 } else if let Some(d) = dropped.filter(|_| npc.mode == Mode::Dead) {
                     (clips.drop_killed[d.0 as usize % 4].or(pick(&clips.assassinated)), clips.lie_front)
                 } else if let Some(a) = assassin.filter(|_| npc.mode == Mode::Dead) {
@@ -7776,14 +7837,17 @@ fn npc_select_anim(
                 };
                 st.settle = settle;
                 if let Some(c) = clip {
-                    anim.restart(c, false, 1.0, if npc.corpse { 0.0 } else { 0.15 });
-                    if npc.corpse {
+                    // (a corpse's pose held at its end; a dying one's loop played on: Martin's)
+                    let looping = npc.corpse && lib.clip(c).name.to_ascii_lowercase().contains("loop");
+                    anim.restart(c, looping, 1.0, if npc.corpse { 0.0 } else { 0.15 });
+                    if npc.corpse && !looping {
                         anim.seek(lib.duration(c));
                     }
                 }
             }
             // its clip goes limp where it says (`DishonoredNotify_Ragdoll`), else at its end
-            if st.ragdoll && !far && own_death.is_none() {
+            // (one placed dead keeps its pose, against its wall or in its chair, till it is moved)
+            if st.ragdoll && !far && own_death.is_none() && !npc.corpse {
                 let due = anim.finished() || anim.current().and_then(|p| st.marks.get(&p.clip).and_then(|m| m.ragdoll).map(|r| p.t >= r)).unwrap_or(true);
                 if due {
                     commands.entity(e).try_insert(crate::ragdoll::GoLimp::soon());

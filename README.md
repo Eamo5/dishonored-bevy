@@ -1602,6 +1602,20 @@ fields no longer show their stand-in "WW" behind the title.
   each sample fading over that life: in the first-person view for Corvo, on his own clock; in
   the world for the characters, on theirs. `DH_TRAIL_LOG`; `DH_TRAIL_SHOT=<dir>` saves a
   screenshot mid-swing (tests).
+- **The levels' dead in their poses** (`npc.rs`, `dhcook`). A spawner that makes its character
+  dead (`m_bSpawnDead`) names the pose it lies in (`m_DeadPoseAnimName`, of its
+  `m_pDeadPoseAnimSet`): on its back (`Corpses_DeathPose_OnBack1`-`3`), slumped against a wall
+  (`_OnWall1`-`5`), sitting (`_Sit`), a mother holding her child (`_HoldingFemale`), a drunk
+  asleep (`Corpses_SleepPose_Drunk`), the overseer dying in the sewer (`Overseer_Sc_Dying_Loop`),
+  Martin and Pendleton at the Lighthouse (`..._Lighthouse_Death_Loop`). 102 such spawners across
+  the campaign and both packs. Before, the cook read neither field. A corpse type
+  (`Pwn_Dead_NPCs`: its only set its corpse poses) found no standing or walking clips, so it was
+  given no animation at all: the dead of the prison's sewers, the streets, the Kaldwin Bridge,
+  the Tower's return, the Flooded District, the Lighthouse and the packs' maps (18 maps) stood
+  upright in their bind poses, arms out. Now the pose's set joins its
+  type's sets, the body lies, sits or hangs in its spawner's pose held at its end (a dying
+  loop plays on), and it keeps that pose rather than falling limp until it is moved; it can
+  be picked up and carried as before. One without a named pose lies on its back.
 - **Ragdolls** (`ragdoll.rs`): each pawn's physics asset (`m_pPhysicsAsset`: its
   `RB_BodySetup` boxes, spheres, capsules and convex pieces on their bones; its
   `RB_ConstraintSetup` ball joints, their frames in each bone (positions at physics scale, a
@@ -3217,7 +3231,11 @@ against the install's own data where it carries them, then implemented independe
     fighter facing Corvo steps back from danger ahead of it or aside from one at its side, the
     way it is pushed, as its steps' cooldowns allow (ManageAttacks 0x00B3A300). So guards keep
     out of a tower's fire and give a tallboy's arrows room.
-  - Not yet: burning characters (their zone lasts about a frame).
+  - A character set on fire (an incendiary bolt's, `StateNPCMasterActionImmolate` with the
+    bolt's `m_ImmolationParams`) lays one about it while it burns, `m_fAvoidanceRadius` (2 m),
+    renewed each moment (the original's lasts about a frame), and makes its noise every
+    `m_fNoisePeriod` (1 s: `EAINoiseContext_Danger` at `EAINoiseLoudness3`, 30 m). Before, it
+    made one 14 m noise as it caught, and the others walked through the flames.
 - **Keeping out of each other's way** (`avoid.rs`), as the original's avoidance does (Arkane's
   `ArkAvoidable`, decoded for this rewrite from the user's own Dishonored.exe: the manager's tick
   0x00938440, a character's setup 0x00B7CD10, the locomotion's fold 0x0094A630):

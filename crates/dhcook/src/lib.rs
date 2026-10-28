@@ -2787,6 +2787,15 @@ impl<'a> Cooker<'a> {
         let story_group = ch.obj(self.assets, "m_pStoryGroupTweakOverride").map(|o| o.name().to_string()).unwrap_or_default();
         // (the Tower's guards are on Corvo's side: `Faction_Corvo_Default`)
         let faction = ch.obj(self.assets, "m_pFactionTweakOverride").map(|f| self.faction(&f));
+        // (spawned dead in its pose: the pose's set among its type's)
+        let dead_pose = flag("m_bSpawnDead").unwrap_or(false).then(|| ch.name("m_DeadPoseAnimName").filter(|n| *n != "None").map(str::to_string)).flatten();
+        if let (Some(_), Some(set), Some(t)) = (&dead_pose, ch.obj(self.assets, "m_pDeadPoseAnimSet"), npc_type) {
+            if let Some(p) = self.pending_anims.iter_mut().find(|p| p.npc_type == t as usize) {
+                if !p.sets.iter().any(|s| s.key() == set.key()) {
+                    p.sets.push(set);
+                }
+            }
+        }
         let index = self.scene.spawners.len() as u32;
         self.actor_ref(actor).spawner = Some(index);
         self.scene.spawners.push(Spawner {
@@ -2812,6 +2821,7 @@ impl<'a> Cooker<'a> {
             spawn_at: ch.get("m_SpawnAtSuspicionLevel").and_then(|v| if let Value::Enum(e) = v { Some(e.clone()) } else { None }).filter(|e| !e.ends_with("None")),
             spawn_on_help: flag("m_bSpawnOnHearHelpRequest").unwrap_or(false),
             start_as_skull: flag("m_bStartAsSkull").unwrap_or(false),
+            dead_pose,
             spawn_visible,
             spawn_near,
             tether: Vec::new(),
@@ -2891,6 +2901,7 @@ impl<'a> Cooker<'a> {
                 spawn_at: None,
                 spawn_on_help: false,
             start_as_skull: false,
+                dead_pose: None,
                 spawn_visible: true,
                 spawn_near: true,
                 tether: Vec::new(),

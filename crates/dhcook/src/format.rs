@@ -2587,6 +2587,11 @@ pub struct Spawner {
     /// a grave hound that lies as its skull till disturbed (`m_bStartAsSkull`)
     #[serde(default)]
     pub start_as_skull: bool,
+    /// it comes into the world dead (`m_bSpawnDead`), lying, sitting or hanging as its pose says
+    /// (`m_DeadPoseAnimName` of `m_pDeadPoseAnimSet`, which its type's sets take in: a body against a
+    /// wall, `Corpses_DeathPose_OnWall2`; Martin dying at the Lighthouse, `Martin_Sc_Lighthouse_Death_Loop`)
+    #[serde(default)]
+    pub dead_pose: Option<String>,
     /// may spawn while Corvo sees the spot (`m_bCanSpawnWhenVisible`) / is near it
     /// (`m_bCanSpawnWhenPlayerNear`)
     #[serde(default)]
@@ -3793,6 +3798,21 @@ pub fn is_player_faction(name: &str) -> bool {
     n.contains("faction_corvo") || n.contains("fctn_daud")
 }
 
+/// A character burning (`ImmolationParams`): the room the others give it (`m_fAvoidanceRadius`,
+/// m), the noise it makes every `noise_period` seconds (`m_NoiseLoudness`, `m_NoiseContext`), and the
+/// harm to those within `damage_radius` (m) every `damage_period` (`m_fDamage`: none in the shipped
+/// tweaks).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct Immolation {
+    pub avoid: f32,
+    pub noise_period: f32,
+    pub loudness: String,
+    pub context: String,
+    pub damage: f32,
+    pub damage_period: f32,
+    pub damage_radius: f32,
+}
+
 /// Campaign-wide game data from the original tweaks: powers, the player's attributes,
 /// bone charms, upgrades and the craftsman's store (`cache/game/gamedata.json`).
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -3808,6 +3828,9 @@ pub struct GameData {
     /// `[DisAINoiseManager] m_LoudnessDistanceArray`, by the enum's order)
     #[serde(default)]
     pub noise_loudness: std::collections::BTreeMap<String, f32>,
+    /// a character set on fire (an incendiary bolt's, a thug's bottle's `m_ImmolationParams`)
+    #[serde(default)]
+    pub immolation: Immolation,
     /// the Dunwall City Trials' challenges (`DisDLC05GameInfo.m_Challenges`)
     #[serde(default)]
     pub challenges: Vec<ChallengeDef>,
