@@ -78,6 +78,8 @@ pub struct Carry {
     pub(crate) resume_animation: bool,
     /// a won chokehold's body to lift (`combat::chokehold`)
     pub request: Option<Entity>,
+    /// a body Pull brought to him, to take up as Use would (`pull`: carried at once)
+    pub take: Option<Entity>,
 }
 
 impl Carry {
@@ -182,10 +184,13 @@ fn carry_input(
             // pick up the body looked at
             let restoring = restore.0.as_ref();
             let choked = carry.request.take();
+            let pulled = carry.take.take();
             let target = if let Some(saved) = restoring {
                 npcs.iter().find(|(_, npc, from, _)| from.0 == saved.spawner && npc.is_down()).map(|(e, _, _, _)| e)
             } else if choked.is_some() {
                 choked
+            } else if pulled.is_some() {
+                pulled
             } else { focus.1.filter(|_| bind.just_pressed(crate::bindings::Act::Use)) };
             let Some(e) = target else { return };
             let Ok((_, npc, from, children)) = npcs.get(e) else { return };
@@ -233,7 +238,7 @@ fn carry_input(
             let time = restoring.map(|s| s.time).unwrap_or(0.0);
             let animation = restoring.and_then(|s| s.animation.clone());
             let resume_animation = restoring.is_some();
-            *carry = Carry { body: Some(e), phase, seq: carry.seq + 1, view_parts, world_parts, visual: Some((visual, vt)), swords, spawner: Some(from.0), t: time, animation, resume_animation, request: None };
+            *carry = Carry { body: Some(e), phase, seq: carry.seq + 1, view_parts, world_parts, visual: Some((visual, vt)), swords, spawner: Some(from.0), t: time, animation, resume_animation, request: None, take: None };
             if restore.0.take().is_none() {
                 used.write(Interaction::Corpse { spawner: from.0, what: 0 });
             }

@@ -1308,6 +1308,21 @@ pub struct NpcStats {
     /// how it answers Corvo's acts (its brain's `m_pReactionTweaks`: `m_Response_<name>`)
     #[serde(default)]
     pub responses: Vec<NpcResponse>,
+    /// its body drawn in by Daud's Pull (The Brigmore Witches' pawns, `DisDLC07Tweaks_NPCPawn`)
+    #[serde(default)]
+    pub pull: Option<NpcPull>,
+}
+
+/// A body drawn in by Pull (`DisDLC07Tweaks_NPCPawn`): the force on its bone toward Daud
+/// (`m_fPullForce`, m/s²), the bone it is drawn by (`m_PullBoneName`: the neck, a Dead Eel's
+/// spine), and the lift that holds it up by how far it lies above or below him
+/// (`m_PullUpForce`, `DeadPullUpForceSettings`: its `m_Min`, `m_Medium`, `m_Max` thresholds,
+/// each (height m, lift m/s²)).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct NpcPull {
+    pub force: f32,
+    pub bone: String,
+    pub up: [[f32; 2]; 3],
 }
 
 /// A character's answer to an act of Corvo's (`TweakAIResponse`): of `name` (`HurtByPlayerAlly`,

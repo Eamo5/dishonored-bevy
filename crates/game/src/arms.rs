@@ -291,6 +291,8 @@ struct ArmClips {
     pull: Option<ClipId>,
     pull_aim: [Option<ClipId>; 2],
     pull_cancel: Option<ClipId>,
+    /// a person held up (`_Lift_In`, `_Lift_Loop`), let drop (`_Lift_Out`), given up (`_Lift_Abort`)
+    pull_lift: [Option<ClipId>; 4],
     dark_vision: Option<ClipId>,
     wristbow_idle: Option<ClipId>,
     pistol_fire: Option<ClipId>,
@@ -433,6 +435,7 @@ impl ArmClips {
             pull: lib.find("Powers_Cast_Pull_Out"),
             pull_aim: [lib.find("Powers_Cast_Pull_In"), lib.find("Powers_Cast_Pull_Loop")],
             pull_cancel: lib.find("Powers_Cast_Pull_Abort"),
+            pull_lift: ["In", "Loop", "Out", "Abort"].map(|k| lib.find(&format!("Powers_Cast_Pull_Lift_{k}"))),
             dark_vision: lib.find("Powers_Cast_DarkVision_In"),
             wristbow_idle: lib.find("Wristbow_Idle"),
             pistol_fire: lib.find("Pistol_Fire"),
@@ -479,6 +482,8 @@ struct ArmsAnim {
     blink_aiming: bool,
     summon_cancels: u32,
     pull_cancels: u32,
+    pull_lifting: bool,
+    pull_lift_ends: (u32, u32),
     possess_cancels: u32,
     /// a grenade cooking (as last seen)
     cooking: bool,
@@ -808,6 +813,8 @@ fn spawn_arms(
                 blink_aiming: false,
                 summon_cancels: 0,
             pull_cancels: 0,
+            pull_lifting: false,
+            pull_lift_ends: (0, 0),
                 possess_cancels: 0,
                 cooking: false,
                 choking: false,
@@ -1603,6 +1610,31 @@ fn animate_arms(
         if let Some(cl) = c.pull_cancel {
             anim.restart_overlay(cl, false, 1.0, 0.1);
         }
+    }
+    // a person held up by Pull: the arm holds it (`_Lift_In`, `_Lift_Loop`) till it is let drop
+    // (`_Lift_Out`) or given up (`_Lift_Abort`)
+    if let Some(a) = pull_aim.as_ref() {
+        let [l_in, l_loop, l_out, l_abort] = c.pull_lift;
+        if (a.lift_out_seq, a.lift_abort_seq) != st.pull_lift_ends {
+            let abort = a.lift_abort_seq != st.pull_lift_ends.1;
+            st.pull_lift_ends = (a.lift_out_seq, a.lift_abort_seq);
+            if let Some(cl) = if abort { l_abort.or(l_out) } else { l_out } {
+                anim.restart_overlay(cl, false, 1.0, 0.1);
+                st.started.push(anim.lib.clip(cl).name.clone());
+            }
+        }
+        let lifting = a.lift.is_some();
+        if lifting && !st.pull_lifting {
+            if let Some(cl) = l_in.or(l_loop) {
+                anim.restart_overlay(cl, l_in.is_none(), 1.0, 0.15);
+                st.started.push(anim.lib.clip(cl).name.clone());
+            }
+        } else if lifting && (anim.overlay_finished() || !(anim.overlay_is(l_in) || anim.overlay_is(l_loop))) {
+            if let Some(cl) = l_loop {
+                anim.play_overlay(cl, true, 1.0, 0.15);
+            }
+        }
+        st.pull_lifting = lifting;
     }
     if let Some(a) = possess_aim.as_ref().filter(|a| a.cancel_seq != st.possess_cancels) {
         st.possess_cancels = a.cancel_seq;

@@ -60,6 +60,8 @@ pub struct Witch {
     summon_cd: f32,
     /// vanished: seconds before she comes back, and where she was
     gone: Option<(f32, Vec3)>,
+    /// to blink out at once (out of Daud's Pull: `m_TeleportDelay`)
+    pub escape: bool,
 }
 
 /// A bolt of a witch's magic in flight.
@@ -79,7 +81,7 @@ fn rand_in(r: [f32; 2]) -> f32 {
 fn mark_witches(mut commands: Commands, npcs: Query<(Entity, &Npc), Added<Npc>>) {
     for (e, n) in &npcs {
         if n.arms.witch.is_some() {
-            commands.entity(e).try_insert(Witch { scream_cd: 0.0, magic_cd: rand_in([1.0, 3.0]), teleport_cd: rand_in([3.0, 8.0]), summon_cd: rand_in([2.0, 6.0]), gone: None });
+            commands.entity(e).try_insert(Witch { scream_cd: 0.0, magic_cd: rand_in([1.0, 3.0]), teleport_cd: rand_in([3.0, 8.0]), summon_cd: rand_in([2.0, 6.0]), gone: None, escape: false });
         }
     }
 }
@@ -182,6 +184,18 @@ fn witch_powers(
             w.gone = None;
             fx.write(SpawnEffect::at("witch_appear", at));
             sfx.write(PostEvent::named("DLC07_Witch_Teleport_Out", Some(at)));
+            continue;
+        }
+        // (out of Daud's Pull: gone at once, back as from any vanishing)
+        if std::mem::take(&mut w.escape) && !npc.is_down() {
+            let me = t.translation;
+            w.teleport_cd = rand_in(sp.teleport_cooldown);
+            w.gone = Some((rand_in(sp.teleport_delay), me));
+            npc.casting = true;
+            *vis = Visibility::Hidden;
+            commands.entity(e).insert(ColliderDisabled);
+            fx.write(SpawnEffect::at("witch_vanish", me));
+            sfx.write(PostEvent::named("DLC07_Witch_Teleport_In", Some(me)));
             continue;
         }
         if !free(&npc) || stats.dead || possession.host.is_some() {

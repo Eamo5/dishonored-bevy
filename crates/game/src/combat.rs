@@ -275,7 +275,9 @@ fn special_moves(
             let behind = npc.forward().dot(to_player(nt)) < -0.2;
             let unaware = npc.alert != Alert::Combat || !npc.sees_player;
             let takes = takes_assassination(npc, rigs.get(e).ok().map(|a| a.lib.as_ref()));
-            sp.assassinate = takes && assassinable(npc) && unaware && (behind || npc.alert == Alert::Unaware) && npc.mode != Mode::Combat;
+            // (one Pull holds up: from any side, whatever it knows)
+            let held = npc.pulled.as_ref().is_some_and(|pl| pl.lifted);
+            sp.assassinate = takes && (held || assassinable(npc) && unaware && (behind || npc.alert == Alert::Unaware) && npc.mode != Mode::Combat);
         }
         if stats.power("BloodThirsty") > 0 && stats.adrenaline >= attrs.adrenaline_max {
             sp.adrenaline = nearest_target(eye, fwd, 2.6, 0.5, npcs.iter()).is_some();
@@ -289,7 +291,8 @@ fn special_moves(
     if let Some((_, npc, nt)) = nearest_target(eye, fwd, 1.7, 0.6, npcs.iter()).and_then(|(e, _)| npcs.get(e).ok()) {
         let behind = npc.forward().dot(to_player(nt)) < 0.0;
         let fighting = npc.mode == Mode::Combat && npc.sees_player;
-        sp.choke = !npc.is_down() && !npc.floored && npc.kind != crate::npc::Kind::Story && if fighting { npc.stagger > 0.0 && npc.arms.vulnerable[1] } else { behind || npc.alert == Alert::Unaware };
+        let held = npc.pulled.as_ref().is_some_and(|pl| pl.lifted);
+        sp.choke = !npc.is_down() && !npc.floored && npc.kind != crate::npc::Kind::Story && (held || if fighting { npc.stagger > 0.0 && npc.arms.vulnerable[1] } else { behind || npc.alert == Alert::Unaware });
     }
 }
 
@@ -742,7 +745,7 @@ fn sword_input(
             let front = from.dot(f) >= 0.0;
             let dramatic = lib.as_ref().and_then(|l| dramatic_pair(l, front));
             let human = npc.kind != crate::npc::Kind::Creature && (npc.kind != crate::npc::Kind::Story || dramatic.is_some());
-            if human && assassinable(&npc) {
+            if human && (npc.pulled.as_ref().is_some_and(|pl| pl.lifted) || assassinable(&npc)) {
                 let right = f.cross(Vec3::Y);
                 let side = if from.dot(f) > 0.707 {
                     "Front"
@@ -1187,16 +1190,22 @@ fn chokehold(
     let ro: Vec<(Entity, &Npc, &Transform)> = npcs.iter().map(|(e, n, t)| (e, n, t)).collect();
     let Some((e, d)) = nearest_target(eye, fwd, 1.7, 0.6, ro.iter().map(|(e, n, t)| (*e, *n, *t))) else { return };
     let _ = d;
-    let Ok((_, mut npc, nt)) = npcs.get_mut(e) else { return };
+    let Ok((_, mut npc, mut nt)) = npcs.get_mut(e) else { return };
     // from behind, or off balance; otherwise Ctrl just blocks
     let to_player = (pt.translation - nt.translation).with_y(0.0).normalize_or_zero();
     let behind = npc.forward().dot(to_player) < 0.0;
     let fighting = npc.mode == Mode::Combat && npc.sees_player;
-    if npc.is_down() || npc.floored || npc.kind == crate::npc::Kind::Story || (fighting && (npc.stagger <= 0.0 || !npc.arms.vulnerable[1])) || (!behind && !fighting && npc.alert != crate::npc::Alert::Unaware) {
+    // (one Pull holds up: from any side)
+    let held = npc.pulled.as_ref().is_some_and(|pl| pl.lifted);
+    if npc.is_down() || npc.floored || npc.kind == crate::npc::Kind::Story || !held && ((fighting && (npc.stagger <= 0.0 || !npc.arms.vulnerable[1])) || (!behind && !fighting && npc.alert != crate::npc::Alert::Unaware)) {
         return;
     }
     npc.mode = Mode::Choked;
     npc.attack_t = None;
+    // (taken out of Pull's hold: down on his floor)
+    if npc.pulled.take().is_some() {
+        nt.translation.y = pt.translation.y - (crate::player::STAND_HALF + crate::player::RADIUS) + crate::npc::NPC_CENTER;
+    }
     p.locked = true;
     // `ChokeTime` (Strong Arms shortens it) and the victim's In clip
     commands.entity(pe).insert(Choking { npc: e, t: 0.0, duration: attrs.choke_time.max(0.0) + CHOKE_IN, end: None, use_held: 0.0 });
@@ -1226,6 +1235,10 @@ fn assassinating(
         let len = arms.iter().next().and_then(|anim| anim.lib.find(&a.master).map(|c| anim.lib.duration(c))).unwrap_or(1.6);
         a.len = Some(len);
         if let Ok((mut npc, mut nt, anim)) = npcs.get_mut(a.npc) {
+            // (taken out of Pull's hold: down on his floor)
+            if npc.pulled.take().is_some() {
+                nt.translation.y = pt.translation.y - (crate::player::STAND_HALF + crate::player::RADIUS) + crate::npc::NPC_CENTER;
+            }
             // Corvo's place in the victim's frame (x right, z behind), turned so that place
             // lies where Corvo is, then the victim moved to put him there
             let anchor = anim.lib.find(&a.slave).and_then(|c| anim.lib.bone_start(c, "anchor_jnt"));
@@ -1306,13 +1319,30 @@ fn receive_hits(
     (mut versus, mut npcs, cam): (ResMut<Versus>, Query<(&mut Npc, &Transform), Without<Player>>, Query<&GlobalTransform, With<PlayerCamera>>),
     attrs: Res<crate::gamedata::Attrs>,
     (mut fx, level, mut shake): (MessageWriter<crate::particles::SpawnEffect>, Option<Res<crate::level::LevelInfo>>, MessageWriter<crate::player::ShakeCamera>),
+    (pull, mut shielded): (Option<Res<crate::pull::PullAim>>, MessageWriter<NpcHit>),
 ) {
     use crate::audio::PostEvent;
     let Ok((pt, mut p, mut sword)) = player.single_mut() else { return };
     let fwd = cam.single().map(|c| c.forward().as_vec3()).unwrap_or(Vec3::NEG_Z);
+    // (the one Pull holds up before him: his shield)
+    let shield = pull.as_ref().and_then(|a| a.shield()).filter(|e| npcs.get(*e).is_ok_and(|(n, _)| n.pulled.as_ref().is_some_and(|pl| pl.lifted) && !n.is_down()));
     for h in hits.read() {
         if stats.dead {
             continue;
+        }
+        // a blow or a shot from the side the one held up stands on strikes it instead
+        // (`ePlayerStat_DamageTakenByPullLiftShield`): within its width of the line to him
+        if let Some(se) = shield.filter(|se| *se != h.npc && h.damage > 0.0 && !h.push) {
+            if let Ok((_, st)) = npcs.get(se) {
+                if crate::pull::shields(pt.translation, h.from, st.translation) {
+                    shielded.write(NpcHit { npc: se, damage: h.damage, kind: HitKind::ByOthers, from: h.from });
+                    *stats.counters.entry("ePlayerStat_DamageTakenByPullLiftShield".to_string()).or_default() += h.damage.round().max(1.0) as u32;
+                    if !h.missile {
+                        sfx.write(PostEvent::named("Snd_Imp_Sword_on_Body_cue_ak", Some(st.translation + Vec3::Y * 0.3)));
+                    }
+                    continue;
+                }
+            }
         }
         // locked with another: its blows wait
         if versus.npc.is_some() && versus.npc != Some(h.npc) {

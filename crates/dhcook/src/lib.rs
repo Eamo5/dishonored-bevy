@@ -4586,6 +4586,25 @@ impl<'a> Cooker<'a> {
         }
         st.danger = self.danger_steering(pawn);
         st.loco = self.npc_loco(pawn);
+        // (drawn in by Pull: The Brigmore Witches' pawns)
+        if let Some(force) = self.tweak_float(pawn, "m_fPullForce", 0) {
+            let bone = match self.tweak_prop(pawn, "m_PullBoneName", 0, 0) {
+                Some((_, Value::Name(n))) if n != "None" => n,
+                _ => "neck_jnt".into(),
+            };
+            // (a threshold's fields unset are 0, as the struct's defaults)
+            let mut up = [[0.0f32; 2]; 3];
+            if let Some((_, Value::Struct(_, s))) = self.tweak_prop(pawn, "m_PullUpForce", 0, 0) {
+                let s = Props(s);
+                for (i, k) in ["m_Min", "m_Medium", "m_Max"].iter().enumerate() {
+                    if let Some(Value::Struct(_, t)) = s.get(k) {
+                        let t = Props(t.clone());
+                        up[i] = [t.float("m_fHeight").unwrap_or(0.0), t.float("m_fValue").unwrap_or(0.0)];
+                    }
+                }
+            }
+            st.pull = Some(NpcPull { force: force * UNIT, bone, up: up.map(|[h, v]| [h * UNIT, v * UNIT]) });
+        }
         log::debug!(
             "npc stats {}: health {:?}, weapons {:?}, ammo {:?}",
             pawn.name(),

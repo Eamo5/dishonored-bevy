@@ -272,6 +272,8 @@ pub struct Npc {
     /// thrown, in the air on its push before it goes limp (the original's animated throw, its
     /// `PHYS_Flying` moment)
     pub flying: bool,
+    /// held by Daud's Pull (The Brigmore Witches): drawn to him, then held up before him
+    pub pulled: Option<Pulled>,
     /// its walk begun or ended with its clip; what it wished to go this frame (its path's way, at
     /// its pace), and its path: how far to its goal and to the path's next point
     pub pace: Option<Pace>,
@@ -2118,6 +2120,21 @@ pub(crate) fn fly_shrapnel(mut commands: Commands, time: Res<Time>, tc: Res<crat
     }
 }
 
+/// Held by Daud's Pull (`DisDLC07StateNPCMasterPulled`): where its middle is drawn to now (before
+/// him at `m_fMinDistance`, held up once within `m_fLiftAnimDistance`: `pull`), how fast (m/s,
+/// `m_Level2Params.m_fSpeed`), whether it is held up (`m_bLifted`), the side it was torn from (its
+/// first clip: front, left, right, back) and the clips shown so far.
+#[derive(Clone, Debug, Default)]
+pub struct Pulled {
+    pub goal: Vec3,
+    pub speed: f32,
+    pub lifted: bool,
+    pub from: u8,
+    pub shown: u8,
+    /// its feet's height off his floor, held up (m)
+    pub height: f32,
+}
+
 /// How far a missed bullet flies on (m).
 const MISS_REACH: f32 = 80.0;
 
@@ -2409,6 +2426,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         casting: false,
         knock: None,
         flying: false,
+        pulled: None,
         pace: None,
         turning: false,
         wish: Vec3::ZERO,
@@ -5967,6 +5985,28 @@ pub(crate) fn npc_move(
                 }
             }
         }
+        // held by Daud's Pull: drawn straight to where he holds it (nothing between: it was in
+        // his sight), facing him, its controller still
+        if let Some(pl) = npc.pulled.as_ref() {
+            let to = pl.goal - t.translation;
+            let d = to.length();
+            let step = pl.speed * dt;
+            t.translation += if d <= step { to } else { to / d * step };
+            if let Some(p) = ppos {
+                let f = (p - t.translation).with_y(0.0);
+                if f.length_squared() > 1e-4 {
+                    npc.yaw = (-f.x).atan2(-f.z);
+                }
+            }
+            t.rotation = Quat::from_rotation_y(npc.yaw);
+            npc.velocity = Vec3::ZERO;
+            npc.grounded = false;
+            npc.pace = None;
+            if let Some(mut k) = kcc {
+                k.translation = None;
+            }
+            continue;
+        }
         // knocked off its feet: its bodies carry it (`ragdoll`); thrown, it flies on its push
         // first, falling, against what is in its way
         if npc.floored {
@@ -6467,6 +6507,9 @@ pub struct NpcClips {
     /// sets); without them, doubled over and up again, sword drawn and empty-handed
     /// (`Sword_Stun_Loop`, `Sword_RecoveryA` / `B`)
     dust: [Option<ClipId>; 3],
+    /// torn off its feet by Daud's Pull (`DisDLC07NPCAnim_Pulled`): from the front, left, right,
+    /// back (`Generic_Pulled_Front`...), drawn along (`_Loop`), held up (`_Lift_Loop`)
+    pulled: [Option<ClipId>; 6],
     stun_loop: [Option<ClipId>; 2],
     recovery: [Vec<ClipId>; 2],
     death_dir: [Option<ClipId>; 4],
@@ -6673,6 +6716,7 @@ impl NpcClips {
             weak_hit: ["Front", "Left", "Right", "Back"].map(|s| lib.find(&format!("ADD_Generic_SmallHit_{s}"))),
             shot_hit: ["Front", "FrontLeft", "FrontRight"].map(|s| lib.find(&format!("Generic_ProjectileHit_{s}"))),
             dust: ["In", "Loop", "Out"].map(|p| lib.find(&format!("Generic_SmokeBomb_{p}"))),
+            pulled: ["Front", "Left", "Right", "Back", "Loop", "Lift_Loop"].map(|p| lib.find(&format!("Generic_Pulled_{p}"))),
             stun_loop: [lib.find("Sword_Stun_Loop"), lib.find("Empty_Stun_Loop")],
             recovery: [lib.all(&["Sword_RecoveryA", "Sword_RecoveryB"]), lib.all(&["Empty_RecoveryA", "Empty_RecoveryB"])],
             hit_leg: [["Sword_", "Empty_"], ["Empty_", "Sword_"]].map(|sets| ["Left", "Right"].map(|s| sets.iter().find_map(|p| lib.find(&format!("{p}HitLeg_{s}"))))),
@@ -7513,6 +7557,36 @@ fn npc_select_anim(
             }
         }
 
+        // held by Daud's Pull (`DisDLC07NPCAnim_Pulled`): torn from its feet by the side it was
+        // taken from (`Generic_Pulled_Front`...), drawn along (`_Loop`), held up (`_Lift_Loop`);
+        // a set without them doubled over (`Sword_Stun_Loop`)
+        if !npc.is_down() {
+            let drawn = st.drawn;
+            if let Some(pl) = npc.pulled.as_mut() {
+                let [front, left, right, back, along, lift] = clips.pulled;
+                let held = clips.stun_loop[(!drawn) as usize].or(clips.stun_loop[drawn as usize]);
+                if pl.shown == 0 {
+                    pl.shown = 1;
+                    if let Some(c) = [front, left, right, back][pl.from.min(3) as usize].or(along).or(held) {
+                        anim.restart(c, false, 1.0, 0.1);
+                    }
+                } else if pl.lifted && pl.shown != 3 && (pl.shown == 2 || anim.finished()) {
+                    pl.shown = 3;
+                    if let Some(c) = lift.or(along).or(held) {
+                        anim.play(c, true, 1.0, 0.25);
+                    }
+                } else if pl.shown == 1 && anim.finished() {
+                    pl.shown = 2;
+                    if let Some(c) = along.or(held) {
+                        anim.play(c, true, 1.0, 0.15);
+                    }
+                }
+                st.oneshot = false;
+                st.last_mode = npc.mode;
+                st.last_alert = npc.alert;
+                continue;
+            }
+        }
         // blown off its feet (Wind Blast), where its set can get it up again: limp (`ragdoll`),
         // out of everyone's way till it is
         if let Some((v, throw)) = npc.knock.take() {

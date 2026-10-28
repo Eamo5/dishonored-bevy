@@ -2796,9 +2796,34 @@ fields no longer show their stand-in "WW" behind the title.
   - *Pull* (`DLC07_Twk_Pwr_Pull`, `DisDLC07Tweaks_Pull`): held, Daud reaches for what he looks
     at within `m_fMaxDistance` (20 m) and `m_fCheckExtent` (1 m) of the look, in sight, its rim
     showing; let go, it comes. A pickup flies to his hand at `m_fPickupSpeed` (30 m/s) and is
-    taken; a loose prop comes into his hands as if grabbed; from the second level a person is
-    torn off its feet and flung at him, reeling. Each costs as its class does (`m_ManaCosts`: a
-    person 40, a pickup or a prop 20). His arms reach (`Powers_Cast_Pull_In`, `_Loop`), cast
+    taken; a loose prop comes into his hands as if grabbed. Each costs as its class does
+    (`m_ManaCosts`: a pawn, living or dead, 40; a pickup or a prop 20).
+    - From the second level a person is torn off its feet, as the power's description has it
+      ("lifted helplessly and can be executed or choked out"). Before, it was flung at him like
+      Wind Blast in reverse, landed reeling and fought on. Now (`DisDLC07StateNPCMasterPulled`)
+      it plays its pawn's own clips (`DisDLC07NPCAnim_Pulled`: `Generic_Pulled_Front`, `_Left`,
+      `_Right` or `_Back` by the side it was taken from, then `_Loop`) and is drawn to him at
+      `m_Level2Params.m_fSpeed` (5 m/s), to `m_fMinDistance` (2 m) before him. Within
+      `m_fLiftAnimDistance` (3 m) it is held up (`m_bLifted`, `Generic_Pulled_Lift_Loop`),
+      its feet `m_fLiftMinHeight`..`m_fLiftMaxHeight` (0.5-1.5 m) off his floor, keeping before
+      him as he moves; his arm holds it up (`Powers_Cast_Pull_Lift_In`, `_Lift_Loop`).
+    - Held, it can be assassinated or choked out from any side, whatever it knows. It is his
+      shield: the blows, shots and spells from its side strike it instead
+      (`ePlayerStat_DamageTakenByPullLiftShield`, the "Wall of Flesh" achievement's statistic).
+    - He lets it drop with the power again (`_Lift_Out`), or gives it up with Use, by putting the
+      power away or being knocked out of it (`_Lift_Abort`). It falls limp with the hold's little
+      push (`m_fCancelImpulse`, `m_fCancelHeightImpulse`). A witch blinks out of it after
+      `m_TeleportDelay` (2-12 s), as the bone charm's text says.
+    - The dead and the unconscious are drawn in too (`DisDLC07StateNPCMasterDead_Pulled`):
+      their bodies pulled by the bone their pawn names (`m_PullBoneName`: a Dead Eel's spine, an
+      assassin's neck) at its `m_fPullForce` (20 m/s²), held up by `m_PullUpForce` by how far
+      below or above him they lie (`DeadPullUpForceSettings`: 15 m/s² from 10 m below, 10 level
+      with him, none from 10 m above). Reaching him, a body goes onto his shoulder ("Corpses
+      and unconscious bodies are automatically carried").
+    - Our reading where the tweaks are silent: the held one goes straight to him (it was in his
+      sight); the hold lasts until he lets go; a body's pull is capped at a person's speed and
+      spread over its whole ragdoll; the shield covers 0.6 m either side of the line to him.
+    - His arms reach (`Powers_Cast_Pull_In`, `_Loop`), cast
     (`_Out`) or give up (`_Abort`: Use, the power put away, nothing there). The scripts bar
     people from it (`DisDLC07SeqAct_SetPullOverride`: Lizzy Stride) and hear of one taken
     (`DisDLC07SeqEvent_NPCPulled`: Started, Finished). The quick-access wheel is the pack's

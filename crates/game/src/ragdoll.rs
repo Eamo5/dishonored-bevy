@@ -27,7 +27,7 @@ pub struct RagdollPlugin;
 impl Plugin for RagdollPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RagdollStep>()
-            .add_systems(PostUpdate, (end_ragdolls, start_ragdolls, push_ragdolls, scale_ragdolls).chain().before(PhysicsSet::SyncBackend).run_if(in_state(GameState::InGame)))
+            .add_systems(PostUpdate, (end_ragdolls, start_ragdolls, push_ragdolls, pull_ragdolls, scale_ragdolls).chain().before(PhysicsSet::SyncBackend).run_if(in_state(GameState::InGame)))
             .add_systems(
                 PostUpdate,
                 (unscale_ragdolls, pose_ragdolls).chain().after(PhysicsSet::Writeback).after(crate::anim::AnimPose).before(TransformSystems::Propagate).run_if(in_state(GameState::InGame)),
@@ -371,6 +371,109 @@ fn push_ragdolls(
         }
         if stirred {
             rd.still = 0.0;
+        }
+    }
+}
+
+/// A body Daud's Pull draws in (`DisDLC07StateNPCMasterDead_Pulled`): toward `to` by its bone
+/// (`m_PullBoneName`) at its pawn's `m_fPullForce`, held up by `m_PullUpForce` by how far it lies
+/// below or above him, no faster than `speed` (`m_Level2Params.m_fSpeed`: our reading of its
+/// cap). Where it was lying still its bodies are stirred first.
+#[derive(Component, Clone, Debug)]
+pub struct PulledBody {
+    pub to: Vec3,
+    pub force: f32,
+    /// (height below/above him m, lift m/s²): `m_Min`, `m_Medium`, `m_Max`
+    pub up: [[f32; 2]; 3],
+    pub bone: String,
+    pub speed: f32,
+    /// where its pulled bone is now (for whoever waits for it to arrive)
+    pub at: Option<Vec3>,
+}
+
+/// The lift `m_PullUpForce` gives at a height (m) relative to the puller: its thresholds' values
+/// between them, held at either end.
+pub fn pull_lift(up: &[[f32; 2]; 3], h: f32) -> f32 {
+    let [lo, mid, hi] = *up;
+    let lerp = |a: [f32; 2], b: [f32; 2]| {
+        let span = b[0] - a[0];
+        if span.abs() < 1e-3 {
+            return b[1];
+        }
+        a[1] + (b[1] - a[1]) * ((h - a[0]) / span).clamp(0.0, 1.0)
+    };
+    if h <= lo[0] {
+        lo[1]
+    } else if h <= mid[0] {
+        lerp(lo, mid)
+    } else if h <= hi[0] {
+        lerp(mid, hi)
+    } else {
+        hi[1]
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn pull_ragdolls(
+    mut commands: Commands,
+    time: Res<Time>,
+    tc: Res<crate::gameplay::TimeControl>,
+    level: Option<Res<LevelInfo>>,
+    mut npcs: Query<(Entity, &Npc, &NpcRig, &mut Ragdoll, &mut PulledBody), Without<ScriptedAnim>>,
+    mut parts: Query<(&Transform, &mut Velocity, &mut Sleeping), With<RagdollPart>>,
+    joints: Query<&GlobalTransform>,
+) {
+    let dt = time.delta_secs() * tc.world_scale();
+    let Some(level) = level else { return };
+    for (e, npc, rig, mut rd, mut pb) in &mut npcs {
+        if rd.parts.is_empty() {
+            // lying still: its bodies stirred again where they lie
+            let Some(def) = ragdoll_of(&level, npc) else { continue };
+            let bodies = body_poses(def, rig, &joints);
+            if bodies.len() < 2 {
+                continue;
+            }
+            rd.parts = spawn_parts(&mut commands, e, def, rig, bodies, Vec3::ZERO, None, None, &[], 0.0);
+            rd.t = 0.0;
+            rd.still = 0.0;
+            continue;
+        }
+        rd.still = 0.0;
+        // the part it is drawn by: its pull bone's, or the nearest above it with a body
+        let mut bone = rig.index(&pb.bone);
+        let mut held = None;
+        while let Some(b) = bone {
+            if let Some(p) = rd.parts.iter().find(|(_, pb)| *pb == b) {
+                held = Some(p.0);
+                break;
+            }
+            bone = rig.parent_of(b);
+        }
+        let Some(held) = held.or_else(|| rd.parts.first().map(|p| p.0)) else { continue };
+        let Ok((t, _, _)) = parts.get(held) else { continue };
+        let at = t.translation;
+        pb.at = Some(at);
+        if log() && (time.elapsed_secs() * 4.0).floor() != ((time.elapsed_secs() - time.delta_secs()) * 4.0).floor() {
+            info!("ragdoll: {} pulled by {} at {at:.2} to {:.2}", npc.name, pb.bone, pb.to);
+        }
+        if dt <= 0.0 {
+            continue;
+        }
+        // (the force on its bone, the whole body following it: each body drawn the same way,
+        // its pulled bone the hardest so it leads, the rest hanging from it; our reading of the
+        // force on the whole as the original's `AddForce` to its bodies)
+        let to = pb.to - at;
+        let lift = Vec3::Y * pull_lift(&pb.up, at.y - pb.to.y);
+        let along = to.normalize_or_zero() * pb.force;
+        for &(p, _) in &rd.parts {
+            let Ok((_, mut v, mut sleep)) = parts.get_mut(p) else { continue };
+            let k = if p == held { 1.0 } else { 0.7 };
+            v.linear += (along + lift) * k * dt;
+            let s = v.linear.length();
+            if s > pb.speed {
+                v.linear *= pb.speed / s;
+            }
+            sleep.sleeping = false;
         }
     }
 }
