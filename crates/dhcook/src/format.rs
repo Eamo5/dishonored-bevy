@@ -1933,6 +1933,15 @@ pub struct Attention {
     /// (`m_bAlarmsKeepRingingUntilNPCsLoseAttention`, `m_AlarmsKeepRingingAttentionLevel`); none: not
     #[serde(default)]
     pub alarm_keep: Option<u8>,
+    /// an ally's request heard: to notice (`m_IncreaseForNoticeRequest`), to search
+    /// (`m_IncreaseForSearchRequest`)
+    #[serde(default = "request_default")]
+    pub requests: [(f32, u8); 2],
+}
+
+/// The requests' increases as the guards' tweaks have them: to turning to look, to investigating.
+fn request_default() -> [(f32, u8); 2] {
+    [(0.0, 2), (0.0, 3)]
 }
 
 /// The allies' increases as the default tweak has them (`Twk_Attn_Default_Neutral`: a fight +1 to

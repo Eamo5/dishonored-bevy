@@ -1569,6 +1569,9 @@ fields no longer show their stand-in "WW" behind the title.
     who hear it look into where the caller thinks Corvo is, at a walk, their attention at
     least at investigating. One already looking there passes it by.
   - `ATTENTION_NOTICE_BEGIN` carries a notice to 8 m: they turn to look there.
+  - How far each raises its hearer's attention is now its attention tweak's own
+    (`m_IncreaseForSearchRequest`, `m_IncreaseForNoticeRequest`: a guard's to investigating and to
+    turning to look, as written out by hand before; others as their tweaks say).
   - A searcher come to its spot looks it over (its check's 10 s cooldown permitting) and tells
     those within 20 m. One investigating the same spot (within 2.5 m) gives up its own look
     and searches on, a body it went to handled all the same (`SearchReachedProxy`).

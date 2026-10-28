@@ -3580,11 +3580,14 @@ fn npc_hearing(
                 continue;
             }
             let Some(att) = scene.and_then(|s| attention_of(&npc, s)) else { continue };
-            let floor = att.levels[if c.kind == CallKind::Search { 2 } else { 1 }][0];
-            if npc.awareness >= floor {
+            // (its profile's increase for the request: `m_IncreaseForSearchRequest` / `_NoticeRequest`,
+            // `DACRT_HeardSearchRequest` / `_HeardNoticeRequest`)
+            let before = npc.awareness;
+            let (inc, reason) = if c.kind == CallKind::Search { (att.requests[1], 5) } else { (att.requests[0], 4) };
+            raise_attention(&mut npc, att, inc, reason);
+            if npc.awareness <= before {
                 continue;
             }
-            npc.awareness = floor;
             npc.last_seen = Some(c.spot);
             if c.kind == CallKind::Search && !matches!(npc.mode, Mode::Investigate | Mode::Flee) {
                 if std::env::var("DH_NPC_LOG").is_ok() {
