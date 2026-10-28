@@ -479,8 +479,8 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
         });
     }
     // Daud's summoned assassins on his stories' maps
-    if daud_pack(map).is_some() {
-        c.summon_spawners();
+    if let Some(pack) = daud_pack(map) {
+        c.summon_spawners(pack);
     }
     let started = kismet::spawners_started_at_load(&levels);
     for (sp, key) in c.scene.spawners.iter_mut().zip(c.stealable_keys.iter()) {
@@ -2848,9 +2848,16 @@ impl<'a> Cooker<'a> {
     /// Daud's summoned assassins (`DLC06_Pwr_Assassummon`, Daud's player package): a spawner
     /// for each power level's `m_pAssassinTweaks`, never started by the level
     /// (`scene.summons`), and the summoning's effects.
-    fn summon_spawners(&mut self) {
+    /// (the pack's own: Daud's pawn's `m_pSummonAssassinPowerTweaks`, The Brigmore Witches'
+    /// `DLC07_Pwr_Assassummon` with its own assassins, `DLC07_Pwn_SummonedAssn`; before, the Knife
+    /// of Dunwall's were summoned in both)
+    fn summon_spawners(&mut self, pack: &DaudPack) {
         const POWER: &str = "DLC06_Twk_Powers_Assassummon.DLC06_Pwr_Assassummon";
-        let power = self.assets.find(POWER).or_else(|| {
+        if let Some(pkg) = self.assets.package(pack.package) {
+            self.assets.add_search(pkg);
+        }
+        let own = self.assets.find(pack.pawn).and_then(|p| self.chain(&p).obj(self.assets, "m_pSummonAssassinPowerTweaks"));
+        let power = own.or_else(|| self.assets.find(POWER)).or_else(|| {
             let pkg = self.assets.package("DLC06_Twk_Player_Daud_SF")?;
             self.assets.add_search(pkg);
             self.assets.find(POWER)
@@ -4519,6 +4526,34 @@ impl<'a> Cooker<'a> {
             }
             if w.class() == "DisTweaks_WepGrenade" {
                 st.grenades.extend(self.grenade_throws(&w));
+            }
+            // (Daud's own assassins' pull, The Brigmore Witches': their hand's `DisDLC07Tweaks_NPCPullSpell`)
+            if st.pull_spell.is_none() {
+                if let Some(c) = self.npc_contexts(&w).into_iter().find(|c| c.class() == "DisDLC07Tweaks_NPCPullSpell") {
+                    let f = |s: &mut Self, n: &str, d: f32| s.tweak_float(&c, n, 0).unwrap_or(d);
+                    let int = |s: &mut Self, n: &str, d: i32| match s.tweak_prop(&c, n, 0, 0) {
+                        Some((_, Value::Int(v))) => v,
+                        _ => d,
+                    };
+                    st.pull_spell = Some(NpcPullSpell {
+                        range: [f(self, "m_fMinContextRange", 350.0) * UNIT, f(self, "m_fMaxContextRange", 2500.0) * UNIT],
+                        angle: f(self, "m_fAllowedAngle", 50.0),
+                        speed: f(self, "m_fPullSpeed", 500.0) * UNIT,
+                        stop: f(self, "m_fPullMinDistance", 250.0) * UNIT,
+                        lift: [f(self, "m_fLiftMinHeight", 40.0) * UNIT, f(self, "m_fLiftMaxHeight", 65.0) * UNIT],
+                        lift_distance: f(self, "m_fLiftDistance", 400.0) * UNIT,
+                        coup: f(self, "m_fLiftTimeBeforeCoupDeGrace", 7.0),
+                        bond: int(self, "m_RequiredArcaneBondLevel", 2).max(0) as u8,
+                        leader: int(self, "m_RequiredLeaderPullPowerLevel", 2).max(0) as u8,
+                        teleport: match self.tweak_prop(&c, "m_TeleportDelay", 0, 0) {
+                            Some((_, Value::Struct(_, r))) => {
+                                let p = Props(r);
+                                [p.float("m_fMinValue").unwrap_or(2.0), p.float("m_fMaxValue").unwrap_or(10.0)]
+                            }
+                            _ => [2.0, 10.0],
+                        },
+                    });
+                }
             }
             if w.class() == "DisTweaks_WepThrowingHand" && st.throwing.is_none() {
                 if let Some(t) = self.npc_contexts(&w).into_iter().find(|c| c.class() == "DisTweaks_NPCThrow") {

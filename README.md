@@ -2766,7 +2766,23 @@ fields no longer show their stand-in "WW" behind the title.
     turns to Daud and salutes (`DLC06_TweaksBehavior_AssnSalute`): having fought and within
     `m_fWinAnimMaxRange` (20 m), the winner's `Sword_DepartureSalute` (`m_WinAnim`), else
     `Sword_DepartureSalute_NoFight` (`m_LoseAnim`), and vanishes once it is done. Before, he
-    vanished where he stood. The summoned are named "Assassin", not "Citizen". His passives (Shadow Kill, Celerity, Vitality, Blood Thirsty, Arcane Bond), his
+    vanished where he stood. The summoned are named "Assassin", not "Citizen".
+    - In The Brigmore Witches he summons that pack's own assassins (his pawn's
+      `m_pSummonAssassinPowerTweaks`: `DLC07_Pwr_Assassummon`, `DLC07_Pwn_SummonedAssn`, of his
+      own faction, `DLC07_Fctn_Daud`, with their own blades and hand). Before, The Knife of
+      Dunwall's were summoned in both.
+    - With Arcane Bond and Pull both at their second level (`m_RequiredArcaneBondLevel`,
+      `m_RequiredLeaderPullPowerLevel`), they pull too (`DisDLC07Tweaks_NPCPullSpell`). A foe
+      3.5-25 m off, within 50 degrees and in sight, is torn off its feet and drawn at 5 m/s to
+      2.5 m before the assassin, held up 0.4-0.65 m once within 4 m, the assassin casting. Held
+      `m_fLiftTimeBeforeCoupDeGrace` (7 s), it is struck down
+      (`DisDLC07Tweaks_NPCPullSpellCoupDeGrace`: `Sword_Power_Attract_Attack`, a killing blow);
+      a witch blinks out of it after `m_TeleportDelay` (2-10 s). Our reading: 3-6 s between
+      pulls (`m_ContextCooldownWhenUnreachable`).
+    - The whalers' own powers against Corvo (the Attract and Teleport spells) were also cast by
+      Daud's assassins, of the whalers' faction, at Daud. They are now cast by those against him
+      only.
+    His passives (Shadow Kill, Celerity, Vitality, Blood Thirsty, Arcane Bond), his
     attributes and his pawn's numbers are his own.
   - *Arms*: his own first-person mesh (`DLC06_Skm_Player_Daud`) with his clips over Corvo's
     (summoning, Void Gaze, the wristbow raised and fired), his sword, and the wristbow on his

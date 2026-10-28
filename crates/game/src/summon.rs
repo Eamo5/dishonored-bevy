@@ -46,7 +46,7 @@ impl Plugin for SummonPlugin {
         app.add_message::<Summon>()
             .init_resource::<SummonAim>()
             .add_systems(OnExit(GameState::InGame), |mut a: ResMut<SummonAim>| *a = SummonAim::default())
-            .add_systems(Update, (aim, summon, summoned).chain().run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (aim, summon, summoned, assassin_pulls).chain().run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -73,6 +73,10 @@ pub struct Summoned {
     fought: bool,
     /// saluting as it goes: how long before it is gone
     leaving: Option<f32>,
+    /// its Pull on its foe (The Brigmore Witches'): whom, how long it has held it up, and when
+    /// a witch blinks out of it; and the wait before the next
+    pulling: Option<(Entity, f32, Option<f32>)>,
+    pull_cd: f32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -111,7 +115,7 @@ fn summon(
         let yaw = (-to.x).atan2(-to.z);
         commands.entity(e).insert((
             Transform::from_translation(r.at + Vec3::Y * (NPC_CENTER + 0.05)).with_rotation(Quat::from_rotation_y(yaw)),
-            Summoned { foe: r.target, fresh: true, idle: 0.0, fought: false, leaving: None },
+            Summoned { foe: r.target, fresh: true, idle: 0.0, fought: false, leaving: None, pulling: None, pull_cd: 1.0 },
         ));
         fx.write(crate::particles::SpawnEffect::at("summon_trigger", r.at));
         noise.write(Noise { corvo: false, pos: r.at, radius: 4.0, kind: NoiseKind::Threatening });
@@ -188,6 +192,151 @@ fn summoned(
                 info!("summon: assassin departs ({clip}, {:.1} s)", len.unwrap_or(0.0));
             }
             s.leaving = Some(len.unwrap_or(0.0));
+        }
+    }
+}
+
+/// The Brigmore Witches' assassins' own Pull on their foe (`DisDLC07Tweaks_NPCPullSpell`, their
+/// hand's), with Daud's Arcane Bond and Pull both at their second level
+/// (`m_RequiredArcaneBondLevel`, `m_RequiredLeaderPullPowerLevel`): a foe 3.5-25 m off, within
+/// 50 degrees and in sight, is torn off its feet (`DisDLC07StateNPCMasterPulled`, its
+/// `Generic_Pulled_*`) and drawn at 5 m/s to 2.5 m before the assassin, held up 0.4-0.65 m once
+/// within 4 m (`m_fLiftDistance`); the assassin casting (`Sword_Power_Attract_In`, `_Loop`).
+/// Held `m_fLiftTimeBeforeCoupDeGrace` (7 s), it is struck down
+/// (`DisDLC07Tweaks_NPCPullSpellCoupDeGrace`: `Sword_Power_Attract_Attack`, a killing blow).
+/// Our reading where the tweak is silent: the wait between pulls (`m_ContextCooldownWhenUnreachable`,
+/// 3-6 s) and the spell given up when its foe goes down or out of sight.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn assassin_pulls(
+    time: Res<Time>,
+    tc: Res<crate::gameplay::TimeControl>,
+    stats: Res<PlayerStats>,
+    level: Option<Res<LevelInfo>>,
+    rapier: ReadRapierContext,
+    mut assassins: Query<(Entity, &mut Summoned, &Transform), With<Npc>>,
+    mut npcs: Query<(&mut Npc, &Transform)>,
+    (mut commands, mut sfx, mut stop, mut hits): (Commands, MessageWriter<crate::audio::PostEvent>, MessageWriter<crate::audio::StopEvent>, MessageWriter<crate::gameplay::NpcHit>),
+    player_pull: Option<Res<crate::pull::PullAim>>,
+    mut witches: Query<&mut crate::witch::Witch>,
+) {
+    let Some(level) = level else { return };
+    let ctx = rapier.single().ok();
+    let walls = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
+    let dt = time.delta_secs() * tc.own_scale().max(tc.world_scale());
+    let able = |spell: &dhcook::format::NpcPullSpell| stats.power("ArcaneBond") >= spell.bond && Power::Pull.level(&stats) >= spell.leader;
+    let daud_holds = player_pull.as_ref().and_then(|p| p.shield());
+    for (me, mut s, t) in &mut assassins {
+        let Ok((npc, _)) = npcs.get(me) else { continue };
+        let Some(spell) = npc.npc_type.and_then(|i| level.scene.npc_types.get(i as usize)).and_then(|ty| ty.stats.as_ref()).and_then(|st| st.pull_spell.clone()) else { continue };
+        let (down, foe, fwd) = (npc.is_down(), npc.foe, npc.forward());
+        let pos = t.translation;
+        s.pull_cd -= dt;
+        // holding one: drawn before it, held up, struck down
+        if let Some((victim, held, blink)) = s.pulling {
+            let gone = down || !able(&spell) || daud_holds == Some(victim);
+            let Ok((mut v, vt)) = npcs.get_mut(victim) else {
+                s.pulling = None;
+                continue;
+            };
+            let vpos = vt.translation;
+            if gone || v.is_down() || v.pulled.is_none() {
+                v.pulled = None;
+                s.pulling = None;
+                s.pull_cd = 3.0 + rand::random::<f32>() * 3.0;
+                stop.write(crate::audio::StopEvent(crate::audio::event_id("AI_Assassin_Pwr_Attract_Loop")));
+                if let Ok((mut n, _)) = npcs.get_mut(me) {
+                    n.casting = false;
+                }
+                continue;
+            }
+            let flat = (vpos - pos).with_y(0.0);
+            let feet = pos.y - NPC_CENTER;
+            let near = flat.length() <= spell.lift_distance;
+            let Some(pl) = v.pulled.as_mut() else { continue };
+            pl.goal = Vec3::new(pos.x, feet + pl.height + NPC_CENTER, pos.z) + fwd * spell.stop;
+            if !near {
+                pl.goal.y = vpos.y.max(pl.goal.y - 1.0);
+            }
+            pl.face = Some(pos);
+            pl.lifted |= near;
+            let lifted = pl.lifted;
+            v.stagger = v.stagger.max(0.3);
+            v.attack_t = None;
+            let held = if lifted { held + dt } else { held };
+            // (a witch blinks out of it, `m_TeleportDelay`)
+            if blink.is_some_and(|b| held >= b) {
+                v.pulled = None;
+                s.pulling = None;
+                s.pull_cd = 3.0 + rand::random::<f32>() * 3.0;
+                stop.write(crate::audio::StopEvent(crate::audio::event_id("AI_Assassin_Pwr_Attract_Loop")));
+                if let Ok(mut w) = witches.get_mut(victim) {
+                    w.escape = true;
+                }
+                if let Ok((mut n, _)) = npcs.get_mut(me) {
+                    n.casting = false;
+                }
+                continue;
+            }
+            if held >= spell.coup {
+                // (struck down where it hangs)
+                v.pulled = None;
+                hits.write(crate::gameplay::NpcHit { npc: victim, damage: 9999.0, kind: crate::gameplay::HitKind::ByOthers, from: pos });
+                s.pulling = None;
+                s.pull_cd = 3.0 + rand::random::<f32>() * 3.0;
+                stop.write(crate::audio::StopEvent(crate::audio::event_id("AI_Assassin_Pwr_Attract_Loop")));
+                if let Ok((mut n, _)) = npcs.get_mut(me) {
+                    n.casting = false;
+                    n.bark_req = (n.bark_req.0.wrapping_add(1), "COMBAT_BIG_ATTACK");
+                }
+                commands.entity(me).try_insert(crate::npc::FinisherClip("Sword_Power_Attract_Attack".to_string(), false));
+                if std::env::var_os("DH_SUMMON_LOG").is_some() {
+                    info!("summon: assassin strikes down the one it holds");
+                }
+                continue;
+            }
+            s.pulling = Some((victim, held, blink));
+            if let Ok((mut n, _)) = npcs.get_mut(me) {
+                n.casting = true;
+                n.attack_t = None;
+                let to = (vpos - pos).with_y(0.0);
+                if to.length() > 0.1 {
+                    n.yaw = (-to.x).atan2(-to.z);
+                }
+            }
+            continue;
+        }
+        // a foe to take: from afar, before it, in sight
+        let Some(f) = foe.filter(|_| !down && s.pull_cd <= 0.0 && able(&spell)) else { continue };
+        let Ok((fnpc, ft)) = npcs.get(f) else { continue };
+        let to = ft.translation - pos;
+        let d = to.with_y(0.0).length();
+        let ahead = to.with_y(0.0).normalize_or_zero().dot(fwd) >= spell.angle.to_radians().cos();
+        let sees = ctx.as_ref().is_some_and(|c| {
+            let eye = pos + Vec3::Y * 0.6;
+            let at = ft.translation + Vec3::Y * 0.5;
+            let l = at.distance(eye);
+            c.cast_ray(eye, (at - eye) / l.max(1e-3), (l - 0.4).max(0.0), true, walls).is_none()
+        });
+        if fnpc.is_down() || fnpc.floored || fnpc.pulled.is_some() || d < spell.range[0] || d > spell.range[1] || !ahead || !sees || to.y.abs() > 3.0 {
+            continue;
+        }
+        let from_dir = (pos - ft.translation).with_y(0.0).normalize_or_zero();
+        let ff = fnpc.forward();
+        let (a, r) = (from_dir.dot(ff), from_dir.dot(Vec3::new(-ff.z, 0.0, ff.x)));
+        let side = if a.abs() >= r.abs() { if a >= 0.0 { 0 } else { 3 } } else if r > 0.0 { 2 } else { 1 };
+        let height = spell.lift[0] + rand::random::<f32>() * (spell.lift[1] - spell.lift[0]).max(0.0);
+        let goal = ft.translation;
+        let mut blink = None;
+        if let Ok((mut v, _)) = npcs.get_mut(f) {
+            v.pulled = Some(crate::npc::Pulled { goal, speed: spell.speed, lifted: false, from: side, shown: 0, height, face: Some(pos) });
+            v.attack_t = None;
+            v.knock = None;
+            blink = v.arms.witch.is_some().then(|| spell.teleport[0] + rand::random::<f32>() * (spell.teleport[1] - spell.teleport[0]).max(0.0));
+        }
+        s.pulling = Some((f, 0.0, blink));
+        sfx.write(crate::audio::PostEvent::named("AI_Assassin_Pwr_Attract_Loop", Some(pos)));
+        if std::env::var_os("DH_SUMMON_LOG").is_some() {
+            info!("summon: assassin pulls its foe from {d:.1} m");
         }
     }
 }

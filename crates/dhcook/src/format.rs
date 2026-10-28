@@ -1311,6 +1311,30 @@ pub struct NpcStats {
     /// its body drawn in by Daud's Pull (The Brigmore Witches' pawns, `DisDLC07Tweaks_NPCPawn`)
     #[serde(default)]
     pub pull: Option<NpcPull>,
+    /// its own Pull on its foes (Daud's assassins in The Brigmore Witches, `DisDLC07Tweaks_NPCPullSpell`)
+    #[serde(default)]
+    pub pull_spell: Option<NpcPullSpell>,
+}
+
+/// An assassin's Pull on its foe (`DisDLC07Tweaks_NPCPullSpell`): from `range` (m) away within
+/// `angle` (degrees) in sight, its foe is drawn at `speed` (m/s) to `stop` before it, held up
+/// `lift` (m) off the floor once within `lift_distance`, and struck down after `coup` seconds held
+/// (`m_fLiftTimeBeforeCoupDeGrace`: `DisDLC07Tweaks_NPCPullSpellCoupDeGrace`). Only with Daud's Arcane
+/// Bond and Pull at `bond` and `leader` (`m_RequiredArcaneBondLevel`, `_LeaderPullPowerLevel`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct NpcPullSpell {
+    pub range: [f32; 2],
+    pub angle: f32,
+    pub speed: f32,
+    pub stop: f32,
+    pub lift: [f32; 2],
+    pub lift_distance: f32,
+    pub coup: f32,
+    pub bond: u8,
+    pub leader: u8,
+    /// a witch's time before she blinks out of it (`m_TeleportDelay`)
+    #[serde(default)]
+    pub teleport: [f32; 2],
 }
 
 /// A body drawn in by Pull (`DisDLC07Tweaks_NPCPawn`): the force on its bone toward Daud

@@ -104,7 +104,8 @@ fn whaler_powers(
         w.teleport_cd -= dt;
         w.pull_cd -= dt;
         let me = t.translation;
-        let fighting = npc.mode == Mode::Combat && !npc.is_down() && npc.stagger <= 0.0 && !stats.dead && possession.host.is_none();
+        // (against Corvo only: Daud's own assassins, of the whalers' faction too, fight his foes)
+        let fighting = npc.hostile() && npc.mode == Mode::Combat && !npc.is_down() && npc.stagger <= 0.0 && !stats.dead && possession.host.is_none();
         // the spell holding Corvo
         if let Some((left, total)) = w.pulling {
             let to = me + Vec3::Y * 0.8 - eye;

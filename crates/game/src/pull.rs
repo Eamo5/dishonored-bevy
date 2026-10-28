@@ -264,7 +264,7 @@ fn aim(
                                 let (ahead, right) = (from.dot(f), from.dot(side));
                                 let dir = if ahead.abs() >= right.abs() { if ahead >= 0.0 { 0 } else { 3 } } else if right > 0.0 { 2 } else { 1 };
                                 let height = r.lift[0] + rand::random::<f32>() * (r.lift[1] - r.lift[0]).max(0.0);
-                                npc.pulled = Some(crate::npc::Pulled { goal: nt.translation, speed: r.speed * attrs.pull_speed, lifted: false, from: dir, shown: 0, height });
+                                npc.pulled = Some(crate::npc::Pulled { goal: nt.translation, speed: r.speed * attrs.pull_speed, lifted: false, from: dir, shown: 0, height, face: None });
                                 npc.attack_t = None;
                                 npc.knock = None;
                                 npc.last_seen = Some(pt.translation);

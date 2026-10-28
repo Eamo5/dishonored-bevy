@@ -2135,6 +2135,8 @@ pub struct Pulled {
     pub shown: u8,
     /// its feet's height off his floor, held up (m)
     pub height: f32,
+    /// whom it faces (one of Daud's assassins holding it; none: Daud)
+    pub face: Option<Vec3>,
 }
 
 /// How far a missed bullet flies on (m).
@@ -6026,7 +6028,7 @@ pub(crate) fn npc_move(
             let d = to.length();
             let step = pl.speed * dt;
             t.translation += if d <= step { to } else { to / d * step };
-            if let Some(p) = ppos {
+            if let Some(p) = pl.face.or(ppos) {
                 let f = (p - t.translation).with_y(0.0);
                 if f.length_squared() > 1e-4 {
                     npc.yaw = (-f.x).atan2(-f.z);
