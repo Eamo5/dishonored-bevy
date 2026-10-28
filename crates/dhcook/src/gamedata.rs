@@ -255,6 +255,29 @@ fn daud_profile(cooked: &Path, game: &Package, base: &GameData, pack: &crate::Da
         });
         p.actives.push(a);
     }
+    // (his Transversal's look: his effects tweak's own Blink warm-up, move and cool-down,
+    // `m_pEffectsTweaks`, `DisDLC06Tweaks_Effects`, over Corvo's `Twk_Blink`'s)
+    if let Some(fx) = pawn.object("m_pEffectsTweaks").filter(|o| *o > 0).and_then(|o| props(&pkg, o)) {
+        const AS: [(&str, &str); 8] = [
+            ("m_fBlinkWarmupTime", "m_fWarmupTime"),
+            ("m_fBlinkWarmupWobblePerSecond", "m_fWarmupWobblePerSecond"),
+            ("m_fBlinkWarmupWobbleMaxStrength", "m_fWarmupWobbleMaxStrength"),
+            ("m_fBlinkWarmupDistortionMinStrength", "m_fWarmupDistorionMinStrength"),
+            ("m_fBlinkMoveDistortionMaxStrength", "m_fMoveDistortionMaxStrength"),
+            ("m_fBlinkMoveBlurMaxStrength", "m_fMoveBlurMaxStrength"),
+            ("m_fBlinkCooldownDuration", "m_fCooldownTime"),
+            ("m_BlinkCoolDownWobbleCount", "m_CoolDownWobbleCount"),
+        ];
+        if let Some(a) = p.actives.iter_mut().find(|a| a.name == "Blink") {
+            for (from, to) in AS {
+                if let Some(v) = fx.float(from) {
+                    for l in a.levels.iter_mut() {
+                        l.insert(to.to_string(), v);
+                    }
+                }
+            }
+        }
+    }
     // his passives (`m_PassivePowers`: Shadow Kill, Celerity, Vitality, Blood Thirsty, Arcane Bond)
     p.passives = struct_array(&pkg, &pawn, "m_PassivePowers")
         .iter()

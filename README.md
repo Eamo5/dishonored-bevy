@@ -2583,6 +2583,10 @@ fields no longer show their stand-in "WW" behind the title.
   - *Powers*: his tweaks over Corvo's, under the names they play as. Transversal is Blink: his
     reach (11 m, then 16 m), and time stops for the world and for him while he aims standing
     still, even mid-jump (`m_fBendTimeDownTime` at once, back over `m_fBendTimeUpTime`).
+    Its look is his effects tweak's (`m_pEffectsTweaks`, `DLC06_Twk_Effects`): its warp warms
+    up in 0.45 s and wobbles harder (0.8), the move blurs less (1.2) and distorts less (1.0), and
+    the arrival's wobble settles in 0.7 s. Before, his Transversal looked like Corvo's Blink
+    (`Twk_Blink`: 1 s warm-up, 0.2 wobble, 2.5 blur).
     Void Gaze is Dark Vision: level 1 shows only the runes and bone charms, level 2 the beings
     through walls, their sight, the items, the security and the sounds made. Bend Time is his
     own. Summon Assassin (`DLC06_Pwr_Assassummon`) sends one of his assassins (the level's
