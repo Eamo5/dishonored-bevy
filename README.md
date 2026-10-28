@@ -3292,6 +3292,14 @@ against the install's own data where it carries them, then implemented independe
   busted check, as roshan's r614/blink research decoded it). Before, a noise that may bust (a
   civilian's danger sound, `Twk_Attn_Default_Neutral`'s `DALFI_Busted`) landing beside a
   character had it fight thin air where the bottle broke.
+- **Talking, they see less.** A character in a conversation the scripts play (its speaker, a
+  one-shot's own speaker and the others it names, `m_MeSpeaker`, `m_OtherSpeakers`) sees with
+  its pawn's in-conversation vision (`m_pVisionTweak_InConversation`: `Twk_Vision_Default_InConvo`,
+  its focused cone 35 degrees to 30 m and its side vision 120 degrees to 15 m, against 45 to
+  35 m and 160 to 17 m), as roshan's r614/blink research decoded the vision component's choice.
+  Its attention leaks at `m_fAttentionLeakRate_InConvo` (a guard's 0.05 a second, twice its
+  0.025). Before, guards chatting saw and remembered as much as those on watch, so creeping
+  past a conversation was no easier than past a sentry.
 - **Searching.** An investigating or searching guard runs to danger, a cry for help, an alarm, a
   death rattle, a body or a sighting (`TweaksBehavior_Search_Default`'s `m_bShouldRun`) and
   walks to the rest, at 0.8 of its pace (`SearchSword` / `SearchEmpty`).

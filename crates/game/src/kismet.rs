@@ -29,7 +29,7 @@ impl Plugin for KismetPlugin {
         app.add_systems(OnEnter(GameState::InGame), setup.after(LevelSpawnSet).after(crate::npc::spawn_npcs))
             .add_systems(
                 Update,
-                (world_events, more_events, (destroyed_events, fired_events, script_shakes, recipe_events), run, apply_effects, update_ui, talk_prompts, speakers_look)
+                (world_events, more_events, (destroyed_events, fired_events, script_shakes, recipe_events), run, apply_effects, update_ui, talk_prompts, speakers_look, conversing)
                     .chain()
                     .after(crate::interact::use_focus)
                     .run_if(in_state(GameState::InGame).and_then(resource_exists::<Vm>)),
@@ -1923,6 +1923,23 @@ impl Vm {
     /// The actors speaking now.
     pub fn speakers(&self) -> impl Iterator<Item = u32> + '_ {
         self.convs.iter().map(|c| c.0)
+    }
+
+    /// The characters in a conversation now, by their spawners: each one played's speaker, a
+    /// one-shot's own speaker and its others (`m_MeSpeaker`, `m_OtherSpeakers`), the characters
+    /// it answers for.
+    pub fn conversing(&self) -> HashSet<u32> {
+        let mut out = HashSet::new();
+        for c in &self.convs {
+            let mut actors = vec![c.0];
+            if let Some(d) = self.g.dialogs.iter().find(|d| d.actor == c.0) {
+                actors.extend(d.me);
+                actors.extend(d.others.iter().copied());
+            }
+            actors.extend(self.pawn_oneshot.iter().filter(|(_, o)| **o == c.0).map(|(p, _)| *p));
+            out.extend(actors.iter().filter_map(|a| self.g.actors.get(*a as usize).and_then(|ka| ka.spawner)));
+        }
+        out
     }
 
     /// Whether the character `actor` answers being talked to (its tree's "player used" hook).
@@ -6242,6 +6259,20 @@ pub fn travel_actors(g: &dhcook::format::Kismet) -> std::collections::HashSet<u3
 
 fn vm_events(g: &Graph, actor: u32) -> impl Iterator<Item = &str> + '_ {
     g.ops.iter().filter(move |o| o.props.get("Originator") == Some(&KVal::Actor(actor))).map(|o| o.class.as_str())
+}
+
+/// Who is in a conversation (their vision and attention's in-conversation tweaks).
+fn conversing(vm: Res<Vm>, mut npcs: Query<(&mut Npc, &FromSpawner)>) {
+    let now = vm.conversing();
+    for (mut npc, from) in &mut npcs {
+        let c = now.contains(&from.0);
+        if npc.in_convo != c {
+            npc.in_convo = c;
+            if vm.trace {
+                info!("kismet: {} {} a conversation", npc.name, if c { "in" } else { "out of" });
+            }
+        }
+    }
 }
 
 /// Characters speaking near the player look at him.

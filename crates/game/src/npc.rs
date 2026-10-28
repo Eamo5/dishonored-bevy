@@ -276,6 +276,8 @@ pub struct Npc {
     pub pulled: Option<Pulled>,
     /// its brain's roll of each attention level's stop (-1..1 of its `m_fStoppingVariance`)
     pub stop_roll: [f32; 4],
+    /// in a conversation now (one played by the level's scripts: its speaker or one answering)
+    pub in_convo: bool,
     /// its walk begun or ended with its clip; what it wished to go this frame (its path's way, at
     /// its pace), and its path: how far to its goal and to the path's next point
     pub pace: Option<Pace>,
@@ -2432,6 +2434,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         flying: false,
         pulled: None,
         stop_roll: std::array::from_fn(|_| rand::random::<f32>() * 2.0 - 1.0),
+        in_convo: false,
         pace: None,
         turning: false,
         wish: Vec3::ZERO,
@@ -3640,10 +3643,10 @@ fn corpse_tuning(x: f32) -> f32 {
 
 /// Whether a body at `at` (its light `light`) is seen from the eyes: in a vision cone, its
 /// nearness's tuning plus its light at `mark` or more (0x00B50030).
-fn body_seen(s: &dhcook::format::Sight, eye: Vec3, fwd: Vec3, at: Vec3, light: f32, mark: f32) -> bool {
+fn body_seen(s: &dhcook::format::Sight, eye: Vec3, fwd: Vec3, at: Vec3, light: f32, mark: f32, convo: bool) -> bool {
     let to = at + Vec3::Y * 0.2 - eye;
     let d = to.length();
-    let Some(range) = vision_range(s, fwd, to / d.max(1e-3), d, false) else { return false };
+    let Some(range) = vision_range(s, fwd, to / d.max(1e-3), d, false, convo) else { return false };
     corpse_tuning(1.0 - d / range.max(1e-3)) + light >= mark
 }
 
@@ -3683,12 +3686,15 @@ fn body_lights(
 /// Whether a direction from the eyes falls in the character's focused or peripheral vision
 /// (`DisTweaks_Vision`: horizontal angle, the vertical one a share of it up and down, and range):
 /// that cone's range. Fighting, it follows Corvo all around close by and up and down.
-fn vision_range(s: &dhcook::format::Sight, fwd: Vec3, dir: Vec3, d: f32, combat: bool) -> Option<f32> {
+/// (in a conversation, its in-conversation cones: `m_pVisionTweak_InConversation`, as roshan's
+/// r614/blink research decoded the vision component's choice)
+fn vision_range(s: &dhcook::format::Sight, fwd: Vec3, dir: Vec3, d: f32, combat: bool, convo: bool) -> Option<f32> {
+    let (inner, outer) = s.cones(convo);
     let flat = dir.with_y(0.0).normalize_or_zero();
     let h = flat.dot(fwd).clamp(-1.0, 1.0).acos();
     let v = dir.y.clamp(-1.0, 1.0).asin();
     if combat {
-        return (d <= s.inner[1] && (h <= (s.outer[0] * 0.5).to_radians() || d < 7.0)).then_some(s.inner[1]);
+        return (d <= inner[1] && (h <= (outer[0] * 0.5).to_radians() || d < 7.0)).then_some(inner[1]);
     }
     // (an elliptical cone, 0x00BEC910: its horizontal half angle across, its up or down scale of
     // that upright, the bounds between them along the ellipse; as roshan's r614/blink research
@@ -3707,10 +3713,10 @@ fn vision_range(s: &dhcook::format::Sight, fwd: Vec3, dir: Vec3, d: f32, combat:
         let k = (2.0 * (half.sin() * z).atan2(vert.sin() * y)).cos();
         2.0 * x * x - 1.0 >= (c2v + k * (cfov - c2v) + cfov) * 0.5
     };
-    if within(&s.inner) {
-        Some(s.inner[1])
-    } else if within(&s.outer) {
-        Some(s.outer[1])
+    if within(inner) {
+        Some(inner[1])
+    } else if within(outer) {
+        Some(outer[1])
     } else {
         None
     }
@@ -3839,7 +3845,7 @@ pub(crate) fn npc_perception(
             let d = to.length();
             let dir = to / d.max(1e-3);
             let r = match sight {
-                Some(s) => vision_range(s, fwd, dir, d, npc.alert == Alert::Combat),
+                Some(s) => vision_range(s, fwd, dir, d, npc.alert == Alert::Combat, npc.in_convo),
                 None => {
                     // in combat they track you all around at close range; otherwise a ~110
                     // degree cone
@@ -3927,7 +3933,9 @@ pub(crate) fn npc_perception(
             if rate > 0.0 {
                 npc.awareness = (npc.awareness + rate * dt).min(att.max);
             } else {
-                npc.awareness = (npc.awareness - att.leak * dt).max(0.0);
+                // (in a conversation, its own: `m_fAttentionLeakRate_InConvo`)
+        let leak = if npc.in_convo { att.leak_convo.unwrap_or(att.leak) } else { att.leak };
+        npc.awareness = (npc.awareness - leak * dt).max(0.0);
             }
             let was = npc.attn_level;
             npc.attn_level = attention_level(att, npc.awareness, was, &npc.stop_roll);
@@ -4052,7 +4060,7 @@ pub(crate) fn npc_perception(
                     .filter(|(_, p, _, _, _)| {
                         let to = *p + Vec3::Y * 0.7 - eye;
                         let d = to.length();
-                        let in_view = sight.is_none_or(|s| vision_range(s, fwd, to / d.max(1e-3), d, false).is_some());
+                        let in_view = sight.is_none_or(|s| vision_range(s, fwd, to / d.max(1e-3), d, false, npc.in_convo).is_some());
                         in_view && ctx.cast_ray(eye, to / d.max(1e-3), (d - 0.4).max(0.0), true, QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD))).is_none()
                     })
                     .map(|(o, _, _, w, _)| (*o, *w))
@@ -4103,7 +4111,7 @@ pub(crate) fn npc_perception(
             if !npc.witnessed_death {
                 for (f, b) in &fresh {
                     let light = bodies.iter().find(|x| x.0 == *f).map_or(0.0, |x| x.2);
-                    if sight.is_some_and(|s| body_seen(s, eye, fwd, *b, light, SEE_DEATH)) || sight.is_none() && b.distance(eye) < 14.0 && (*b - eye).normalize_or_zero().dot(fwd) > 0.3 {
+                    if sight.is_some_and(|s| body_seen(s, eye, fwd, *b, light, SEE_DEATH, npc.in_convo)) || sight.is_none() && b.distance(eye) < 14.0 && (*b - eye).normalize_or_zero().dot(fwd) > 0.3 {
                         let d = b.distance(eye);
                         let dir = (*b + Vec3::Y * 0.2 - eye).normalize_or_zero();
                         let filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
@@ -4138,7 +4146,7 @@ pub(crate) fn npc_perception(
                         continue;
                     }
                     let seen = match sight {
-                        Some(s) => body_seen(s, eye, fwd, *b, *light, SEE_CORPSE),
+                        Some(s) => body_seen(s, eye, fwd, *b, *light, SEE_CORPSE, npc.in_convo),
                         None => b.distance(eye) < 14.0 && (*b - eye).normalize_or_zero().dot(fwd) > 0.5,
                     };
                     let d = b.distance(eye);
@@ -4198,7 +4206,7 @@ pub(crate) fn npc_perception(
             let flags = sight.map(|s| s.corpses).unwrap_or_default();
             let seen_body = |b: Vec3, light: f32, mark: f32| {
                 (match sight {
-                    Some(s) => body_seen(s, eye, fwd, b, light, mark),
+                    Some(s) => body_seen(s, eye, fwd, b, light, mark, npc.in_convo),
                     None => b.distance(eye) < 14.0 && (b - eye).normalize_or_zero().dot(fwd) > 0.5,
                 }) && {
                     let d = b.distance(eye);
@@ -5814,7 +5822,7 @@ pub(crate) fn npc_brain(
             let eye = t.translation + Vec3::Y * 0.7;
             let to = at + Vec3::Y * 0.7 - eye;
             let d = to.length();
-            let in_view = sight.as_ref().is_none_or(|s| vision_range(s, npc.forward(), to / d.max(1e-3), d, false).is_some());
+            let in_view = sight.as_ref().is_none_or(|s| vision_range(s, npc.forward(), to / d.max(1e-3), d, false, npc.in_convo).is_some());
             let clear = ctx.as_ref().is_some_and(|c| c.cast_ray(eye, to / d.max(1e-3), (d - 0.4).max(0.0), true, world).is_none());
             // (an ally seen fighting makes it suspect, `SeeAllyCombat`)
             npc.suspecting |= in_view && clear;
@@ -9200,7 +9208,7 @@ mod tests {
         let at = |yaw: f32, pitch: f32, d: f32| {
             let (yaw, pitch) = (yaw.to_radians(), pitch.to_radians());
             let dir = Vec3::new(-yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos());
-            vision_range(&s, fwd, dir, d, false)
+            vision_range(&s, fwd, dir, d, false, false)
         };
         assert_eq!(at(0.0, 0.0, 30.0), Some(35.0));
         assert_eq!(at(25.0, 0.0, 30.0), None, "25 degrees across at 30 m: past the inner cone, the outer one 17 m");
@@ -9216,6 +9224,23 @@ mod tests {
         assert_eq!(at(120.0, 0.0, 5.0), None);
     }
 
+    /// In a conversation the narrower, shorter cones (`Twk_Vision_Default_InConvo`).
+    #[test]
+    fn in_a_conversation_it_sees_less() {
+        let s = dhcook::format::Sight {
+            inner: [45.0, 35.0, 0.25, 0.7],
+            outer: [160.0, 17.0, 0.1, 0.7],
+            convo: Some([[35.0, 30.0, 0.1, 0.7], [120.0, 15.0, 0.05, 0.7]]),
+            ..Default::default()
+        };
+        let dir = |yaw: f32| Vec3::new(-yaw.to_radians().sin(), 0.0, -yaw.to_radians().cos());
+        assert_eq!(vision_range(&s, Vec3::NEG_Z, dir(0.0), 32.0, false, false), Some(35.0));
+        assert_eq!(vision_range(&s, Vec3::NEG_Z, dir(0.0), 32.0, false, true), None);
+        assert_eq!(vision_range(&s, Vec3::NEG_Z, dir(70.0), 10.0, false, false), Some(17.0));
+        assert_eq!(vision_range(&s, Vec3::NEG_Z, dir(70.0), 10.0, false, true), None);
+        assert_eq!(vision_range(&s, Vec3::NEG_Z, dir(50.0), 10.0, false, true), Some(15.0));
+    }
+
     use super::*;
 
     #[test]
@@ -9229,11 +9254,11 @@ mod tests {
         let eye = Vec3::new(0.0, 0.7, 0.0);
         let ahead = |d: f32| Vec3::new(0.0, 0.0, -d);
         // in the dark: ahead within about 10.8 m, not beyond; lit, as far as it sees
-        assert!(body_seen(&s, eye, Vec3::NEG_Z, ahead(10.0), 0.0, SEE_CORPSE));
-        assert!(!body_seen(&s, eye, Vec3::NEG_Z, ahead(12.0), 0.0, SEE_CORPSE));
-        assert!(body_seen(&s, eye, Vec3::NEG_Z, ahead(30.0), 0.4, SEE_CORPSE));
+        assert!(body_seen(&s, eye, Vec3::NEG_Z, ahead(10.0), 0.0, SEE_CORPSE, false));
+        assert!(!body_seen(&s, eye, Vec3::NEG_Z, ahead(12.0), 0.0, SEE_CORPSE, false));
+        assert!(body_seen(&s, eye, Vec3::NEG_Z, ahead(30.0), 0.4, SEE_CORPSE, false));
         // behind: never
-        assert!(!body_seen(&s, eye, Vec3::NEG_Z, Vec3::new(0.0, 0.0, 3.0), 1.0, SEE_CORPSE));
+        assert!(!body_seen(&s, eye, Vec3::NEG_Z, Vec3::new(0.0, 0.0, 3.0), 1.0, SEE_CORPSE, false));
     }
 
     /// A turn speeds up at its acceleration to its rate, slows to arrive and never passes it.

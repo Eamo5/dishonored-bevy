@@ -1830,6 +1830,20 @@ pub struct Sight {
     /// how it takes bodies (its attention process's corpse flags)
     #[serde(default)]
     pub corpses: CorpseFlags,
+    /// its focused and peripheral vision while in a conversation (`m_pVisionTweak_InConversation`),
+    /// as `inner` and `outer`; none: the same
+    #[serde(default)]
+    pub convo: Option<[[f32; 4]; 2]>,
+}
+
+impl Sight {
+    /// Its focused and peripheral vision, in a conversation or not.
+    pub fn cones(&self, convo: bool) -> (&[f32; 4], &[f32; 4]) {
+        match (&self.convo, convo) {
+            (Some([i, o]), true) => (i, o),
+            _ => (&self.inner, &self.outer),
+        }
+    }
 }
 
 /// How a character takes bodies (`DisTweaks_AIBrainProcess_Attention`): none at all
@@ -1912,6 +1926,9 @@ pub struct Attention {
     /// believes he is while he is farther from there (`m_fMinRangeToUnsightedBustedProxy`)
     #[serde(default)]
     pub proxy_range: f32,
+    /// its leak while in a conversation (`m_fAttentionLeakRate_InConvo`); none: `leak`'s
+    #[serde(default)]
+    pub leak_convo: Option<f32>,
 }
 
 /// The allies' increases as the default tweak has them (`Twk_Attn_Default_Neutral`: a fight +1 to

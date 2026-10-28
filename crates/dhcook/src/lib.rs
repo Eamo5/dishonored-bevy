@@ -4757,9 +4757,16 @@ impl<'a> Cooker<'a> {
     /// attention process's attention tweaks.
     fn sight(&mut self, pawn: &Obj) -> Option<Sight> {
         let vision = self.tweak_obj(pawn, "m_pVisionTweak")?;
-        let v = |s: &mut Self, n: &str, d: f32| s.tweak_float(&vision, n, 0).unwrap_or(d);
-        let inner = [v(self, "m_fVision_InnerFOV_Deg", 45.0), v(self, "m_fVision_InnerMaxRange", 3500.0) * UNIT, v(self, "m_fVision_InnerVerticalFOVScale_Up", 0.25), v(self, "m_fVision_InnerVerticalFOVScale_Down", 0.7)];
-        let outer = [v(self, "m_fVision_OuterFOV_Deg", 160.0), v(self, "m_fVision_OuterMaxRange", 1700.0) * UNIT, v(self, "m_fVision_OuterVerticalFOVScale_Up", 0.1), v(self, "m_fVision_OuterVerticalFOVScale_Down", 0.7)];
+        let cones = |s: &mut Self, vision: &Obj| {
+            let v = |s: &mut Self, n: &str, d: f32| s.tweak_float(vision, n, 0).unwrap_or(d);
+            [
+                [v(s, "m_fVision_InnerFOV_Deg", 45.0), v(s, "m_fVision_InnerMaxRange", 3500.0) * UNIT, v(s, "m_fVision_InnerVerticalFOVScale_Up", 0.25), v(s, "m_fVision_InnerVerticalFOVScale_Down", 0.7)],
+                [v(s, "m_fVision_OuterFOV_Deg", 160.0), v(s, "m_fVision_OuterMaxRange", 1700.0) * UNIT, v(s, "m_fVision_OuterVerticalFOVScale_Up", 0.1), v(s, "m_fVision_OuterVerticalFOVScale_Down", 0.7)],
+            ]
+        };
+        let [inner, outer] = cones(self, &vision);
+        // (in a conversation, its own: `Twk_Vision_Default_InConvo`, 35/120 degrees to 30/15 m)
+        let convo = self.tweak_obj(pawn, "m_pVisionTweak_InConversation").map(|c| cones(self, &c)).filter(|c| *c != [inner, outer]);
         let brain = self.tweak_obj(pawn, "m_pBrainTweak")?;
         let aware_level = match self.tweak_prop(&brain, "m_MinAttentionForAwareness", 0, 0) {
             Some((_, Value::Enum(e))) => attention_level(&e),
@@ -4799,7 +4806,7 @@ impl<'a> Cooker<'a> {
             enemy_if_carried: flag(self, "m_bBecomeEnemyIfSeeCorpseCarry", false),
             escalate: flag(self, "m_bEscalateSuspicionIfSeeAnyCorpse", true),
         };
-        Some(Sight { inner, outer, unsuspecting, suspecting, neutral, aware_level, protect_neutrals, scary, panic, corpses })
+        Some(Sight { inner, outer, unsuspecting, suspecting, neutral, aware_level, protect_neutrals, scary, panic, corpses, convo })
     }
 
     /// The noises that panic a brain's character: its panic behaviour (`m_BehaviorTweak`'s
@@ -4878,6 +4885,7 @@ impl<'a> Cooker<'a> {
     fn attention(&mut self, tw: &Obj) -> Attention {
         let mut a = Attention {
             leak: self.tweak_float(tw, "m_fAttentionLeakRate", 0).unwrap_or(0.1),
+            leak_convo: self.tweak_float(tw, "m_fAttentionLeakRate_InConvo", 0),
             max: self.tweak_float(tw, "m_fMaxAttention", 0).unwrap_or(1.0),
             lose_sight: self.tweak_float(tw, "m_fDistanceToLoseSight", 0).unwrap_or(300.0) * crate::xform::UNIT,
             proxy_range: self.tweak_float(tw, "m_fMinRangeToUnsightedBustedProxy", 0).unwrap_or(250.0) * crate::xform::UNIT,
