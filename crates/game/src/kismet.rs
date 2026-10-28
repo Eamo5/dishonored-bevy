@@ -979,6 +979,8 @@ pub struct Vm {
     /// and the score's steps (`m_DarknessLevels`), kept from the player's statistics
     pub darkness: i32,
     pub darkness_score: i32,
+    /// the Trials' run's score (`DisSeqVar_DLC05_Score`)
+    pub challenge_score: i64,
     pub darkness_levels: Vec<i32>,
     /// `SeqAct_PrepareMapChange`'s map
     pending_map: Option<String>,
@@ -1335,6 +1337,7 @@ impl Vm {
             campaign: None,
             darkness: 0,
             darkness_score: 0,
+            challenge_score: 0,
             darkness_levels: Vec::new(),
             pending_map: None,
             pending_levels: Vec::new(),
@@ -1648,6 +1651,7 @@ impl Vm {
             "SeqVar_Player" | "DisSeqVar_PlayerPawn" => Val::Player,
             "DisSeqVar_DarknessLevel" => Val::Int(self.darkness),
             "DisSeqVar_Darkness" => Val::Int(self.darkness_score),
+            "DisSeqVar_DLC05_Score" => Val::Int(self.challenge_score.clamp(i32::MIN as i64, i32::MAX as i64) as i32),
             "SeqVar_RandomFloat" => {
                 let p = &self.g.vars[v as usize].props;
                 let get = |k: &str, d: f32| match p.get(k) {

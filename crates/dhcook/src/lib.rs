@@ -5631,14 +5631,29 @@ impl<'a> Cooker<'a> {
                         }
                         continue;
                     }
-                    for l in op.vars.iter().filter(|l| l.desc == g.name) {
-                        for &v in &l.vars {
-                            let Some(KVal::Actor(a)) = k.vars.get(v as usize).and_then(|v| v.props.get("ObjValue")) else { continue };
-                            let Some(s) = k.actors.get(*a as usize).and_then(|a| a.spawner) else { continue };
-                            let Some(t) = self.scene.spawners.get(s as usize).and_then(|sp| sp.npc_type) else { continue };
-                            for set in &g.anim_sets {
-                                wanted.push((t as usize, set.clone()));
-                            }
+                    // (its character: the group's variable's actor; through a named variable, the
+                    // variable it names; one set only as the scripts run (a pawn spawned into it,
+                    // Lizzy Stride's), the spawner of the group's stage mark)
+                    let actor_of = |v: u32| -> Option<u32> {
+                        let var = k.vars.get(v as usize)?;
+                        if let Some(KVal::Actor(a)) = var.props.get("ObjValue") {
+                            return Some(*a);
+                        }
+                        let Some(KVal::Str(name)) = var.props.get("FindVarName") else { return None };
+                        k.vars.iter().filter(|o| matches!(o.props.get("VarName"), Some(KVal::Str(n)) if n == name)).find_map(|o| match o.props.get("ObjValue") {
+                            Some(KVal::Actor(a)) => Some(*a),
+                            _ => None,
+                        })
+                    };
+                    let mut actors: Vec<u32> = op.vars.iter().filter(|l| l.desc == g.name).flat_map(|l| l.vars.iter()).filter_map(|&v| actor_of(v)).collect();
+                    if actors.iter().all(|a| k.actors.get(*a as usize).is_none_or(|a| a.spawner.is_none())) && !g.stage_mark.is_empty() {
+                        actors.extend(op.vars.iter().filter(|l| l.desc.eq_ignore_ascii_case(&g.stage_mark)).flat_map(|l| l.vars.iter()).filter_map(|&v| actor_of(v)));
+                    }
+                    for a in actors {
+                        let Some(s) = k.actors.get(a as usize).and_then(|a| a.spawner) else { continue };
+                        let Some(t) = self.scene.spawners.get(s as usize).and_then(|sp| sp.npc_type) else { continue };
+                        for set in &g.anim_sets {
+                            wanted.push((t as usize, set.clone()));
                         }
                     }
                 }

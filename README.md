@@ -2366,7 +2366,11 @@ fields no longer show their stand-in "WW" behind the title.
   speaker's dialogue outputs first (her "Give_Letter").
 - **Scene animations**: a matinee group's own animation sets (`GroupAnimSets`: the
   Empress dying in Corvo's arms, Emily's hug, the Hound Pits' scenes) are added to the
-  characters it binds, as UE3 adds them to the pawn; the player group's go to Corvo's arms,
+  characters it binds, as UE3 adds them to the pawn (one bound through a named variable, by
+  the variable it names; one the scripts bind only as it spawns, by its group's stage mark's
+  spawner: before, Lizzy Stride's pillory scenes, `DLC07_Female_SC_Prison_as`, never reached
+  her type, so in Coldridge she stood in her bind pose in front of the pillory instead of
+  slumped in it); the player group's go to Corvo's arms,
   which play its keys while the scene runs. Characters change dress on the scripts' word
   (`DisSeqAct_NPCSetMaterials`: the Boyle sisters' red, black and white, by material slot).
   A clip of a set keying only part of the body (fewer than nine tenths of the fullest set's
@@ -2725,6 +2729,9 @@ fields no longer show their stand-in "WW" behind the title.
     frame), resurrection, healing, infinite ammo, Dark Vision, the clockwork dolls, the DLC's
     achievements, the mystery man's target and clues, equipment unlocks, waves' slowed entrances.
     A death goes to the scripts (`DisSeqEvent_DLC05_PlayerDeath`) rather than the game over menu.
+    The scripts' score variable (`DisSeqVar_DLC05_Score`) reads the run's score: Assassin's Run,
+    Oil Rain and Race write it into their end's "Final Score: N". Before, it read nothing and
+    their final line ended at the colon.
   - *HUD* (`dlc05hud.rs`): the elements of `UI_HUD_DLC05.HUD` as their classes run them (tweens,
     delays, sounds of the HUD's theme, the movie's real time): score and multiplier, timer, kill /
     tank / coin / egg / chance / gate counters, enemies left as skulls, round titles, the count to

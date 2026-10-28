@@ -626,6 +626,8 @@ fn tick(mut ch: ResMut<Challenge>, vm: Option<ResMut<crate::kismet::Vm>>, time: 
         return;
     }
     let Some(mut vm) = vm else { return };
+    // the score for the scripts (`DisSeqVar_DLC05_Score`: the end's "Final Score")
+    vm.challenge_score = ch.score;
     // the ammunition for the scripts (`DisSeqAct_DLC05_GetAmmoInfo`)
     for ty in 0..8u8 {
         vm.ammo[ty as usize] = (crate::gadgets::ammo_count(&stats, ty), attrs.ammo_capacity.get(ty as usize).copied().unwrap_or(0));
