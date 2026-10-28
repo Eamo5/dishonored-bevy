@@ -405,6 +405,7 @@ impl Menu {
             // (a story pack's own home: `dlcmenu`)
             (Some(MenuKind::Main), Page::Main) if self.dlc_home() => Some((crate::dlcmenu::CODE, labels())),
             (Some(MenuKind::Main), Page::Main) => Some((1, labels())),
+            (Some(MenuKind::Main), Page::Difficulty) if self.dlc_home() => Some((crate::dlcmenu::NEW_GAME, labels())),
             (Some(MenuKind::Main), Page::Difficulty) => Some((2, labels())),
             (Some(MenuKind::Pause), Page::Main) => Some((3, labels())),
             (Some(MenuKind::GameOver), Page::Main) => Some((4, labels())),
@@ -533,6 +534,16 @@ impl Menu {
     /// The story pack whose front end or game this is.
     pub fn dlc(&self) -> Option<usize> {
         self.dlc
+    }
+
+    /// The choice moved along by y (a story pack's new game's arrows), kept within the list.
+    pub fn step_sel(&mut self, by: i32) {
+        let n = self.items.len() as i32;
+        let to = (self.sel as i32 + by).clamp(0, (n - 1).max(0)) as usize;
+        if to != self.sel {
+            self.sel = to;
+            self.dirty = true;
+        }
     }
 
     /// An item not yet open (a story pack's last difficulty).
@@ -751,25 +762,25 @@ impl Menu {
     }
 }
 
-/// A story pack's front end's scene follows its menu, as its movie player fires its map's remote
-/// events: into the new game's screen (`ToNewGameScreen`), each difficulty as it is chosen
-/// (`MainMenu_UIDiffEasy`, `_Normal`, `_Hard`, `_VeryHard`: Daud's figure for it shown, its sound),
-/// and back out (`MainMenu_FromNewGameScreen<n>`, by the one chosen).
+/// A story pack's front end's scene follows its menu, as its movie tells its map (`fscommand`,
+/// the map's `GFxEvent_FSCommand`s): into the new game's screen (`ToNewGameScreen<n>`, by the
+/// difficulty chosen), each difficulty as it is chosen (`SetDifficultyCameraAngle<n>`: its camera,
+/// Daud's figure for it, its card), back out (`FromNewGameScreen<n>`), the saves' screen in and out
+/// (`ToLoadScreen`, `FromLoadScreen`).
 fn dlc_scene(menu: Res<Menu>, vm: Option<ResMut<Vm>>, mut was: Local<Option<(Page, usize)>>) {
-    const DIFF: [&str; 4] = ["Easy", "Normal", "Hard", "VeryHard"];
     let now = menu.dlc_home().then_some((menu.page, menu.sel));
     if now == *was {
         return;
     }
     let before = std::mem::replace(&mut *was, now);
     let (Some(mut vm), Some((page, sel))) = (vm, now) else { return };
+    let sel = sel.min(3);
     match (before.map(|b| b.0), page) {
-        (Some(Page::Difficulty), Page::Difficulty) => vm.remote_event(&format!("MainMenu_UIDiff{}", DIFF[sel.min(3)])),
-        (_, Page::Difficulty) => {
-            vm.remote_event("ToNewGameScreen");
-            vm.remote_event(&format!("MainMenu_UIDiff{}", DIFF[sel.min(3)]));
-        }
-        (Some(Page::Difficulty), _) => vm.remote_event(&format!("MainMenu_FromNewGameScreen{}", before.map_or(1, |b| b.1.min(3)))),
+        (Some(Page::Difficulty), Page::Difficulty) => vm.fs_command(&format!("SetDifficultyCameraAngle{sel}")),
+        (_, Page::Difficulty) => vm.fs_command(&format!("ToNewGameScreen{sel}")),
+        (Some(Page::Difficulty), _) => vm.fs_command(&format!("FromNewGameScreen{}", before.map_or(1, |b| b.1.min(3)))),
+        (Some(Page::Load), p) if p != Page::Load => vm.fs_command("FromLoadScreen"),
+        (b, Page::Load) if b != Some(Page::Load) => vm.fs_command("ToLoadScreen"),
         _ => {}
     }
 }
@@ -786,14 +797,15 @@ fn enter_level(level: Option<Res<LevelInfo>>, mut menu: ResMut<Menu>, vm: Option
     let name = level.as_ref().map(|l| l.scene.name.clone()).unwrap_or_default();
     *menu = Menu::default();
     menu.dlc = dlc_of(&name);
-    // a story pack's own front end (its map's scripts bring its camera in: `MainMenu_Play`)
+    // a story pack's own front end (its movie opening tells its map, `OpenMainMenuScreen`: its
+    // camera brought in)
     if let Some(i) = dlc_menu_of(&name) {
         menu.open = Some(MenuKind::Main);
         menu.page = Page::Main;
         menu.started = true;
         menu.campaign_map = Some(DLC_PACKS[i].first);
         if let Some(mut vm) = vm {
-            vm.remote_event("MainMenu_Play");
+            vm.fs_command("OpenMainMenuScreen");
         }
         return;
     }
@@ -1889,7 +1901,7 @@ fn menu_input(
     };
     // the front page's bar runs across the screen: left and right move along it
     // (and the missions' slide: `SlideMenu`'s left and right)
-    if left_right != 0.0 && menu.front_page().is_some_and(|f| f.0 == 1 || f.0 == crate::missionscreen::CODE) {
+    if left_right != 0.0 && menu.front_page().is_some_and(|f| f.0 == 1 || f.0 == crate::missionscreen::CODE || f.0 == crate::dlcmenu::NEW_GAME) {
         let to = if left_right > 0.0 { (menu.sel + 1).min(n - 1) } else { menu.sel.saturating_sub(1) };
         ui(&mut sfx, if to != menu.sel { "UI_Move" } else { "UI_Stop" });
         if to != menu.sel {

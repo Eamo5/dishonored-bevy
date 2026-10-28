@@ -73,7 +73,8 @@ fn in_world(pkg: &Package, i: i32) -> bool {
 }
 
 fn is_op_class(c: &str) -> bool {
-    (c.contains("SeqAct") || c.contains("SeqEvent") || c.contains("SeqEvt") || c.contains("SeqCond") || c == "Sequence" || c == "PrefabSequence")
+    // (and the movies' events: `GFxEvent_FSCommand`, a movie's fscommand)
+    (c.contains("SeqAct") || c.contains("SeqEvent") || c.contains("SeqEvt") || c.contains("SeqCond") || c == "Sequence" || c == "PrefabSequence" || c == "GFxEvent_FSCommand")
         && !c.contains("SeqVar")
 }
 
@@ -1300,7 +1301,14 @@ fn cook_matinee(pkg: &Package, idata: &Props, voices: &HashMap<[u32; 4], Vec<Str
                             .collect(),
                     ));
                 }
-                "InterpTrackEvent" => group.tracks.push(KTrack::Event(keys("EventTrack").iter().map(|k| (k.float("Time").unwrap_or(0.0), str_of(k, "EventName"))).collect())),
+                "InterpTrackEvent" => {
+                    let flag = |n: &str, d: bool| match tp.get(n) {
+                        Some(Value::Bool(b)) => *b,
+                        _ => d,
+                    };
+                    let flags = [flag("bFireEventsWhenForwards", true), flag("bFireEventsWhenBackwards", true), flag("bFireEventsWhenJumpingForwards", false)];
+                    group.tracks.push(KTrack::EventFlags(keys("EventTrack").iter().map(|k| (k.float("Time").unwrap_or(0.0), str_of(k, "EventName"))).collect(), flags));
+                }
                 "InterpTrackAkEvent" => group.tracks.push(KTrack::Sound(
                     keys("AkEvents").iter().filter_map(|k| Some((k.float("Time").unwrap_or(0.0), name_of_obj(k.object("Event").filter(|e| *e != 0)?)))).collect(),
                 )),
@@ -1426,7 +1434,7 @@ fn cook_matinee(pkg: &Package, idata: &Props, voices: &HashMap<[u32; 4], Vec<Str
             for t in &g.tracks {
                 let last = match t {
                     KTrack::Move { pos, rot, .. } => pos.iter().chain(rot.iter()).map(|k| k.t).fold(0.0, f32::max),
-                    KTrack::Event(k) | KTrack::Sound(k) => k.iter().map(|k| k.0).fold(0.0, f32::max),
+                    KTrack::Event(k) | KTrack::EventFlags(k, _) | KTrack::Sound(k) => k.iter().map(|k| k.0).fold(0.0, f32::max),
                     KTrack::Visibility(k) | KTrack::Toggle(k) => k.iter().map(|k| k.0).fold(0.0, f32::max),
                     KTrack::Float { points, .. } => points.iter().map(|k| k.t).fold(0.0, f32::max),
                     KTrack::Anim(k) => k.iter().map(|k| k.0).fold(0.0, f32::max),

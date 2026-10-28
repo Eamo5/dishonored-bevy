@@ -1239,7 +1239,17 @@ fn spawn_level(
                     Some(_) => Some(Policy::NoLightMap),
                     _ => None,
                 };
-                let ue_mat = ue_policy.and_then(|p| mb.ue3_material(mat_id, p, &mut image_assets, &mut ue_assets, &mut ue_programs, &mut shader_assets));
+                let mut ue_policy = ue_policy;
+                let mut ue_mat = ue_policy.and_then(|p| mb.ue3_material(mat_id, p, &mut image_assets, &mut ue_assets, &mut ue_programs, &mut shader_assets));
+                // (a material its shader map has no light-mapped program for, cooked only without:
+                // the unlit ones, the Lighthouse's far water; drawn so, as UE3 falls back to the
+                // light-map policy the map has)
+                if ue_mat.is_none() && ue_policy == Some(Policy::DirectionalLightMap) {
+                    ue_mat = mb.ue3_material(mat_id, Policy::NoLightMap, &mut image_assets, &mut ue_assets, &mut ue_programs, &mut shader_assets);
+                    if ue_mat.is_some() {
+                        ue_policy = Some(Policy::NoLightMap);
+                    }
+                }
                 let full = ue_mat.is_some();
                 let base = ue_mat.clone();
                 let mat = match ue_mat {
@@ -1249,6 +1259,11 @@ fn spawn_level(
                     }
                     None => {
                         let Some(mat) = mb.material(mat_id, &mut image_assets, &mut mat_assets, &mut sky_assets) else { continue };
+                        // (DH_FALLBACK_LOG: the surfaces drawn without their original shader)
+                        if std::env::var_os("DH_FALLBACK_LOG").is_some() {
+                            let d = scene.materials.get(mat_id as usize);
+                            info!("fallback material: {} (ue3 {}, lightmapped {lightmapped}) on {}", d.map_or("?", |d| d.name.as_str()), ue.is_some(), inst.class);
+                        }
                         mat
                     }
                 };

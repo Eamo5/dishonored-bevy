@@ -1396,8 +1396,8 @@ fields no longer show their stand-in "WW" behind the title.
   skip gauge's blue ring fills round at the bottom left; choking someone, the interaction
   gauge's red ring fills at the screen's middle (drawn with a small radial-wipe UI material
   standing in for the movie's `_mask_mc` wipe).
-  A skipped scene now fires the event keys it jumps over, as a jump forward fires them
-  (`InterpTrackEvent.bFireEventsWhenJumpingForwards`); its sounds and lines don't play. Then
+  A skipped scene now fires the event keys it jumps over on the tracks that fire when jumped
+  over (`InterpTrackEvent.bFireEventsWhenJumpingForwards`); its sounds and lines don't play. Then
   its `OnSkipWhole` output fires: what its scripts do when it is skipped. A scene marked
   `m_bIsSkippable` false isn't skipped. Before, a skip jumped straight to the end: skipping the
   Outsider's first meeting missed its `UnhidePlatforms` key, so the dream's platforms never
@@ -1807,13 +1807,27 @@ fields no longer show their stand-in "WW" behind the title.
   the next blow is an ordinary one, not a finisher, and they can't be choked mid-fight. Before,
   any character left reeling died to the next blow. Script: `stun S [NAME]` staggers the nearest
   character S seconds, as a parry does.
+- **Light-mapped surfaces whose material has no light-mapped shader** (`level.rs`). Some
+  materials' shader maps were cooked without a light-map program (`TLightMapPolicy`
+  `FDirectionalLightMapTexturePolicy`): the blockout's unlit black and white
+  (`Env_Blockout.Colors_unlit.black_unlit_INST`, `white_unlit_INST`: the Hound Pits' and the
+  Flooded District's dark openings, a Trials map's walls), the Lighthouse's far and near water
+  (`island_water_near.Water_Island_*_Inst`), a hat (`FemaleMiddle01Hat_inst`) and the rune
+  recipe (`RuneRecipe_01_INST`). Before, those surfaces fell back to a plain lit material. Now,
+  as UE3 takes the policy a shader map has, they are drawn with its program without a light
+  map (`FNoLightMapPolicy`), their original shader. A sweep of every map's surfaces
+  (`DH_FALLBACK_LOG`: each surface drawn without its original shader, by material and actor)
+  found 41 of them in 11 maps; rechecked on the Hound Pits, the Trials' train, the Lighthouse
+  and Draper's Ward, none are left.
 - **The story packs' own front ends** (`dlcmenu.rs`, `menu.rs`'s `DLC_PACKS`). Before, The
   Knife of Dunwall and The Brigmore Witches were only lines on the main menu's Downloadable
   Content page that started their first map. Their saves were mixed with Corvo's, and leaving
   a mission or finishing the story went back to the game's menu.
   - Each pack now opens on its own menu map (`DLC06_Dishonored_MainMenu`, `L_DLC07_MainMenu`:
-    what its whole-game package starts, `DisDLC06GameInfo.m_DLC06MainMenuCommand`). Its scripts
-    bring its camera in (`MainMenu_Play`), with its music.
+    what its whole-game package starts, `DisDLC06GameInfo.m_DLC06MainMenuCommand`). The menu
+    tells the map what it shows as its movie does, by `fscommand`: the map's
+    `GFxEvent_FSCommand` events are now cooked and fired (`OpenMainMenuScreen` brings the camera
+    in, with its music).
   - Its home is its own movie's (`UI_MainMenu_DLC06.MainMenu`, `_DLC07`, cooked as
     `MainMenu_DLC06` and `_DLC07`): `MM_Home_Screen` with its blades, circles and texture, the
     pack's logo on its brush and Daud's portrait. The menu `MM_Home_Menu_item`s run down from
@@ -1826,9 +1840,22 @@ fields no longer show their stand-in "WW" behind the title.
     `t_LastDifficultyUnlockCondition`, until its campaign is finished; that is kept in the
     user's settings (`ProfileSaveWarning`). The new game warning names the pack
     (`t_Q_NewGame_DLC07`).
-  - Choosing a difficulty fires its map's events: the camera to the new game's screen
-    (`ToNewGameScreen`), Daud's figure for each difficulty (`MainMenu_UIDiffEasy`...), and back
-    out (`MainMenu_FromNewGameScreen<n>`).
+  - Its new game is its movie's `MM_NewGame_Screen`: the brush across the bottom with a dot for
+    each difficulty (`MM_NewGame_Menu_item`, the chosen one turning and grown), and the arrows
+    either side (`_arrL_mc`, `_arrR_mc`). Left and right, the arrows or the dots choose. Going in
+    tells the map `ToNewGameScreen<n>`, each choice `SetDifficultyCameraAngle<n>` (the camera
+    flies to Daud's figure for that difficulty, which appears in its smoke), and going out
+    `FromNewGameScreen<n>`. The saves' screen tells it `ToLoadScreen` and `FromLoadScreen`.
+  - The difficulty's name and words are on the card standing in the scene by Daud
+    (`DiificultyUI_RenderMat`). As the menu's `DisGFxActionOpenMovie` does with its
+    `RenderTexture`, the pack's `DifficultyInfos` movie (`DI_Infos`) is drawn into the map's render
+    target (`DLC06_MainMenu_MS.DifficultyUI_RenderText`, 1024x512).
+  - Before, the camera flew to the new game's view and straight back to the menu's. The menu
+    played its way in with every event key, including `ShouldPlayMainMenu`, whose track fires
+    only playing backwards (`bFireEventsWhenForwards` false), and that restarted the menu's
+    camera. Event tracks now keep their flags (`bFireEventsWhenForwards`, `_Backwards`,
+    `_JumpingForwards`): a scene played fires only the tracks that fire its way, and a skipped
+    one only those that fire when jumped over.
   - In its missions the pause menu offers `t_BackToDLC06MainMenu` ("Exit the Mission", to its
     own front end) and `t_ExitDLC06` (out of the pack), each asked first with the pack's name
     put in (`§DLC06_NAME§`). Its story's end goes back to its own front end.

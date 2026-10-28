@@ -23,7 +23,7 @@ use std::path::Path;
 // 158: spawners' flags from their class's defaults (travel spawners make nobody at the start).
 // 159: scene keys laid out along their sequences' soiree markers (KTrack::AnimStretch).
 // 160: scene sections' ways (KTrack::PinModes); the story packs' spawners and krusts.
-pub const SCENE_VERSION: u32 = 162;
+pub const SCENE_VERSION: u32 = 163;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Scene {
@@ -568,6 +568,9 @@ pub enum KTrack {
     Move { pos: Vec<KCurvePoint>, rot: Vec<KCurvePoint>, relative: bool },
     /// fire the `SeqAct_Interp` output named after the event
     Event(Vec<(f32, String)>),
+    /// the same, fired only playing forwards, backwards, or jumped over as they say
+    /// (`bFireEventsWhenForwards`, `bFireEventsWhenBackwards`, `bFireEventsWhenJumpingForwards`)
+    EventFlags(Vec<(f32, String)>, [bool; 3]),
     /// Wwise events
     Sound(Vec<(f32, String)>),
     /// show / hide the actor

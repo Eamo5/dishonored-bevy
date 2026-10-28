@@ -354,6 +354,52 @@ mod flow_tests {
         assert!(vm.queue.iter().any(|q| q.0 == 1), "let go, it plays out");
     }
 
+    /// A scene's event tracks fire as their flags say: played forwards only those that fire
+    /// forwards, skipped only those that fire when jumped over.
+    #[test]
+    fn event_tracks_fire_as_their_flags_say() {
+        use dhcook::format::{KInterpGroup, KLink, KMatinee, KTrack, KVar};
+        let scene = || {
+            let mut g = Graph::default();
+            let outputs = ["Completed", "Fwd", "NotFwd", "Jump"];
+            g.ops.push(KOp {
+                class: "SeqAct_Interp".into(),
+                inputs: ["Play", "Reverse", "Stop", "Pause", "Change Dir"].iter().map(|d| KInput { desc: d.to_string(), ..Default::default() }).collect(),
+                outputs: outputs.iter().enumerate().map(|(i, d)| KOutput { desc: d.to_string(), links: if i > 0 { vec![(i as u32, 0, 0.0)] } else { vec![] }, linked: None }).collect(),
+                vars: vec![KLink { desc: "Data".into(), vars: vec![0], write: false }],
+                ..Default::default()
+            });
+            for _ in 0..3 {
+                g.ops.push(KOp { class: "SeqAct_Log".into(), ..Default::default() });
+            }
+            g.vars.push(KVar { class: "InterpData".into(), props: [("InterpLength".to_string(), KVal::Float(3.0)), ("Matinee".to_string(), KVal::Int(0))].into_iter().collect(), ..Default::default() });
+            let tracks = vec![
+                KTrack::EventFlags(vec![(1.0, "Fwd".into())], [true, true, false]),
+                KTrack::EventFlags(vec![(1.0, "NotFwd".into())], [false, true, false]),
+                KTrack::EventFlags(vec![(1.0, "Jump".into())], [true, true, true]),
+            ];
+            g.matinees.push(KMatinee { length: 3.0, cuts: vec![(0.0, "Cam".into())], groups: vec![KInterpGroup { name: "Cam".into(), tracks, ..Default::default() }], ..Default::default() });
+            let mut vm = Vm::new(Arc::new(g), &[]);
+            vm.exec(0, 0);
+            vm.tick(0.1);
+            vm.queue.clear();
+            vm
+        };
+        let fired = |vm: &Vm| {
+            let mut v: Vec<u32> = vm.queue.iter().map(|q| q.0).filter(|o| *o > 0).collect();
+            v.sort();
+            v
+        };
+        let mut played = scene();
+        for _ in 0..15 {
+            played.tick(0.1);
+        }
+        assert_eq!(fired(&played), [1, 3]);
+        let mut skipped = scene();
+        skipped.skip_cinematics();
+        assert_eq!(fired(&skipped), [3]);
+    }
+
     #[test]
     fn a_switch_with_auto_disable_fires_each_link_once() {
         let mut vm = switch("SeqAct_Switch", 2, &[("LinkCount", KVal::Int(2)), ("bLooping", KVal::Bool(true)), ("bAutoDisableLinks", KVal::Bool(true))]);
@@ -5510,6 +5556,22 @@ impl Vm {
         }
     }
 
+    /// A menu movie's `fscommand` (its map's `GFxEvent_FSCommand`s of that name: a story pack's
+    /// front end's `ToNewGameScreen1`, `SetDifficultyCameraAngle2`).
+    pub fn fs_command(&mut self, name: &str) {
+        let g = self.g.clone();
+        let evs: Vec<u32> = g
+            .ops
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.class == "GFxEvent_FSCommand" && matches!(o.props.get("FSCommand"), Some(KVal::Str(s)) if s.eq_ignore_ascii_case(name)))
+            .map(|(i, _)| i as u32)
+            .collect();
+        for ev in evs {
+            self.event(ev, 0, None);
+        }
+    }
+
     /// Matinees playing now: (op, cooked matinee, position, actors bound per group).
     pub fn matinees(&self) -> Vec<(u32, u32, f32, &[(u32, Vec<u32>)])> {
         self.latent
@@ -5539,12 +5601,17 @@ impl Vm {
             }
         }
         for (op, m, from, to) in skipped {
-            // (its event keys jumped over still fire, as a jump forward fires them,
+            // (the event keys jumped over fire where their track says a jump forward fires them,
             // `bFireEventsWhenJumpingForwards`: the Outsider's dream's platforms shown; its sounds
             // and lines don't play)
             for gr in &g.matinees[m as usize].groups {
                 for tr in &gr.tracks {
-                    if let dhcook::format::KTrack::Event(keys) = tr {
+                    let keys = match tr {
+                        dhcook::format::KTrack::Event(keys) => Some(keys),
+                        dhcook::format::KTrack::EventFlags(keys, [_, _, true]) => Some(keys),
+                        _ => None,
+                    };
+                    if let Some(keys) = keys {
                         for (k, name) in keys {
                             if *k > from && *k <= to {
                                 self.fire_desc(op, name);
@@ -5671,6 +5738,16 @@ impl Vm {
                                     for (k, name) in keys {
                                         if crossed(*k) {
                                             named_outputs.push((*op, name.clone()));
+                                        }
+                                    }
+                                }
+                                // (only the ways its track fires: forwards, backwards)
+                                dhcook::format::KTrack::EventFlags(keys, [fwd, back, _]) => {
+                                    if if *rate >= 0.0 { *fwd } else { *back } {
+                                        for (k, name) in keys {
+                                            if crossed(*k) {
+                                                named_outputs.push((*op, name.clone()));
+                                            }
                                         }
                                     }
                                 }
