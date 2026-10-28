@@ -1929,6 +1929,10 @@ pub struct Attention {
     /// its leak while in a conversation (`m_fAttentionLeakRate_InConvo`); none: `leak`'s
     #[serde(default)]
     pub leak_convo: Option<f32>,
+    /// an alarm bell it hears keeps ringing while its attention is above this level
+    /// (`m_bAlarmsKeepRingingUntilNPCsLoseAttention`, `m_AlarmsKeepRingingAttentionLevel`); none: not
+    #[serde(default)]
+    pub alarm_keep: Option<u8>,
 }
 
 /// The allies' increases as the default tweak has them (`Twk_Attn_Default_Neutral`: a fight +1 to

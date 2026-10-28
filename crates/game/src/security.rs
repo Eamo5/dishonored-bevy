@@ -1140,6 +1140,9 @@ fn pylons(
     devices.drains.extend(spent);
 }
 
+/// How far a ringing bell is heard (m).
+const ALARM_REACH: f32 = 60.0;
+
 /// Alarm bells: guards in a fight nearby ring them; the whole area comes running, and the
 /// bell's spawners send reinforcements (`m_MaxSpawnedPawnsPerRing`).
 #[allow(clippy::too_many_arguments)]
@@ -1174,19 +1177,27 @@ fn alarms(
                 // he was
                 let delay = d.def.params.get("m_fAlarmRingDelayBeforeAINoise").copied().unwrap_or(2.5);
                 if t < delay && t + dt >= delay {
-                    noise.write(Noise { corvo: false, pos, radius: 60.0, kind: NoiseKind::Alarm });
+                    noise.write(Noise { corvo: false, pos, radius: ALARM_REACH, kind: NoiseKind::Alarm });
                     for (_, mut n, nt) in &mut npcs {
-                        if n.hostile() && !n.is_down() && nt.translation.distance(pos) < 60.0 && n.mode != Mode::Combat && n.alert == Alert::Combat {
+                        if n.hostile() && !n.is_down() && nt.translation.distance(pos) < ALARM_REACH && n.mode != Mode::Combat && n.alert == Alert::Combat {
                             n.last_seen = Some(ppos);
                             n.set_mode(Mode::Search);
                         }
                     }
                 }
-                // it rings while anyone still hunts him; then every bell waits
+                // it rings while anyone still hunts him, or anyone who heard it has not yet lost
+                // its attention, as its attention tweak says (`m_bAlarmsKeepRingingUntilNPCsLoseAttention`:
+                // a suspecting guard's, while above turning to look, `m_AlarmsKeepRingingAttentionLevel`;
+                // "heard": within its noise's reach, our reading); then every bell waits
                 // `DisAlarmGlobalManager.m_fAlarmCooldown`
-                let hunted = npcs.iter().any(|(_, n, _)| n.hostile() && !n.is_down() && n.alert == Alert::Combat);
+                let keeps = |n: &Npc, at: Vec3| {
+                    at.distance(pos) < ALARM_REACH
+                        && level.as_ref().and_then(|l| crate::npc::attention_of(n, &l.scene)).and_then(|a| a.alarm_keep).is_some_and(|l| n.attn_level > l)
+                };
+                let hunted = npcs.iter().any(|(_, n, nt)| n.hostile() && !n.is_down() && (n.alert == Alert::Combat || keeps(n, nt.translation)));
                 d.phase = if t > delay + 1.0 && !hunted { Phase::Idle } else { Phase::Ringing(t + dt) };
                 if d.phase == Phase::Idle {
+                    info!("alarm: the bell at {pos:.1} stops after {t:.1} s");
                     *global_cooldown = 10.0;
                     if let Some(s) = d.def.sounds.get("m_pAlarmRingEndEvent") {
                         sfx.write(PostEvent::named(s, Some(pos)));

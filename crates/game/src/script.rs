@@ -754,6 +754,23 @@ fn run_script(
                 info!("script: enemy grenade at {from:.2}, fuse {fuse}");
             });
         }
+        "ring" => {
+            // (tests) ring [off]: the nearest alarm bell set ringing (or silenced), as the scripts'
+            // `DisSeqAct_AlarmBell`
+            let on = cmd.get(1).is_none_or(|v| v != "off");
+            let at = t.translation;
+            commands.queue(move |w: &mut World| {
+                let mut dev = w.resource_mut::<crate::security::Devices>();
+                let near = dev.list.iter().enumerate().filter(|(_, d)| d.def.kind == "AlarmBell").min_by(|a, b| Vec3::from(a.1.def.position).distance(at).total_cmp(&Vec3::from(b.1.def.position).distance(at))).map(|(i, _)| i);
+                if let Some(i) = near {
+                    let sound = dev.ring(i, on);
+                    info!("script: alarm bell {i} {}", if on { "rings" } else { "silenced" });
+                    if let Some((ev, pos)) = sound {
+                        w.write_message(crate::audio::PostEvent::named(&ev, Some(pos)));
+                    }
+                }
+            });
+        }
         "summon" => {
             // (tests) summon [D] [LEVEL]: one of Daud's assassins summoned D m (3) ahead on the
             // floor there, for no enemy
