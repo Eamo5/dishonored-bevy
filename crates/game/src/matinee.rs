@@ -318,6 +318,30 @@ fn active_key(group: &dhcook::format::KInterpGroup, t: f32) -> Option<(usize, &(
     best
 }
 
+/// The other animation tracks' keys playing `t` into the scene whose clips key part of the body,
+/// stacked over the base track's in the tracks' order (the original's `MatineeStackNode`: the
+/// Outsider's head bobs and gestures over his float): clip, time.
+fn stacked(group: &dhcook::format::KInterpGroup, t: f32, base_track: usize, lib: &crate::anim::CharAnims) -> Vec<(crate::anim::ClipId, f32)> {
+    let mut out = Vec::new();
+    for (i, tr) in group.tracks.iter().enumerate() {
+        let KTrack::Anim(keys) = tr else { continue };
+        if i == base_track {
+            continue;
+        }
+        let stretch = match group.tracks.get(i + 1) {
+            Some(KTrack::AnimStretch(s)) if s.len() == keys.len() => Some(s),
+            _ => None,
+        };
+        let Some(k) = keys.iter().rposition(|k| k.0 <= t + 1e-4) else { continue };
+        let Some(clip) = lib.find(&keys[k].1).filter(|c| lib.partial(*c)) else { continue };
+        let Some((s, _, looping)) = key_time(&keys[k], stretch.and_then(|s| s[k].as_ref()), t) else { continue };
+        let len = lib.duration(clip).max(1e-3);
+        // (a clip played through holds its last frame, as a track's key does past its end)
+        out.push((clip, if looping { s.rem_euclid(len) } else { s.min(len) }));
+    }
+    out
+}
+
 /// Where a key plays its sequence `t` into the scene: the sequence's time, its pace and whether
 /// it loops (stretched along its markers, else from its start offset at its rate); none past a
 /// laid out key's end.
@@ -673,6 +697,12 @@ fn play_matinees(
                             // (past a laid out key's end: its last frame held, the pawn still the
                             // scene's)
                             let Some((k, key, laid, at)) = active_key(group, t) else { continue };
+                            // (its other tracks' clips keying part of the body, stacked over it)
+                            let lib = animator.lib.clone();
+                            animator.stack = stacked(group, t, k / 10_000, &lib);
+                            if std::env::var("DH_MATINEE_LOG").is_ok() && !animator.stack.is_empty() && (t * 2.0).fract() < 0.02 {
+                                info!("matinee #{mi}: {} stacks {:?}", ka.name, animator.stack.iter().map(|(c, ct)| format!("{} {ct:.1}", lib.clip(*c).name)).collect::<Vec<_>>());
+                            }
                             let seq = &key.1;
                             if st.npc_keys.get(&e) == Some(&(mi, k)) {
                                 // (stretched: kept to the key's place along its sequence, a loop

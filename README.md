@@ -2353,6 +2353,14 @@ fields no longer show their stand-in "WW" behind the title.
   whole-body clip before it, the joints it leaves keeping that one's pose, as a clip on the
   original's `MatineeStackNode` does; before, they fell to the bind pose, and Emily stood in a
   T-pose as Corvo gave the Empress the letter.
+  The stack now holds every track at once. A character's animation tracks all play on that
+  node (`SlotName` `MatineeStackNode`, titled Posture, Gesture, Gesture2...), so the other
+  tracks' clips keying part of the body are laid over the scene's main clip in their tracks'
+  order, each on the joints it keys, holding its last frame past its end as a track's key
+  does. Before, only the clip started last showed: the Outsider at his shrines lost his crossed
+  arms each time his head bobbed (`Outsider_Gesture_ArmsCrossed` under `Gesture_HeadBob_*`, over
+  `Empty_Float_Low`), and Sokolov in The Knife of Dunwall's opening dropped his hand from his
+  chest as his other arm moved. `DH_MATINEE_LOG` logs the clips stacked.
   A scene's player group with a stage mark (`InterpGroupPlayer.m_StageMarkGroup`) blends Corvo
   onto it as it starts, facing its way, over `m_fTimeToBlendToStageMark` (0.2 s), and holds him
   there while it plays (`StatePlayerMasterSoiree`: movement disabled); one that carries him (a

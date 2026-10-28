@@ -420,6 +420,10 @@ pub struct Animator {
     /// a clip's pose laid on some joints alone (a hand's grip on its fingers): clip, time,
     /// joints
     pub masked: Option<(ClipId, f32, Arc<Vec<usize>>)>,
+    /// clips keying part of the body stacked over the base, in order, each on the joints it keys
+    /// (a scene's tracks on the original's `MatineeStackNode`: the Outsider's gestures and head
+    /// bobs over his float): clip, time. Set for a frame (whoever sets it does so each frame).
+    pub stack: Vec<(ClipId, f32)>,
     /// the joints the overlay layer may move (a branch's filter: the arms' left arm), else
     /// all its clip keys
     pub overlay_mask: Option<Arc<Vec<bool>>>,
@@ -456,6 +460,7 @@ impl Animator {
             pending: Vec::new(),
             additive: Vec::new(),
             masked: None,
+            stack: Vec::new(),
             overlay_mask: None,
             upper_mask: None,
             deltas: Vec::new(),
@@ -707,6 +712,12 @@ impl Animator {
             sample_playing(&self.lib, &u, (&self.bind_rot, &self.bind_t), (&mut self.rot, &mut self.trans), (&mut self.rot_c, &mut self.trans_c));
         }
         for li in 0..4 {
+            // (the scene's stacked clips over the base, beneath the upper body's)
+            if li == 1 {
+                for &(clip, t) in &self.stack {
+                    self.lib.sample(clip, t, &mut self.rot, &mut self.trans);
+                }
+            }
             let layer = match li {
                 0 => &self.base,
                 1 => &self.upper,
@@ -827,9 +838,11 @@ fn pose_animators(
             }
         }
         if a.frozen {
+            a.stack.clear();
             continue;
         }
         a.pose();
+        a.stack.clear();
         let a = a.into_inner();
         // a pose on some joints alone (their rotations)
         if let Some((clip, t, joints)) = a.masked.clone() {
