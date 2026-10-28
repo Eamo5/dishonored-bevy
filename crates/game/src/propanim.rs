@@ -1,7 +1,9 @@
 //! Props the matinees animate (`KActor.device`: a skeletal level actor in a scene group with
 //! animation keys — the Tower's gangway lowering, the Hound Pits' doors, the Lighthouse's
 //! machinery): the level instance's bind-pose mesh gives way to a skinned rig whose animator
-//! the matinee drives (`matinee::play_matinees`).
+//! the matinee drives (`matinee::play_matinees`). And the props that play a clip of themselves
+//! (their skeletal component's `Animations` node set playing: Draper's Ward's looms, the Tower's
+//! pendulum clocks), looping from a random phase.
 
 use crate::anim::Animator;
 use crate::level::{GameAssets, LevelInfo, LevelInstance, LevelSpawnSet};
@@ -44,7 +46,7 @@ fn spawn_prop_rigs(
     let (Some(assets), Some(level)) = (assets, level) else { return };
     let scene = &level.scene;
     let by_index: std::collections::HashMap<u32, (Entity, Vec<Entity>)> = instances.iter().map(|(e, li, ch)| (li.index, (e, ch.map(|c| c.iter().collect()).unwrap_or_default()))).collect();
-    let mut n = 0;
+    let (mut n, mut ambient) = (0, 0);
     for (ai, a) in scene.kismet.actors.iter().enumerate() {
         let (Some(t), None) = (a.device, a.usable) else { continue };
         let Some(vis) = assets.npc_types.get(t as usize).and_then(|v| v.as_ref()) else { continue };
@@ -95,12 +97,24 @@ fn spawn_prop_rigs(
             }
             ec.insert(PropRig { actor: ai as u32, attachments });
             if let Some(lib) = vis.anims.clone() {
-                ec.insert(Animator::new(lib, &vis.skeleton, joints));
+                let mut anim = Animator::new(lib.clone(), &vis.skeleton, joints);
+                // (one playing a clip of itself from the start, at its rate: a loom running, a
+                // pendulum swinging; each its own phase)
+                if let Some((clip, rate, looping)) = a.ambient.as_ref() {
+                    if let Some(c) = lib.find(clip) {
+                        anim.play(c, *looping, if *rate > 0.0 { *rate } else { 1.0 }, 0.0);
+                        if *looping {
+                            anim.seek(rand::random::<f32>() * lib.duration(c));
+                        }
+                        ambient += 1;
+                    }
+                }
+                ec.insert(anim);
             }
             n += 1;
         }
     }
     if n > 0 {
-        info!("{n} props animated by matinees");
+        info!("{n} props animated by matinees ({ambient} playing of themselves)");
     }
 }

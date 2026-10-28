@@ -1923,6 +1923,16 @@ impl<'a> Cooker<'a> {
             None => Vec::new(),
         };
         self.skel_insts.insert(index, (mesh_obj.clone(), comp_sets));
+        // (a clip it plays of itself: its `Animations` node playing; the actor animated as the
+        // matinees' props are)
+        if let Some(node) = cch.obj(self.assets, "Animations").filter(|n| n.class() == "AnimNodeSequence") {
+            let nc = self.chain(&node);
+            if let (Some(seq), true) = (nc.name("AnimSeqName").filter(|s| *s != "None").map(str::to_string), nc.bool("bPlaying").unwrap_or(false)) {
+                let rate = nc.float("Rate").unwrap_or(1.0);
+                let looping = nc.bool("bLooping").unwrap_or(false);
+                self.actor_ref(actor).ambient = Some((seq, rate, looping));
+            }
+        }
         // a usable object's moving part
         if actor_class == "DishonoredUsableObject" || actor_class == "DisAudioLogPlayer" {
             if let Some(&u) = self.usable_ids.get(&actor.key()) {
@@ -5678,6 +5688,12 @@ impl<'a> Cooker<'a> {
                 }
             }
         }
+        // (and the actors playing a clip of themselves, by their own sets)
+        for (a, ka) in k.actors.iter().enumerate() {
+            if ka.ambient.is_some() && ka.spawner.is_none() && !ka.instances.is_empty() {
+                wanted.push((a as u32, Vec::new()));
+            }
+        }
         // (and the actors usables drive, by their own sets)
         for u in &self.scene.usables {
             if let Some(a) = u.remote {
@@ -6977,6 +6993,15 @@ impl<'a> Cooker<'a> {
                     }
                     "DishonoredNotify_AttackInterruptable" if m.interruptible == 0.0 => m.interruptible = t,
                     "DisNotify_DropItem" => m.drops.push(t),
+                    "DisNotify_DropArmor" => {
+                        let np = upk::read_object(&seq.pkg, no).ok().map(|o| o.props);
+                        let v = np.as_ref().and_then(|p| p.vector("m_DropVelocity")).unwrap_or([0.0; 3]);
+                        let which = match np.as_ref().and_then(|p| p.name("m_WhichArmor")) {
+                            Some("eDisWhichArmorToDrop_ByRegion") => if np.as_ref().and_then(|p| p.name("m_ByRegion")).is_some_and(|r| r != "DHR_HEAD") { 2 } else { 1 },
+                            _ => 0,
+                        };
+                        m.armor.push((t, [v[0] * UNIT, v[1] * UNIT, v[2] * UNIT], which));
+                    }
                     "DishonoredNotify_Ragdoll" if m.ragdoll.is_none() => m.ragdoll = Some(t),
                     "DishonoredNotify_FireDialogHook" => {
                         // (`m_DialogHook`, `eDisDialogHookAnimNotify`: the dying's cry when unset)
@@ -7008,7 +7033,7 @@ impl<'a> Cooker<'a> {
             m.hooks.sort_by(|a, b| a.0.total_cmp(&b.0));
             m.fx.sort_by(|a, b| a.time.total_cmp(&b.time));
             m.footfalls.sort_by(|a, b| a.total_cmp(b));
-            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() || !m.look_off.is_empty() || !m.footfalls.is_empty() {
+            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() || !m.look_off.is_empty() || !m.footfalls.is_empty() || !m.armor.is_empty() {
                 self.scene.clip_marks.push(m);
             }
         }

@@ -14,7 +14,57 @@ pub struct NpcPartsPlugin;
 
 impl Plugin for NpcPartsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<KnockOff>().add_systems(Update, (part_hits, knock_off).run_if(in_state(GameState::InGame)));
+        app.add_message::<KnockOff>().add_systems(Update, (part_hits, knock_off, drop_armor).run_if(in_state(GameState::InGame)));
+    }
+}
+
+/// Armour falling off as its wearer's clip says (`DisNotify_DropArmor`: a beheading sends the
+/// helmet back and aside, a fast death lets it drop): all it wears (`_All_Equipped`) or its
+/// head's or body's, flung at the notify's velocity in the wearer's frame. Before, a beheaded
+/// guard's helmet stayed on the head that flew off.
+fn drop_armor(
+    mut commands: Commands,
+    level: Option<Res<LevelInfo>>,
+    mut npcs: Query<(Entity, &mut crate::npc::Npc, &crate::npc::NpcAnim, &crate::anim::Animator)>,
+    parts: Query<(Entity, &NpcAttached, &GlobalTransform)>,
+) {
+    let Some(level) = level else { return };
+    let mut drops: Vec<(Entity, Vec3, u8)> = Vec::new();
+    for (e, npc, st, anim) in &npcs {
+        let Some(p) = anim.current() else { continue };
+        let Some(m) = st.marks().get(&p.clip) else { continue };
+        for &(t, v, which) in &m.armor {
+            if p.t >= t && p.t - t < 0.5 {
+                let f = npc.forward();
+                let right = Vec3::new(-f.z, 0.0, f.x);
+                drops.push((e, f * v[0] + right * v[1] + Vec3::Y * v[2], which));
+            }
+        }
+    }
+    if drops.is_empty() {
+        return;
+    }
+    for (e, part, gt) in &parts {
+        let Some(&(_, vel, which)) = drops.iter().find(|d| d.0 == part.npc) else { continue };
+        let Some(def) = level.scene.npc_types.get(part.npc_type as usize).and_then(|t| t.attachments.get(part.index)) else { continue };
+        // (armour: what knocks off or takes blows in its place, on the region asked for)
+        let armour = !def.knock_off.is_empty() || !def.absorb.is_empty();
+        if !armour || (which == 1 && !def.absorb_head && !def.socket.to_ascii_lowercase().contains("head") && !def.socket.to_ascii_lowercase().contains("helm")) || (which == 2 && def.absorb_head) {
+            continue;
+        }
+        if let Ok((_, mut n, _, _)) = npcs.get_mut(part.npc) {
+            n.bare.push(part.index as u8);
+            if std::env::var_os("DH_NPC_CLIP_LOG").is_some() {
+                info!("npc {}: its armour on {} falls ({vel:.2})", n.name, def.socket);
+            }
+        }
+        commands.entity(e).remove::<(ChildOf, NpcAttached)>().insert((
+            gt.compute_transform(),
+            bevy_rapier3d::prelude::RigidBody::Dynamic,
+            bevy_rapier3d::prelude::Collider::ball(0.12),
+            bevy_rapier3d::prelude::CollisionGroups::new(crate::level::GROUP_PROP, crate::level::GROUP_WORLD | crate::level::GROUP_PROP),
+            bevy_rapier3d::prelude::Velocity { linear: vel, angular: Vec3::new(3.0, 1.0, 2.0) },
+        ));
     }
 }
 

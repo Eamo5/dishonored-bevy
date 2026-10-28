@@ -789,7 +789,8 @@ pub fn cook(levels: &[Arc<Package>], refs: &HashMap<ActorKey, KActor>) -> Kismet
     }
     // the pickups too, scripted or not: what Corvo uses is named to the scripts listening to
     // everything (`DisSeqEvent_Interact`: the Prison's "Take a weapon")
-    let mut extra: Vec<&ActorKey> = refs.iter().filter(|(_, r)| r.pickup.is_some()).map(|(k, _)| k).collect();
+    // (and the props playing a clip of themselves, to be animated)
+    let mut extra: Vec<&ActorKey> = refs.iter().filter(|(_, r)| r.pickup.is_some() || r.ambient.is_some()).map(|(k, _)| k).collect();
     extra.sort();
     for (pkg, o) in extra {
         if let Some(pi) = levels.iter().position(|l| l.name == *pkg) {

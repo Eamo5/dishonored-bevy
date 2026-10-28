@@ -2434,6 +2434,14 @@ fields no longer show their stand-in "WW" behind the title.
   (`Animations`: an AnimNodeSequence at its time) is cooked in that pose, mesh and physics
   bodies: the Tower's lowered gangway was a 4 m wall at its reference pose, and Corvo fell
   into the waterlock.
+- **Props that play of themselves**: a skeletal level actor whose `Animations` node is set
+  playing (`AnimNodeSequence.bPlaying`, `bLooping`, at its `Rate`) now plays that clip from the
+  start, looping from a random phase, as the engine ticks it: Draper's Ward's mill looms
+  (`LoomMachine_Loop`, 12 of them), and the pendulum clocks ticking (`Clock_TickAnim`) in the
+  Tower, on the Kaldwin Bridge, in Boyle's mansion, Galvani's house, the Lighthouse and two
+  Trials (31 actors in 9 maps).
+  Before, only the props a scene drives were animated; these held still in their first frame
+  or their reference pose.
 - **The keyboard mapping lists the original's 36 actions** (`Settings.int`'s `PSI_GBA_*`, in its
   order, with `DefaultInput.ini`'s `m_PCBindings` as the defaults). Before, it had 17, and the
   sword, the left hand, the quick-access wheel, the shortcuts and the shortcut stepping were
@@ -3403,6 +3411,13 @@ against the install's own data where it carries them, then implemented independe
     head material and 174 a body one.
   - Armour comes off to its `m_DamageTypesThatKnockOff`: a bullet or bolt to the head, Wind Blast
     or a flare anywhere. It falls away and stays off after a load.
+  - It also falls where its wearer's clip says (`DisNotify_DropArmor`, now cooked: the
+    beheading finishers, `Generic_Fatality_Behead_*_Slave`, fling the helmet back and aside at
+    `m_DropVelocity`, 4.5 m/s; the other fatalities and the fast deaths,
+    `Generic_DeathFast_*_DownUp`, let it drop), all of it (`eDisWhichArmorToDrop_All_Equipped`)
+    or its head's or body's (`_ByRegion`). Before, a beheaded guard's helmet stayed on.
+    (`npcclip CLIP [NAME]`, a test command, plays a clip on a character: a `_Slave` one as its
+    death.)
   - While worn, armour takes the blows it lists (`m_DamageTypesToAbsorb`) on its region from its
     side (`m_ProtectedBodyRegion`, `m_ProtectedSide`), as roshan's r614/blink research decoded
     the filter: an overseer's mask a bolt, a sleep dart or a bullet in the face from the front,

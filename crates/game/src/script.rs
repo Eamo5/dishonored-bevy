@@ -1237,6 +1237,24 @@ fn run_script(
                 });
             }
         }
+        "npcclip" => {
+            // (tests) npcclip CLIP [NAME]: the nearest standing character (whose name or pawn holds
+            // NAME) plays CLIP once, as a finisher's is played on it
+            let (clip, named) = (cmd.get(1).cloned().unwrap_or_default(), cmd.get(2).cloned().unwrap_or_default());
+            if let Some((e, _, _)) = npc_ents.iter().filter(|(_, n, _)| !n.is_down() && (named.is_empty() || n.name.contains(&named) || n.pawn.contains(&named))).min_by(|a, b| a.2.translation.distance(t.translation).total_cmp(&b.2.translation.distance(t.translation))) {
+                info!("script: npcclip {clip}");
+                // (a killing clip, `_Slave`: it dies playing it, as a finisher's victim)
+                if clip.ends_with("_Slave") {
+                    let from = t.translation;
+                    commands.entity(e).try_insert(crate::npc::AssassinClip(clip));
+                    commands.queue(move |w: &mut World| {
+                        w.write_message(crate::gameplay::NpcHit { npc: e, damage: 999.0, kind: crate::gameplay::HitKind::Assassinate, from });
+                    });
+                } else {
+                    commands.entity(e).try_insert(crate::npc::FinisherClip(clip, false));
+                }
+            }
+        }
         "burn" => {
             // (tests) burn [NAME]: the nearest living character (whose name or pawn holds NAME) set
             // on fire, as an incendiary bolt does

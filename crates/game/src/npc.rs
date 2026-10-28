@@ -7270,6 +7270,11 @@ impl NpcAnim {
         &self.sword
     }
 
+    /// Its clips' marks (`DisNotify_*`, as cooked).
+    pub fn marks(&self) -> &std::collections::HashMap<ClipId, dhcook::format::ClipMarks> {
+        &self.marks
+    }
+
     /// The lines a clip cues (`DishonoredNotify_FireDialogHook`): when, which dialog hook.
     pub fn clip_hooks(&self, clip: ClipId) -> &[(f32, String)] {
         self.marks.get(&clip).map(|m| m.hooks.as_slice()).unwrap_or(&[])

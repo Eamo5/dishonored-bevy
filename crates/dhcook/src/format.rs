@@ -959,6 +959,11 @@ pub struct KActor {
     /// (`scene.npc_types`, kind "device")
     #[serde(default)]
     pub device: Option<u32>,
+    /// the clip it plays of itself, looping (its skeletal component's `Animations`: an
+    /// `AnimNodeSequence` set `bPlaying`: a loom running, a clock's pendulum), its rate, and whether
+    /// it loops
+    #[serde(default)]
+    pub ambient: Option<(String, f32, bool)>,
     /// its tweak and those it falls back on (`m_FallbackChainCooked`), as object paths: what
     /// `DisSeqCond_CompareTweaks` calls related (the Prison's sword is an
     /// `InventoryPickupSwordBase`)
@@ -1061,6 +1066,11 @@ pub struct ClipMarks {
     /// locomotion loops)
     #[serde(default)]
     pub footfalls: Vec<f32>,
+    /// when its character's armour falls off (`DisNotify_DropArmor`: the beheadings', the fast
+    /// deaths'): seconds in, its velocity in the character's frame (m/s: ahead, right, up), and
+    /// which (0 all it wears, `eDisWhichArmorToDrop_All_Equipped`; 1 its head's, 2 its body's)
+    #[serde(default)]
+    pub armor: Vec<(f32, [f32; 3], u8)>,
 }
 
 /// An effect a character's clip starts: seconds in, the particle system, the socket (or bone)
