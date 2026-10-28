@@ -9353,6 +9353,9 @@ pub fn cook_ui(cooked: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         ("UI_EquipmentIcons_DLC06_SF", "icons", "UI_EquipmentIcons_DLC06."),
         ("UI_ItemIcons_Small_DLC06_SF", "itemsmall", "UI_ItemIcons_Small_DLC06."),
         ("UI_ItemIcons_Large_DLC06", "items", ""),
+        // (its missions' pictures: the loading screens', its missions screen's cards)
+        ("UI_Mission_Large_DLC06", "missions", ""),
+        ("UI_Mission_Small_DLC06", "missions", ""),
         // (The Brigmore Witches': Pull, its gadgets and items, its powers' journal art and
         // missions' pictures)
         ("UI_EquipmentIcons_DLC07_SF", "icons", "UI_EquipmentIcons_DLC07."),

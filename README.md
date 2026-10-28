@@ -1868,6 +1868,19 @@ fields no longer show their stand-in "WW" behind the title.
     camera. Event tracks now keep their flags (`bFireEventsWhenForwards`, `_Backwards`,
     `_JumpingForwards`): a scene played fires only the tracks that fire its way, and a skipped
     one only those that fire when jumped over.
+  - Its own missions (`t_Missions`, its movie's `m_missions`; the map's camera to its missions
+    view, `ToMissionsScreen` / `FromMissionsScreen`): The Knife of Dunwall's three and The
+    Brigmore Witches' four, as the game numbers them (`m_MissionImages` 12-14, 16-19), each
+    with its picture (`UI_Mission_Large_DLC06`, `_DLC07`) and its name (`m_MissionNames`: "A
+    Captain of Industry"...), played again from its start's save. Their statistics are kept
+    by the same numbers.
+  - Before, a story pack's mission starts and autosaves were written to Corvo's own slots
+    (`m_MissionNumber` 0-3 being the packs' own count): starting The Knife of Dunwall's first
+    mission replaced the Prison's start save, and a pack's autosaves took turns with Corvo's.
+    Its missions' statistics replaced Corvo's first missions' records too. Each campaign now
+    keeps its own two autosaves and nine mission starts. Its saves are named by their
+    missions (`m_MissionNames`) rather than their maps, and its loading screens and save cards
+    show its missions' pictures.
   - In its missions the pause menu offers `t_BackToDLC06MainMenu` ("Exit the Mission", to its
     own front end) and `t_ExitDLC06` (out of the pack), each asked first with the pack's name
     put in (`§DLC06_NAME§`). Its story's end goes back to its own front end.

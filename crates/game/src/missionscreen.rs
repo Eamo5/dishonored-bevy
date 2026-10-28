@@ -58,9 +58,27 @@ pub const MISSIONS: [(&str, &str); 9] = [
     ("Chapter12Info_Lighthouse", "Lighthouse"),
 ];
 
+/// A campaign's missions (Corvo's, or a story pack's own: `DlcPack::missions`).
+pub fn missions_of(pack: Option<usize>) -> &'static [(&'static str, &'static str)] {
+    match pack {
+        Some(p) => crate::menu::DLC_PACKS.get(p).map_or(&[], |d| d.missions),
+        None => &MISSIONS,
+    }
+}
+
+/// A campaign's mission as the game numbers it (its record's key: Corvo's 0-8, a pack's from its
+/// first, `m_MissionImages`).
+pub fn global_mission(pack: Option<usize>, i: usize) -> usize {
+    pack.and_then(|p| crate::menu::DLC_PACKS.get(p)).map_or(0, |d| d.first_mission as usize) + i
+}
+
 /// A mission's name: its chapter's title.
-pub fn mission_name(data: &crate::gamedata::Data, i: usize) -> String {
-    MISSIONS.get(i).and_then(|(tag, _)| data.0.chapters.iter().find(|c| c.tag == *tag)).map(|c| c.title.clone()).unwrap_or_default()
+/// (a story pack's by the game's number for it, `m_MissionNames`)
+pub fn mission_name(data: &crate::gamedata::Data, pack: Option<usize>, i: usize) -> String {
+    if let Some(t) = pack.and_then(|_| data.0.texts.get(&format!("Missions.{}", global_mission(pack, i)))).filter(|t| !t.is_empty()) {
+        return t.clone();
+    }
+    missions_of(pack).get(i).and_then(|(tag, _)| data.0.chapters.iter().find(|c| c.tag == *tag)).map(|c| c.title.clone()).unwrap_or_default()
 }
 
 /// A card's size and look at its distance from the chosen one (`SetItemsSize`): scale and
@@ -122,7 +140,10 @@ fn draw(
         commands.entity(e).try_despawn();
     }
     let Some((_, labels)) = page else { return };
-    let Some(tl) = timelines.get(MOVIE) else { return };
+    // (a story pack's own movie and missions: `UI_MainMenu_DLC06`'s `m_missions`)
+    let pack = menu.dlc();
+    let movie = pack.and_then(|p| crate::menu::DLC_PACKS.get(p)).map(|d| d.movie).filter(|m| timelines.get(m).is_some_and(|t| Clip::export(&t, "m_missions").is_some())).unwrap_or(MOVIE);
+    let Some(tl) = timelines.get(movie) else { return };
     let s = (w.width() / 1280.0).min(w.height() / 720.0).max(0.01);
     let off = (Vec2::new(w.width(), w.height()) - Vec2::new(1280.0, 720.0) * s) * 0.5;
     let root = commands.spawn((MissionRoot, Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() }, GlobalZIndex(55), Pickable::IGNORE, DespawnOnExit(GameState::InGame))).id();
@@ -132,7 +153,7 @@ fn draw(
     // cards, below)
     let screen = |title: bool| {
         let c = Clip::export(&tl, "m_missions")?;
-        let mut fc = FlashClip::new(MOVIE, tl.clone(), c).real();
+        let mut fc = FlashClip::new(movie, tl.clone(), c).real();
         fc.scale = s;
         for part in ["_tabs_mc", "_tabsBkgd_mc"] {
             fc.set_visible(part, false);
@@ -168,7 +189,7 @@ fn draw(
         let on = i == sel;
         let alpha = if on { 1.0 } else { k };
         // its picture, centred on its loader (`_img_mc` (0,-252), `loader_mc` (7,22.4))
-        if let Some((h, size)) = MISSIONS.get(i).and_then(|m| ui.file(&mut images, "missions", &format!("MissionsScreen_{}_Large", m.1))) {
+        if let Some((h, size)) = missions_of(pack).get(i).and_then(|m| ui.file(&mut images, "missions", &format!("MissionsScreen_{}_Large", m.1))) {
             let (iw, ih) = (size.x * k, size.y * k);
             let c = card(Vec2::new(7.0, -252.0 + 22.4));
             commands.spawn((
@@ -181,7 +202,7 @@ fn draw(
         }
         // the card over it: its strokes, padlock, number and banner
         if let Some(c) = Clip::export(&tl, "m_missions_item") {
-            let mut fc = FlashClip::new(MOVIE, tl.clone(), c).real();
+            let mut fc = FlashClip::new(movie, tl.clone(), c).real();
             fc.scale = s;
             fc.m = [SLIDE_M[0] * k, SLIDE_M[1] * k, SLIDE_M[2] * k, SLIDE_M[3] * k, 0.0, 0.0];
             fc.alpha = alpha;
@@ -226,7 +247,7 @@ fn draw(
         let locked = menu.item_slot(sel).and_then(|slot| slots.info(slot)).is_none();
         let entries = [
             Entry::new(Btn::A, data.text(base, "t_Validate")).locked(locked),
-            Entry::new(Btn::X, data.text("DisGFxMoviePlayerMainMenu_Texts", "t_SeeMissionStats")).locked(!records.has(sel)),
+            Entry::new(Btn::X, data.text("DisGFxMoviePlayerMainMenu_Texts", "t_SeeMissionStats")).locked(!records.has(global_mission(pack, sel))),
             Entry::new(Btn::B, data.text(base, "t_Back")),
         ];
         crate::helpbar::spawn(&mut commands, root, lib, s, off + crate::helpbar::END * s, &entries, &mut ui, &mut images, false);
@@ -255,6 +276,6 @@ fn see_stats(
         return;
     }
     let Ok(w) = window.single() else { return };
-    let shown = crate::mission::show_record(&mut commands, menu.selected(), &records, &data, &fonts, &mut ui, &mut images, &mut timelines, w);
+    let shown = crate::mission::show_record(&mut commands, global_mission(menu.dlc(), menu.selected()), &records, &data, &fonts, &mut ui, &mut images, &mut timelines, w);
     sfx.write(crate::audio::PostEvent::named(if shown { "UI_Validation" } else { "UI_Failure" }, None));
 }

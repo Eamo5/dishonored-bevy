@@ -71,8 +71,10 @@ impl MissionEnd {
 }
 
 /// The mission just played's start, if saved (`bReplayAvailable`): its slot.
-fn replay_slot(stats: &PlayerStats, slots: &crate::save::SaveSlots) -> Option<usize> {
-    stats.mission_start.map(|n| crate::save::MISSION_SLOT + n as usize).filter(|slot| slots.info(*slot).is_some())
+/// (a story pack's in its own slots)
+fn replay_slot(stats: &PlayerStats, slots: &crate::save::SaveSlots, map: &str) -> Option<usize> {
+    let pack = crate::menu::dlc_of(map);
+    stats.mission_start.map(|n| crate::save::campaign_slot(crate::save::MISSION_SLOT + n as usize, pack)).filter(|slot| slots.info(*slot).is_some())
 }
 
 #[derive(Component)]
@@ -239,7 +241,7 @@ fn travel(
     }
     // a mission is over: its statistics first
     paused.0 = true;
-    let replay = replay_slot(&stats, &slots);
+    let replay = replay_slot(&stats, &slots, &from);
     commands.insert_resource(MissionEnd { map: Some((r.map, r.start)), op: None, replay, confirm: None, confirm_click: None, in_menu: false });
     let s = &stats;
     let view = StatsView {
@@ -292,9 +294,11 @@ fn show_stats(
     let title = data.mission_title(&map, def.mission).unwrap_or_else(|| mission_name(&map));
     let rec = record_of(def, &stats, vm.as_deref(), title);
     let mut view = record_view(def, &rec);
-    records.keep(tweak_mission(def), rec);
+    // (kept by the mission's number in the game: a story pack's after Corvo's, from its first,
+    // `m_MissionImages`)
+    records.keep(crate::missionscreen::global_mission(crate::menu::dlc_of(&map), tweak_mission(def) as usize).min(255) as u8, rec);
     paused.0 = true;
-    let replay = replay_slot(&stats, &slots);
+    let replay = replay_slot(&stats, &slots, &map);
     commands.insert_resource(MissionEnd { map: None, op: Some(r.op), replay, confirm: None, confirm_click: None, in_menu: false });
     view.replay = replay.is_some();
     if let (Ok(w), Some(tl)) = (window.single(), timelines.get("MissionStats")) {

@@ -111,23 +111,51 @@ pub fn manual_number(slot: usize) -> usize {
     if slot >= MORE_MANUAL { slot - MORE_MANUAL + 9 } else { slot }
 }
 
-/// An autosave's slot (either of the two).
+/// The story packs' own autosaves and mission starts (each campaign's apart, as the original's
+/// `t_Q_NewGame_DLC07` speaks of the pack's own autosaves): a pack's two autosaves and its nine
+/// mission starts, after the manual saves, a pack after another.
+pub const PACK_BASE: usize = MAX_SLOT + 1;
+const PACK_SLOTS: usize = LAST_SLOT - AUTOSAVE_SLOT + 1;
+/// The last slot of all.
+pub const TOP_SLOT: usize = PACK_BASE + 2 * PACK_SLOTS - 1;
+
+/// A campaign's own slot for an autosave or a mission start (Corvo's: as it is; a story pack's,
+/// its own); any other slot as it is.
+pub fn campaign_slot(slot: usize, pack: Option<usize>) -> usize {
+    match pack {
+        Some(p) if (AUTOSAVE_SLOT..=LAST_SLOT).contains(&slot) => PACK_BASE + p * PACK_SLOTS + (slot - AUTOSAVE_SLOT),
+        _ => slot,
+    }
+}
+
+/// A slot's place among its campaign's autosaves and mission starts (`AUTOSAVE_SLOT`..`LAST_SLOT`).
+fn as_corvos(slot: usize) -> usize {
+    if (PACK_BASE..=TOP_SLOT).contains(&slot) {
+        AUTOSAVE_SLOT + (slot - PACK_BASE) % PACK_SLOTS
+    } else {
+        slot
+    }
+}
+
+/// An autosave's slot (either of the two, of any campaign).
 pub fn is_autosave(slot: usize) -> bool {
-    slot == AUTOSAVE_SLOT || slot == AUTOSAVE_SLOT_B
+    let s = as_corvos(slot);
+    s == AUTOSAVE_SLOT || s == AUTOSAVE_SLOT_B
 }
 
-/// A mission start's slot (missions 0..8).
+/// A mission start's slot (missions 0..8, of any campaign).
 pub fn is_mission_save(slot: usize) -> bool {
-    (MISSION_SLOT..=LAST_SLOT).contains(&slot)
+    (MISSION_SLOT..=LAST_SLOT).contains(&as_corvos(slot))
 }
 
-/// Where the next autosave goes: the autosave slot not holding the newer autosave.
-fn autosave_target(slots: &SaveSlots) -> usize {
+/// Where the next autosave of a campaign goes: its autosave slot not holding the newer.
+fn autosave_target(slots: &SaveSlots, pack: Option<usize>) -> usize {
+    let (a_slot, b_slot) = (campaign_slot(AUTOSAVE_SLOT, pack), campaign_slot(AUTOSAVE_SLOT_B, pack));
     let at = |s: usize| slots.info(s).map(|i| i.2);
-    match (at(AUTOSAVE_SLOT), at(AUTOSAVE_SLOT_B)) {
-        (Some(a), Some(b)) if a > b => AUTOSAVE_SLOT_B,
-        (Some(_), None) => AUTOSAVE_SLOT_B,
-        _ => AUTOSAVE_SLOT,
+    match (at(a_slot), at(b_slot)) {
+        (Some(a), Some(b)) if a > b => b_slot,
+        (Some(_), None) => b_slot,
+        _ => a_slot,
     }
 }
 
@@ -460,6 +488,16 @@ pub fn mission_name(map: &str) -> String {
         ("l_out", "The Loyalists"),
         ("l_isl", "The Light at the End"),
         ("l_lighth", "The Light at the End"),
+        // (the story packs': their missions' names, `m_MissionNames` 11-14, 16-20)
+        ("dlc06_tower", "None Like Her"),
+        ("dlc06_slaughter", "A Captain of Industry"),
+        ("dlc06_timsh", "Eminent Domain"),
+        ("dlc06_daudbase", "The Surge"),
+        ("l_dlc07_baseintro", "Choosing Your Mark"),
+        ("l_dlc07_coldridge", "A Stay of Execution For Lizzy"),
+        ("l_dlc07_draper", "The Dead Eels"),
+        ("l_dlc07_brig", "Delilah's Masterwork"),
+        ("l_dlc07_endgame", "Everything is Connected"),
     ];
     names.iter().find(|(k, _)| m.starts_with(k)).map(|(_, n)| n.to_string()).unwrap_or_else(|| map.to_string())
 }
@@ -492,7 +530,7 @@ pub fn mission_index(map: &str) -> usize {
 impl SaveSlots {
     pub fn scan() -> SaveSlots {
         let mut slots = Vec::new();
-        for slot in 0..=MAX_SLOT {
+        for slot in 0..=TOP_SLOT {
             #[derive(Deserialize)]
             struct Head {
                 map: String,
@@ -614,7 +652,9 @@ pub(crate) fn save_game(
             *waiting = (left > time.delta_secs()).then_some((s, left - time.delta_secs()));
         }
     }
-    let slot = slot.map(|s| if is_autosave(s) { autosave_target(&slots) } else { s });
+    // (the campaign's own autosaves and mission starts: Corvo's, or the story pack's)
+    let pack = level.as_ref().and_then(|l| crate::menu::dlc_of(&l.scene.name));
+    let slot = slot.map(|s| if is_autosave(s) { autosave_target(&slots, pack) } else { campaign_slot(s, pack) });
     if slot.is_none() && keep.is_none() {
         return;
     }
@@ -1169,5 +1209,22 @@ mod slot_tests {
         assert_eq!(all.len(), 40);
         assert!(all.iter().all(|s| is_manual(*s) && !is_autosave(*s) && !is_mission_save(*s) && *s != 0));
         assert_eq!(all.iter().map(|s| manual_number(*s)).collect::<Vec<_>>(), (1..=40).collect::<Vec<_>>());
+    }
+
+    /// Each campaign keeps its own autosaves and mission starts: none of a story pack's is
+    /// Corvo's, another pack's or a manual save, and each is still known for what it is.
+    #[test]
+    fn each_campaign_has_its_own_autosaves_and_mission_starts() {
+        let mut seen = std::collections::HashSet::new();
+        for pack in [None, Some(0), Some(1)] {
+            for logical in AUTOSAVE_SLOT..=LAST_SLOT {
+                let s = campaign_slot(logical, pack);
+                assert!(seen.insert(s), "slot {s} shared");
+                assert!(!is_manual(s) && s <= TOP_SLOT);
+                assert_eq!(is_autosave(s), is_autosave(logical));
+                assert_eq!(is_mission_save(s), is_mission_save(logical));
+            }
+        }
+        assert_eq!(campaign_slot(3, Some(1)), 3, "a manual save stays where it is");
     }
 }

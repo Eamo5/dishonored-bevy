@@ -351,7 +351,24 @@ fn build_colliders(scene: &Scene, raw: &[Option<MeshFile>]) -> Vec<Option<Instan
 /// The mission illustration (`UI_Mission_Large`) shown while a map loads.
 pub(crate) fn mission_art(map: &str) -> Option<&'static str> {
     let m = map.to_ascii_lowercase();
-    let table: [(&str, &str); 22] = [
+    // (the story packs' own: `UI_Mission_Large_DLC06`, `_DLC07`, by the map each shows: our
+    // reading of their maps; their missions' numbered ones are `m_MissionImages`')
+    let table: [(&str, &str); 37] = [
+        ("dlc06_tower", "DLC06Tower"),
+        ("dlc06_slaughter", "DLC06Slaughter"),
+        ("dlc06_timsh", "DLC06LegalDistrict"),
+        ("dlc06_daudbase", "DLC06DaudBase"),
+        ("dlc06_dishonored_mainmenu", ""),
+        ("l_dlc07_baseintro", "DLC07Intro"),
+        ("l_dlc07_coldridge", "DLC07Prison"),
+        ("l_dlc07_draperstreets", "DLC07DraperStreets"),
+        ("l_dlc07_drapersewers", "DLC07DraperStreets"),
+        ("l_dlc07_drapership", "DLC07DraperShip"),
+        ("l_dlc07_drapermill", "DLC07MillDL"),
+        ("l_dlc07_brigmore_void", "DLC07BrigmoreVoid"),
+        ("l_dlc07_brig", "DLC07BrigmoreManor"),
+        ("l_dlc07_endgame", "DLC07End"),
+        ("l_dlc07_mainmenu", ""),
         ("l_tower_p", "EmpressTower"),
         ("l_prsnsewer", "Sewer"),
         ("l_prison", "Prison"),

@@ -35,11 +35,16 @@ pub struct DlcPack {
     pub prefix: &'static str,
     pub full: &'static str,
     pub credits: &'static str,
+    /// its missions as the game's numbers them (`m_MissionImages`, its records: The Knife of
+    /// Dunwall's 12-14, The Brigmore Witches' 16-19) and each one's chapter (its name) and picture
+    /// (`MissionsScreen_<x>_Large`)
+    pub first_mission: u8,
+    pub missions: &'static [(&'static str, &'static str)],
 }
 
 pub const DLC_PACKS: [DlcPack; 2] = [
-    DlcPack { first: "DLC06_Tower_P", name: "t_DLC06_Name", menu: "DLC06_Dishonored_MainMenu", movie: "MainMenu_DLC06", logo: 79, prefix: "dlc06_", full: "dlc06_dishonoredgamefull_p", credits: "CreditsDLC06" },
-    DlcPack { first: "L_DLC07_BaseIntro_P", name: "t_DLC07_Name", menu: "L_DLC07_MainMenu", movie: "MainMenu_DLC07", logo: 94, prefix: "l_dlc07_", full: "l_dlc07_gamefull_p", credits: "CreditsDLC07" },
+    DlcPack { first: "DLC06_Tower_P", name: "t_DLC06_Name", menu: "DLC06_Dishonored_MainMenu", movie: "MainMenu_DLC06", logo: 79, prefix: "dlc06_", full: "dlc06_dishonoredgamefull_p", credits: "CreditsDLC06", first_mission: 12, missions: &[("ChapterInfo02_TheKillingFloor", "DLC06Slaughter"), ("ChapterInfo03_EminentDomain", "DLC06LegalDistrict"), ("ChapterInfo04_DaudBase", "DLC06DaudBase")] },
+    DlcPack { first: "L_DLC07_BaseIntro_P", name: "t_DLC07_Name", menu: "L_DLC07_MainMenu", movie: "MainMenu_DLC07", logo: 94, prefix: "l_dlc07_", full: "l_dlc07_gamefull_p", credits: "CreditsDLC07", first_mission: 16, missions: &[("ChapterInfo02", "DLC07Intro"), ("ChapterInfo03", "DLC07Prison"), ("ChapterInfo04", "DLC07DraperStreets"), ("ChapterInfo05", "DLC07BrigmoreManor")] },
 ];
 
 /// The story pack a map is of (its own front end's too).
@@ -779,6 +784,8 @@ fn dlc_scene(menu: Res<Menu>, vm: Option<ResMut<Vm>>, mut was: Local<Option<(Pag
         (Some(Page::Difficulty), Page::Difficulty) => vm.fs_command(&format!("SetDifficultyCameraAngle{sel}")),
         (_, Page::Difficulty) => vm.fs_command(&format!("ToNewGameScreen{sel}")),
         (Some(Page::Difficulty), _) => vm.fs_command(&format!("FromNewGameScreen{}", before.map_or(1, |b| b.1.min(3)))),
+        (Some(Page::Missions), p) if p != Page::Missions => vm.fs_command("FromMissionsScreen"),
+        (b, Page::Missions) if b != Some(Page::Missions) => vm.fs_command("ToMissionsScreen"),
         (Some(Page::Load), p) if p != Page::Load => vm.fs_command("FromLoadScreen"),
         (b, Page::Load) if b != Some(Page::Load) => vm.fs_command("ToLoadScreen"),
         _ => {}
@@ -1102,6 +1109,8 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
             if has_saves {
                 v.push(("Load".into(), Action::Page(Page::Load)));
             }
+            // (its own missions: `m_missions`, its map's `ToMissionsScreen`)
+            v.push((data.text(base, "t_Missions"), Action::Page(Page::Missions)));
             v.push(("Options".into(), Action::Page(Page::Options)));
             v.push((data.text(own, "t_Credits"), Action::DlcCredits(pack)));
             v.push((data.text(own, "t_BackToMainMenu"), Action::LeaveDlc));
@@ -1343,10 +1352,12 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
         (_, Page::Load) => slots.list().into_iter().filter(|(i, _)| slots.info(*i).is_some_and(|(map, ..)| dlc_of(map) == menu.dlc)).map(|(i, desc)| (desc, Action::Load(i))).collect(),
         // the missions as the exe lists them (`OnMissionsClicked`): up to the furthest started,
         // each by its start's save (`SGS_DisMission0..8`), locked without it
+        // (a story pack's own missions, by their own starts' saves)
         (_, Page::Missions) => {
-            let has = |i: usize| slots.info(crate::save::MISSION_SLOT + i).is_some();
-            match (0..crate::missionscreen::MISSIONS.len()).filter(|&i| has(i)).max() {
-                Some(last) => (0..=last).map(|i| (crate::missionscreen::mission_name(data, i), if has(i) { Action::Mission(crate::save::MISSION_SLOT + i) } else { Action::LockedMission(i) })).collect(),
+            let slot = |i: usize| crate::save::campaign_slot(crate::save::MISSION_SLOT + i, menu.dlc);
+            let has = |i: usize| slots.info(slot(i)).is_some();
+            match (0..crate::missionscreen::missions_of(menu.dlc).len()).filter(|&i| has(i)).max() {
+                Some(last) => (0..=last).map(|i| (crate::missionscreen::mission_name(data, menu.dlc, i), if has(i) { Action::Mission(slot(i)) } else { Action::LockedMission(i) })).collect(),
                 None => Vec::new(),
             }
         }
