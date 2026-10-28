@@ -2284,8 +2284,8 @@ fn run_script(
             list.sort_by(|a, b| a.0.total_cmp(&b.0));
             for (d, n, pos) in list.iter().take(4) {
                 info!(
-                    "script:   npc {} d={:.1} pos={:.1} mode={:?} alert={:?} aware={:.2} hp={:.0} sees={} down={:.2} enemy={} pawn={}",
-                    n.name, d, pos, n.mode, n.alert, n.awareness, n.health, n.sees_player, n.down_t, n.enemy, n.pawn
+                    "script:   npc {} d={:.1} pos={:.1} mode={:?} alert={:?} aware={:.2} hp={:.0} sees={} down={:.2} enemy={} open={:?} pawn={}",
+                    n.name, d, pos, n.mode, n.alert, n.awareness, n.health, n.sees_player, n.down_t, n.enemy, n.open, n.pawn
                 );
             }
         }

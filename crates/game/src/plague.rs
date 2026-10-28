@@ -73,6 +73,8 @@ fn clip_notifies(
     mut npcs: Query<(Entity, &Npc, &Animator, &NpcAnim, &NpcRig, Option<&mut ClipSeen>, Option<&mut Cloud>)>,
     globals: Query<&GlobalTransform>,
     mut fx: MessageWriter<SpawnEffect>,
+    (player, mut shake): (Query<&Transform, With<crate::player::Player>>, MessageWriter<crate::player::ShakeCamera>),
+    level: Option<Res<crate::level::LevelInfo>>,
 ) {
     let Some(assets) = assets else { return };
     for (e, npc, anim, clips, rig, seen, cloud) in &mut npcs {
@@ -90,12 +92,25 @@ fn clip_notifies(
         };
         for f in clips.clip_fx(p.clip).iter().filter(|f| passed(f.time)) {
             let Some((joint, local)) = socket(&assets, npc, rig, &f.socket) else { continue };
+            // (as long as the system plays of itself: a burning man's flames 8.5 s, its smoke
+            // after; one looping for ever, `FX_SECS`)
+            let secs = level.as_ref().and_then(|l| l.scene.particle_systems.get(f.system as usize)).and_then(|s| crate::particles::natural_secs(s, 2.0)).map_or(FX_SECS, |s| s.clamp(0.5, 30.0));
             if f.attach {
-                let at = commands.spawn((local, ChildOf(joint), Expire(FX_SECS))).id();
-                fx.write(SpawnEffect { follow: Some(at), turn: true, system: Some(f.system), secs: FX_SECS, ..SpawnEffect::at("", Vec3::ZERO) });
+                let at = commands.spawn((local, ChildOf(joint), Expire(secs))).id();
+                fx.write(SpawnEffect { follow: Some(at), turn: true, system: Some(f.system), secs, ..SpawnEffect::at("", Vec3::ZERO) });
             } else if let Ok(g) = globals.get(joint) {
                 let w = g.mul_transform(local);
-                fx.write(SpawnEffect { rot: w.rotation(), system: Some(f.system), secs: FX_SECS, ..SpawnEffect::at("", w.translation()) });
+                fx.write(SpawnEffect { rot: w.rotation(), system: Some(f.system), secs, ..SpawnEffect::at("", w.translation()) });
+            }
+        }
+        // the view shaken near it, less the further from its bone (`DisNotify_CameraShake`: a
+        // tallboy's stomp; the fall-off with distance is our reading)
+        for (_, bone, reach, mag) in clips.clip_shakes(p.clip).iter().filter(|s| passed(s.0)) {
+            let at = rig.joint(bone).and_then(|j| globals.get(j).ok()).map_or(globals.get(e).map(|g| g.translation()).unwrap_or_default(), |g| g.translation());
+            let d = player.single().map_or(f32::MAX, |pt| pt.translation.distance(at));
+            if d < *reach {
+                // (held to the scripts' own greatest jolt, `DisSeqAct_CameraShake`'s)
+                shake.write(crate::player::ShakeCamera((mag * (1.0 - d / reach.max(0.01))).min(1500.0)));
             }
         }
         let Some(pl) = npc.arms.plague.as_ref() else { continue };

@@ -494,6 +494,21 @@ fn value(m: &ModuleDef, name: &str, default: f32) -> f32 {
     m.values.get(name).copied().unwrap_or(default)
 }
 
+/// How long a system plays of itself: its last emitter's delay and loops (`EmitterDelay`,
+/// `EmitterDuration` (its range's longer end), `EmitterLoops`), and `tail` more for its last
+/// particles; none when an emitter loops for ever.
+pub fn natural_secs(sys: &dhcook::format::ParticleSystemDef, tail: f32) -> Option<f32> {
+    sys.emitters.iter().try_fold(0.0f32, |acc, e| {
+        let r = &e.required;
+        let loops = value(r, "EmitterLoops", 0.0);
+        let duration = value(r, "EmitterDuration", 1.0);
+        if loops <= 0.0 && duration > 0.0 {
+            return None;
+        }
+        Some(acc.max(value(r, "EmitterDelay", 0.0) + duration * loops.max(1.0)))
+    }).map(|s| s + tail)
+}
+
 fn rand3() -> [f32; 3] {
     [rand::random(), rand::random(), rand::random()]
 }

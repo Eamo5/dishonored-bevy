@@ -218,6 +218,9 @@ pub struct NpcSave {
     /// its attachments knocked off (armour)
     #[serde(default)]
     bare: Vec<u8>,
+    /// burnt: its skin charred
+    #[serde(default)]
+    charred: bool,
     /// Original passenger placement, before a cinematic vehicle's movement.
     #[serde(default)]
     ride_base: Option<[f32; 16]>,
@@ -745,6 +748,7 @@ pub(crate) fn save_game(
                 consumed,
                 corpse_age: Some(n.corpse_age),
                 bare: n.bare.clone(),
+                charred: n.charred,
                 ride_base: matinee.saved_ride_base(entity),
                 ragdoll: ragdolls.get(entity).ok().map(|(rd, rig, g)| rd.pose(g, rig, &globals).into_iter().map(|(b, t)| (b as u16, t.translation.to_array(), t.rotation.to_array())).collect()),
             })
@@ -1142,6 +1146,11 @@ pub(crate) fn restore_npcs(mut commands: Commands, mut q: Query<(Entity, &Restor
         let s = &r.0;
         if s.handled {
             handled.0.insert(e);
+        }
+        // (burnt: charred again, long burnt out)
+        if s.charred {
+            n.charred = true;
+            commands.entity(e).try_insert(crate::npc::Immolated::burnt_out());
         }
         // (the armour it had lost stays off)
         n.bare = s.bare.clone();

@@ -209,7 +209,7 @@ fn aim(
     level: Option<Res<LevelInfo>>,
     mut vm: Option<ResMut<crate::kismet::Vm>>,
     (mut sfx, mut used, mut stagger, mut grab, mut lit): (MessageWriter<PostEvent>, MessageWriter<crate::powers::PowerUsed>, MessageWriter<NpcStagger>, MessageWriter<crate::props::PullProp>, ResMut<crate::highlight::ExtraHighlight>),
-    (mut commands, mut carry, ragdolls, consumed): (Commands, ResMut<crate::carry::Carry>, Query<(), With<crate::ragdoll::Ragdoll>>, Query<(), Or<(With<crate::npc::ConsumedBody>, With<crate::npc::Ashes>)>>),
+    (mut commands, mut carry, ragdolls, consumed): (Commands, ResMut<crate::carry::Carry>, Query<(), With<crate::ragdoll::Ragdoll>>, Query<(), Or<(With<crate::npc::ConsumedBody>, With<crate::npc::Ashes>, With<crate::npc::Immolated>)>>),
     mut krusts: Query<(Entity, &mut crate::krust::Krust), Without<crate::possession::Possessed>>,
 ) {
     if paused.0 {

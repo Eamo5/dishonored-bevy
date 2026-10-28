@@ -280,6 +280,11 @@ pub struct Npc {
     pub in_convo: bool,
     /// spawned dead in this pose (its spawner's `m_DeadPoseAnimName`)
     pub dead_pose: Option<String>,
+    /// burnt (its skin charred: `Immolation_INST`)
+    pub charred: bool,
+    /// open now, as the clips it plays say (`DisNotify_VulnerableRange`): killable (a blow a
+    /// finisher), off balance (choked in a fight)
+    pub open: [bool; 2],
     /// its walk begun or ended with its clip; what it wished to go this frame (its path's way, at
     /// its pace), and its path: how far to its goal and to the path's next point
     pub pace: Option<Pace>,
@@ -1291,10 +1296,22 @@ fn ash_marked(
 /// as it is. (Our reading of the settings: the fade's begin is a time, its end the parameter's
 /// last value; the material's mask leaves nothing below 0.5, so the fade can't start lower.)
 /// One set on fire standing (an incendiary bolt's): it burns with its own clip
-/// (`DisNPCAnim_Immolate`: `Generic_Immolation`) until nothing is left.
-/// (Burning, it makes its noise every `m_fNoisePeriod`: the seconds to the next.)
-#[derive(Component)]
-pub struct Immolated(pub f32);
+/// (`DisNPCAnim_Immolate`: `Generic_Immolation`) and lies charred (`burning`): seconds since it
+/// caught, the seconds to its next noise (`m_fNoisePeriod`), and its charred skin once its clip
+/// has put it on (`DisNotify_ReplaceMaterials`).
+#[derive(Component, Default)]
+pub struct Immolated {
+    pub t: f32,
+    noise: f32,
+    mat: Option<Handle<crate::ue3mat::Ue3Material>>,
+}
+
+impl Immolated {
+    /// A body restored charred: long burnt out.
+    pub fn burnt_out() -> Immolated {
+        Immolated { t: 1.0e6, ..Default::default() }
+    }
+}
 
 #[derive(Component)]
 pub struct Electrocuted {
@@ -1385,42 +1402,89 @@ fn electrocute(
     }
 }
 
-/// One burning (`ImmolationParams`, the incendiary bolt's): the others keep `m_fAvoidanceRadius` (2 m)
-/// from it, a danger zone laid afresh each moment it burns, and it makes its noise every
-/// `m_fNoisePeriod` (1 s: a danger, `EAINoiseLoudness3`, 30 m). Before, it made one noise (14 m) as
-/// it caught, and the others walked through it.
+/// One burning (`ImmolationParams`, the incendiary bolt's) burns its clip through
+/// (`Generic_Immolation`, 6.9 s, flailing): at the clip's `DisNotify_ReplaceMaterials` (1.05 s) its
+/// skin is charred (`Immolation_INST`), its fire (`Fire_Amount`) rising to 1 over 0.5 s
+/// (`DisNotify_PawnMaterialParam`) and dying back to 0 over 1.25 s as the clip ends; it goes limp
+/// at the clip's `DishonoredNotify_Ragdoll` (6.78 s) and lies there charred. While it burns the
+/// others keep `m_fAvoidanceRadius` (2 m) from it, a danger zone laid afresh each moment, and it
+/// makes its noise every `m_fNoisePeriod` (1 s: a danger, `EAINoiseLoudness3`, 30 m). Before, it
+/// made one noise (14 m) as it caught, the others walked through it, and it was gone in 1.5 s.
+#[allow(clippy::type_complexity)]
 fn burning(
+    mut commands: Commands,
     time: Res<Time>,
     data: Res<crate::gamedata::Data>,
-    mut q: Query<(Entity, &mut Immolated, &Ashes, &GlobalTransform)>,
+    assets: Option<Res<GameAssets>>,
+    mut materials: ResMut<Assets<crate::ue3mat::Ue3Material>>,
+    mut q: Query<(Entity, &mut Immolated, &GlobalTransform, Option<&Animator>, Option<&NpcAnim>)>,
+    children: Query<&Children>,
+    parts: Query<Option<&crate::fxlight::PartPasses>, With<NpcPart>>,
     mut zones: ResMut<crate::danger::DangerZones>,
     mut noise: MessageWriter<Noise>,
 ) {
     let imm = &data.0.immolation;
     let dt = time.delta_secs();
-    for (e, mut b, ashes, g) in &mut q {
-        // (burnt away: nothing left burning)
-        if ashes.0 > 0.6 {
-            continue;
+    let charred = assets.as_ref().and_then(|a| a.immolation_material.clone());
+    for (e, mut b, g, anim, st) in &mut q {
+        b.t += dt;
+        // its clip, and where it is in it (none: as long as the original's)
+        let playing = anim.and_then(|a| a.current().map(|p| (p.clip, p.t, a.lib.duration(p.clip))));
+        let marks = playing.and_then(|(c, _, _)| st.and_then(|s| s.marks().get(&c)));
+        let (ct, len) = playing.map_or((b.t, 6.87), |(_, t, l)| (t, l));
+        let burning = b.t < len.max(1.0);
+        if burning {
+            let pos = g.translation();
+            if imm.avoid > 0.0 {
+                zones.sphere(e, 0.1, pos, imm.avoid);
+            }
+            b.noise -= dt;
+            if b.noise <= 0.0 {
+                b.noise = if imm.noise_period > 0.0 { imm.noise_period } else { f32::INFINITY };
+                let radius = data.0.noise_loudness.get(&imm.loudness).copied().unwrap_or(14.0);
+                let kind = match imm.context.as_str() {
+                    "EAINoiseContext_Threatening" => NoiseKind::Threatening,
+                    "EAINoiseContext_Anomaly" => NoiseKind::Anomaly,
+                    _ => NoiseKind::Danger,
+                };
+                noise.write(Noise { corvo: false, pos, radius: if radius > 0.0 { radius } else { 14.0 }, kind });
+            }
         }
-        let pos = g.translation();
-        if imm.avoid > 0.0 {
-            zones.sphere(e, 0.1, pos, imm.avoid);
+        // its skin charred at the clip's mark
+        let at = marks.and_then(|m| m.recolor.first().map(|r| r.0)).unwrap_or(1.05);
+        if b.mat.is_none() && b.t >= at {
+            if let Some(m) = charred.as_ref().and_then(|(base, _)| materials.get(base).cloned()) {
+                let h = materials.add(m);
+                for c in children.iter_descendants(e) {
+                    if let Ok(passes) = parts.get(c) {
+                        crate::fxlight::drop_light_passes(&mut commands, c, passes);
+                        commands.entity(c).try_remove::<(MeshMaterial3d<crate::lightmap::WorldMaterial>, MeshMaterial3d<crate::ue3mat::Ue3Material>)>().try_insert(MeshMaterial3d(h.clone()));
+                    }
+                }
+                b.mat = Some(h);
+            }
         }
-        b.0 -= dt;
-        if b.0 <= 0.0 {
-            b.0 = if imm.noise_period > 0.0 { imm.noise_period } else { f32::INFINITY };
-            let radius = data.0.noise_loudness.get(&imm.loudness).copied().unwrap_or(14.0);
-            let kind = match imm.context.as_str() {
-                "EAINoiseContext_Threatening" => NoiseKind::Threatening,
-                "EAINoiseContext_Anomaly" => NoiseKind::Anomaly,
-                _ => NoiseKind::Danger,
-            };
-            noise.write(Noise { corvo: false, pos, radius: if radius > 0.0 { radius } else { 14.0 }, kind });
+        // its fire: up to the clip's value at its pace, down at the end's
+        let fire = marks.and_then(|m| m.mat_params.iter().find(|p| p.name.eq_ignore_ascii_case("Fire_Amount")).cloned());
+        let (start, value, rise, end) = fire.map_or((at, 1.0, 0.5, Some((0.0, 1.25))), |p| (p.time, p.value, p.interp, p.end));
+        let since = if playing.is_some() && b.t < len { ct } else { b.t };
+        let mut v = if since < start { 0.0 } else { value * ((since - start) / rise.max(1e-3)).min(1.0) };
+        if let Some((to, fall)) = end.filter(|_| b.t >= len) {
+            v = value + (to - value) * ((b.t - len) / fall.max(1e-3)).min(1.0);
+        }
+        if let (Some(mut m), Some((_, slots))) = (b.mat.as_ref().and_then(|h| materials.get_mut(h)), charred.as_ref()) {
+            for &s in slots {
+                if s < m.params.p.len() {
+                    m.params.p[s] = Vec4::splat(v);
+                }
+            }
+        }
+        // (burnt out: a charred body)
+        if b.t > len + end.map_or(0.0, |e| e.1) + 0.1 {
+            commands.entity(e).try_remove::<Immolated>();
         }
     }
 }
-
 fn burn_ashes(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &mut Ashes, &mut Npc, &mut Visibility)>) {
     for (e, mut a, mut npc, mut vis) in &mut q {
         a.0 += time.delta_secs();
@@ -2476,6 +2540,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         stop_roll: std::array::from_fn(|_| rand::random::<f32>() * 2.0 - 1.0),
         in_convo: false,
         dead_pose: sp.dead_pose.clone(),
+        charred: false,
+        open: [false; 2],
         pace: None,
         turning: false,
         wish: Vec3::ZERO,
@@ -3207,7 +3273,8 @@ fn npc_hits(
                 npc.health = 0.0;
                 npc.set_mode(Mode::Dead);
                 stats.killed(&npc.pawn, npc.civilian());
-                commands.entity(e).try_insert((Ashes(-0.9), Immolated(0.0)));
+                npc.charred = true;
+                commands.entity(e).try_insert(Immolated::default());
                 sfx.write(crate::audio::PostEvent::named("Amb_Fire_Alcohol_Immolation", Some(pos + Vec3::Y)));
                 fx.write(crate::particles::SpawnEffect { follow: Some(e), secs: 1.6, ..crate::particles::SpawnEffect::at("immolation", Vec3::ZERO) });
             }
@@ -7281,6 +7348,11 @@ impl NpcAnim {
     }
 
     /// The effects a clip starts (`AnimNotify_PlayParticleEffect`).
+    /// The view shakes a clip of its gives (`DisNotify_CameraShake`).
+    pub fn clip_shakes(&self, clip: ClipId) -> &[(f32, String, f32, f32)] {
+        self.marks.get(&clip).map(|m| m.shakes.as_slice()).unwrap_or(&[])
+    }
+
     pub fn clip_fx(&self, clip: ClipId) -> &[dhcook::format::ClipFx] {
         self.marks.get(&clip).map(|m| m.fx.as_slice()).unwrap_or(&[])
     }
@@ -7461,7 +7533,7 @@ fn npc_select_anim(
             Option<&AssassinClip>,
             Option<&mut FinisherClip>,
             Option<&crate::carry::Falling>,
-            (Has<crate::ragdoll::Ragdoll>, Has<crate::ragdoll::GoLimp>, Has<crate::musicbox::TunePlaying>, Option<&Electrocuted>, Has<Immolated>, Option<&mut HeadTrack>),
+            (Has<crate::ragdoll::Ragdoll>, Has<crate::ragdoll::GoLimp>, Has<crate::musicbox::TunePlaying>, Option<&Electrocuted>, Option<&Immolated>, Option<&mut HeadTrack>),
         ),
         Without<ScriptedAnim>,
     >,
@@ -7511,6 +7583,12 @@ fn npc_select_anim(
         }
         let clips = st.clips.clone();
         let lib = anim.lib.clone();
+        // open to a blow or a choke while a clip it plays says so (`DisNotify_VulnerableRange`):
+        // its body's, its upper body's, its flinch's
+        {
+            let playing = [anim.current().map(|p| (p.clip, p.t)), anim.upper_playing().map(|p| (p.clip, p.t)), st.flinch];
+            npc.open = [0u8, 1].map(|kind| playing.iter().flatten().any(|(c, ct)| st.marks.get(c).is_some_and(|m| m.open.iter().any(|&(a, b, k)| k == kind && (a..=b).contains(ct)))));
+        }
         // (Corvo lost in the fight: kept until it is free to show it)
         if npc.mode != Mode::Search {
             st.lost_pending = false;
@@ -7522,6 +7600,8 @@ fn npc_select_anim(
         // else empty-handed)
         look_grids(&mut anim, &clips, &lib, npc.anim_speed, track.as_deref_mut());
         // (its own death, and no going limp: a wall of light's dead, struck standing; one burning)
+        // (burning now: one restored charred has burnt out)
+        let immolated = immolated.is_some_and(|i| i.t < 30.0);
         let own_death = electrocuted.filter(|el| el.standing).and(clips.electrified).or(clips.immolate.filter(|_| immolated));
         // a weak hit's flinch, laid over whatever it does (its clip played through once)
         npc.weak_hits = clips.weak_hit.iter().all(Option::is_some);
@@ -7855,7 +7935,8 @@ fn npc_select_anim(
             }
             // its clip goes limp where it says (`DishonoredNotify_Ragdoll`), else at its end
             // (one placed dead keeps its pose, against its wall or in its chair, till it is moved)
-            if st.ragdoll && !far && own_death.is_none() && !npc.corpse {
+            // (a burning one's own death goes limp at its mark too)
+            if st.ragdoll && !far && (own_death.is_none() || immolated) && !npc.corpse {
                 let due = anim.finished() || anim.current().and_then(|p| st.marks.get(&p.clip).and_then(|m| m.ragdoll).map(|r| p.t >= r)).unwrap_or(true);
                 if due {
                     commands.entity(e).try_insert(crate::ragdoll::GoLimp::soon());

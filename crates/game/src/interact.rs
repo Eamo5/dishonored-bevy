@@ -632,7 +632,7 @@ fn find_focus(
     rapier: bevy_rapier3d::prelude::ReadRapierContext,
     level: Option<Res<LevelInfo>>,
     (bodies, carry, data, owners, stats): (
-        Query<(Entity, &crate::npc::Npc, &Transform, Option<&crate::anim::Animator>), (Without<Player>, Without<crate::npc::ConsumedBody>)>,
+        Query<(Entity, &crate::npc::Npc, &Transform, Option<&crate::anim::Animator>), (Without<Player>, Without<crate::npc::ConsumedBody>, Without<crate::npc::Immolated>)>,
         Res<crate::carry::Carry>,
         Res<crate::gamedata::Data>,
         Query<(&crate::npc::Npc, &Transform), Without<Player>>,

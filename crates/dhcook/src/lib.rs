@@ -7008,6 +7008,40 @@ impl<'a> Cooker<'a> {
                     }
                     "DishonoredNotify_AttackInterruptable" if m.interruptible == 0.0 => m.interruptible = t,
                     "DisNotify_DropItem" => m.drops.push(t),
+                    "DisNotify_CameraShake" => {
+                        let np = upk::read_object(&seq.pkg, no).ok().map(|o| o.props);
+                        let bone = np.as_ref().and_then(|p| p.name("m_BoneName")).filter(|n| *n != "None").unwrap_or("root_jnt").to_string();
+                        let reach = np.as_ref().and_then(|p| p.float("m_fMaxDistance")).unwrap_or(1000.0) * UNIT;
+                        let mag = np.as_ref().and_then(|p| p.float("m_fHighestMagnitude")).unwrap_or(500.0);
+                        m.shakes.push((t, bone, reach, mag));
+                    }
+                    "DisNotify_VulnerableRange" => {
+                        let np = upk::read_object(&seq.pkg, no).ok().map(|o| o.props);
+                        let kind = u8::from(np.as_ref().and_then(|p| p.name("m_VulnerabilityType")) == Some("eDisVulnerabilityType_OffBalance"));
+                        let extra = if np.as_ref().and_then(|p| p.bool("m_bUseExtraTime")).unwrap_or(false) { np.as_ref().and_then(|p| p.float("m_fExtraTime")).unwrap_or(0.5) } else { 0.0 };
+                        if d + extra > 0.0 {
+                            m.open.push((t, t + d + extra, kind));
+                        }
+                    }
+                    "DisNotify_ReplaceMaterials" => {
+                        if let Some(nm) = upk::read_object(&seq.pkg, no).ok().and_then(|o| o.props.object("m_pNewMaterial")).filter(|o| *o != 0) {
+                            m.recolor.push((t, seq.pkg.obj_path(nm)));
+                        }
+                    }
+                    "DisNotify_PawnMaterialParam" => {
+                        let Ok(np) = upk::read_object(&seq.pkg, no).map(|o| o.props) else { continue };
+                        let first = |k: &str| np.array(k).and_then(|(c, o, sz)| parse_struct_array(&seq.pkg, o, sz, c).ok()).and_then(|a| a.into_iter().next());
+                        let end = first("m_EndScalarParameterInterpArray");
+                        if let Some(p) = first("ScalarParameterInterpArray") {
+                            m.mat_params.push(ClipMatParam {
+                                time: t,
+                                name: p.name("ParameterName").unwrap_or_default().to_string(),
+                                value: p.float("ParameterValue").unwrap_or(0.0),
+                                interp: p.float("InterpTime").unwrap_or(0.0),
+                                end: end.map(|e| (e.float("ParameterValue").unwrap_or(0.0), e.float("InterpTime").unwrap_or(0.0))),
+                            });
+                        }
+                    }
                     "DisNotify_DropArmor" => {
                         let np = upk::read_object(&seq.pkg, no).ok().map(|o| o.props);
                         let v = np.as_ref().and_then(|p| p.vector("m_DropVelocity")).unwrap_or([0.0; 3]);
@@ -7048,7 +7082,7 @@ impl<'a> Cooker<'a> {
             m.hooks.sort_by(|a, b| a.0.total_cmp(&b.0));
             m.fx.sort_by(|a, b| a.time.total_cmp(&b.time));
             m.footfalls.sort_by(|a, b| a.total_cmp(b));
-            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() || !m.look_off.is_empty() || !m.footfalls.is_empty() || !m.armor.is_empty() {
+            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() || !m.look_off.is_empty() || !m.footfalls.is_empty() || !m.armor.is_empty() || !m.recolor.is_empty() || !m.mat_params.is_empty() || !m.open.is_empty() || !m.shakes.is_empty() {
                 self.scene.clip_marks.push(m);
             }
         }
@@ -8420,6 +8454,10 @@ impl<'a> Cooker<'a> {
         // a wall of light's dead vanish in its lightning (`DisTweaks_NPCPawn.m_pElectrocutedMaterial`)
         if let Some(mat) = self.assets.find("Shr_Characters.Effect.Electric_Vanish_inst") {
             self.scene.electrocuted_material = Some(self.material(&mat));
+        }
+        // a burning character's charred skin (`Generic_Immolation`'s `DisNotify_ReplaceMaterials`)
+        if let Some(mat) = self.assets.find("Vfx_GamePlay.SpittingFire.Immolation_INST") {
+            self.scene.immolation_material = Some(self.material(&mat));
         }
         if let (Some(obj), Some(comp)) = (
             self.assets.find("Npc_SmallRat.Mesh.Npc_SmallRat"),

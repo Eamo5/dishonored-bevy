@@ -70,6 +70,8 @@ pub struct MatineeState {
     prop_keys: HashMap<Entity, (u32, usize)>,
     /// NPCs a scene animates: the key each one plays (matinee, key index)
     npc_keys: HashMap<Entity, (u32, usize)>,
+    /// (matinee, clip) a character was keyed but lacks (logged once)
+    missing: HashSet<(u32, String)>,
     /// (matinee op, NPC) already put on their stage mark
     staged: HashSet<(u32, Entity)>,
     /// the player carried by a scene: where the ride began, and the scene (op)
@@ -720,7 +722,15 @@ fn play_matinees(
                                 }
                                 continue;
                             }
-                            let Some(clip) = animator.lib.find(seq) else { continue };
+                            let Some(clip) = animator.lib.find(seq) else {
+                                // (a clip its sets don't have: the scene can't move it)
+                                if std::env::var("DH_MATINEE_LOG").is_ok() || std::env::var("DH_MISSING_CLIP_LOG").is_ok() {
+                                    if st.missing.insert((mi, seq.clone())) {
+                                        info!("matinee #{mi}: {} has no clip {seq}", ka.name);
+                                    }
+                                }
+                                continue;
+                            };
                             if std::env::var("DH_MATINEE_LOG").is_ok() {
                                 info!("matinee #{mi}: {} plays {seq} at t={t:.1}", ka.name);
                             }

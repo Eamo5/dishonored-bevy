@@ -2626,6 +2626,10 @@ fields no longer show their stand-in "WW" behind the title.
 - **Tallboys' steps**: a tallboy's stilt coming down is the contact system's `Footfall_Tallboy`, not a
   guard's footstep: its thump (`FS_TBoy_Base`, `FS_TBoy_Base_Wet` in water) and its dust
   (`Vfx_PhysMat.FootSteps.fsteps_tallboy`).
+  - Its stomp shakes the view (`DisNotify_CameraShake` in `Empty_StompAttack`, from its claw:
+    up to 5000 uu/s within 30 m), and folding its stilts a little (500 within 15 m). Before,
+    these notifies were not read. The jolt falls off with the distance from its claw and is held
+    to the scripts' greatest shake (our reading).
 - **Characters' steps in time with their feet**: a character's footfalls come twice a loop of the
   walk or run it plays, its stride the clip's root motion (a guard's run 5.4 m a loop, a tallboy's
   walk 4.3 m, its stilt sounds at 0.69 and 1.57 s of 2.03), not a man's stride for every gait.
@@ -3363,6 +3367,17 @@ against the install's own data where it carries them, then implemented independe
 - **The blade's sweep.** Corvo's swing meets everyone in its reach, each once
   (`m_AlreadyHitActors`): the nearest takes the blow as chosen (an assassination, a finisher,
   the blades locking, a parry or the cut), the others its cut, unless they parry it.
+- **Open to a finisher.** A fighter is open while a clip it plays says so
+  (`DisNotify_VulnerableRange`, now cooked: its window, and `m_fExtraTime` more where
+  `m_bUseExtraTime`). Killable (`eDisVulnerabilityType_Killable`): through its hit reactions
+  (`Sword_HitFront_*`, 2 s), a hurt leg, its panic and the recovery from it, a lost parry
+  (`Sword_Ready_ParryLost_*`), a lost blade lock (`Sword_Versus_MediumLose`, `_Stun_In`), being
+  eaten by rats (`Sword_SwarmAttack_Loop`) and Wind Blast's stagger: Corvo's blow then is a
+  finisher. Off balance (`_OffBalance`): stepping aside (`Sword_SideStep_*`) and flinching from a
+  small hit (`ADD_Generic_SmallHit_*`): it can be choked. Before, only our own stagger timer
+  after Corvo's parry left it open, so a guard reeling from his first cut took a plain blow from
+  the second. Its type's `DisDLC06Tweaks_VulnerabilityEx` still says whether it can be (a saw
+  butcher can't).
 - **Attackers.** At most `m_InnerSkirmishCaps` blades come at Corvo at once: 1 on easy, 2 on
   normal, 3 on hard and very hard.
   - Each fighter strikes in flurries of 2-3 blows, then recovers its stamina for 4-5 s
@@ -3503,9 +3518,21 @@ against the install's own data where it carries them, then implemented independe
   - The crossbow's Range upgrade doubles its bolts' speed.
   - Bolts double on the head or torso of someone not fighting Corvo, and do at most 15 to a limb.
   - An incendiary bolt does 50, never killing outright, and sets its target alight 0.5 s later.
-    It burns to ash flailing in the flames with its own clip (`DisNPCAnim_Immolate`:
+    It burns flailing in the flames with its own clip (`DisNPCAnim_Immolate`:
     `Generic_Immolation`) rather than falling as from a blow (the bolt's damage type,
     `DisDamageType_Arrow_Flare`: `m_bPutToFire`, `m_bCannotKillNPC`, no hit reaction).
+    - It burns that clip through, as its notifies say (now cooked): at 1.05 s its skin is
+      charred (`DisNotify_ReplaceMaterials`: `Vfx_GamePlay.SpittingFire.Immolation_INST`), its
+      fire (`Fire_Amount`) rising to 1 over 0.5 s (`DisNotify_PawnMaterialParam`) and dying
+      back over 1.25 s as the clip ends (its `m_EndScalarParameterInterpArray`). It goes limp at
+      the clip's `DishonoredNotify_Ragdoll` (6.78 s) and lies there, a charred body, kept so by
+      saves. Before, it was burnt to ash and gone in 1.5 s, which the clip's data doesn't do
+      (it has no `DisNotify_Destroy`, as the wall of light's `Generic_Electrified` does, and
+      `Immolation_INST` has no opacity). It can't be picked up or pulled while it burns.
+    - A clip's effects (`AnimNotify_PlayParticleEffect`) now play as long as their systems do
+      (their emitters' `EmitterDelay`, `EmitterDuration` and `EmitterLoops`): the burning man's
+      flames on his limbs (`ps_immolation`, `ps_immolation_spine`) 8 to 10 s, through his fall.
+      Before, every one was cut off after 3 s, so he stopped burning halfway through his clip.
   - Grenades bounce the original's way: floors and walls lose different amounts, bodies almost all.
     The fuse runs out whatever they hit, and a sticky grenade does 75 more to whoever it is stuck
     to. A sticky grenade sinks 5 cm into what it sticks to; on a wall it goes off just out of it.

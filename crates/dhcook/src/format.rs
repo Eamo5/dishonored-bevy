@@ -66,6 +66,10 @@ pub struct Scene {
     /// What a wall of light's dead are drawn with as they vanish (`Electric_Vanish_inst`).
     #[serde(default)]
     pub electrocuted_material: Option<u32>,
+    /// What a burning character's skin turns to (`Vfx_GamePlay.SpittingFire.Immolation_INST`: charred,
+    /// its fire by `Fire_Amount`)
+    #[serde(default)]
+    pub immolation_material: Option<u32>,
     /// Security systems: walls of light, arc pylons, watchtowers, alarm bells and the whale
     /// oil receptacles and tanks that power them.
     #[serde(default)]
@@ -1071,6 +1075,35 @@ pub struct ClipMarks {
     /// which (0 all it wears, `eDisWhichArmorToDrop_All_Equipped`; 1 its head's, 2 its body's)
     #[serde(default)]
     pub armor: Vec<(f32, [f32; 3], u8)>,
+    /// when its character's materials give way to another (`DisNotify_ReplaceMaterials`: the
+    /// immolation's charred skin, the electrified death's vanishing): seconds in, the material's path
+    #[serde(default)]
+    pub recolor: Vec<(f32, String)>,
+    /// its character's material parameters driven (`DisNotify_PawnMaterialParam`): seconds in,
+    /// the parameter, its value and the seconds to reach it, then at the clip's end (its
+    /// `m_EndScalarParameterInterpArray`) the value and seconds, if any
+    #[serde(default)]
+    pub mat_params: Vec<ClipMatParam>,
+    /// when its character is open (`DisNotify_VulnerableRange`: from, to, and how: 0 killable, a
+    /// blow a finisher; 1 off balance, a choke), its window `Duration` long and `m_fExtraTime` more
+    /// where `m_bUseExtraTime`: the hit reactions', the panic's, a lost parry's, a hurt leg's, the
+    /// rats' meal's, a lost blade lock's; a side step's off balance
+    #[serde(default)]
+    pub open: Vec<(f32, f32, u8)>,
+    /// the view shaken near it (`DisNotify_CameraShake`: a tallboy's stomp): seconds in, the bone it
+    /// comes from, how far it is felt (m) and its greatest jolt (uu/s)
+    #[serde(default)]
+    pub shakes: Vec<(f32, String, f32, f32)>,
+}
+
+/// A material parameter a clip drives on its character (`DisNotify_PawnMaterialParam`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ClipMatParam {
+    pub time: f32,
+    pub name: String,
+    pub value: f32,
+    pub interp: f32,
+    pub end: Option<(f32, f32)>,
 }
 
 /// An effect a character's clip starts: seconds in, the particle system, the socket (or bone)
