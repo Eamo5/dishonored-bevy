@@ -274,6 +274,8 @@ pub struct Npc {
     pub flying: bool,
     /// held by Daud's Pull (The Brigmore Witches): drawn to him, then held up before him
     pub pulled: Option<Pulled>,
+    /// its brain's roll of each attention level's stop (-1..1 of its `m_fStoppingVariance`)
+    pub stop_roll: [f32; 4],
     /// its walk begun or ended with its clip; what it wished to go this frame (its path's way, at
     /// its pace), and its path: how far to its goal and to the path's next point
     pub pace: Option<Pace>,
@@ -2427,6 +2429,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         knock: None,
         flying: false,
         pulled: None,
+        stop_roll: std::array::from_fn(|_| rand::random::<f32>() * 2.0 - 1.0),
         pace: None,
         turning: false,
         wish: Vec3::ZERO,
@@ -3430,7 +3433,19 @@ fn npc_hearing(
                 .min(cap);
                 npc.awareness = npc.awareness.max((npc.awareness + amount).max(floor).min(cap));
                 npc.last_seen = Some(n.pos);
-                if busted && npc.awareness >= att.levels[3][0] {
+                // (busted refused him unseen and untouched, it already at where it believes he is
+                // while he is farther off: `m_fMinRangeToUnsightedBustedProxy`, 2.5 m, as roshan's
+                // r614/blink research decoded the busted check; its value held at busted's start,
+                // investigating)
+                let refused = busted
+                    && npc.attn_level < 4
+                    && !npc.sees_player
+                    && t.translation.distance(n.pos) <= att.proxy_range
+                    && corvo.is_some_and(|c| c.distance(n.pos) > att.proxy_range);
+                if refused && npc.awareness >= att.levels[3][0] {
+                    npc.awareness = (att.levels[3][0] - 0.001).max(0.0);
+                }
+                if busted && !refused && npc.awareness >= att.levels[3][0] {
                     // (busted by the call: after Corvo where it came from)
                     if std::env::var("DH_NPC_LOG").is_ok() {
                         info!("{}: busted by what it heard ({:?}) at {:.1}", npc.name, n.kind, n.pos);
@@ -3513,15 +3528,23 @@ fn npc_hearing(
 /// The attention level (0 unaware, 1 head track, 2 turn to face, 3 investigate, 4 busted) an
 /// attention value holds, from the current one: levels start at their start threshold and end
 /// below their stop one.
-pub fn attention_level(att: &dhcook::format::Attention, a: f32, cur: u8) -> u8 {
+/// (each level's stop rolled for this brain: `stop`)
+pub fn attention_level(att: &dhcook::format::Attention, a: f32, cur: u8, roll: &[f32; 4]) -> u8 {
     let mut l = cur.min(4);
     while l < 4 && a >= att.levels[l as usize][0] {
         l += 1;
     }
-    while l > 0 && a < att.levels[l as usize - 1][1] {
+    while l > 0 && a < stop(att, l as usize - 1, roll) {
         l -= 1;
     }
     l
+}
+
+/// A level's stop as this brain has it: the tweak's, moved by its roll within
+/// `m_fStoppingVariance` (`stop + uniform(-variance, variance)`, rolled once for each brain, as
+/// roshan's r614/blink research decoded it).
+pub fn stop(att: &dhcook::format::Attention, level: usize, roll: &[f32; 4]) -> f32 {
+    att.levels[level][1] + roll[level].clamp(-1.0, 1.0) * att.stop_variance[level]
 }
 
 /// The attention tweak a character uses towards Corvo: an enemy it doesn't yet suspect, one it
@@ -3905,7 +3928,7 @@ pub(crate) fn npc_perception(
                 npc.awareness = (npc.awareness - att.leak * dt).max(0.0);
             }
             let was = npc.attn_level;
-            npc.attn_level = attention_level(att, npc.awareness, was);
+            npc.attn_level = attention_level(att, npc.awareness, was, &npc.stop_roll);
             npc.attn_fill = (npc.awareness / att.levels[3][0].max(0.05)).clamp(0.0, 1.0);
             if log && npc.attn_level != was {
                 info!("attention: {} {:.2} level {} -> {} (sees {visible} at {:.1} m of {:.0}, vis {:.2})", npc.name, npc.awareness, was, npc.attn_level, dist.min(99.0), range, pvis.value);
@@ -4764,7 +4787,7 @@ pub(crate) fn npc_brain(
                 // as roshan's r614/blink research measured); it has no timer of its own, its
                 // crumbs never running out
                 let given_up = match level.as_ref().and_then(|l| attention_of(&npc, &l.scene)) {
-                    Some(a) => npc.mode_timer > 3.0 && npc.awareness < a.levels[2][1],
+                    Some(a) => npc.mode_timer > 3.0 && npc.awareness < stop(a, 2, &npc.stop_roll),
                     None => npc.mode_timer > 10.0 + (npc.alert == Alert::Combat) as u8 as f32 * 6.0,
                 };
                 if given_up {
@@ -5064,7 +5087,7 @@ pub(crate) fn npc_brain(
                 }
                 // out of sight its attention leaks; below Busted's stop it has lost him
                 // (`CombatToSearch`, as roshan's r614/blink research decoded it)
-                let lost = !npc.sees_player && npc.mode_timer > 2.0 && level.as_ref().and_then(|l| attention_of(&npc, &l.scene)).is_some_and(|a| npc.awareness < a.levels[3][1]);
+                let lost = !npc.sees_player && npc.mode_timer > 2.0 && level.as_ref().and_then(|l| attention_of(&npc, &l.scene)).is_some_and(|a| npc.awareness < stop(a, 3, &npc.stop_roll));
                 if lost || npc.mode_timer > 20.0 {
                     npc.set_mode(Mode::Search);
                     continue;
@@ -9047,6 +9070,20 @@ mod response_tests {
         let hub = NpcResponse { duration: 0.1, ..r };
         let mut w = (0, 0.0);
         assert!((0..5).all(|i| answer(&mut w, &hub, i as f32).0));
+    }
+
+    /// A level ends below its stop as this brain rolled it, within the tweak's variance.
+    #[test]
+    fn a_levels_stop_is_rolled_within_its_variance() {
+        use super::attention_level;
+        let att = dhcook::format::Attention { levels: [[0.125, 0.05], [0.35, 0.25], [0.6, 0.3], [0.85, 0.8]], stop_variance: [0.025; 4], ..Default::default() };
+        // (rolled late, the investigation lasts down to 0.275; rolled early, it ends at 0.325)
+        assert_eq!(attention_level(&att, 0.29, 3, &[0.0, 0.0, -1.0, 0.0]), 3);
+        assert_eq!(attention_level(&att, 0.29, 3, &[0.0, 0.0, 1.0, 0.0]), 2);
+        // (no variance: the tweak's own stop)
+        let plain = dhcook::format::Attention { stop_variance: [0.0; 4], ..att };
+        assert_eq!(attention_level(&plain, 0.31, 3, &[0.0, 0.0, 1.0, 0.0]), 3);
+        assert_eq!(attention_level(&plain, 0.29, 3, &[0.0, 0.0, -1.0, 0.0]), 2);
     }
 }
 

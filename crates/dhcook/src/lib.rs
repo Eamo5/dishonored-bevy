@@ -4845,12 +4845,14 @@ impl<'a> Cooker<'a> {
             leak: self.tweak_float(tw, "m_fAttentionLeakRate", 0).unwrap_or(0.1),
             max: self.tweak_float(tw, "m_fMaxAttention", 0).unwrap_or(1.0),
             lose_sight: self.tweak_float(tw, "m_fDistanceToLoseSight", 0).unwrap_or(300.0) * crate::xform::UNIT,
+            proxy_range: self.tweak_float(tw, "m_fMinRangeToUnsightedBustedProxy", 0).unwrap_or(250.0) * crate::xform::UNIT,
             ..Default::default()
         };
         for k in 0..4 {
             if let Some((_, Value::Struct(_, r))) = self.tweak_prop(tw, "m_AttentionThresholds", k as i32, 0) {
                 let p = Props(r);
                 a.levels[k] = [p.float("m_fAttentionLevelToStart").unwrap_or(0.0), p.float("m_fAttentionLevelToStop").unwrap_or(0.0)];
+                a.stop_variance[k] = p.float("m_fStoppingVariance").unwrap_or(0.0);
             }
         }
         a.see = [1.0; 4];

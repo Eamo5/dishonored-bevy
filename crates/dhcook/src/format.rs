@@ -1880,6 +1880,14 @@ pub struct Attention {
     /// seen searching and seen panicking (`m_IncreaseForAllySearchTarget`, `_AllyPanicTarget`)
     #[serde(default = "ally_default")]
     pub ally: [(f32, u8); 3],
+    /// each level's stop rolled once for each brain within this either side
+    /// (`m_AttentionThresholds[k].m_fStoppingVariance`)
+    #[serde(default)]
+    pub stop_variance: [f32; 4],
+    /// a rise to busted refused without him in sight or touch, it this near (m) where it
+    /// believes he is while he is farther from there (`m_fMinRangeToUnsightedBustedProxy`)
+    #[serde(default)]
+    pub proxy_range: f32,
 }
 
 /// The allies' increases as the default tweak has them (`Twk_Attn_Default_Neutral`: a fight +1 to

@@ -3262,6 +3262,16 @@ against the install's own data where it carries them, then implemented independe
 - **Losing Corvo.** A guard in a fight who can't see him gives up for a search when its attention
   leaks below busted's stop. A search lasts while its attention holds above investigating's stop
   (a dozen seconds unsuspecting, half a minute and more suspecting), not a fixed time.
+  Each brain now rolls each level's stop once, within the tweak's `m_fStoppingVariance`
+  (0.025 either side), as roshan's r614/blink research decoded the attention process. Before,
+  every guard gave up at exactly the same value, so a group searching together all stood down
+  in the same frame.
+- **No bust at an empty spot.** A rise to busted is refused while Corvo is neither seen nor
+  touching, if it is within `m_fMinRangeToUnsightedBustedProxy` (2.5 m) of where it believes he
+  is and he is farther from there: its attention is held at busted's start, investigating (the
+  busted check, as roshan's r614/blink research decoded it). Before, a noise that may bust (a
+  civilian's danger sound, `Twk_Attn_Default_Neutral`'s `DALFI_Busted`) landing beside a
+  character had it fight thin air where the bottle broke.
 - **Searching.** An investigating or searching guard runs to danger, a cry for help, an alarm, a
   death rattle, a body or a sighting (`TweaksBehavior_Search_Default`'s `m_bShouldRun`) and
   walks to the rest, at 0.8 of its pace (`SearchSword` / `SearchEmpty`).
