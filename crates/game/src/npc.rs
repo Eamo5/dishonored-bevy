@@ -3890,14 +3890,22 @@ pub(crate) fn npc_perception(
                     let rel = relation(scene, &npc.faction, victim);
                     let protects = sight.is_some_and(|s| s.protect_neutrals);
                     let ally = rel == 1 || rel == 0 && protects;
-                    npc.carry_bark = Some(if ally { 0 } else if rel == 0 { 1 } else { 2 });
-                    // (a remark is its reaction behaviour's, `ReactionRequest`, 0x00B3EAB0)
-                    if !ally {
-                        npc.reacting = 3.0;
+                    let which = if ally { 0 } else if rel == 0 { 1 } else { 2 };
+                    // (as its brain has the answer, `m_Response_Carry<Ally|Neutral|Enemy>Corpse`:
+                    // none where it is off, the Lighthouse's guards'; only a remark where it is
+                    // harmless, Brisby's and the soirees' guests')
+                    let resp = npc.arms.responses.iter().find(|r| r.name == ["CarryAllyCorpse", "CarryNeutralCorpse", "CarryEnemyCorpse"][which as usize]);
+                    let (answers, hostile) = resp.map_or((true, ally), |r| (r.enabled, r.hostile));
+                    if answers {
+                        npc.carry_bark = Some(which);
+                        // (a remark is its reaction behaviour's, `ReactionRequest`, 0x00B3EAB0)
+                        if !hostile {
+                            npc.reacting = 3.0;
+                        } else {
+                            npc.enemy = true;
+                        }
                     }
-                    if ally {
-                        npc.enemy = true;
-                    }
+                    let ally = answers && hostile;
                     if log {
                         info!("{} sees Corvo carry a body ({victim}): {}", npc.name, if ally { "an enemy now" } else { "remarks on it" });
                     }

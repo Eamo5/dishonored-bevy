@@ -1513,6 +1513,10 @@ fields no longer show their stand-in "WW" behind the title.
     or a neutral's it protects (`m_CarryAllyCorpseResponse`, Hostile). A neutral's or an enemy's
     body it only remarks on (`DDH_NOTICE_CARRYING_*_CORPSE`; none of the shipped voices has
     lines for them).
+  - Each answer is now its brain's own (`m_Response_CarryAllyCorpse`, `_Neutral`, `_Enemy`).
+    The Lighthouse's guards and Havelock have them off and say nothing. Brisby and the soirees'
+    restrained guests only remark, even on a body of their side. Before, every such character
+    answered as the class does.
 - **The search follows Corvo's crumbs** (`crumbs.rs`; `DishonoredSearchCrumbsComponent`, decoded
   from `Dishonored.exe` for this rewrite):
   - One proxy for where Corvo might be, shared by every searcher. Every noise he makes and every
