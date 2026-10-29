@@ -838,7 +838,11 @@ fields no longer show their stand-in "WW" behind the title.
   or wandering) have none. A guard turning on Corvo on the move draws its sword on the upper body
   too, its legs keeping their stride, rather than the draw being cut short. Calming down, it
   puts the sword away with its clip (`Sword_Patrol_UnEquip`), the blade going into the holster
-  at its unequip cue, not at once. A character that has just noticed Corvo (its attention at
+  at its unequip cue, not at once. Both ways the blade now moves where its clip says
+  (`DishonoredNotify_AttachEquippedItem`, now cooked: into the hand 0.4 s into `Sword_Equip`
+  and `Sword_Patrol_Equip`, into the holster 0.87 s into `Sword_Patrol_UnEquip`, 1.2 s into
+  `Sword_UnEquip`). Before, a drawn sword was in the hand the moment the draw began, the hand
+  reaching for an empty holster; a character going straight to a blow still has it at once. A character that has just noticed Corvo (its attention at
   the head-tracking level: the original posts its look-at there and clears it at any other, as
   roshan's research decoded it; turning to face him the whole body turns; standing or on its
   rounds it says so as its head first turns, `DisAISubProcessHeadTrackBark`, our reading of its

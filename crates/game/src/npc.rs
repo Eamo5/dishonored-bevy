@@ -3001,6 +3001,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
                 attract_phase: 0,
                 bow_drawn: false,
                 holster_in: None,
+                draw_in: None,
                 limp_in: None,
                 next_clip: None,
                 lost_pending: false,
@@ -7196,6 +7197,9 @@ pub struct NpcAnim {
     attract_phase: u8,
     /// putting its sword away: how long until it is in its holster
     holster_in: Option<f32>,
+    /// drawing: its sword to its hand at its clip's `DishonoredNotify_AttachEquippedItem` (the seconds left
+    /// to wait for one at most)
+    draw_in: Option<f32>,
     /// knocked off its feet: how long until it goes limp, and its push
     limp_in: Option<(f32, Vec3)>,
     /// the clip to follow the one playing: up again from where it lay, its stun's recovery;
@@ -7718,7 +7722,8 @@ fn npc_select_anim(
             // unequip cue (`Snd_Sword_Enm_Unequip_cue_ak`), on its upper body as it walks
             let away = clips.unequip.filter(|_| !drawn && !npc.is_down() && st.hand.is_some());
             if let Some(c) = away {
-                let cue = lib.clip(c).sounds.first().map_or(lib.duration(c) * 0.4, |s| s.0);
+                // (its clip's `DishonoredNotify_AttachEquippedItem` to the holster, else its sound's cue)
+                let cue = st.marks.get(&c).and_then(|m| m.attach.iter().find(|a| !a.1).map(|a| a.0)).or_else(|| lib.clip(c).sounds.first().map(|s| s.0)).unwrap_or(lib.duration(c) * 0.4);
                 st.holster_in = Some(cue);
                 if npc.anim_speed >= 0.6 {
                     anim.restart_upper(c, false, 1.0, 0.15);
@@ -7728,7 +7733,12 @@ fn npc_select_anim(
                 }
             } else {
                 st.holster_in = None;
-                if let Some((j, at)) = if drawn { st.hand } else { st.holster.or(st.hand) } {
+                st.draw_in = None;
+                // (drawn standing: into its hand as its draw's clip takes it, `DishonoredNotify_AttachEquippedItem`)
+                let later = drawn && !npc.is_down() && npc.mode != Mode::Choked && st.hand.is_some();
+                if later {
+                    st.draw_in = Some(1.0);
+                } else if let Some((j, at)) = if drawn { st.hand } else { st.holster.or(st.hand) } {
                     for &s in &st.sword {
                         commands.entity(s).try_insert((at, ChildOf(j)));
                     }
@@ -7746,6 +7756,26 @@ fn npc_select_anim(
                 }
             }
             st.drawn = drawn;
+        }
+        if let Some(left) = st.draw_in.as_mut() {
+            *left -= dt;
+            let playing = [anim.current().map(|p| (p.clip, p.t)), anim.upper_playing().map(|p| (p.clip, p.t))];
+            let marked = playing.iter().flatten().filter_map(|(c, t)| st.marks.get(c).and_then(|m| m.attach.iter().find(|a| a.1)).map(|a| *t >= a.0)).collect::<Vec<_>>();
+            // (at its clip's mark; none playing one a frame on, or past the wait: at once)
+            if marked.iter().any(|d| *d) || (marked.is_empty() && *left < 0.98) || *left <= 0.0 || npc.is_down() || !st.drawn {
+                let waited = 1.0 - *left;
+                st.draw_in = None;
+                if st.drawn {
+                    if std::env::var_os("DH_NPC_CLIP_LOG").is_some() {
+                        info!("npc {}: sword to its hand {waited:.2} s into its draw ({:?})", npc.name, playing.iter().flatten().map(|(c, t)| format!("{} {t:.2} {:?}", lib.clip(*c).name, st.marks.get(c).map(|m| m.attach.clone()))).collect::<Vec<_>>());
+                    }
+                    if let Some((j, at)) = st.hand {
+                        for &s in &st.sword {
+                            commands.entity(s).try_insert((at, ChildOf(j)));
+                        }
+                    }
+                }
+            }
         }
         if let Some(t) = st.holster_in.as_mut() {
             *t -= dt;

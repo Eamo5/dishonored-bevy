@@ -1114,6 +1114,10 @@ pub struct ClipMarks {
     pub unlock: Option<f32>,
     #[serde(default)]
     pub state_exit: Option<f32>,
+    /// when its character's weapon moves (`DishonoredNotify_AttachEquippedItem`): seconds in, and to
+    /// its hand (`ItemSocket_Equipped`) or not (its holster, `ItemSocket_Holstered`)
+    #[serde(default)]
+    pub attach: Vec<(f32, bool)>,
 }
 
 /// A material parameter a clip drives on its character (`DisNotify_PawnMaterialParam`).
