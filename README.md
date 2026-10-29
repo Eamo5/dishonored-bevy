@@ -725,7 +725,12 @@ fields no longer show their stand-in "WW" behind the title.
   Strong Arms shortens the choke hold and its progress indicator (the hold is `ChokeTime`,
   1.5 s, and the victim's In clip, 0.667 s: 2.2 s, as roshan's r614/blink research decoded the
   choke's states; let go once its loop begins and the victim breaks free, both held through
-  the Lose chain, 2.23 s; won, the Win chain plays out, 2.47 s); Whirlwind speeds up
+  the Lose chain, 2.23 s; won, the Win chain plays out, 2.47 s. His sword is put away as the
+  choke takes hold and back in his hand as it lets go, where his clips say,
+  `DishonoredNotify_ShowEquippedInvItem` (now cooked: hidden 0.02 s into `Sword_Choke_In_Master`,
+  shown 2.02 s into the Win and Lose chains, 1.17 s into the Cancel), and drawing it, it shows
+  as his hand takes it, 0.24 s into `Sword_Ready_Equip`; before, the blade stayed in his hand
+  through the hold, between his arms and the victim's neck); Whirlwind speeds up
   sword hits and their arm animation; Fleet Fighter removes the drawn-weapon movement
   penalty. Healthy Appetite, Twist of Fortune (including automatic remedies), Unnerving
   Target, Plague Resistant and Plague Affinity now feed their gameplay effects. Remaining

@@ -547,6 +547,9 @@ struct ArmsAnim {
     /// the sword (put away while swimming or carrying a body)
     sword: Option<Entity>,
     swimming: bool,
+    /// his sword clips' shows and hides (`DishonoredNotify_ShowEquippedInvItem`), by clip
+    show_marks: std::collections::HashMap<ClipId, Vec<(f32, bool)>>,
+    item_hidden: bool,
     carry_seq: u32,
     drop_seq: u32,
     assassin_seq: u32,
@@ -795,6 +798,7 @@ fn spawn_arms(
                 sockets.push((name.to_string(), e));
             }
         }
+        let level_marks = level.as_ref().map(|l| lib.marks(&l.scene)).unwrap_or_default();
         let animator = Animator::new(lib, &vis.skeleton, joints.clone());
         let eye = root_t * animator.bind_model(cam_j);
         commands.entity(root).insert((
@@ -864,6 +868,8 @@ fn spawn_arms(
                 held,
                 sword: sword.single().ok(),
                 swimming: false,
+                item_hidden: false,
+                show_marks: level_marks.iter().filter(|(_, m)| !m.show_item.is_empty()).map(|(c, m)| (*c, m.show_item.clone())).collect(),
                 sheathed: false,
                 equipping: false,
                 scene_key: None,
@@ -1022,7 +1028,22 @@ fn animate_arms(
     let empty = stats.unarmed || stats.sheathed;
     let full_body = scene_arms.playing(&anim.lib).is_some()
         || swim.swimming() || carry.carrying();
-    let away = full_body || empty;
+    // (and away as his sword clip says, `DishonoredNotify_ShowEquippedInvItem`: as a choke takes hold
+    // until it lets go, until his hand has it drawn; before its first mark, the other way)
+    // (kept through the clips between, a choke's hold, until one shows it again)
+    let cur = anim.current().filter(|c| anim.lib.clip(c.clip).name.starts_with("Sword_"));
+    let by_marks = cur.and_then(|c| {
+        let marks = st.show_marks.get(&c.clip)?;
+        let first = marks.first()?;
+        Some(marks.iter().rev().find(|m| c.t >= m.0).map_or(!first.1, |m| m.1))
+    });
+    let held_on = cur.is_some_and(|c| { let n = &anim.lib.clip(c.clip).name; n.contains("Choke") || n.contains("CarryCorpse") });
+    st.item_hidden = match by_marks {
+        Some(shown) => !shown,
+        None => st.item_hidden && held_on,
+    };
+    let shown_by_clip = Some(!st.item_hidden);
+    let away = full_body || empty || shown_by_clip == Some(false);
     if away != st.swimming {
         st.swimming = away;
         if let Some(mut v) = st.sword.and_then(|s| held.get_mut(s).ok()) {

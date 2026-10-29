@@ -1118,6 +1118,10 @@ pub struct ClipMarks {
     /// its hand (`ItemSocket_Equipped`) or not (its holster, `ItemSocket_Holstered`)
     #[serde(default)]
     pub attach: Vec<(f32, bool)>,
+    /// when its player's held item shows or hides (`DishonoredNotify_ShowEquippedInvItem`,
+    /// `m_bShow`: the sword put away as a choke takes hold, back as it lets go, out as it is drawn)
+    #[serde(default)]
+    pub show_item: Vec<(f32, bool)>,
 }
 
 /// A material parameter a clip drives on its character (`DisNotify_PawnMaterialParam`).
