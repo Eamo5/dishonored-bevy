@@ -5165,6 +5165,21 @@ impl<'a> Cooker<'a> {
 
     /// Bind the characters' AnimSets (`anims/*.anim`), now that every mesh is known.
     fn cook_anims(&mut self) {
+        // (a type's head variants take the sets added to it since: its scenes', its spawners'
+        // dead poses; before, a witch with the other head lacked her ambush's crouch)
+        let groups: Vec<(usize, Vec<usize>)> = self.scene.npc_types.iter().enumerate().filter(|(_, t)| t.variants.len() > 1).map(|(i, t)| (i, t.variants.iter().map(|v| v.0 as usize).collect())).collect();
+        for (base, vars) in groups {
+            let Some(sets) = self.pending_anims.iter().find(|p| p.npc_type == base).map(|p| p.sets.clone()) else { continue };
+            for v in vars.into_iter().filter(|v| *v != base) {
+                if let Some(p) = self.pending_anims.iter_mut().find(|p| p.npc_type == v) {
+                    for s in &sets {
+                        if !p.sets.iter().any(|x| x.key() == s.key()) {
+                            p.sets.push(s.clone());
+                        }
+                    }
+                }
+            }
+        }
         let pending = std::mem::take(&mut self.pending_anims);
         let refs: Vec<&[String]> = pending.iter().map(|p| p.bones.as_slice()).collect();
         for p in &pending {
@@ -5640,9 +5655,20 @@ impl<'a> Cooker<'a> {
                             return Some(*a);
                         }
                         let Some(KVal::Str(name)) = var.props.get("FindVarName") else { return None };
-                        k.vars.iter().filter(|o| matches!(o.props.get("VarName"), Some(KVal::Str(n)) if n == name)).find_map(|o| match o.props.get("ObjValue") {
+                        let named: Vec<usize> = k.vars.iter().enumerate().filter(|(_, o)| matches!(o.props.get("VarName"), Some(KVal::Str(n)) if n == name)).map(|(i, _)| i).collect();
+                        named.iter().find_map(|&i| match k.vars[i].props.get("ObjValue") {
                             Some(KVal::Actor(a)) => Some(*a),
                             _ => None,
+                        })
+                        // (set only as the scripts run: by a spawned event's instigator, the
+                        // pawn its spawner made: the Kennels' sick hound's)
+                        .or_else(|| {
+                            // (the variable, or another naming it, linked)
+                            let refs: Vec<usize> = k.vars.iter().enumerate().filter(|(i, o)| named.contains(i) || matches!(o.props.get("FindVarName"), Some(KVal::Str(n)) if n == name)).map(|(i, _)| i).collect();
+                            k.ops.iter().filter(|o| o.vars.iter().any(|l| l.vars.iter().any(|x| refs.contains(&(*x as usize))))).find_map(|o| match o.props.get("Originator") {
+                                Some(KVal::Actor(a)) if o.class.ends_with("SeqEvent_Spawned") => Some(*a),
+                                _ => None,
+                            })
                         })
                     };
                     let mut actors: Vec<u32> = op.vars.iter().filter(|l| l.desc == g.name).flat_map(|l| l.vars.iter()).filter_map(|&v| actor_of(v)).collect();
@@ -7008,6 +7034,7 @@ impl<'a> Cooker<'a> {
                     }
                     "DishonoredNotify_AttackInterruptable" if m.interruptible == 0.0 => m.interruptible = t,
                     "DisNotify_DropItem" => m.drops.push(t),
+                    "DisNotify_BlockParryZone" => m.parry_zone = Some((t, t + d)),
                     "DisNotify_CameraShake" => {
                         let np = upk::read_object(&seq.pkg, no).ok().map(|o| o.props);
                         let bone = np.as_ref().and_then(|p| p.name("m_BoneName")).filter(|n| *n != "None").unwrap_or("root_jnt").to_string();
@@ -7082,7 +7109,7 @@ impl<'a> Cooker<'a> {
             m.hooks.sort_by(|a, b| a.0.total_cmp(&b.0));
             m.fx.sort_by(|a, b| a.time.total_cmp(&b.time));
             m.footfalls.sort_by(|a, b| a.total_cmp(b));
-            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() || !m.look_off.is_empty() || !m.footfalls.is_empty() || !m.armor.is_empty() || !m.recolor.is_empty() || !m.mat_params.is_empty() || !m.open.is_empty() || !m.shakes.is_empty() {
+            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() || !m.look_off.is_empty() || !m.footfalls.is_empty() || !m.armor.is_empty() || !m.recolor.is_empty() || !m.mat_params.is_empty() || !m.open.is_empty() || !m.shakes.is_empty() || m.parry_zone.is_some() {
                 self.scene.clip_marks.push(m);
             }
         }

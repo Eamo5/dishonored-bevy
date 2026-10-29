@@ -988,8 +988,11 @@ fields no longer show their stand-in "WW" behind the title.
   aggression are its own behaviour's. A blow (a kick too) throws his arms from the side it came (`Sword_BigHit_Front`,
   `_Back`, `_Left`, `_Right`; empty-handed, `Empty_BigHit_*`, and a knockdown's `Empty_Knockdown*`);
   other harm, as from ahead. A big blow leaves Corvo reeling for `m_fVulnerableTime_BigHit_Dizzy`; his perfect
-  parry is a block begun within `m_fTapForPerfectParryWindow` (0.2 s), within his sword's
-  `m_fBlockAngle` (50 degrees). When his blow and a guard's land together (their attack
+  parry is a block begun within `m_fTapForPerfectParryWindow` (0.2 s), or while his block
+  clip's `DisNotify_BlockParryZone` lasts (`Sword_Ready_ParryIdle_In`, 0.001 to 0.431 s, now
+  cooked), as roshan's r614/blink research decoded the block handler, within his sword's
+  `m_fBlockAngle` (50 degrees). Before, a block raised 0.2 to 0.43 s before the blow was only
+  a plain block. When his blow and a guard's land together (their attack
   zones within `m_fVersusZoneMaxTime`, each facing the other) the blades lock
   (`StatePlayerMasterVersus`): "Mash [Left Mouse Button] !" (`DUI_Context_Versus`), the guard straining in
   `Sword_Versus_MinigameUU` and his arms in `Sword_Ready_Versus_MinigameUU`. His presses over
@@ -2370,7 +2373,12 @@ fields no longer show their stand-in "WW" behind the title.
   the variable it names; one the scripts bind only as it spawns, by its group's stage mark's
   spawner: before, Lizzy Stride's pillory scenes, `DLC07_Female_SC_Prison_as`, never reached
   her type, so in Coldridge she stood in her bind pose in front of the pillory instead of
-  slumped in it); the player group's go to Corvo's arms,
+  slumped in it; one bound through a named variable the scripts fill only from a spawned
+  event's instigator, by that event's spawner: the Kennels' sick hound, so it sleeps through
+  its scene, `WolfHound_SC_Overseer`'s `Sleep`, instead of standing; and a type's other heads,
+  the same character with another face, take the sets its scenes add: in Draper's Ward's
+  sewers one of the two crouching ambush witches lacked `Witch_Crouch_Loop`); the player
+  group's go to Corvo's arms,
   which play its keys while the scene runs. Characters change dress on the scripts' word
   (`DisSeqAct_NPCSetMaterials`: the Boyle sisters' red, black and white, by material slot).
   A clip of a set keying only part of the body (fewer than nine tenths of the fullest set's
@@ -4150,7 +4158,7 @@ furthest spot with a floor and a clear line to it), `ledge [LOW] [HIGH] [crouch]
 high; `crouch`, only one he'd arrive crouched on; `DH_MANTLE_LOG` logs what blocks a mantle's
 top), `pos` (his position, velocity, footing), `pistol [NAME]` (the nearest hostile character
 carries a pistol and turns on him; `bow [NAME]`, a tallboy's bow: `DH_GUN_LOG` logs why it holds), `npchere [D] [NAME]` (the nearest hostile character, or
-the nearest whose name holds NAME, moved D m before him), `stream NAME [out]` (a streamed sublevel loads, or goes), `rise D` (Corvo lifted D m and held there), `notarget [0]` (the characters stop seeing Corvo, as `DH_NOTARGET`; `0` they see him again), `hideout` (Corvo crouched in the nearest hideout volume), `keyhole [D]` (before the nearest keyhole, looking at it), `spotlit [D]` (a character stood under the nearest dominant spot light, Corvo looking on), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `summon [D] [LEVEL]` (one of Daud's assassins summoned D m ahead, for no enemy), `ring [off]` (the nearest alarm bell rung or silenced), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup [health|mana|ammo|rune|charm|N]`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `addobjective NAME` (the objective whose path holds NAME added, as `DisSeqAct_AddObjective`), `taskstate NAME done|failed|active` (the objective or task whose path holds NAME set so), `replay` (the statistics' Replay Mission pressed), `runes N`,
+the nearest whose name holds NAME, moved D m before him), `stream NAME [out]` (a streamed sublevel loads, or goes), `rise D` (Corvo lifted D m and held there), `notarget [0]` (the characters stop seeing Corvo, as `DH_NOTARGET`; `0` they see him again), `hideout` (Corvo crouched in the nearest hideout volume), `keyhole [D]` (before the nearest keyhole, looking at it), `spotlit [D]` (a character stood under the nearest dominant spot light, Corvo looking on), `tpnpc N [NAME]`, `npcidle` (the nearest hostile character stands still facing Corvo), `health N` (set his health: the near-death effects), `hurt D ANGLE` (a blow of D from ANGLE degrees off his view, clockwise: the damage feedback), `aware L1,L2,..` (the awareness markers step through attention levels, 1.5 s each), `location NAME` (the location banner; `_` for spaces), `message TEXT` / `tutorial TEXT` (a HUD game message, a tutorial), `objpopup STATE NAME|TASK[:STATE]|..` (the objectives popup), `breath N` (seconds of breath left: the oxygen gauge), `krust [D] [N]` (hover in front of a river krust), `summon [D] [LEVEL]` (one of Daud's assassins summoned D m ahead, for no enemy), `ring [off]` (the nearest alarm bell rung or silenced), `poses [D]` (the characters within D m left unposed: no animator, frozen, or playing nothing), `possess fish|krust|rat`, `prop [NAME]` (stand at a prop), `weapons`, `explode [D]`, `flare [D]`, `select POWER`, `pickup [health|mana|ammo|rune|charm|N]`, `door`, `use`, `god`, `epp Epp_NAME [0|1]` (a scripted screen effect: Knocked, Weepers), `giveupgrade Twk_Upgrade_NAME`, `kop OP [INPUT]` (activate a level script op: test one step of a sequence), `campos X Y Z YAW PITCH` (hold the view at a point; `campos -` lets go), `givepower NAME LEVEL`, `addobjective NAME` (the objective whose path holds NAME added, as `DisSeqAct_AddObjective`), `taskstate NAME done|failed|active` (the objective or task whose path holds NAME set so), `replay` (the statistics' Replay Mission pressed), `runes N`,
 `charms N`, `mana`, `ammo TYPE N` (0 bullets .. 6 grenades, 7 sticky), `fx EFFECT [DIST]`,
 `remote EVENT` (a level-script remote event, e.g. `ChangeLvl_fromStreets1_toHub`), `chaos N`,
 `ko [NAME]` (a sleep dart into the nearest, or the nearest whose name or pawn holds NAME),

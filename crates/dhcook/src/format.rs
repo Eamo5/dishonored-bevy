@@ -1094,6 +1094,10 @@ pub struct ClipMarks {
     /// comes from, how far it is felt (m) and its greatest jolt (uu/s)
     #[serde(default)]
     pub shakes: Vec<(f32, String, f32, f32)>,
+    /// while a block parries (`DisNotify_BlockParryZone`: Corvo's `Sword_Ready_ParryIdle_In`, 0.001 to
+    /// 0.431 s): from, to
+    #[serde(default)]
+    pub parry_zone: Option<(f32, f32)>,
 }
 
 /// A material parameter a clip drives on its character (`DisNotify_PawnMaterialParam`).

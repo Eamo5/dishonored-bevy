@@ -26,7 +26,7 @@ pub struct ArmsPlugin;
 impl Plugin for ArmsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DeathFall>()
-            .init_resource::<ArmSteps>()
+            .init_resource::<ArmSteps>().init_resource::<ParryZone>()
             .add_systems(OnEnter(GameState::InGame), spawn_arms.after(spawn_view_model))
             .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_steps.after(ArmsAnimSet), arm_effects.after(ArmsAnimSet), possess_hand.after(ArmsAnimSet), (animate_held, animate_sword, show_bolts).after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin, swap_arms).after(animate_view_model).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, (align_arms.in_set(ArmsAlign), arm_pitch).after(AnimPose).before(TransformSystems::Propagate))
@@ -47,17 +47,26 @@ pub struct ArmSteps {
     pub due: u32,
 }
 
+/// While Corvo's block parries, from its start (s): his block clip's `DisNotify_BlockParryZone`
+/// (`Sword_Ready_ParryIdle_In`, to 0.431 s), as roshan's r614/blink research decoded the block
+/// handler; none: the clip has none.
+#[derive(Resource, Default)]
+pub struct ParryZone(pub Option<f32>);
+
 /// The footfalls the arms' loop passed since the last frame (its time wrapping as it loops).
 fn arm_steps(
     level: Option<Res<crate::level::LevelInfo>>,
     arms: Query<&Animator, With<ArmsRoot>>,
     mut steps: ResMut<ArmSteps>,
+    mut zone: ResMut<ParryZone>,
     mut marks: Local<Option<(String, std::collections::HashMap<ClipId, Vec<f32>>)>>,
     mut was: Local<Option<(ClipId, f32)>>,
 ) {
     let (Some(level), Ok(anim)) = (level, arms.single()) else { return };
     if marks.as_ref().is_none_or(|(n, _)| *n != level.scene.name) {
-        let by = anim.lib.marks(&level.scene).into_iter().filter(|(_, m)| !m.footfalls.is_empty()).map(|(id, m)| (id, m.footfalls)).collect();
+        let all = anim.lib.marks(&level.scene);
+        zone.0 = anim.lib.find("Sword_Ready_ParryIdle_In").and_then(|c| all.get(&c)).and_then(|m| m.parry_zone).map(|z| z.1);
+        let by = all.into_iter().filter(|(_, m)| !m.footfalls.is_empty()).map(|(id, m)| (id, m.footfalls)).collect();
         *marks = Some((level.scene.name.clone(), by));
     }
     let now = anim.current().filter(|c| c.looping).map(|c| (c.clip, c.t));

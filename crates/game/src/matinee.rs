@@ -734,7 +734,7 @@ fn play_matinees(
                                 // (a clip its sets don't have: the scene can't move it)
                                 if std::env::var("DH_MATINEE_LOG").is_ok() || std::env::var("DH_MISSING_CLIP_LOG").is_ok() {
                                     if st.missing.insert((mi, seq.clone())) {
-                                        info!("matinee #{mi}: {} has no clip {seq}", ka.name);
+                                        info!("matinee #{mi}: {} ({}, {} sets) has no clip {seq}", ka.name, npc.pawn, animator.lib.set_count());
                                     }
                                 }
                                 continue;

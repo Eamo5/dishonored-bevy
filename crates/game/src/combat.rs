@@ -1319,7 +1319,7 @@ fn receive_hits(
     (mut versus, mut npcs, cam): (ResMut<Versus>, Query<(&mut Npc, &Transform), Without<Player>>, Query<&GlobalTransform, With<PlayerCamera>>),
     attrs: Res<crate::gamedata::Attrs>,
     (mut fx, level, mut shake): (MessageWriter<crate::particles::SpawnEffect>, Option<Res<crate::level::LevelInfo>>, MessageWriter<crate::player::ShakeCamera>),
-    (pull, mut shielded): (Option<Res<crate::pull::PullAim>>, MessageWriter<NpcHit>),
+    (pull, mut shielded, zone): (Option<Res<crate::pull::PullAim>>, MessageWriter<NpcHit>, Res<crate::arms::ParryZone>),
 ) {
     use crate::audio::PostEvent;
     let Ok((pt, mut p, mut sword)) = player.single_mut() else { return };
@@ -1379,7 +1379,8 @@ fn receive_hits(
         let fwd = Quat::from_rotation_y(p.yaw) * Vec3::NEG_Z;
         let to_npc = (h.from - pt.translation).with_y(0.0).normalize_or_zero();
         // the block's reach (`Twk_Inv_SwordCorvo`'s `m_fBlockAngle` 50 degrees); a perfect parry
-        // is a block begun within `m_fTapForPerfectParryWindow` (0.2 s) of the blow
+        // is a block begun within `m_fTapForPerfectParryWindow` (0.2 s) of the blow, or while its
+        // clip's `DisNotify_BlockParryZone` lasts (0.431 s), as roshan's r614/blink research found
         let facing = fwd.dot(to_npc) > 50f32.to_radians().cos();
         if sword.blocking && facing && !h.unblockable {
             noise.write(Noise { corvo: true, pos: pt.translation, radius: 8.0, kind: NoiseKind::Threatening });
@@ -1392,7 +1393,11 @@ fn receive_hits(
             }
             // (a tap parry forces a plain block for 0.3 s after: `DishonoredPlayerPawn`'s
             // block handler, as roshan's r614/blink research reads it)
-            if sword.block_t < 0.2 && sword.forced_block <= 0.0 {
+            let perfect = sword.block_t < zone.0.unwrap_or(0.0).max(0.2) && sword.forced_block <= 0.0;
+            if std::env::var_os("DH_MELEE_LOG").is_some() {
+                info!("melee: Corvo blocks {:.2} s into his block (parry zone {:?}): {}", sword.block_t, zone.0, if perfect { "parried" } else { "plain block" });
+            }
+            if perfect {
                 stagger.write(NpcStagger { npc: h.npc, secs: 1.8, parried: true });
                 sword.parry_flash = 0.25;
                 sword.forced_block = 0.3;

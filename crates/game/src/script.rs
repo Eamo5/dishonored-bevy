@@ -2331,6 +2331,36 @@ fn run_script(
             }
             info!("script: census {modes:?} off-height {odd} paths {pathing} straight {straight}");
         }
+        "poses" => {
+            // (tests) poses [D]: the characters within D m (40) left unposed: no animator, one
+            // frozen, or one playing nothing (a bind pose on screen)
+            let reach = f(1).max(0.0);
+            let reach = if reach > 0.0 { reach } else { 40.0 };
+            let at = t.translation;
+            commands.queue(move |w: &mut World| {
+                let mut q = w.query::<(&Npc, &Transform, Option<&crate::anim::Animator>, Has<crate::npc::ScriptedAnim>)>();
+                let (mut ok, mut bad) = (0, 0);
+                for (n, nt, a, scripted) in q.iter(w) {
+                    if nt.translation.distance(at) > reach || n.mode == crate::npc::Mode::Dead && n.corpse && a.is_none() {
+                        continue;
+                    }
+                    let why = match a {
+                        None => Some("no animator".to_string()),
+                        Some(a) if a.frozen && !n.is_down() => Some("frozen".to_string()),
+                        Some(a) if a.current().is_none() => Some("playing nothing".to_string()),
+                        _ => None,
+                    };
+                    match why {
+                        Some(why) => {
+                            bad += 1;
+                            info!("script: unposed {} ({}) at {:.1}: {why} (scripted {scripted}, mode {:?})", n.name, n.pawn, nt.translation, n.mode);
+                        }
+                        None => ok += 1,
+                    }
+                }
+                info!("script: poses: {ok} posed, {bad} unposed within {reach} m");
+            });
+        }
         "exit" => {
             exit.write(AppExit::Success);
         }

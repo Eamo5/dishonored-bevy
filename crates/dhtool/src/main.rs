@@ -255,6 +255,11 @@ fn main() -> Result<()> {
         Some("animdump") => {
             // dhtool animdump <file.anim> <clip>: a cooked clip's tracks (bone, keys, value range)
             let f = dhcook::format::AnimFile::read(std::path::Path::new(&args[2]))?;
+            // (no clip named: every clip's name)
+            if args.len() < 4 {
+                for c in &f.clips { println!("{} {:.2}s", c.name, c.duration); }
+                return Ok(());
+            }
             for c in f.clips.iter().filter(|c| c.name.eq_ignore_ascii_case(&args[3])) {
                 println!("{} {:.2}s {} fps {} frames, root motion {:?}", c.name, c.duration, c.rate, c.frames, c.root_motion);
                 for t in &c.rotations {
