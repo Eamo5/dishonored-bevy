@@ -1122,6 +1122,11 @@ pub struct ClipMarks {
     /// `m_bShow`: the sword put away as a choke takes hold, back as it lets go, out as it is drawn)
     #[serde(default)]
     pub show_item: Vec<(f32, bool)>,
+    /// the wall of light's bolts' targets as it kills (`DisNotify_SetLightningTarget`): the corner a
+    /// bolt comes from (`EDisBoltOrigin`: 0 top left, 1 top right, 2 bottom left, 3 bottom right) and
+    /// the bone it strikes
+    #[serde(default)]
+    pub lightning: Vec<(u8, String)>,
 }
 
 /// A material parameter a clip drives on its character (`DisNotify_PawnMaterialParam`).

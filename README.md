@@ -3142,7 +3142,10 @@ against the install's own data where it carries them, then implemented independe
     `m_fMinSparkInterval` to `m_fMaxSparkInterval` (2 to 3.5 s) a spark (`m_CrossSparkEffect`,
     `Lightnings3_random`) leaps from one of them to another for `m_fSparkDuration` (0.17 s). What it
     shocks takes its beams (`m_Beams`, placed `Lightnings2`) from the pylons for its kill effect's
-    `m_ActivationTime` (0.1 s), and a bolt or dart it destroys its own shock particles
+    `m_ActivationTime` (0.1 s): a character's, each from its corner of the wall into the limb its
+    death clip names for that corner (`DisNotify_SetLightningTarget`, now cooked: in
+    `Generic_Electrified` the top bolts into the hands, the bottom into a foot; before, every
+    bolt met at the middle of the body), and a bolt or dart it destroys its own shock particles
     (`ps_shock_electrified`). (The placement 0x00A28D80, tick 0x00A3EEE0 and beams 0x00A30CA0,
     decoded for this rewrite from the user's own Dishonored.exe, as roshan's r614/blink research
     found them too.) The rewrite drew a glowing sheet of its own before.

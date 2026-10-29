@@ -819,6 +819,7 @@ fn walls(
         Query<(Entity, &Transform, Option<&crate::powers::Projectile>), Or<(With<crate::powers::Projectile>, With<crate::gadgets::Grenade>)>>,
     ),
     mut last_thrown: Local<std::collections::HashMap<Entity, Vec3>>,
+    (rigs, globals): (Query<(&crate::npc::NpcAnim, &crate::npc::NpcRig)>, Query<&GlobalTransform>),
 ) {
     // (stopped time: no collision, nothing burns)
     let stopped = tc.bend_remaining > 0.0 && tc.world_dilation <= 0.0;
@@ -938,7 +939,31 @@ fn walls(
                 if rewired {
                     commands.entity(e).try_insert(crate::distrust::DeviceKill(i));
                 }
-                strike(&mut fx, d, t.translation + Vec3::Y * 0.3, true);
+                // (each bolt into the limb its death clip names for its corner, `DisNotify_SetLightningTarget`:
+                // the top ones into the hands, the bottom ones into the feet)
+                let targets: Vec<(u8, Vec3)> = rigs
+                    .get(e)
+                    .ok()
+                    .and_then(|(st, rig)| {
+                        let marks = st.marks().values().find(|m| !m.lightning.is_empty())?;
+                        Some(marks.lightning.iter().filter_map(|(c, b)| rig.joint(b).and_then(|j| globals.get(j).ok()).map(|g| (*c, g.translation()))).collect())
+                    })
+                    .unwrap_or_default();
+                if targets.is_empty() {
+                    strike(&mut fx, d, t.translation + Vec3::Y * 0.3, true);
+                } else {
+                    let secs = d.def.params.get("m_ActivationTimeForPawnEffect").copied().unwrap_or(0.1);
+                    let local: Vec<Vec3> = d.def.beams.iter().map(|(_, m)| w.0.transform_point3(Mat4::from_cols_array(m).to_scale_rotation_translation().2)).collect();
+                    let mid = local.iter().fold(Vec3::ZERO, |a, b| a + *b) / local.len().max(1) as f32;
+                    for ((sys, m), l) in d.def.beams.iter().zip(&local) {
+                        let corner = (l.y < mid.y) as u8 * 2 + (l.x > mid.x) as u8;
+                        let to = targets.iter().find(|x| x.0 == corner).or(targets.first()).map_or(t.translation, |x| x.1);
+                        let (_, rot, at) = Mat4::from_cols_array(m).to_scale_rotation_translation();
+                        if secs > 0.0 {
+                            fx.write(crate::particles::SpawnEffect { system: Some(*sys), rot, secs, beam_to: Some(to), ..crate::particles::SpawnEffect::at("wall_beam", at) });
+                        }
+                    }
+                }
                 struck.insert(e);
                 killed.push(d.def.actor.clone());
                 // (a kill spends its tank's oil: `m_PawnChargeCost`)
