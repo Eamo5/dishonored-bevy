@@ -337,6 +337,8 @@ pub struct Assassinating {
     master: String,
     slave: String,
     len: Option<f32>,
+    /// when Corvo is free again as his clip plays on (`DisNotify_AnimStateUnlock`)
+    unlock: f32,
     /// its slow motion played (the kill cam's), its Blood Thirst slow motion
     slomo: bool,
     adrenaline: bool,
@@ -652,7 +654,7 @@ fn begin_sync_kill(commands: &mut Commands, pe: Entity, sword: &mut Sword, p: &m
     sword.swing = 0.0;
     p.locked = true;
     p.velocity = Vec3::ZERO;
-    commands.entity(pe).insert(Assassinating { npc: e, t: 0.0, master, slave, len: None, slomo, adrenaline, real: 0.0 });
+    commands.entity(pe).insert(Assassinating { npc: e, t: 0.0, master, slave, len: None, unlock: f32::INFINITY, slomo, adrenaline, real: 0.0 });
 }
 
 /// Whether a finisher plays in slow motion (`PSI_Gameplay_KillCamMode`, the fatality tweak's
@@ -1257,7 +1259,12 @@ fn assassinating(
         return;
     };
     if a.len.is_none() {
-        let len = arms.iter().next().and_then(|anim| anim.lib.find(&a.master).map(|c| anim.lib.duration(c))).unwrap_or(1.6);
+        // (over at its clip's `DishonoredNotify_AnimStateExit`, Corvo free from its
+        // `DisNotify_AnimStateUnlock`: a fast assassination's 0.89-1.09 s of its 1.43, as roshan's
+        // r614/blink research found the actions end)
+        let marks = arms.iter().next().zip(level.as_ref()).and_then(|(anim, l)| anim.lib.find(&a.master).map(|c| (anim.lib.duration(c), anim.lib.marks(&l.scene).remove(&c))));
+        let len = marks.as_ref().map(|(d, m)| m.as_ref().and_then(|m| m.state_exit).filter(|x| *x > 0.1).unwrap_or(*d)).unwrap_or(1.6);
+        a.unlock = marks.as_ref().and_then(|(_, m)| m.as_ref().and_then(|m| m.unlock)).filter(|u| *u > 0.1).unwrap_or(len).min(len);
         a.len = Some(len);
         if let Ok((mut npc, mut nt, anim)) = npcs.get_mut(a.npc) {
             // (taken out of Pull's hold: down on his floor)
@@ -1316,7 +1323,17 @@ fn assassinating(
             severs.write(crate::gore::SeverLimb { npc: a.npc, bone: s.bone.clone(), impulse: s.impulse, eaten: false });
         }
     }
-    p.velocity = Vec3::ZERO;
+    // (free: his own again, the clip playing on)
+    if a.t >= a.unlock {
+        if p.locked {
+            p.locked = false;
+            if std::env::var_os("DH_MELEE_LOG").is_some() {
+                info!("assassination: Corvo free at {:.2} s of {}", a.t, a.master);
+            }
+        }
+    } else {
+        p.velocity = Vec3::ZERO;
+    }
     if a.t >= a.len.unwrap_or(1.6) {
         info!("{} done: {:.2} s of clip in {:.2} s", a.master, a.t, a.real);
         p.locked = false;

@@ -1598,7 +1598,11 @@ fields no longer show their stand-in "WW" behind the title.
   with a body on his shoulder (`Sword_Ready_Assassination_<Fast?><Side><_CarryCorpse?>_Master`
   with the victim's `Generic_Assassination_..._Slave`). The victim is turned and set where its
   clip's `anchor_jnt` puts Corvo (a metre or so behind, before or beside it) and Corvo holds
-  still for his clip. The targets and nobles die their own dramatic deaths instead
+  still for his clip until it frees him (`DisNotify_AnimStateUnlock`, now cooked: a quick
+  one's 0.89-1.09 s of its 1.43, a drop's 1.6-1.8 s of 2.23, a beheading's 0.5 s), the clip
+  playing on to its `DishonoredNotify_AnimStateExit` (its slow motion and the victim's severing
+  with it). Before, he was held to each clip's very end, half a second longer after a quick
+  kill. The targets and nobles die their own dramatic deaths instead
   (`Sword_DramaticDeath_Front_Campbell_Master` / `DramaticDeath_Front_Campbell_Slave`, Havelock,
   Martin, the Pendletons, the Lord Regent, Daud; `..._Back_A` from behind).
 - **The view's shake** (`player.rs` `CameraShake`): the eye's place on `DishonoredCamera_Shake`'s

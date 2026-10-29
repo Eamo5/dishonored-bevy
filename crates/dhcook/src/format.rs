@@ -1108,6 +1108,12 @@ pub struct ClipMarks {
     pub chain_input: Option<(f32, f32)>,
     #[serde(default)]
     pub chain_exit: Option<f32>,
+    /// when its player is free again as it plays on (`DisNotify_AnimStateUnlock`: an assassination's,
+    /// a finisher's) and when its action is over (`DishonoredNotify_AnimStateExit`)
+    #[serde(default)]
+    pub unlock: Option<f32>,
+    #[serde(default)]
+    pub state_exit: Option<f32>,
 }
 
 /// A material parameter a clip drives on its character (`DisNotify_PawnMaterialParam`).
