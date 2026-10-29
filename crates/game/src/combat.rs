@@ -301,6 +301,10 @@ pub struct Sword {
     /// > 0 while a swing is in progress (seconds elapsed)
     pub swing: f32,
     pub swing_dir: f32,
+    /// swings begun (each a clip of the arms', a chained one before the last is over), and whether
+    /// a press waits in this one's chain window to start the next
+    pub swing_seq: u32,
+    pub queued: bool,
     pub hit_done: bool,
     pub hold: f32,
     pub blocking: bool,
@@ -665,6 +669,7 @@ pub(crate) fn kill_cam(mode: u8, last_foe: bool) -> bool {
 #[allow(clippy::too_many_arguments)]
 fn sword_input(
     time: Res<Time>,
+    swing_marks: Res<crate::arms::SwingMarks>,
 
     bind: Res<crate::bindings::Bindings>,
     cursor: Single<&CursorOptions>,
@@ -977,8 +982,26 @@ fn sword_input(
                 }
             }
         }
-        if sword.swing > 0.48 {
+        // (its clip's chain: a press in its window starts the next blow at its exit; else it is over
+        // once it may be broken off, `DishonoredNotify_AttackInterruptable`; as roshan's r614/blink
+        // research decoded the swing context's `m_ChainInputZone`, `m_bQueuedChain`)
+        let (input, exit, end) = swing_marks.0.unwrap_or((None, None, None));
+        if input.is_some_and(|(a, b)| (a..=b).contains(&sword.swing)) && bind.just_pressed(crate::bindings::Act::Primary) && !sword.blocking {
+            sword.queued = true;
+        }
+        if sword.queued && exit.is_some_and(|x| sword.swing >= x) && grabbed {
+            sword.queued = false;
+            sword.swing = 0.001;
+            sword.swing_seq = sword.swing_seq.wrapping_add(1);
+            sword.hit_done = false;
+            sword.swing_dir = if sword.swing_dir > 0.0 { -1.0 } else { 1.0 };
+            sword.hold = 0.0;
+            if std::env::var_os("DH_MELEE_LOG").is_some() {
+                info!("melee: Corvo's blow chains into the next");
+            }
+        } else if sword.swing > end.unwrap_or(0.48) {
             sword.swing = 0.0;
+            sword.queued = false;
         }
     }
     if !grabbed {
@@ -986,6 +1009,8 @@ fn sword_input(
     }
     if bind.just_pressed(crate::bindings::Act::Primary) && sword.swing == 0.0 && !sword.blocking {
         sword.swing = 0.001;
+        sword.swing_seq = sword.swing_seq.wrapping_add(1);
+        sword.queued = false;
         sword.hit_done = false;
         sword.swing_dir = if sword.swing_dir > 0.0 { -1.0 } else { 1.0 };
         sword.hold = 0.0;

@@ -7036,6 +7036,8 @@ impl<'a> Cooker<'a> {
                     "DisNotify_DropItem" => m.drops.push(t),
                     "DisNotify_BlockParryZone" => m.parry_zone = Some((t, t + d)),
                     "DisNotify_NPCTurnControl" => m.turn_control.push((t, t + d)),
+                    "DishonoredNotify_ChainInput" if m.chain_input.is_none() => m.chain_input = Some((t, t + d)),
+                    "DishonoredNotify_ChainExit" if m.chain_exit.is_none() => m.chain_exit = Some(t),
                     "DisNotify_CameraShake" => {
                         let np = upk::read_object(&seq.pkg, no).ok().map(|o| o.props);
                         let bone = np.as_ref().and_then(|p| p.name("m_BoneName")).filter(|n| *n != "None").unwrap_or("root_jnt").to_string();
@@ -7110,7 +7112,7 @@ impl<'a> Cooker<'a> {
             m.hooks.sort_by(|a, b| a.0.total_cmp(&b.0));
             m.fx.sort_by(|a, b| a.time.total_cmp(&b.time));
             m.footfalls.sort_by(|a, b| a.total_cmp(b));
-            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() || !m.look_off.is_empty() || !m.footfalls.is_empty() || !m.armor.is_empty() || !m.recolor.is_empty() || !m.mat_params.is_empty() || !m.open.is_empty() || !m.shakes.is_empty() || m.parry_zone.is_some() || !m.turn_control.is_empty() {
+            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() || !m.look_off.is_empty() || !m.footfalls.is_empty() || !m.armor.is_empty() || !m.recolor.is_empty() || !m.mat_params.is_empty() || !m.open.is_empty() || !m.shakes.is_empty() || m.parry_zone.is_some() || !m.turn_control.is_empty() || m.chain_input.is_some() || m.chain_exit.is_some() {
                 self.scene.clip_marks.push(m);
             }
         }

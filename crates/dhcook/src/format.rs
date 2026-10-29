@@ -1102,6 +1102,12 @@ pub struct ClipMarks {
     /// `m_bAnimAllowsTurnControl`): from, to
     #[serde(default)]
     pub turn_control: Vec<(f32, f32)>,
+    /// a swing's chain: while a press is taken for the next (`DishonoredNotify_ChainInput`: from, to)
+    /// and when that next begins (`DishonoredNotify_ChainExit`): Corvo's attacks
+    #[serde(default)]
+    pub chain_input: Option<(f32, f32)>,
+    #[serde(default)]
+    pub chain_exit: Option<f32>,
 }
 
 /// A material parameter a clip drives on its character (`DisNotify_PawnMaterialParam`).

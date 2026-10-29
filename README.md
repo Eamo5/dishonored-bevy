@@ -3103,6 +3103,13 @@ against the install's own data where it carries them, then implemented independe
 - **Melee timing.** A blow lands where the original's zone handler opens the damage: in the last
   `m_fDamageZoneMaxTime` of its clip's `DishonoredNotify_AttackZone`. That is 0.29 s into Corvo's
   swing (blink measured 0.30–0.35 s).
+- **Chained blows.** A swing lasts until its clip may be broken off
+  (`DishonoredNotify_AttackInterruptable`: 0.57-0.63 s), and a press while its clip takes the
+  next (`DishonoredNotify_ChainInput`, from about 0.27 s to its end) is kept and starts that
+  blow at the clip's `DishonoredNotify_ChainExit`, as roshan's r614/blink research decoded the
+  swing's `m_ChainInputZone` and `m_bQueuedChain`; a press before the window is not. Before,
+  every swing was over at 0.48 s and only a press after that started another, so a press a
+  little early was lost and mashing swung faster than the original allows.
 - **Swing clips.** Corvo's swings play the `_Small` clips (`Sword_Ready_Attack{Right,Left}_{A,B}_Small`,
   and the sneak's `Sword_Sneak_Attack_Small`), which blink captured the original playing. A swing
   that is stopped short bounces back with the clip for that state (blink decoded the melee
