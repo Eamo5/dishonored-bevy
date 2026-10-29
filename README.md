@@ -1490,7 +1490,11 @@ fields no longer show their stand-in "WW" behind the title.
   `Corpses_CarryCorpse_*_Slave` clips in step, drawn with the view model), slower
   (`GroundSpeedCarryingCorpse`) and without sprinting or the sword; [F] or attacking puts the
   body down (the original drop clips: the carry has no throw, as roshan's r614/blink research
-  found it, the HUD's corpse-throw text never shown). A won chokehold's body is lifted
+  found it, the HUD's corpse-throw text never shown). The body leaves his shoulder where the
+  drop clip lets it go (`DishonoredNotify_ReleaseCorpse`, now cooked: 0.17 s into
+  `Empty_CarryCorpse_DropNoMove_Master`, 0.5 s into `_DropLow_Master`), falling from there as
+  his arms finish the clip; before, it rode the whole clip down and was let go only as it
+  ended, up to 1.1 s. A won chokehold's body is lifted
   straight from the hold with Use held 0.2 s through its Win (`m_fHoldTimeForAutoCarry`:
   `Sword_Choke_CarryCorpse_Master`, the body's `Generic_Choke_CarryCorpse_Slave`). The level
   scripts hear of it

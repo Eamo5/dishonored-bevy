@@ -162,7 +162,7 @@ fn carry_input(
     visuals: Query<(&Transform, &Children), With<NpcVisual>>,
     parts: Query<(&SkinnedMesh, &MeshTag), With<Mesh3d>>,
     mut vis: Query<&mut Visibility>,
-    mut used: MessageWriter<Interaction>,
+    (mut used, mut releases): (MessageWriter<Interaction>, Local<(String, std::collections::HashMap<crate::anim::ClipId, f32>)>),
     (arms, mut anims, npc_anims, rigs, joints): (Query<&Animator, With<ArmsRoot>>, Query<&mut Animator, Without<ArmsRoot>>, Query<&crate::npc::NpcAnim>, Query<&crate::npc::NpcRig>, Query<&GlobalTransform>),
 ) {
     if paused.0 { return; }
@@ -177,6 +177,15 @@ fn carry_input(
         }
     }
     let arms_done = arms.single().map(|a| a.finished()).unwrap_or(true);
+    // (a drop lets go of the body where its clip says, `DishonoredNotify_ReleaseCorpse`: 0.5 s into
+    // `Empty_CarryCorpse_DropLow_Master`'s 1.1, 0.17 into `_DropNoMove`'s 0.63; the arms play on)
+    if level.as_ref().is_some_and(|l| releases.0 != l.scene.name) {
+        if let (Some(l), Ok(a)) = (level.as_ref(), arms.single()) {
+            releases.0 = l.scene.name.clone();
+            releases.1 = a.lib.marks(&l.scene).into_iter().filter_map(|(c, m)| m.release_corpse.map(|r| (c, r))).collect();
+        }
+    }
+    let let_go = arms.single().ok().and_then(|a| a.current()).and_then(|c| releases.1.get(&c.clip).map(|r| c.t >= *r)).unwrap_or(false);
     let release_hips = |body| rigs.get(body).ok().and_then(|r| r.joint("Root_jnt"))
         .and_then(|joint| joints.get(joint).ok()).map(GlobalTransform::translation);
     match carry.phase {
@@ -262,7 +271,10 @@ fn carry_input(
             carry.t = 0.0;
         }
         CarryPhase::Drop(_) => {
-            if carry.t > 0.3 && arms_done {
+            if carry.t > 0.1 && (arms_done || let_go) {
+                if std::env::var_os("DH_CARRY_LOG").is_some() {
+                    info!("carry: drop lets go at {:.2} s (clip's mark {let_go}, clip done {arms_done})", carry.t);
+                }
                 let spawner = carry.spawner;
                 let b = carry.body;
                 release(&mut commands, &mut carry, &mut vis, None);

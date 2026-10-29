@@ -1130,6 +1130,9 @@ pub struct ClipMarks {
     /// when a mantle gives its player back his control (`DishonoredNotify_AllowMantleEnd`)
     #[serde(default)]
     pub mantle_end: Option<f32>,
+    /// when a body carried is let go of (`DishonoredNotify_ReleaseCorpse`: Corvo's drops)
+    #[serde(default)]
+    pub release_corpse: Option<f32>,
 }
 
 /// A material parameter a clip drives on its character (`DisNotify_PawnMaterialParam`).
