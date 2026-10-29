@@ -1132,14 +1132,22 @@ pub const FALL_STUN: f32 = 22.0;
 /// `DishonoredNotify_AnimStateExit`).
 const LAND_BIG_EXIT: f32 = 0.935;
 
-fn mantle_time(h: f32, crouch: bool) -> f32 {
-    if h <= MANTLE_STEP_UP {
-        if crouch { 0.633 } else { 0.0 }
+/// How long a mantle holds Corvo: its clip until it gives him back his control
+/// (`DishonoredNotify_AllowMantleEnd`: low 0.35 s, medium 0.45, high 0.72 of 0.63, 0.7 and 1.03),
+/// else its clip's length; a low edge standing is stepped onto at once.
+fn mantle_time(h: f32, crouch: bool, ends: &crate::arms::MantleEnds) -> f32 {
+    let (kind, whole) = if h <= MANTLE_STEP_UP {
+        if !crouch {
+            return 0.0;
+        }
+        (0, 0.633)
     } else if h <= 1.7 {
-        0.700
+        (1, 0.700)
     } else {
-        1.033
-    }
+        (2, 1.033)
+    };
+    let end = ends.0[crouch as usize][kind];
+    if end > 0.1 { end } else { whole }
 }
 
 /// Where a mantle from `t` facing `yaw` would put Corvo (standing, or `crouched` sneaking: he
@@ -1244,6 +1252,7 @@ fn mantle(
     attrs: Res<crate::gamedata::Attrs>,
     mut q: Query<(Entity, &mut Player, &mut Transform, &mut Collider), Without<PlayerCamera>>,
     (mut spot, mut auto, mut edge, mut request): (ResMut<MantleSpot>, ResMut<AutoCrouch>, ResMut<MantleEdge>, ResMut<MantleRequest>),
+    ends: Res<crate::arms::MantleEnds>,
 ) {
     spot.0 = false;
     if paused.0 { return; }
@@ -1251,7 +1260,7 @@ fn mantle(
     if let Some((from, to, k)) = p.mantle {
         // Acrobat modifies MantleAnimRate; the head's additive mantle clip uses
         // this same progress, keeping its motion in step with the faster climb.
-        let dur = mantle_time(edge.h, edge.crouch).max(0.3);
+        let dur = mantle_time(edge.h, edge.crouch, &ends).max(0.3);
         let nk = (k + time.delta_secs() * attrs.mantle_rate.max(0.01) / dur).min(1.0);
         // up first, then forward
         let up = (nk / 0.6).min(1.0);
@@ -1283,7 +1292,7 @@ fn mantle(
     let Some((dest, h, body)) = found else { return };
     let crouch = body != Body::Stand;
     *edge = MantleEdge { h, crouch };
-    info!("mantle: {h:.2} m edge, {:.3} s{}", mantle_time(h, crouch), if crouch { ", crouched" } else { "" });
+    info!("mantle: {h:.2} m edge, {:.3} s{}", mantle_time(h, crouch, &ends), if crouch { ", crouched" } else { "" });
     if crouch {
         // (into a space too low to stand: down by it, not by choice)
         p.rise |= !p.crouched;
@@ -1292,7 +1301,7 @@ fn mantle(
         *col = body.collider();
         auto.0 = p.crawl;
     }
-    if mantle_time(h, crouch) <= 0.0 {
+    if mantle_time(h, crouch, &ends) <= 0.0 {
         // a low edge: stepped onto at once
         t.translation = dest;
         p.velocity = Vec3::ZERO;

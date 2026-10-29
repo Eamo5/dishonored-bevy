@@ -26,7 +26,7 @@ pub struct ArmsPlugin;
 impl Plugin for ArmsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DeathFall>()
-            .init_resource::<ArmSteps>().init_resource::<ParryZone>().init_resource::<SwingMarks>()
+            .init_resource::<ArmSteps>().init_resource::<ParryZone>().init_resource::<SwingMarks>().init_resource::<MantleEnds>()
             .add_systems(OnEnter(GameState::InGame), spawn_arms.after(spawn_view_model))
             .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_steps.after(ArmsAnimSet), arm_effects.after(ArmsAnimSet), possess_hand.after(ArmsAnimSet), (animate_held, animate_sword, show_bolts).after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin, swap_arms).after(animate_view_model).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, (align_arms.in_set(ArmsAlign), arm_pitch).after(AnimPose).before(TransformSystems::Propagate))
@@ -53,6 +53,11 @@ pub struct ArmSteps {
 #[derive(Resource, Default)]
 pub struct ParryZone(pub Option<f32>);
 
+/// When each of Corvo's mantles gives him back his control (`DishonoredNotify_AllowMantleEnd`):
+/// standing and sneaking, low, medium and high (s; 0: its clip has none).
+#[derive(Resource, Default, Clone, Copy)]
+pub struct MantleEnds(pub [[f32; 3]; 2]);
+
 /// The swing clip Corvo's arms play: while a press is taken for the next blow and when that one
 /// begins (`DishonoredNotify_ChainInput`, `ChainExit`), and when the swing may be broken off
 /// (`DishonoredNotify_AttackInterruptable`), in the clip's seconds; none: no swing clip playing.
@@ -65,6 +70,7 @@ fn arm_steps(
     arms: Query<&Animator, With<ArmsRoot>>,
     mut steps: ResMut<ArmSteps>,
     mut zone: ResMut<ParryZone>,
+    mut mantles: ResMut<MantleEnds>,
     mut swing: ResMut<SwingMarks>,
     mut chains: Local<std::collections::HashMap<ClipId, (Option<(f32, f32)>, Option<f32>, Option<f32>)>>,
     mut marks: Local<Option<(String, std::collections::HashMap<ClipId, Vec<f32>>)>>,
@@ -74,6 +80,8 @@ fn arm_steps(
     if marks.as_ref().is_none_or(|(n, _)| *n != level.scene.name) {
         let all = anim.lib.marks(&level.scene);
         zone.0 = anim.lib.find("Sword_Ready_ParryIdle_In").and_then(|c| all.get(&c)).and_then(|m| m.parry_zone).map(|z| z.1);
+        let end = |n: &str| anim.lib.find(n).and_then(|c| all.get(&c)).and_then(|m| m.mantle_end).unwrap_or(0.0);
+        mantles.0 = [[end("Empty_MantleLow"), end("Empty_MantleMedium"), end("Empty_MantleHigh")], [end("Empty_Sneak_MantleLow"), end("Empty_Sneak_MantleMedium"), end("Empty_Sneak_MantleHigh")]];
         *chains = all.iter().filter(|(_, m)| m.chain_input.is_some() && m.zone.is_some()).map(|(c, m)| (*c, (m.chain_input, m.chain_exit, (m.interruptible > 0.0).then_some(m.interruptible)))).collect();
         let by = all.into_iter().filter(|(_, m)| !m.footfalls.is_empty()).map(|(id, m)| (id, m.footfalls)).collect();
         *marks = Some((level.scene.name.clone(), by));

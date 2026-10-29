@@ -1127,6 +1127,9 @@ pub struct ClipMarks {
     /// the bone it strikes
     #[serde(default)]
     pub lightning: Vec<(u8, String)>,
+    /// when a mantle gives its player back his control (`DishonoredNotify_AllowMantleEnd`)
+    #[serde(default)]
+    pub mantle_end: Option<f32>,
 }
 
 /// A material parameter a clip drives on its character (`DisNotify_PawnMaterialParam`).

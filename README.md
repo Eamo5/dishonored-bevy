@@ -3056,6 +3056,10 @@ against the install's own data where it carries them, then implemented independe
   (`Empty_Mantle*`, `Empty_Sneak_Mantle*`) or sword in hand (`Sword_Ready_Mantle*`,
   `Sword_Sneak_Mantle*`), each as long as its climb and at Acrobat's `MantleAnimRate`; the left
   hand keeps what it holds. Edges to 1.2 m are stepped onto at once (`m_bLowMantleUseStepUp`).
+  A mantle gives him back his control where its clip says (`DishonoredNotify_AllowMantleEnd`,
+  now cooked: a medium edge's 0.45 s of `Empty_MantleMedium`'s 0.7, a high one's 0.72 of 1.03,
+  sneaking 0.35-0.72), the arms' clip playing on as he moves; before, he was held for each
+  clip's whole length, a third longer.
 - **Conversations.** Random branches pick by their percentage weights and avoid repeating
   their last pick; in-turn branches stay on their last output unless they loop; a shuffled turn
   ends on "Depleted". A conversation breaks off on its speaker's death or change of behaviour,
