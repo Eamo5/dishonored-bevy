@@ -288,6 +288,10 @@ pub struct Npc {
     /// may turn now, as the clip it plays says (`DisNotify_NPCTurnControl`: the pawn's
     /// `m_bAnimAllowsTurnControl`); a blow without its windows never turns
     pub turn_ok: bool,
+    /// taken aback (`DART_Surprise`): where from, to be shown (its clip by the side it came from)
+    pub startle: Option<Vec3>,
+    /// held still taken aback until its clip's `DisNotify_EndSurprise` (s left)
+    pub aback: f32,
     /// its walk begun or ended with its clip; what it wished to go this frame (its path's way, at
     /// its pace), and its path: how far to its goal and to the path's next point
     pub pace: Option<Pace>,
@@ -2549,6 +2553,8 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         charred: false,
         open: [false; 2],
         turn_ok: true,
+        startle: None,
+        aback: 0.0,
         pace: None,
         turning: false,
         wish: Vec3::ZERO,
@@ -3562,6 +3568,7 @@ fn npc_hearing(
                 // aback, `DART_Surprise`'s `DDH_COMBAT_SURPRISED`)
                 if n.kind == NoiseKind::DeathRattle && !npc.suspecting && npc.attn_level <= 3 && npc.alert != Alert::Combat {
                     npc.bark_req = (npc.bark_req.0.wrapping_add(1), "COMBAT_SURPRISED");
+                    npc.startle = Some(n.pos);
                 }
                 // (an alarm makes it suspect, its attention reactions' `Alarm`)
                 if n.kind == NoiseKind::Alarm {
@@ -4100,6 +4107,7 @@ pub(crate) fn npc_perception(
                 // `DDH_COMBAT_SURPRISED`)
                 if touching && npc.alert != Alert::Combat {
                     npc.bark_req = (npc.bark_req.0.wrapping_add(1), "COMBAT_SURPRISED");
+                    npc.startle = Some(pt.translation);
                 }
             }
             // busted with a body on his shoulder, by one neither his enemy nor of his side
@@ -4270,6 +4278,7 @@ pub(crate) fn npc_perception(
                             // aback, `DART_Surprise`)
                             if !npc.suspecting && npc.attn_level <= 3 {
                                 npc.bark_req = (npc.bark_req.0.wrapping_add(1), "COMBAT_SURPRISED");
+                                npc.startle = Some(*b);
                             }
                             break;
                         }
@@ -6258,7 +6267,8 @@ pub(crate) fn npc_move(
         let mut wish = Vec3::ZERO;
         // a lunging blow carries it at Corvo until it lands (a step back, away)
         let lunge = npc.swing.as_ref().filter(|s| s.lunge != 0.0 && npc.attack_t.is_some_and(|t| t < s.hit)).map(|s| s.lunge);
-        let frozen = npc.stagger > 0.0 || (npc.attack_t.is_some() && lunge.is_none()) || npc.is_down() || npc.mode == Mode::Choked || npc.versus || npc.ambush.is_some();
+        npc.aback = (npc.aback - dt).max(0.0);
+        let frozen = npc.stagger > 0.0 || npc.aback > 0.0 || (npc.attack_t.is_some() && lunge.is_none()) || npc.is_down() || npc.mode == Mode::Choked || npc.versus || npc.ambush.is_some();
         if let (Some(v), Some(p), false) = (lunge, ppos, frozen) {
             wish = (p - pos).with_y(0.0).normalize_or_zero() * v;
         }
@@ -6743,6 +6753,9 @@ pub struct NpcClips {
     /// startled by a live explosive, sword sheathed or drawn (`Empty_Surprised_Front`,
     /// `Sword_Surprised_Front`)
     startled: [Option<ClipId>; 2],
+    /// taken aback, by the side it came from (front, back, left, right): sword drawn, empty-handed,
+    /// and empty-handed drawing (`Sword_Surprised_*`, `Empty_Surprised_*`, `Empty_SurprisedDraw_*`)
+    aback: [[Option<ClipId>; 4]; 3],
     /// its sword drawn: into its patrol stance, to search (`DisNPCAnim_EquipToSearch`:
     /// `Sword_Patrol_Equip`); into its fighting stance (`DisNPCAnim_EquipToCombat`:
     /// `Sword_Equip`); and, drawn in its patrol stance, raised to fight
@@ -6954,6 +6967,7 @@ impl NpcClips {
             out_of_sight: [lib.first(&["Empty_OutOfSight", "Sword_OutOfSight"]), lib.first(&["Sword_OutOfSight", "Empty_OutOfSight"])],
             surprised: lib.first(&["Sword_Surprised_Front", "Empty_Surprised_Front", "Attack_IdleBark_Short", "Empty_Taunt"]),
             startled: [lib.find("Empty_Surprised_Front"), lib.find("Sword_Surprised_Front")],
+        aback: ["Sword_Surprised_", "Empty_Surprised_", "Empty_SurprisedDraw_"].map(|p| ["Front", "Back", "Left", "Right"].map(|s| lib.find(&format!("{p}{s}")))),
             equip: lib.first(&["Sword_Patrol_Equip", "Sword_Equip"]),
             equip_combat: lib.first(&["Sword_Equip", "Sword_Patrol_Equip"]),
             patrol_to_sword: lib.find("Sword_Patrol_PatrolToSword"),
@@ -7681,6 +7695,31 @@ fn npc_select_anim(
             }
         }
         st.escaping = npc.escape.is_some();
+        // taken aback (`DART_Surprise`): its clip by the side it came from, sword drawn or not (a
+        // guard's empty hand drawing as it starts, `Empty_SurprisedDraw_*`), held still until the clip's
+        // `DisNotify_EndSurprise` (as `DisNPCAnim_Surprised` plays it)
+        if let Some(from) = npc.startle.take() {
+            if !npc.is_down() && npc.attack_t.is_none() && !musical && npc.mode != Mode::Choked {
+                let to = (from - t.translation).with_y(0.0).normalize_or_zero();
+                let f = npc.forward();
+                let right = Vec3::new(-f.z, 0.0, f.x);
+                let (ahead, side) = (to.dot(f), to.dot(right));
+                let dir = if ahead.abs() >= side.abs() { if ahead >= 0.0 { 0 } else { 1 } } else if side < 0.0 { 2 } else { 3 };
+                let set = if st.drawn { 0 } else if npc.hostile() && npc.has_sword { 2 } else { 1 };
+                let c = clips.aback[set][dir].or(clips.aback[if set == 0 { 1 } else { 0 }][dir]).or(clips.aback[set][0]);
+                if let Some(c) = c {
+                    anim.restart(c, false, 1.0, 0.1);
+                    st.oneshot = true;
+                    npc.aback = st.marks.get(&c).and_then(|m| m.end_surprise).unwrap_or(lib.duration(c) * 0.5);
+                    if std::env::var_os("DH_NPC_CLIP_LOG").is_some() {
+                        info!("npc {}: taken aback, {} for {:.2} s", npc.name, lib.clip(c).name, npc.aback);
+                    }
+                    st.last_mode = npc.mode;
+                    st.last_alert = npc.alert;
+                    continue;
+                }
+            }
+        }
         // a musical Overseer's arms hold its music box, walking or standing (its pawn's walking
         // upper-body desire, `MusicBoxIdle`), and crank it while it plays (`PlayMusic`: in, the
         // loop, out), as roshan's r614/blink research read `DisWepMusicBox`

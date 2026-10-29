@@ -1133,6 +1133,9 @@ pub struct ClipMarks {
     /// when a body carried is let go of (`DishonoredNotify_ReleaseCorpse`: Corvo's drops)
     #[serde(default)]
     pub release_corpse: Option<f32>,
+    /// when a character taken aback may act again (`DisNotify_EndSurprise`)
+    #[serde(default)]
+    pub end_surprise: Option<f32>,
 }
 
 /// A material parameter a clip drives on its character (`DisNotify_PawnMaterialParam`).

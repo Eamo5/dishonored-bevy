@@ -1575,6 +1575,11 @@ fields no longer show their stand-in "WW" behind the title.
   - Taken aback (`DART_Surprise`), while unsuspecting: one that sees or hears a death with its
     attention at investigating at most, or that Corvo bumps into once its attention is at
     investigating, says `COMBAT_SURPRISED` ("What the...!"). Bumped into, it also suspects.
+    It is taken aback in its body too (`DisNPCAnim_Surprised`), turning from the side the death
+    or the bump came from: front, back, left or right, sword drawn (`Sword_Surprised_*`),
+    empty-handed (`Empty_Surprised_*`) or drawing as it starts (`Empty_SurprisedDraw_*`, the blade
+    to its hand at the clip's mark), and holds still until its clip's `DisNotify_EndSurprise`
+    (now cooked: 0.36-0.75 s). Before, only the line was said and it walked straight off.
   - Looking into something, it turns to it and waits its search's reaction
     (`m_SearchReactionDelay`, 0-1 s) before setting off. It counts as come to it within 2.5 m
     (`m_fProximityThresholds`, 250 uu). A body is 1.6 m: the original's 100 uu can't be

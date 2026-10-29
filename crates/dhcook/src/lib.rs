@@ -7041,6 +7041,7 @@ impl<'a> Cooker<'a> {
                     "DisNotify_AnimStateUnlock" if m.unlock.is_none() => m.unlock = Some(t),
                     "DishonoredNotify_AllowMantleEnd" if m.mantle_end.is_none() => m.mantle_end = Some(t),
                     "DishonoredNotify_ReleaseCorpse" if m.release_corpse.is_none() => m.release_corpse = Some(t),
+                    "DisNotify_EndSurprise" if m.end_surprise.is_none() => m.end_surprise = Some(t),
                     "DisNotify_SetLightningTarget" => {
                         let Ok(np) = upk::read_object(&seq.pkg, no).map(|o| o.props) else { continue };
                         let corner = match np.name("m_Origin") {
@@ -7136,7 +7137,7 @@ impl<'a> Cooker<'a> {
             m.hooks.sort_by(|a, b| a.0.total_cmp(&b.0));
             m.fx.sort_by(|a, b| a.time.total_cmp(&b.time));
             m.footfalls.sort_by(|a, b| a.total_cmp(b));
-            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() || !m.look_off.is_empty() || !m.footfalls.is_empty() || !m.armor.is_empty() || !m.recolor.is_empty() || !m.mat_params.is_empty() || !m.open.is_empty() || !m.shakes.is_empty() || m.parry_zone.is_some() || !m.turn_control.is_empty() || m.chain_input.is_some() || m.chain_exit.is_some() || m.unlock.is_some() || m.state_exit.is_some() || !m.attach.is_empty() || !m.show_item.is_empty() || !m.lightning.is_empty() || m.mantle_end.is_some() || m.release_corpse.is_some() {
+            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() || !m.look_off.is_empty() || !m.footfalls.is_empty() || !m.armor.is_empty() || !m.recolor.is_empty() || !m.mat_params.is_empty() || !m.open.is_empty() || !m.shakes.is_empty() || m.parry_zone.is_some() || !m.turn_control.is_empty() || m.chain_input.is_some() || m.chain_exit.is_some() || m.unlock.is_some() || m.state_exit.is_some() || !m.attach.is_empty() || !m.show_item.is_empty() || !m.lightning.is_empty() || m.mantle_end.is_some() || m.release_corpse.is_some() || m.end_surprise.is_some() {
                 self.scene.clip_marks.push(m);
             }
         }
