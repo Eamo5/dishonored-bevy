@@ -42,6 +42,13 @@ pub struct LevelInfo {
 }
 
 /// Pre-placed corpses (plague victims, previous fights) rather than live characters.
+/// A type of the dead, by its name or one it derives from (`DLC06_PwnBody_Eaten` from
+/// `PwnDead_Base`: the Knife of Dunwall's slaughterhouse's half-eaten bodies, which stood in their
+/// bind poses).
+pub fn is_corpse_npc_type(t: &dhcook::format::NpcType) -> bool {
+    is_corpse_type(&t.name) || t.lineage.iter().any(|l| is_corpse_type(l))
+}
+
 pub fn is_corpse_type(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
     n.contains("dead_npc") || n.contains("pwndead") || n.contains("pwn_dead")
@@ -69,7 +76,7 @@ pub fn choose_start(scene: &Scene, requested: Option<usize>) -> Option<usize> {
             .iter()
             .filter(|sp| sp.spawn_on_begin_play || sp.script_start)
             .filter_map(|sp| sp.npc_type.and_then(|t| scene.npc_types.get(t as usize)).map(|t| (sp, t)))
-            .filter(|(_, t)| matches!(t.kind.as_str(), "guard" | "overseer" | "thug" | "creature") && !is_corpse_type(&t.name))
+            .filter(|(_, t)| matches!(t.kind.as_str(), "guard" | "overseer" | "thug" | "creature") && !is_corpse_npc_type(t))
             .filter(|(sp, _)| Vec3::from(sp.position).distance(p) < 15.0)
             .count()
     };

@@ -797,6 +797,13 @@ fields no longer show their stand-in "WW" behind the title.
     Before, everyone turned at 344 degrees a second. A fighter facing Corvo close turns at its
     melee engagement's face-to rate (`DisTweaks_AISubState_MeleeEngage`'s `m_fRotationSpeed`,
     600 degrees a second) the same way; standing turns are as before.
+  - In a blow, a surprise, a recovery or a taunt it turns only while its clip lets it
+    (`DisNotify_NPCTurnControl`, now cooked: the pawn's `m_bAnimAllowsTurnControl`). A city
+    guard's `Sword_Attack_MediumSmallB` follows Corvo through its windup (0 to 0.62 s) and holds
+    its way as the blade comes (0.64 s on); its quick `FastA` and `FastB` track him as they
+    strike; a blow with no window (`Sword_Attack_ShortBigA`-`E`) keeps the way it began. Before,
+    a fighter swung round after him at 600 degrees a second through every blow, so stepping
+    aside never made one miss.
   - Its speed eases at its locomotion modifier's `m_fAcceleration` and `m_fDeceleration` (a city
     guard's sword drawn 4.75 m/s² up, on its rounds 3.2; searching empty-handed 0.35, so it
     creeps off slowly), and slows in time to stop where its path ends; its way follows its path
@@ -1622,6 +1629,11 @@ fields no longer show their stand-in "WW" behind the title.
   type's sets, the body lies, sits or hangs in its spawner's pose held at its end (a dying
   loop plays on), and it keeps that pose rather than falling limp until it is moved; it can
   be picked up and carried as before. One without a named pose lies on its back.
+  A type is one of the dead by the types it derives from too (`DLC06_PwnBody_Eaten` from
+  `PwnDead_Base`): the half-eaten bodies of The Knife of Dunwall's slaughterhouse stood in
+  their bind poses, as living characters with nothing to play. (`poses [D]`, a test command,
+  lists the characters within D m left unposed; across every map at the start none now are,
+  but for those beyond 80 m, which stop posing as they should.)
 - **Ragdolls** (`ragdoll.rs`): each pawn's physics asset (`m_pPhysicsAsset`: its
   `RB_BodySetup` boxes, spheres, capsules and convex pieces on their bones; its
   `RB_ConstraintSetup` ball joints, their frames in each bone (positions at physics scale, a
@@ -2411,7 +2423,10 @@ fields no longer show their stand-in "WW" behind the title.
   found. The posture sets of the guards, the women, the weepers and the packs' characters
   lost such clips, so in 28 maps the scenes' standing and talking postures
   (`Posture_IdleLeft`, `_TalkCenter`, `_WallBack`...: 83 of the 120 clips scenes asked for and
-  their characters lacked) did not play.
+  their characters lacked) did not play. With these and the bindings above, 10 remain in the
+  whole campaign and both packs (`DH_MISSING_CLIP_LOG`), all clips the shipped sets don't hold
+  (the packs' thugs' `DLC06_Npc_CityGuard_Postures` has 5 of its 24 postures, the witches have
+  no `Posture_WallRight`): their characters keep their own stance under the scene's gestures.
   A scene's player group with a stage mark (`InterpGroupPlayer.m_StageMarkGroup`) blends Corvo
   onto it as it starts, facing its way, over `m_fTimeToBlendToStageMark` (0.2 s), and holds him
   there while it plays (`StatePlayerMasterSoiree`: movement disabled); one that carries him (a

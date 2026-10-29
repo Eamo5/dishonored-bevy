@@ -285,6 +285,9 @@ pub struct Npc {
     /// open now, as the clips it plays say (`DisNotify_VulnerableRange`): killable (a blow a
     /// finisher), off balance (choked in a fight)
     pub open: [bool; 2],
+    /// may turn now, as the clip it plays says (`DisNotify_NPCTurnControl`: the pawn's
+    /// `m_bAnimAllowsTurnControl`); a blow without its windows never turns
+    pub turn_ok: bool,
     /// its walk begun or ended with its clip; what it wished to go this frame (its path's way, at
     /// its pace), and its path: how far to its goal and to the path's next point
     pub pace: Option<Pace>,
@@ -1094,6 +1097,9 @@ fn display_name(pawn: &str) -> &'static str {
         "Executioner"
     } else if p.contains("campbell") {
         "High Overseer Campbell"
+    } else if p.contains("hound") {
+        // (before the overseers: the Kennels' `Overseer_Twk.twk_SickWolfhound`)
+        "Wolfhound"
     } else if p.contains("overseer") {
         "Overseer"
     } else if p.contains("thug") {
@@ -2458,7 +2464,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
     };
     let arms = stats.map(|s| Arms::of(s, difficulty, si as u64)).unwrap_or_default();
     // (a corpse's type, or spawned dead: `m_bSpawnDead`)
-    let corpse = crate::level::is_corpse_type(&vis.name) || sp.dead_pose.is_some();
+    let corpse = crate::level::is_corpse_type(&vis.name) || ty.is_some_and(crate::level::is_corpse_npc_type) || sp.dead_pose.is_some();
     // (its spawner sets it out on patrol, `m_bPatrolUponStartup`: it takes up a route as it
     // starts; the others wait for the scripts)
     let patrol = crate::patrol::Patrol { on: sp.patrol && !corpse, dir: 1, ..Default::default() };
@@ -2542,6 +2548,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         dead_pose: sp.dead_pose.clone(),
         charred: false,
         open: [false; 2],
+        turn_ok: true,
         pace: None,
         turning: false,
         wish: Vec3::ZERO,
@@ -5820,6 +5827,9 @@ pub(crate) fn npc_brain(
                             let in_front = to.normalize_or_zero().dot(npc.forward()) > 0.5;
                             let shot = kind == Some(MoveKind::UnderGun);
                             let struck = to.length() < reach && (ppos.y - pos.y).abs() < 1.5 && in_front;
+                            if std::env::var("DH_MELEE_LOG").is_ok() {
+                                info!("melee: {}'s blow {} ({:.1} m, {:.0} degrees off its way)", npc.name, if struck { "lands" } else { "misses" }, to.length(), to.normalize_or_zero().dot(npc.forward()).clamp(-1.0, 1.0).acos().to_degrees());
+                            }
                             if struck {
                                 let damage = if kick { 0.0 } else if shot { npc.arms.ranged } else { npc.arms.melee };
                                 hit_writer.write(PlayerHit { npc: e, from: pos, damage, kick, big, push: false, unblockable: under, missile: false });
@@ -6442,6 +6452,8 @@ pub(crate) fn npc_move(
         };
         // (turning with its clip: faced the new way already, shown turning: `npc_select_anim`)
         let face = face.filter(|_| npc.pace.is_none_or(|p| p.turn.is_none()));
+        // (in a clip that allows it only: `DisNotify_NPCTurnControl`)
+        let face = face.filter(|_| npc.turn_ok || npc.is_down());
         if let Some(f) = face {
             if f.length_squared() > 1e-4 {
                 let target_yaw = (-f.x).atan2(-f.z);
@@ -7588,6 +7600,13 @@ fn npc_select_anim(
         {
             let playing = [anim.current().map(|p| (p.clip, p.t)), anim.upper_playing().map(|p| (p.clip, p.t)), st.flinch];
             npc.open = [0u8, 1].map(|kind| playing.iter().flatten().any(|(c, ct)| st.marks.get(c).is_some_and(|m| m.open.iter().any(|&(a, b, k)| k == kind && (a..=b).contains(ct)))));
+            // (turning in its clip's windows only, a blow's or a reaction's; a blow without any held
+            // to the way it began, so a step aside as it swings makes it miss)
+            npc.turn_ok = match anim.current().and_then(|p| st.marks.get(&p.clip).map(|m| (m, p.t))) {
+                Some((m, ct)) if !m.turn_control.is_empty() => m.turn_control.iter().any(|&(a, b)| (a..=b).contains(&ct)),
+                Some((m, _)) if !m.zones.is_empty() => false,
+                _ => true,
+            };
         }
         // (Corvo lost in the fight: kept until it is free to show it)
         if npc.mode != Mode::Search {

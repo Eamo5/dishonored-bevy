@@ -1098,6 +1098,10 @@ pub struct ClipMarks {
     /// 0.431 s): from, to
     #[serde(default)]
     pub parry_zone: Option<(f32, f32)>,
+    /// while its character may turn as it plays (`DisNotify_NPCTurnControl`, the pawn's
+    /// `m_bAnimAllowsTurnControl`): from, to
+    #[serde(default)]
+    pub turn_control: Vec<(f32, f32)>,
 }
 
 /// A material parameter a clip drives on its character (`DisNotify_PawnMaterialParam`).

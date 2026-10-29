@@ -2346,7 +2346,8 @@ fn run_script(
                     }
                     let why = match a {
                         None => Some("no animator".to_string()),
-                        Some(a) if a.frozen && !n.is_down() => Some("frozen".to_string()),
+                        // (beyond 80 m the characters stop posing, as they should)
+                        Some(a) if a.frozen && !n.is_down() && nt.translation.distance(at) < 80.0 => Some("frozen".to_string()),
                         Some(a) if a.current().is_none() => Some("playing nothing".to_string()),
                         _ => None,
                     };
