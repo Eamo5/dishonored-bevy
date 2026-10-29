@@ -1136,6 +1136,9 @@ pub struct ClipMarks {
     /// when a character taken aback may act again (`DisNotify_EndSurprise`)
     #[serde(default)]
     pub end_surprise: Option<f32>,
+    /// when a swimmer's stroke pushes (`DisNotify_SwimStroke`: Corvo's `Empty_Swim*`)
+    #[serde(default)]
+    pub strokes: Vec<f32>,
 }
 
 /// A material parameter a clip drives on its character (`DisNotify_PawnMaterialParam`).

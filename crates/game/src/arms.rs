@@ -45,6 +45,8 @@ pub struct ArmsAnimSet;
 pub struct ArmSteps {
     pub cued: bool,
     pub due: u32,
+    /// swim strokes his arms' swim loop passed (`DisNotify_SwimStroke`), not yet taken
+    pub strokes: u32,
 }
 
 /// While Corvo's block parries, from its start (s): his block clip's `DisNotify_BlockParryZone`
@@ -83,22 +85,29 @@ fn arm_steps(
         let end = |n: &str| anim.lib.find(n).and_then(|c| all.get(&c)).and_then(|m| m.mantle_end).unwrap_or(0.0);
         mantles.0 = [[end("Empty_MantleLow"), end("Empty_MantleMedium"), end("Empty_MantleHigh")], [end("Empty_Sneak_MantleLow"), end("Empty_Sneak_MantleMedium"), end("Empty_Sneak_MantleHigh")]];
         *chains = all.iter().filter(|(_, m)| m.chain_input.is_some() && m.zone.is_some()).map(|(c, m)| (*c, (m.chain_input, m.chain_exit, (m.interruptible > 0.0).then_some(m.interruptible)))).collect();
-        let by = all.into_iter().filter(|(_, m)| !m.footfalls.is_empty()).map(|(id, m)| (id, m.footfalls)).collect();
+        let by = all.into_iter().filter(|(_, m)| !m.footfalls.is_empty() || !m.strokes.is_empty()).map(|(id, m)| (id, if m.strokes.is_empty() { m.footfalls } else { m.strokes.iter().map(|t| -1.0 - t).collect() })).collect();
         *marks = Some((level.scene.name.clone(), by));
     }
     swing.0 = anim.current().and_then(|c| chains.get(&c.clip).copied());
     let now = anim.current().filter(|c| c.looping).map(|c| (c.clip, c.t));
     let feet = now.and_then(|(clip, _)| marks.as_ref().and_then(|(_, m)| m.get(&clip)));
-    steps.cued = feet.is_some();
+    steps.cued = feet.is_some_and(|f| f.first().is_some_and(|x| *x >= 0.0));
     if let (Some(feet), Some((clip, t)), Some((before, t0))) = (feet, now, *was) {
         if clip == before {
             let len = anim.lib.duration(clip).max(1e-3);
-            let passed = |a: f32, b: f32| feet.iter().filter(|&&f| f > a && f <= b).count() as u32;
+            // (a swim loop's strokes kept as -1 - t: its own count)
+            let stroke = feet.first().is_some_and(|f| *f < 0.0);
+            let at = |f: f32| if f < 0.0 { -1.0 - f } else { f };
+            let passed = |a: f32, b: f32| feet.iter().filter(|&&f| at(f) > a && at(f) <= b).count() as u32;
             let n = if t >= t0 { passed(t0, t) } else { passed(t0, len) + passed(-1.0, t) };
             if n > 0 && std::env::var_os("DH_STEP_LOG").is_some() {
                 info!("arm steps: {} at {t:.3} of {}", anim.lib.clip(clip).name, n);
             }
-            steps.due += n;
+            if stroke {
+                steps.strokes += n;
+            } else {
+                steps.due += n;
+            }
         }
     }
     *was = now;

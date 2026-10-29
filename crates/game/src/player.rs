@@ -708,6 +708,9 @@ fn player_move(
     wish += fwd * pad_walk.y + right * pad_walk.x;
     // the scripts' cinematics hold Corvo where he is
     let held = cine.holds_movement();
+    if std::env::var_os("DH_MOVE_LOG").is_some() && (wish != Vec3::ZERO || held) {
+        info!("move: wish {wish:.2} held {held} (input off {}) rate {:.2} locked {} grounded {}", cine.input_off, tc.player_rate(), p.locked, p.grounded);
+    }
     let wish = if held { Vec3::ZERO } else if analog { wish.clamp_length_max(1.0) } else { wish.normalize_or_zero() };
     let jump_pressed = !held && (bind.just_pressed(crate::bindings::Act::Jump) || std::mem::take(&mut vinput.jump));
     // (held in the air with the world while Daud's Blink is aimed)

@@ -212,6 +212,11 @@ impl Settings {
     }
 
     pub fn save(&self) {
+        // (a scripted run's changes are its own: a test of the options menu once left Forward
+        // bound to the down arrow for every run after it; `DH_SAVE_SETTINGS` keeps them)
+        if std::env::var_os("DH_SCRIPT").is_some() && std::env::var_os("DH_SAVE_SETTINGS").is_none() {
+            return;
+        }
         if let Ok(d) = serde_json::to_vec_pretty(self) {
             let _ = std::fs::write(user_dir().join("settings.json"), d);
         }

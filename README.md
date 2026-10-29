@@ -1485,6 +1485,13 @@ fields no longer show their stand-in "WW" behind the title.
   bar) and drowns after (the drowning step is read as a tenth of his health); going in
   splashes by speed with the volume's sounds and effects, and under water its colour grade,
   fog and sound loop take over. Climbing out is a mantle.
+  Under water each of his arms' strokes pushes him on (`DisNotify_SwimStroke`, now cooked:
+  0.65-0.79 s into `Empty_SwimN`, `_E`, `_S`, `_W`): for `m_fStrokeTime` (0.3 s) he speeds up at
+  `m_fMaxSwimAccel` (40 m/s²) toward `WaterSpeed` and glides back to `m_fMaxSpeedNoStroke`
+  after, as roshan's r614/blink research decoded the swim's acceleration; at the surface there
+  are none (`m_bConstantSpeedAtSurface`). Before, he glided at one speed in time with nothing.
+  (A scripted run no longer saves the settings, `DH_SAVE_SETTINGS` to keep them: a test of the
+  options menu had left Forward bound to the down arrow for the runs after it.)
 - **Carrying bodies**: the unconscious and the dead ([F] Pick up), carried over the shoulder
   with the original carry clips (`Ply_Empty_CarryCorpse_as`; the body plays the matching
   `Corpses_CarryCorpse_*_Slave` clips in step, drawn with the view model), slower

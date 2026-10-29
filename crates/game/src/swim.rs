@@ -22,7 +22,7 @@ impl Plugin for SwimPlugin {
         app.init_resource::<Swim>()
             .add_systems(OnEnter(GameState::InGame), build_waters.after(crate::level::LevelSpawnSet))
             .add_systems(Update, stream_waters.before(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (splashes, breathe, underwater_look).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (splashes, breathe, underwater_look, strokes).chain().after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -106,11 +106,13 @@ pub struct Swim {
     /// the level's fog, kept while the water's replaces it
     level_fog: Option<DistanceFog>,
     was_in: Option<usize>,
+    /// a stroke pushing him on under water (seconds left of `m_fStrokeTime`)
+    pub stroke: f32,
 }
 
 impl Default for Swim {
     fn default() -> Self {
-        Swim { water: None, surface: 0.0, under: None, breath: 30.0, max: 30.0, drown_t: 0.0, level_fog: None, was_in: None }
+        Swim { water: None, surface: 0.0, under: None, breath: 30.0, max: 30.0, drown_t: 0.0, level_fog: None, was_in: None, stroke: 0.0 }
     }
 }
 
@@ -242,7 +244,14 @@ pub fn swim_move(
     if wish.y.abs() < 0.01 && t.translation.y < float_y {
         target.y += 0.7;
     }
-    p.velocity += (target - p.velocity) * (2.5 * dt).min(1.0);
+    if !at_surface && host.is_none() && swim.stroke > 0.0 && wish != Vec3::ZERO {
+        // (a stroke under water: `m_fMaxSwimAccel`, 4000 uu/s², toward `WaterSpeed`; after it the
+        // water's friction brings him back to his speed without strokes)
+        let want = wish * attrs.swim_fast.max(speed) + current;
+        p.velocity += (want - p.velocity).clamp_length_max(40.0 * dt);
+    } else {
+        p.velocity += (target - p.velocity) * (2.5 * dt).min(1.0);
+    }
     // never out of the water but by climbing
     let room = float_y - t.translation.y;
     if room < 0.0 {
@@ -382,3 +391,17 @@ fn underwater_look(
 }
 
 // (the breath gauge is the HUD movie's: `oxygen`)
+
+/// Under water, his arms' strokes push him on (`DisNotify_SwimStroke` in `Empty_Swim*`): each for
+/// `m_fStrokeTime` (0.3 s), as `StatePlayerMasterSwim` takes them (roshan's r614/blink research
+/// decoded the stroke's acceleration; which notify starts one is the swim clips' own). At the
+/// surface there are none (`m_bConstantSpeedAtSurface`).
+fn strokes(time: Res<Time>, mut swim: ResMut<Swim>, mut steps: ResMut<crate::arms::ArmSteps>, data: Res<crate::gamedata::Data>) {
+    swim.stroke = (swim.stroke - time.delta_secs()).max(0.0);
+    if std::mem::take(&mut steps.strokes) > 0 && swim.under.is_some() {
+        swim.stroke = data.0.pawn.get("swim.m_fStrokeTime").copied().unwrap_or(0.3);
+        if std::env::var_os("DH_SWIM_LOG").is_some() {
+            info!("swim: a stroke");
+        }
+    }
+}
