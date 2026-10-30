@@ -2042,7 +2042,11 @@ fields no longer show their stand-in "WW" behind the title.
   (`DisSeqAct_RiverKrustSpitAtTarget`) play too.
 - **Hagfish**: the fish (`DisFish`) roam the water around their place; a swimmer near them is
   set upon and bitten (`m_DamagePerHit` by difficulty, at most every `m_fMinTimeBetweenBites`),
-  bodies in the water are eaten, and a blade, bolt, bullet or blast kills one.
+  bodies in the water are eaten, and a blade, bolt, bullet or blast kills one, with the blade's
+  flesh sound (`Snd_Imp_Sword_on_Body_cue_ak`; before, a name no bank holds, so it died
+  silently). (A thrown grenade's whoosh is its throw clip's own, `Gadgets_Grenade_Deploy`'s
+  `Snd_P_Bash_Light_cue_ak`; the `Snd_Grenade_Throw` the throws also posted is no event of the
+  game's and is gone.)
 - **Daud's assassins** fight with their left hand's gifts (`Twk_Inv_AssassinHand`): they
   teleport in a swirl to 3-8 m of Corvo (`DisTweaks_NPCTeleportSpell`), drag him towards them
   from afar (`DisTweaks_NPCAttractSpell`, 8-30 m, 4-8 s; a blink breaks free), holding their
@@ -2769,7 +2773,12 @@ fields no longer show their stand-in "WW" behind the title.
     (`UI_Brief_DLC05`: objectives, scoring, specials with their pictures), the pause menu's
     retry / end with confirmations, and the results (`UI_Results_DLC05`: what the run unlocked
     first - an artwork, a challenge's expert mode - then the score counted up against the
-    medals, the rule set's statistics, a new record, then retry / next / exit). The gallery
+    medals, the rule set's statistics, a new record, then retry / next / exit). Its sounds are
+    its sound theme's (`Twk_DisDLC05MoviePlayerResultsMenu`'s `DisUISoundTheme`, over
+    `UISoundTheme_Common`): its unlocks open with `UI_OpenScreen`, each line counted and
+    confirmed with `UI_Validation`, and it closes with `R_DLC05_ResultsClose`; before, the
+    results posted names no bank holds (`UI_R_OpenScreen`, `UI_R_validation`,
+    `UI_R_DLC05_ResultsClose`) and those three were silent. The gallery
     (`CM_Gallery_Screen`, `DisDLC05GameInfo.m_Gallery`): 44 pieces of artwork, each opened by
     stars won in a challenge's normal or expert mode (or all of a mode's), in a grid of their
     pictures (the new marked, the locked padlocked with the way to them), and seen large

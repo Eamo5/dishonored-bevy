@@ -445,7 +445,6 @@ pub(crate) fn grenade_focus(
     cam: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
     rapier: ReadRapierContext,
     (stats, attrs, carry, possession, peek): (Res<PlayerStats>, Res<crate::gamedata::Attrs>, Res<crate::carry::Carry>, Res<crate::possession::Possession>, Res<crate::keyhole::Peek>),
-    mut sfx: MessageWriter<PostEvent>,
 ) {
     if paused.0 { return; }
     let (Ok((pe, p)), Ok(camera)) = (player.single(), cam.single()) else { return };
@@ -460,9 +459,6 @@ pub(crate) fn grenade_focus(
             grenade.release(camera.forward().as_vec3(), p.velocity, attrs.throw, thrown);
             held.0 = None;
             held.1 = 0.3;
-            if thrown {
-                sfx.write(PostEvent::named("Snd_Grenade_Throw", None));
-            }
         }
         return;
     }
@@ -711,9 +707,6 @@ fn use_gadget(
                 let (blast, after_hit) = if choke { chokedust_blast(&data) } else { (BLAST, FUSE_AFTER_HIT) };
                 // (the pin was pulled as it began to cook)
                 let fuse = (FUSE - u.cooked).max(0.0);
-                if fuse > 0.0 {
-                    sfx.write(PostEvent::named("Snd_Grenade_Throw", None));
-                }
                 let mut ec = commands.spawn((
                     // (`DisTweaks_ThrowGrenade`: 2500 uu/s, 5 degrees above the view;
                     // `DisTweaks_GrenadeComponent.m_fDetonationDelay` 3 s)
@@ -780,9 +773,8 @@ fn use_gadget(
 
 /// The characters' grenades: out of the hand, the grenade's own model.
 #[allow(clippy::too_many_arguments)]
-fn npc_grenades(mut commands: Commands, mut throws: MessageReader<NpcGrenade>, assets: Option<Res<GameAssets>>, mut sfx: MessageWriter<PostEvent>, data: Res<crate::gamedata::Data>, stats: Res<PlayerStats>, settings: Res<crate::settings::Settings>, mut fx: MessageWriter<SpawnEffect>) {
+fn npc_grenades(mut commands: Commands, mut throws: MessageReader<NpcGrenade>, assets: Option<Res<GameAssets>>, data: Res<crate::gamedata::Data>, stats: Res<PlayerStats>, settings: Res<crate::settings::Settings>, mut fx: MessageWriter<SpawnEffect>) {
     for g in throws.read() {
-        sfx.write(PostEvent::named("Snd_Grenade_Throw", Some(g.from)));
         let b = &g.blast;
         let fuse = g.fuse[0] + data.attribute("GrenadeExplosionDelay", settings.difficulty, &stats.powers, &stats.charms).max(0.0);
         let mut ec = commands.spawn((

@@ -247,7 +247,7 @@ fn fish_hits(
         }
         commands.entity(f.collider).remove::<Strikeable>();
         commands.entity(e).remove::<crate::possession::Host>();
-        sfx.write(PostEvent::named("Imp_Sword_on_Body", Some(t.translation)));
+        sfx.write(PostEvent::named("Snd_Imp_Sword_on_Body_cue_ak", Some(t.translation)));
         if std::env::var("DH_FISH_LOG").is_ok() {
             info!("fish #{} killed", f.index);
         }

@@ -228,7 +228,7 @@ fn run(
             if let Some(u) = ch.unlocks.get(r.unlock) {
                 let e = unlock_spawn(&mut commands, r.root, &tl, w, u, &data, &mut ui, &mut images);
                 r.unlock_part = e;
-                sfx.write(crate::audio::PostEvent::named("UI_R_OpenScreen", None));
+                sfx.write(crate::audio::PostEvent::named("UI_OpenScreen", None));
                 return;
             }
             let rows = spawn_screen(&mut commands, r.root, &tl, &mtl, w, &ch, &profile, level.as_deref(), &data);
@@ -761,7 +761,7 @@ fn input(
                     commands.entity(e).despawn();
                     r.unlock += 1;
                     r.t = 0.0;
-                    sfx.write(crate::audio::PostEvent::named("UI_R_validation", None));
+                    sfx.write(crate::audio::PostEvent::named("UI_Validation", None));
                 }
             }
         }
@@ -824,7 +824,7 @@ fn input(
             // the leaderboard over the screen (`OnLeaderboardsClicked`: this challenge, this mode)
             if c == 1 {
                 let at = ch.def.as_ref().and_then(|d| data.0.challenges.iter().position(|x| x.id == d.id)).unwrap_or(0);
-                sfx.write(crate::audio::PostEvent::named("UI_R_validation", None));
+                sfx.write(crate::audio::PostEvent::named("UI_Validation", None));
                 // (the screen out, its backdrop kept: `_title_mc.Close()`)
                 for (p, mut fc) in &mut parts {
                     if p.kind != PartKind::Backdrop {
@@ -836,7 +836,7 @@ fn input(
                 r.stage = Stage::Board;
                 return;
             }
-            sfx.write(crate::audio::PostEvent::named("UI_R_DLC05_ResultsClose", None));
+            sfx.write(crate::audio::PostEvent::named("R_DLC05_ResultsClose", None));
             commands.entity(r.root).despawn();
             commands.remove_resource::<Results>();
             paused.0 = false;
