@@ -722,19 +722,29 @@ pub fn cook(levels: &[Arc<Package>], refs: &HashMap<ActorKey, KActor>) -> Kismet
         })
         .map(|(k, v)| (*k, *v))
         .collect();
-    // every dialogue tree of the levels
+    // every dialogue tree of the levels (by package: the sublevels' own `PersistentLevel`s
+    // repeat each other's names, so the Hound Pits' `L_Pub_FromPrison_Script` and
+    // `_FromOvrsr_Script_Sleep` both hold a `DisDialogOneShot_1.DisDialogTree_OneShot_0`; once
+    // only the first was cooked, and Samuel's welcome on the first morning, which ends the fade
+    // in, never ran: the screen stayed black)
     let mut tree_ids: HashMap<(usize, i32), u32> = HashMap::new();
+    let mut seen: HashMap<(String, String), u32> = HashMap::new();
     for (pi, pkg) in levels.iter().enumerate() {
         for i in 1..=pkg.exports.len() as i32 {
             if !pkg.class_name(i).starts_with("DisDialogTree") {
                 continue;
             }
             let path = pkg.obj_path(i);
-            if ex.out.dialog_trees.iter().any(|t| t.path == path) {
+            // (a character's tree copied into each package that uses it is the one tree)
+            let own = if path.starts_with("TheWorld.") { pkg.name.clone() } else { String::new() };
+            if let Some(&t) = seen.get(&(own.clone(), path.clone())) {
+                tree_ids.insert((pi, i), t);
                 continue;
             }
             if let Some(t) = dialog_tree(pkg, i, &voices) {
-                tree_ids.insert((pi, i), ex.out.dialog_trees.len() as u32);
+                let id = ex.out.dialog_trees.len() as u32;
+                seen.insert((own, path), id);
+                tree_ids.insert((pi, i), id);
                 ex.out.dialog_trees.push(t);
             }
         }

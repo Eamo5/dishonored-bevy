@@ -2360,7 +2360,16 @@ fields no longer show their stand-in "WW" behind the title.
   talking to a character (their name over the HUD's "[F] Talk", `m_InteractionTexts[29]`) enter through the trees' hooks, whose
   story-flag, conversation-already-had, time-limit and branch nodes pick what is said; lines
   are voiced from the speaker and subtitled, and conversations set
-  their story flags and raise their Kismet outputs. A conversation's soiree
+  their story flags and raise their Kismet outputs. Each sublevel's dialogue actors have their
+  own trees: the sublevels' `PersistentLevel`s repeat each other's names
+  (`L_Pub_FromPrison_Script` and `L_Pub_FromOvrsr_Script_Sleep` both hold a
+  `DisDialogOneShot_1.DisDialogTree_OneShot_0`), and the cook kept only the first of a name, so
+  the others had none. On the first arrival at the Hound Pits (`L_Pub_Day_P` from the prison)
+  Samuel's welcome ("Welcome to the Hound Pits", which plays the boat's arrival and lifts the
+  fade in) never ran and the screen stayed black; three of Lady Boyle's party's one-shots, one in
+  the prison's sewers and the pub's at dusk and in the morning were silent too. A character's
+  tree copied into several packages stays one tree, each copy's actors reaching it. A
+  conversation's soiree
   (`DisConv_Soiree`) plays its matinee and holds the conversation until it ends, then goes on
   down its output 0; its output 1 is the editor's preview of the lines, played only with
   `m_UsePreviewBlurbsOnly` (which no shipped soiree sets), and a conversation that doesn't
