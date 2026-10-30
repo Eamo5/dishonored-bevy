@@ -84,7 +84,8 @@ pub struct EventDef {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq)]
 pub struct Control {
     /// 0 stop, 1 pause, 2 resume, 3 mute, 4 unmute, 5 set pitch, 6 reset pitch, 7 set volume,
-    /// 8 reset volume (action types 0x06xx-0x0bxx)
+    /// 8 reset volume (action types 0x06xx-0x0bxx), 9 set a game parameter (its RTPC the target), 10 reset
+    /// it (0x13xx, 0x14xx)
     pub kind: u8,
     pub target: u32,
     pub on_object: bool,
@@ -869,7 +870,7 @@ impl Wwise {
                 }
                 // (stop, pause, resume, mute, unmute, volume and pitch set or reset: of an object, on its
                 // game object, of everything)
-                t if matches!(t >> 8, 1..=3 | 6..=11) && matches!(t & 0xff, 2..=7) => {
+                t if matches!(t >> 8, 1..=3 | 6..=11 | 0x13 | 0x14) && matches!(t & 0xff, 2..=7) => {
                     let d = self.nodes.get(a).map(|n| n.data.as_slice()).unwrap_or(&[]);
                     let (mut delay, mut fade) = (0.0, 0.0);
                     let n = d.get(6).copied().unwrap_or(0) as usize;
@@ -891,6 +892,8 @@ impl Wwise {
                     let value = d.get(q + 1..q + 5).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).filter(|v| v.is_finite()).unwrap_or(0.0);
                     let kind = match t >> 8 {
                         1..=3 => (t >> 8) as u8 - 1,
+                        0x13 => 9,
+                        0x14 => 10,
                         k => k as u8 - 3,
                     };
                     def.controls.push(Control {
@@ -899,7 +902,7 @@ impl Wwise {
                         on_object: scope % 2 == 1,
                         delay,
                         fade,
-                        value: if matches!(kind, 5 | 7) { value } else { 0.0 },
+                        value: if matches!(kind, 5 | 7 | 9) { value } else { 0.0 },
                         relative,
                     });
                     if kind <= 2 {

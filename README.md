@@ -2701,7 +2701,9 @@ fields no longer show their stand-in "WW" behind the title.
   actor-mixer over 2.5 s and brings it back 12 s on over 4 s; the animations' sound variants set
   their sounds' level and pitch before playing them (`Not_P_Clothes_Grab_V030`, -12 dB;
   `Not_Door_Snk_Wood_Med_Squeak_cue_P200`, an octave up); the cable cars' and the bridge wheel's
-  motors pitch up as they start (`CableCar_Start`, +200 cents over 5 s). Before, the stingers
+  motors pitch up as they start (`CableCar_Start`, +200 cents over 5 s); and the events that set a
+  game parameter (0x13xx, 0x14xx) set it, easing over their transition (the Lighthouse's
+  ambience, `Set_State_Amb_LVL_Lighthouse_Ext`, its mix's parameter to 10). Before, the stingers
   played over the music at full, and those variants all sounded alike.
 - **Whale oil tanks** hold their charge (`DisTweaks_WhaleOilBattery`: 50 full); walls of light,
   arc pylons and watchtowers spend it from the tank feeding them (a kill, a shot) and stop when

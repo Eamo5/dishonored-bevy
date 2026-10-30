@@ -370,6 +370,7 @@ fn event_controls(
     mut q: Query<(&mut Emitter, &Transform, &Voice)>,
     mut music: ResMut<Music>,
     mut mix: ResMut<ObjectMix>,
+    mut rtpcs: ResMut<Rtpcs>,
 ) {
     let Some(lib) = library() else {
         msgs.clear();
@@ -401,6 +402,24 @@ fn event_controls(
         }
     }
     for (c, obj, at, event) in now {
+        // (a game parameter: set over its transition, or back to its default; one game object's
+        // own, the world's sounds having one value each, not)
+        if c.kind >= 9 {
+            if !c.on_object {
+                if c.kind == 9 {
+                    let from = rtpcs.0.get(&c.target).copied().unwrap_or(c.value);
+                    let r = mix.rtpc.entry(c.target).or_insert(Ramp::at(from));
+                    r.set(if c.relative { r.to + c.value } else { c.value }, c.fade);
+                } else {
+                    mix.rtpc.remove(&c.target);
+                    rtpcs.0.remove(&c.target);
+                }
+            }
+            if log {
+                info!("audio: {} sets parameter {:#x} to {:.1} over {:.1} s", event_name(event), c.target, c.value, c.fade);
+            }
+            continue;
+        }
         // (mixing: held on the object, for what plays under it now and later)
         if c.kind >= 3 {
             let on = if c.on_object { obj } else { None };
@@ -475,6 +494,11 @@ fn event_controls(
         m.pitch.step(dt);
     }
     mix.held.retain(|_, m| !m.idle());
+    for (id, r) in mix.rtpc.iter_mut() {
+        r.step(dt);
+        rtpcs.0.insert(*id, r.now);
+    }
+    mix.rtpc.retain(|_, r| r.now != r.to);
 }
 
 /// A mixing value easing to where an action set it, over its transition.
@@ -533,6 +557,8 @@ impl Mix {
 #[derive(Resource, Default)]
 pub struct ObjectMix {
     held: HashMap<(u32, Option<Entity>), Mix>,
+    /// game parameters easing to what an event set them to
+    rtpc: HashMap<u32, Ramp>,
     pending: Vec<(f32, Control, Option<Entity>, Option<Vec3>, u32)>,
 }
 
