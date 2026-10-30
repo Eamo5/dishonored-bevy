@@ -65,12 +65,30 @@ struct Node {
 pub struct EventDef {
     pub id: u32,
     pub plays: Vec<PlayDef>,
-    /// stops (event ids or object ids) are not modelled; set when the event only stops
+    /// set when the event only stops, pauses or resumes
     #[serde(default)]
     pub stop: bool,
+    /// what it stops, pauses or resumes, in order (its `Stop_E`, `Stop_E_O`, `Stop_ALL`,
+    /// `Pause_*`, `Resume_*` actions)
+    #[serde(default)]
+    pub controls: Vec<Control>,
     /// state changes: (state group, state)
     #[serde(default)]
     pub states: Vec<(u32, u32)>,
+}
+
+/// An event's stop, pause or resume (Wwise's action types 0x01xx, 0x02xx, 0x03xx): of an object
+/// and all it plays below it (`_E`), only as posted on the same game object (`_E_O`), or of
+/// everything (`_ALL`, `_ALL_O`: target 0); after its `DelayTime`, over its `TransitionTime`
+/// (props 0x0d, 0x0e, in ms).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq)]
+pub struct Control {
+    /// 0 stop, 1 pause, 2 resume
+    pub kind: u8,
+    pub target: u32,
+    pub on_object: bool,
+    pub delay: f32,
+    pub fade: f32,
 }
 
 /// The sound hierarchy under a played object.
@@ -183,6 +201,9 @@ pub struct PlayDef {
     /// sets one)
     #[serde(default)]
     pub limit: Option<Limit>,
+    /// the object it plays and its ancestors (what a stop or pause of any of them reaches)
+    #[serde(default)]
+    pub objects: Vec<u32>,
 }
 
 /// A Wwise playback limit (`u16MaxNumInstance`): so many instances at most, counted over every
@@ -825,6 +846,14 @@ impl Wwise {
                         t.media(&mut p.media);
                         p.layered = matches!(t, PlayNode::Layer(_));
                     }
+                    let mut at = target;
+                    for _ in 0..16 {
+                        if at == 0 || p.objects.contains(&at) {
+                            break;
+                        }
+                        p.objects.push(at);
+                        at = self.nodes.get(&at).map_or(0, |n| n.parent);
+                    }
                     p.max_distance = self.max_distance(target) * 0.01;
                     p.media.sort();
                     p.media.dedup();
@@ -832,7 +861,29 @@ impl Wwise {
                         def.plays.push(p);
                     }
                 }
-                0x0102 | 0x0103 | 0x0104 => stops += 1,
+                // (stop, pause, resume: of an object, on its game object, of everything)
+                t if matches!(t >> 8, 1..=3) && matches!(t & 0xff, 2..=7) => {
+                    let d = self.nodes.get(a).map(|n| n.data.as_slice()).unwrap_or(&[]);
+                    let (mut delay, mut fade) = (0.0, 0.0);
+                    let n = d.get(6).copied().unwrap_or(0) as usize;
+                    for k in 0..n {
+                        let (Some(&pid), Some(v)) = (d.get(7 + k), u32_at(d, 7 + n + k * 4)) else { continue };
+                        match pid {
+                            0x0d => delay = v as f32 / 1000.0,
+                            0x0e => fade = v as f32 / 1000.0,
+                            _ => {}
+                        }
+                    }
+                    let scope = t & 0xff;
+                    def.controls.push(Control {
+                        kind: (t >> 8) as u8 - 1,
+                        target: if matches!(scope, 2 | 3) { target } else { 0 },
+                        on_object: scope % 2 == 1,
+                        delay,
+                        fade,
+                    });
+                    stops += 1;
+                }
                 _ => {}
             }
         }
@@ -843,6 +894,21 @@ impl Wwise {
         }
         def.stop = def.plays.is_empty() && stops > 0;
         (!def.plays.is_empty() || def.stop || !def.states.is_empty()).then_some(def)
+    }
+
+    /// Debug: every event's actions: (event, action type, target, the action's bytes).
+    pub fn event_actions(&self) -> Vec<(u32, u16, u32, &[u8])> {
+        let mut out = Vec::new();
+        for (&id, n) in self.nodes.iter().filter(|(_, n)| n.kind == 4) {
+            for a in &n.actions {
+                if let Some(an) = self.nodes.get(a) {
+                    if let Some((ty, target)) = an.action {
+                        out.push((id, ty, target, an.data.as_slice()));
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Every object's RTPC curves (by object id).

@@ -14,7 +14,7 @@ use crate::speakers::{screen_gains, world_gains, Output, Voice};
 use crate::GameState;
 use bevy::audio::{AudioSource, SpatialListener};
 use bevy::prelude::*;
-use dhcook::audio::{AudioIndex, EventDef, PlayDef, PlayNode, RtpcCurve};
+use dhcook::audio::{AudioIndex, Control, EventDef, PlayDef, PlayNode, RtpcCurve};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
@@ -36,7 +36,7 @@ impl Plugin for GameAudioPlugin {
             .add_systems(Update, apply_speakers)
             .add_systems(
                 Update,
-                (attach_listener, script_states, run_ambients, run_timed, play_events, follow_sounds, advance_playlists, finish_voices, stop_events, run_fades, attenuate, pause_voices).chain().after(apply_speakers).run_if(in_state(GameState::InGame)),
+                (attach_listener, script_states, run_ambients, run_timed, event_controls, play_events, follow_sounds, advance_playlists, finish_voices, stop_events, run_fades, attenuate, pause_voices).chain().after(apply_speakers).run_if(in_state(GameState::InGame)),
             );
     }
 }
@@ -358,6 +358,91 @@ fn follow_sounds(mut q: Query<(&Following, &mut Transform, &mut Emitter)>, carri
     }
 }
 
+/// The stops, pauses and resumes of the events posted (`EventDef::controls`), on the sounds already
+/// playing: those under the object they name (it, or an object above what they play), only those
+/// from the same game object for an `_O` action (its entity, else within a metre of where it was
+/// posted), all for an `_ALL`: after its delay, a stop fading over its transition. Before, the events
+/// that stopped sounds did nothing: the scripts' loops (machinery, alarms, fires, music) kept on.
+fn event_controls(
+    time: Res<Time>,
+    mut msgs: MessageReader<PostEvent>,
+    mut q: Query<(&mut Emitter, &Transform, &Voice)>,
+    mut music: ResMut<Music>,
+    mut pending: Local<Vec<(f32, Control, Option<Entity>, Option<Vec3>, u32)>>,
+) {
+    let Some(lib) = library() else {
+        msgs.clear();
+        return;
+    };
+    let log = std::env::var("DH_AUDIO_LOG").is_ok();
+    let mut now: Vec<(Control, Option<Entity>, Option<Vec3>, u32)> = Vec::new();
+    // (a delayed one acts on what plays then, the sound its own event just started too: a
+    // guard's `Snd_AI_Guard_Head_Scratch_Short` cut off after 0.25 s)
+    let dt = time.delta_secs();
+    pending.retain_mut(|(left, c, o, at, ev)| {
+        *left -= dt;
+        if *left <= 0.0 {
+            now.push((*c, *o, *at, *ev));
+            false
+        } else {
+            true
+        }
+    });
+    for m in msgs.read() {
+        let Some(ev) = lib.events.get(&m.event).filter(|e| !e.controls.is_empty()) else { continue };
+        let obj = m.object.or(m.follow).or(m.speaker);
+        for c in &ev.controls {
+            if c.delay > 0.01 {
+                pending.push((c.delay, *c, obj, m.at, m.event));
+            } else {
+                now.push((*c, obj, m.at, m.event));
+            }
+        }
+    }
+    for (c, obj, at, event) in now {
+        let mut n = 0;
+        for (mut em, t, v) in &mut q {
+            if c.target != 0 && !em.objects.contains(&c.target) {
+                continue;
+            }
+            if c.on_object {
+                let same = match (obj, at) {
+                    (Some(o), _) => em.object == Some(o),
+                    (None, Some(at)) => em.positional && t.translation.distance(at) < 1.0,
+                    (None, None) => em.object.is_none() && !em.positional,
+                };
+                if !same {
+                    continue;
+                }
+            }
+            n += 1;
+            match c.kind {
+                0 => {
+                    em.playlist = None;
+                    em.fade_rate = em.fade_rate.min(-1.0 / c.fade.max(0.02));
+                    if em.music && music.current.as_ref().is_some_and(|cur| cur.0 == em.event) {
+                        music.current = None;
+                    }
+                }
+                1 => {
+                    if !v.player.is_paused() {
+                        v.player.pause();
+                        em.paused = true;
+                    }
+                }
+                _ => {
+                    if em.paused {
+                        v.player.play();
+                        em.paused = false;
+                    }
+                }
+            }
+        }
+        if log {
+            info!("audio: {} {} {:#x}{} ({n} sounds)", event_name(event), ["stops", "pauses", "resumes"][c.kind.min(2) as usize], c.target, if c.on_object { " on its object" } else { "" });
+        }
+    }
+}
 /// Stop (fade out) the sounds an event started.
 #[derive(Message, Clone, Copy)]
 pub struct StopEvent(pub u32);
@@ -394,6 +479,12 @@ pub struct Emitter {
     fade_rate: f32,
     /// its RTPC curves
     curves: Arc<Vec<RtpcCurve>>,
+    /// the objects it plays under (what an event's stop or pause of one of them reaches), and
+    /// its game object
+    objects: Arc<Vec<u32>>,
+    object: Option<Entity>,
+    /// paused by an event (`Pause_E`), until one resumes it
+    paused: bool,
 }
 
 /// Who says the dominant line (`attenuate`'s, the voices' ducking): its subtitle comes first
@@ -564,6 +655,7 @@ fn start_play(
     let reach = if play.max_distance > 0.5 { play.max_distance } else { DEFAULT_REACH };
     let looping = continues && playlist.is_none();
     let curves = Arc::new(play.rtpcs.clone());
+    let objects = Arc::new(play.objects.clone());
     let at = s.at.unwrap_or(Vec3::ZERO);
     let gains = match ear {
         Some(l) if positional => world_gains(out.channels, l, at),
@@ -593,6 +685,9 @@ fn start_play(
                 fade: if s.fade_in { 0.0 } else { 1.0 },
                 fade_rate: if s.fade_in { 1.0 / FADE } else { 0.0 },
                 curves: curves.clone(),
+                objects: objects.clone(),
+                object: s.object.or(s.follow).or(s.speaker),
+                paused: false,
             },
             DespawnOnExit(GameState::InGame),
         ));
@@ -776,6 +871,9 @@ fn advance_playlists(
                     fade: em.fade,
                     fade_rate: em.fade_rate,
                     curves: em.curves.clone(),
+                    objects: em.objects.clone(),
+                    object: em.object,
+                    paused: false,
                 },
                 DespawnOnExit(GameState::InGame),
             ));

@@ -252,6 +252,24 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Some("audioactions") => {
+            // dhtool audioactions [type hex]: how many of each action type the events use; with a
+            // type, examples' bytes
+            let w = dhcook::audio::Wwise::load(COOKED.as_path())?;
+            let all = w.event_actions();
+            let mut by: std::collections::BTreeMap<u16, usize> = Default::default();
+            for a in &all {
+                *by.entry(a.1).or_default() += 1;
+            }
+            for (t, n) in &by {
+                println!("{t:#06x} {n}");
+            }
+            if let Some(t) = args.get(2).and_then(|s| u16::from_str_radix(s.trim_start_matches("0x"), 16).ok()) {
+                for a in all.iter().filter(|a| a.1 == t).take(40) {
+                    println!("{:#010x} -> {:#010x}: {}", a.0, a.2, a.3.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "));
+                }
+            }
+        }
         Some("bonetrack") => {
             // dhtool bonetrack <map> <type name part> <clip> <bone> [steps]: the bone's model-space
             // place through the clip (when a climb's camera arrives)

@@ -2683,6 +2683,17 @@ fields no longer show their stand-in "WW" behind the title.
   shut door in it (`m_fPlayerSoundOcclusion` / `m_fAISoundOcclusion` of the door's tweak),
   what the scripts set (`DisSeqAct_SetAudioOcclusion`) - and the AI hears through them the same
   way (`DH_AUDIO_LOG`, `DH_NO_ROOMS`).
+- **Stopping sounds**: an event's stop, pause and resume actions are cooked (the banks' action
+  types 0x01xx, 0x02xx, 0x03xx: 924 in 531 events) and act on what is playing: of the object
+  they name and everything it plays under it (`Stop_E`), only what sounds from the same game
+  object (`Stop_E_O`: its entity, else within a metre of where it was posted), or everything
+  (`Stop_ALL`); a stop fades over its `TransitionTime` after its `DelayTime` (props 0x0e, 0x0d),
+  and a delayed one acts on what its own event just started (a guard's
+  `Snd_AI_Guard_Head_Scratch_Short` plays its scratch and cuts it off 0.25 s in). Before, these
+  were not modelled and did nothing: the scripts' and scenes' loops never ended (the boatman's
+  motor, `Snd_Motorboat_Boatman_Stop`, ran on after the ride; the Tower's chain lift,
+  `Chain_Lift_Stop`; the executioner's hot poker; the levels' music, `LVL_Boatman_Music_Stop`,
+  until other music replaced it).
 - **Whale oil tanks** hold their charge (`DisTweaks_WhaleOilBattery`: 50 full); walls of light,
   arc pylons and watchtowers spend it from the tank feeding them (a kill, a shot) and stop when
   it runs dry; the scripts refill them (`DisSeqAct_RefillWhaleOilBattery`; the Refinery's start
