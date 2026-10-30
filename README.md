@@ -2694,6 +2694,15 @@ fields no longer show their stand-in "WW" behind the title.
   motor, `Snd_Motorboat_Boatman_Stop`, ran on after the ride; the Tower's chain lift,
   `Chain_Lift_Stop`; the executioner's hot poker; the levels' music, `LVL_Boatman_Music_Stop`,
   until other music replaced it).
+  The mixing actions are kept too (types 0x06xx-0x0bxx: `Mute` / `Unmute`, `SetPitch` /
+  `ResetPitch`, `SetVolume` / `ResetVolume`, 347 more): held on the object they name (and the
+  game object, for an `_O` one), easing over their transition, for what plays under it now and
+  after. A stinger ducks the level's music: `Music_Stinger_Drama_2` mutes the music's
+  actor-mixer over 2.5 s and brings it back 12 s on over 4 s; the animations' sound variants set
+  their sounds' level and pitch before playing them (`Not_P_Clothes_Grab_V030`, -12 dB;
+  `Not_Door_Snk_Wood_Med_Squeak_cue_P200`, an octave up); the cable cars' and the bridge wheel's
+  motors pitch up as they start (`CableCar_Start`, +200 cents over 5 s). Before, the stingers
+  played over the music at full, and those variants all sounded alike.
 - **Whale oil tanks** hold their charge (`DisTweaks_WhaleOilBattery`: 50 full); walls of light,
   arc pylons and watchtowers spend it from the tank feeding them (a kill, a shot) and stop when
   it runs dry; the scripts refill them (`DisSeqAct_RefillWhaleOilBattery`; the Refinery's start

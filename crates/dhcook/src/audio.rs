@@ -83,12 +83,18 @@ pub struct EventDef {
 /// (props 0x0d, 0x0e, in ms).
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq)]
 pub struct Control {
-    /// 0 stop, 1 pause, 2 resume
+    /// 0 stop, 1 pause, 2 resume, 3 mute, 4 unmute, 5 set pitch, 6 reset pitch, 7 set volume,
+    /// 8 reset volume (action types 0x06xx-0x0bxx)
     pub kind: u8,
     pub target: u32,
     pub on_object: bool,
     pub delay: f32,
     pub fade: f32,
+    /// a set's value (dB, cents), added to the last (`relative`) or in its place
+    #[serde(default)]
+    pub value: f32,
+    #[serde(default)]
+    pub relative: bool,
 }
 
 /// The sound hierarchy under a played object.
@@ -861,8 +867,9 @@ impl Wwise {
                         def.plays.push(p);
                     }
                 }
-                // (stop, pause, resume: of an object, on its game object, of everything)
-                t if matches!(t >> 8, 1..=3) && matches!(t & 0xff, 2..=7) => {
+                // (stop, pause, resume, mute, unmute, volume and pitch set or reset: of an object, on its
+                // game object, of everything)
+                t if matches!(t >> 8, 1..=3 | 6..=11) && matches!(t & 0xff, 2..=7) => {
                     let d = self.nodes.get(a).map(|n| n.data.as_slice()).unwrap_or(&[]);
                     let (mut delay, mut fade) = (0.0, 0.0);
                     let n = d.get(6).copied().unwrap_or(0) as usize;
@@ -875,14 +882,29 @@ impl Wwise {
                         }
                     }
                     let scope = t & 0xff;
+                    // (a set value's after its ranged props and its fade curve: its meaning, 2 an
+                    // offset, and its value, dB or cents)
+                    let mut q = 7 + n * 5;
+                    let ranged = d.get(q).copied().unwrap_or(0) as usize;
+                    q += 1 + ranged * 9 + 1;
+                    let relative = d.get(q).copied() == Some(2);
+                    let value = d.get(q + 1..q + 5).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).filter(|v| v.is_finite()).unwrap_or(0.0);
+                    let kind = match t >> 8 {
+                        1..=3 => (t >> 8) as u8 - 1,
+                        k => k as u8 - 3,
+                    };
                     def.controls.push(Control {
-                        kind: (t >> 8) as u8 - 1,
+                        kind,
                         target: if matches!(scope, 2 | 3) { target } else { 0 },
                         on_object: scope % 2 == 1,
                         delay,
                         fade,
+                        value: if matches!(kind, 5 | 7) { value } else { 0.0 },
+                        relative,
                     });
-                    stops += 1;
+                    if kind <= 2 {
+                        stops += 1;
+                    }
                 }
                 _ => {}
             }
@@ -893,7 +915,7 @@ impl Wwise {
             }
         }
         def.stop = def.plays.is_empty() && stops > 0;
-        (!def.plays.is_empty() || def.stop || !def.states.is_empty()).then_some(def)
+        (!def.plays.is_empty() || def.stop || !def.states.is_empty() || !def.controls.is_empty()).then_some(def)
     }
 
     /// Debug: every event's actions: (event, action type, target, the action's bytes).

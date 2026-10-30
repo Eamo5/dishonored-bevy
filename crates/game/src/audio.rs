@@ -29,6 +29,7 @@ impl Plugin for GameAudioPlugin {
             .init_resource::<WwiseStates>()
             .init_resource::<TimedSounds>()
             .init_resource::<Music>()
+            .init_resource::<ObjectMix>()
             .init_resource::<Rtpcs>()
             .init_resource::<DominantSpeaker>()
             .add_systems(Startup, |mut commands: Commands, settings: Res<crate::settings::Settings>| commands.insert_resource(Output::open(settings.speaker_config)))
@@ -368,7 +369,7 @@ fn event_controls(
     mut msgs: MessageReader<PostEvent>,
     mut q: Query<(&mut Emitter, &Transform, &Voice)>,
     mut music: ResMut<Music>,
-    mut pending: Local<Vec<(f32, Control, Option<Entity>, Option<Vec3>, u32)>>,
+    mut mix: ResMut<ObjectMix>,
 ) {
     let Some(lib) = library() else {
         msgs.clear();
@@ -379,7 +380,7 @@ fn event_controls(
     // (a delayed one acts on what plays then, the sound its own event just started too: a
     // guard's `Snd_AI_Guard_Head_Scratch_Short` cut off after 0.25 s)
     let dt = time.delta_secs();
-    pending.retain_mut(|(left, c, o, at, ev)| {
+    mix.pending.retain_mut(|(left, c, o, at, ev)| {
         *left -= dt;
         if *left <= 0.0 {
             now.push((*c, *o, *at, *ev));
@@ -393,13 +394,38 @@ fn event_controls(
         let obj = m.object.or(m.follow).or(m.speaker);
         for c in &ev.controls {
             if c.delay > 0.01 {
-                pending.push((c.delay, *c, obj, m.at, m.event));
+                mix.pending.push((c.delay, *c, obj, m.at, m.event));
             } else {
                 now.push((*c, obj, m.at, m.event));
             }
         }
     }
     for (c, obj, at, event) in now {
+        // (mixing: held on the object, for what plays under it now and later)
+        if c.kind >= 3 {
+            let on = if c.on_object { obj } else { None };
+            let set = |m: &mut Mix| match c.kind {
+                3 => m.audible.set(0.0, c.fade),
+                4 => m.audible.set(1.0, c.fade),
+                5 => m.pitch.set(if c.relative { m.pitch.to + c.value } else { c.value }, c.fade),
+                6 => m.pitch.set(0.0, c.fade),
+                7 => m.volume.set(if c.relative { m.volume.to + c.value } else { c.value }, c.fade),
+                _ => m.volume.set(0.0, c.fade),
+            };
+            if c.target == 0 && matches!(c.kind, 4 | 6 | 8) {
+                for (k, m) in mix.held.iter_mut() {
+                    if !c.on_object || k.1 == on {
+                        set(m);
+                    }
+                }
+            } else {
+                set(mix.held.entry((c.target, on)).or_default());
+            }
+            if log {
+                info!("audio: {} {} {:#x}{} {:.1} over {:.1} s", event_name(event), ["mutes", "unmutes", "pitches", "resets the pitch of", "sets the volume of", "resets the volume of"][(c.kind - 3).min(5) as usize], c.target, if c.on_object { " on its object" } else { "" }, c.value, c.fade);
+            }
+            continue;
+        }
         let mut n = 0;
         for (mut em, t, v) in &mut q {
             if c.target != 0 && !em.objects.contains(&c.target) {
@@ -441,6 +467,94 @@ fn event_controls(
         if log {
             info!("audio: {} {} {:#x}{} ({n} sounds)", event_name(event), ["stops", "pauses", "resumes"][c.kind.min(2) as usize], c.target, if c.on_object { " on its object" } else { "" });
         }
+    }
+    // (the mixing's fades; one back where it began, gone)
+    for m in mix.held.values_mut() {
+        m.audible.step(dt);
+        m.volume.step(dt);
+        m.pitch.step(dt);
+    }
+    mix.held.retain(|_, m| !m.idle());
+}
+
+/// A mixing value easing to where an action set it, over its transition.
+#[derive(Clone, Copy)]
+struct Ramp {
+    now: f32,
+    to: f32,
+    rate: f32,
+}
+
+impl Ramp {
+    const fn at(v: f32) -> Self {
+        Ramp { now: v, to: v, rate: 0.0 }
+    }
+    fn set(&mut self, to: f32, secs: f32) {
+        self.to = to;
+        if secs <= 0.001 {
+            self.now = to;
+            self.rate = 0.0;
+        } else {
+            self.rate = (to - self.now).abs() / secs;
+        }
+    }
+    fn step(&mut self, dt: f32) {
+        if self.now != self.to {
+            let d = self.rate * dt;
+            self.now = if self.now < self.to { (self.now + d).min(self.to) } else { (self.now - d).max(self.to) };
+        }
+    }
+}
+
+/// What the events' mixing holds on an object: heard (1) or muted (0), its volume offset (dB) and
+/// its pitch offset (cents).
+#[derive(Clone, Copy)]
+struct Mix {
+    audible: Ramp,
+    volume: Ramp,
+    pitch: Ramp,
+}
+
+impl Default for Mix {
+    fn default() -> Self {
+        Mix { audible: Ramp::at(1.0), volume: Ramp::at(0.0), pitch: Ramp::at(0.0) }
+    }
+}
+
+impl Mix {
+    fn idle(&self) -> bool {
+        self.audible.now == 1.0 && self.audible.to == 1.0 && self.volume.now == 0.0 && self.volume.to == 0.0 && self.pitch.now == 0.0 && self.pitch.to == 0.0
+    }
+}
+
+/// The events' mixing actions held on the sound objects (Wwise's `Mute` / `Unmute`, `SetVolume` /
+/// `ResetVolume`, `SetPitch` / `ResetPitch`), by object and the game object of an `_O` one (none:
+/// on every one; object 0: on everything); and the actions waiting out their delays.
+#[derive(Resource, Default)]
+pub struct ObjectMix {
+    held: HashMap<(u32, Option<Entity>), Mix>,
+    pending: Vec<(f32, Control, Option<Entity>, Option<Vec3>, u32)>,
+}
+
+impl ObjectMix {
+    /// A sound's gain and speed from what is held on the objects it plays under.
+    fn of(&self, objects: &[u32], object: Option<Entity>) -> (f32, f32) {
+        if self.held.is_empty() {
+            return (1.0, 1.0);
+        }
+        let (mut g, mut cents) = (1.0, 0.0);
+        for &o in objects.iter().chain(std::iter::once(&0)) {
+            for key in [(o, None), (o, object)] {
+                if let Some(m) = self.held.get(&key) {
+                    g *= m.audible.now * db(m.volume.now);
+                    cents += m.pitch.now;
+                }
+                if object.is_none() {
+                    break;
+                }
+            }
+        }
+        (g, 2f32.powf(cents / 1200.0))
     }
 }
 /// Stop (fade out) the sounds an event started.
@@ -713,7 +827,8 @@ fn fade_out_music(emitters: &mut Query<&mut Emitter>) {
     }
 }
 
-fn reset_audio_state(mut states: ResMut<WwiseStates>, mut music: ResMut<Music>, mut timed: ResMut<TimedSounds>) {
+fn reset_audio_state(mut states: ResMut<WwiseStates>, mut music: ResMut<Music>, mut timed: ResMut<TimedSounds>, mut mix: ResMut<ObjectMix>) {
+    *mix = ObjectMix::default();
     states.0.clear();
     timed.0.clear();
     music.current = None;
@@ -914,7 +1029,7 @@ fn attenuate(
     voices: Query<(Entity, &Transform, &Emitter, &Voice, Has<OneShot>, Has<Hushed>)>,
     (time, mut log_t, mut ducks): (Res<Time>, Local<f32>, Local<HashMap<Entity, f32>>),
     (rooms, movies, mut dominant_speaker): (Res<crate::audiorooms::AudioRooms>, Res<crate::movie::Movies>, ResMut<DominantSpeaker>),
-    (mut commands, virt): (Commands, Res<Time<Virtual>>),
+    (mut commands, virt, mix): (Commands, Res<Time<Virtual>>, Res<ObjectMix>),
 ) {
     let Ok(l) = listener.single() else { return };
     // (a movie's own soundtrack over the music: the trials' credits over their menu's)
@@ -952,6 +1067,8 @@ fn attenuate(
     for (e, t, em, voice, one_shot, hushed) in &voices {
         let cat = if em.music { music_volume } else if em.voice { settings.voice_volume } else { settings.sfx_volume };
         let (g, speed) = mods(em);
+        let (mg, ms) = mix.of(&em.objects, em.object);
+        let (g, speed) = (g * mg, speed * ms);
         if log && ((g - 1.0).abs() > 1e-3 || (speed - 1.0).abs() > 1e-3) {
             info!("rtpc: {} gain {g:.3} speed {speed:.3}", event_name(em.event));
         }
@@ -982,7 +1099,7 @@ fn attenuate(
         if quiet && !hushed && !voice.player.is_paused() {
             voice.player.pause();
             commands.entity(e).try_insert(Hushed);
-        } else if !quiet && hushed && !virt.is_paused() {
+        } else if !quiet && hushed && !virt.is_paused() && !em.paused {
             voice.player.play();
             commands.entity(e).try_remove::<Hushed>();
         }
