@@ -2366,7 +2366,7 @@ mod elixir_input_tests {
         stats.health_elixirs = 2;
         stats.mana_elixirs = 2;
         app.init_resource::<Time>().init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<crate::bindings::Bindings>().init_resource::<Attrs>()
+            .init_resource::<crate::bindings::Bindings>().init_resource::<Attrs>().init_resource::<Data>()
             .init_resource::<HudMessages>().insert_resource(crate::hud::Paused(true))
             .insert_resource(stats)
             .add_systems(First, crate::bindings::update_acts)
