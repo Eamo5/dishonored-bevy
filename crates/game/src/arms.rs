@@ -361,6 +361,9 @@ struct ArmClips {
     empty_idle: Option<ClipId>,
     /// thrown by a blow empty-handed, by its side (`Empty_BigHit_Front`...)
     empty_hit: [Option<ClipId>; 4],
+    /// the sword hand's start as a gun goes off in the other (`m_SwordhandReaction`: standing,
+    /// sneaking)
+    gunshot: [Option<ClipId>; 2],
     /// empty-handed in the air and landing (`Empty_Sneak_Jump`, `_JumpLandSmall`: the empty set's
     /// only jump)
     empty_jump: [Option<ClipId>; 2],
@@ -441,6 +444,7 @@ impl ArmClips {
             swim_idle: lib.find("Empty_SwimIdle"),
             empty_idle: lib.find("Empty_Idle"),
             empty_hit: ["Front", "Back", "Left", "Right"].map(|s| lib.find(&format!("Empty_BigHit_{s}"))),
+            gunshot: ["Ready", "Sneak"].map(|s| lib.find(&format!("Sword_{s}_GunshotReaction"))),
             empty_jump: [lib.find("Empty_Sneak_Jump"), lib.find("Empty_Sneak_JumpLandSmall")],
             empty_sneak: [lib.find("Empty_Sneak_Idle"), lib.find("Empty_Sneak_Walk")],
             equip: [lib.find("Sword_Ready_Equip"), lib.find("Sword_Sneak_Equip")],
@@ -548,6 +552,8 @@ struct ArmsAnim {
     /// the blows seen (`PlayerStats::blow`)
     blow_seen: u32,
     knock_seen: u32,
+    /// the shots fired as last seen
+    shots_seen: Option<u32>,
     cast_seq: u32,
     /// the reload clips seen asked for
     reload_seq: u32,
@@ -911,6 +917,7 @@ fn spawn_arms(
                 damage_flash: 0.0,
                 blow_seen: 0,
                 knock_seen: 0,
+                shots_seen: None,
                 cast_seq: powers.as_ref().map(|p| p.cast_seq).unwrap_or(0),
                 reload_seq: powers.as_ref().map(|p| p.reload_anim.0).unwrap_or(0),
                 no_mana_seq: powers.as_ref().map(|p| p.no_mana_seq).unwrap_or(0),
@@ -1414,6 +1421,18 @@ fn animate_arms(
                 if std::env::var("DH_ARMS_LOG").is_ok() {
                     info!("arms: knocked down {}", anim.lib.clip(cl).name);
                 }
+            }
+        }
+        // a gun gone off in the left hand: the sword hand starts at it, if it's doing nothing else
+        // (the pistol's and crossbow's `m_SwordhandReaction` / `_Sneaking`: their `PistolReaction` /
+        // `CrossbowReaction` states, `Ready_GunshotReaction` / `Sneak_GunshotReaction` with the sword's
+        // prefix, `m_bAesthetic`)
+        if st.shots_seen != Some(stats.shots_fired) {
+            let first = st.shots_seen.is_none();
+            st.shots_seen = Some(stats.shots_fired);
+            if let Some(cl) = c.gunshot[p.crouched as usize].filter(|_| !first && !empty && !st.oneshot && !sword.blocking && sword.swing == 0.0) {
+                anim.restart(cl, false, 1.0, 0.08);
+                st.oneshot = true;
             }
         }
         // a blow: the arms thrown from its side (a kick too, harmless as it is); other harm, as
