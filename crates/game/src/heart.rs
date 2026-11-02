@@ -26,9 +26,12 @@ impl Plugin for HeartPlugin {
 
 #[derive(Resource, Default)]
 pub struct Heart {
-    /// seconds to the next beat
+    /// seconds to the next beat (put away: `m_fUnequippedHeartBeatsFrequency`)
     next_beat: f32,
-    beat_toggle: bool,
+    /// its pulse's rate (`m_fMinPulseRate` to `m_fMaxPulseRate`): its beating clip's pace
+    pub rate: f32,
+    /// the beats its clip passed (`DisNotify_Heartbeat`'s `m_Index`), not yet heard
+    pub beats: Vec<u8>,
     /// how strongly it calls (0..1), for the HUD and the glow
     pub pulse: f32,
     /// sequential branches' progress (node -> next output)
@@ -41,6 +44,8 @@ pub struct Heart {
 
 /// Unreal units to metres.
 const UU: f32 = 0.01;
+/// Seconds between the Heart's beats put away (`m_fUnequippedHeartBeatsFrequency`).
+const UNEQUIPPED_BEATS: f32 = 3.5;
 
 fn beat(
     time: Res<Time>,
@@ -60,6 +65,7 @@ fn beat(
     let fwd = cg.forward().as_vec3();
     let reach = 4000.0 * UU;
     if powers.selected != Power::Heart {
+        heart.beats.clear();
         // a rune or charm within the Heart's reach, the Heart not in hand: the pawn's
         // `m_HeartTargetTutorialMessage`, once per approach (`m_TutorialHeartTargetDistanceBuffer`
         // beyond the reach to leave it) and `m_TutorialHeartTargetShowCount` times at most
@@ -72,6 +78,18 @@ fn beat(
         }
         let buffer = data.pawn("m_TutorialHeartTargetDistanceBuffer", 100.0) * UU;
         let cap = data.pawn("m_TutorialHeartTargetShowCount", 350.0) as u32;
+        // (put away, it still beats now and then while one is in reach: `m_bUnequippedHeartBeats`,
+        // every `m_fUnequippedHeartBeatsFrequency`, 3.5 s, our reading of it as a period)
+        if nearest.is_some_and(|d| d < reach) {
+            heart.next_beat -= dt;
+            if heart.next_beat <= 0.0 {
+                heart.next_beat = UNEQUIPPED_BEATS;
+                crate::rumble::play("heart.unequipped");
+                sfx.write(PostEvent::named("Heart_Gadget_Beat_1", None));
+            }
+        } else {
+            heart.next_beat = 0.0;
+        }
         match nearest {
             Some(d) if d < reach && !heart.near_target => {
                 heart.near_target = true;
@@ -113,13 +131,12 @@ fn beat(
         }
         None => (0.25, false),
     };
-    heart.next_beat -= dt;
-    if heart.next_beat <= 0.0 {
-        heart.next_beat = 1.0 / rate;
-        heart.beat_toggle = !heart.beat_toggle;
-        // (each beat with its rumble: `m_Heartbeats`' `m_pRumbleWaveform`)
-        crate::rumble::play(if heart.beat_toggle { "heart.beat.0" } else { "heart.beat.1" });
-        sfx.write(PostEvent::named(if heart.beat_toggle { "Heart_Gadget_Beat_1" } else { "Heart_Gadget_Beat_2" }, None));
+    heart.rate = rate;
+    // (each beat its clip passed, with its sound and rumble: `m_Heartbeats`' `m_pSoundEvent`,
+    // `m_pRumbleWaveform`)
+    for i in std::mem::take(&mut heart.beats) {
+        crate::rumble::play(if i == 0 { "heart.beat.0" } else { "heart.beat.1" });
+        sfx.write(PostEvent::named(if i == 0 { "Heart_Gadget_Beat_1" } else { "Heart_Gadget_Beat_2" }, None));
         heart.pulse = if facing { 1.0 } else { 0.4 };
     }
 }

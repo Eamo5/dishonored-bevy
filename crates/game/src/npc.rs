@@ -1329,11 +1329,16 @@ pub struct Electrocuted {
     /// struck standing (its death clip plays), else a body
     pub standing: bool,
     mat: Option<Handle<crate::ue3mat::Ue3Material>>,
+    /// its death clip's parameters as they go (`AnimNotify_PawnMaterialParam`): each's name, from,
+    /// to, since (s) and over (s)
+    params: Vec<(String, f32, f32, f32, f32)>,
+    /// the clip's time last seen
+    clip_t: f32,
 }
 
 impl Electrocuted {
     pub fn new(standing: bool) -> Self {
-        Electrocuted { t: 0.0, standing, mat: None }
+        Electrocuted { t: 0.0, standing, mat: None, params: Vec::new(), clip_t: -1.0 }
     }
 }
 
@@ -1362,7 +1367,7 @@ fn electrocute(
     time: Res<Time>,
     assets: Option<Res<GameAssets>>,
     mut materials: ResMut<Assets<crate::ue3mat::Ue3Material>>,
-    mut q: Query<(Entity, &mut Electrocuted, &NpcRig, &Npc)>,
+    mut q: Query<(Entity, &mut Electrocuted, &NpcRig, &Npc, Option<&Animator>, Option<&NpcAnim>)>,
     children: Query<&Children>,
     parts: Query<Option<&crate::fxlight::PartPasses>, With<NpcPart>>,
     mut fx: MessageWriter<crate::particles::SpawnEffect>,
@@ -1370,9 +1375,22 @@ fn electrocute(
     let dt = time.delta_secs();
     let vanish = assets.as_ref().and_then(|a| a.electrocuted_material.clone());
     let gone = ELECTROCUTED_FADE.0 + ELECTROCUTED_FADE.2;
-    for (e, mut el, rig, npc) in &mut q {
+    for (e, mut el, rig, npc, anim, st) in &mut q {
         let t0 = el.t;
         el.t += dt;
+        // (struck standing: its death clip's parameters, as their notifies come)
+        let clip = el.standing.then(|| anim.and_then(|a| a.current().map(|p| (p.clip, p.t)))).flatten();
+        let marks = clip.and_then(|(c, _)| st.and_then(|s| s.marks().get(&c))).filter(|m| !m.mat_params.is_empty());
+        if let (Some(m), Some((_, ct))) = (marks, clip) {
+            let last = el.clip_t;
+            for p in m.mat_params.iter().filter(|p| p.time > last && p.time <= ct) {
+                let now = el.params.iter().find(|q| q.0.eq_ignore_ascii_case(&p.name)).map_or(1.0, |q| ramp(q, el.t));
+                el.params.retain(|q| !q.0.eq_ignore_ascii_case(&p.name));
+                let since = el.t;
+                el.params.push((p.name.clone(), now, p.value, since, p.interp));
+            }
+            el.clip_t = ct;
+        }
         if t0 == 0.0 {
             // the lightning on its limbs until it is gone
             for (bone, name) in ELECTROCUTED_FXS {
@@ -1395,21 +1413,42 @@ fn electrocute(
                 info!("npc {} electrocuted ({}{})", npc.name, if el.standing { "standing" } else { "a body" }, if el.mat.is_some() { "" } else { ", no vanishing material" });
             }
         }
-        // its parameter from the material's own (1) to the fade's end
+        // its parameter from the material's own (1) to the fade's end; struck standing, its clip's
+        // (half seen at once, its lightning at 20, gone 1.5 s after: 1.65 s in)
         let k = ((el.t - ELECTROCUTED_FADE.0) / ELECTROCUTED_FADE.2).clamp(0.0, 1.0);
+        let names = assets.as_ref().map(|a| a.electrocuted_params.as_slice()).unwrap_or(&[]);
         if let (Some(mut m), Some((_, slots))) = (el.mat.as_ref().and_then(|h| materials.get_mut(h)), vanish.as_ref()) {
-            let v = 1.0 + (ELECTROCUTED_FADE.1 - 1.0) * k;
-            for &s in slots {
-                if s < m.params.p.len() {
-                    m.params.p[s] = Vec4::splat(v);
+            if el.params.is_empty() {
+                let v = 1.0 + (ELECTROCUTED_FADE.1 - 1.0) * k;
+                for &s in slots {
+                    if s < m.params.p.len() {
+                        m.params.p[s] = Vec4::splat(v);
+                    }
+                }
+            } else {
+                for q in &el.params {
+                    let v = ramp(q, el.t);
+                    for (s, _) in names.iter().enumerate().filter(|(_, n)| n.eq_ignore_ascii_case(&q.0)) {
+                        if s < m.params.p.len() {
+                            m.params.p[s] = Vec4::splat(v);
+                        }
+                    }
                 }
             }
         }
-        if el.t >= gone {
+        // (gone as its parameters have run their course, else the settings' fade)
+        let done = if el.params.is_empty() { el.t >= gone } else { el.params.iter().all(|q| el.t >= q.3 + q.4) && el.params.iter().any(|q| q.0.eq_ignore_ascii_case("O_Opacity") && q.2 <= 0.0) };
+        if done || el.t >= gone + 2.0 {
             // nothing left to find
             commands.entity(e).try_remove::<Electrocuted>().try_insert(Ashes(1.0));
         }
     }
+}
+
+/// A death clip's material parameter at a moment: from its value then to its target over its time.
+fn ramp(q: &(String, f32, f32, f32, f32), t: f32) -> f32 {
+    let k = if q.4 <= 1e-3 { 1.0 } else { ((t - q.3) / q.4).clamp(0.0, 1.0) };
+    q.1 + (q.2 - q.1) * k
 }
 
 /// One burning (`ImmolationParams`, the incendiary bolt's) burns its clip through

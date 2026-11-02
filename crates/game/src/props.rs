@@ -106,6 +106,8 @@ pub struct TankEvents {
 
 /// Kilograms by `m_WeightClass` (tiny, small, medium, large).
 const MASS: [f32; 4] = [0.4, 2.0, 8.0, 25.0];
+/// A factory's whale oil tank's mass for a push (see `script_physics`).
+const TANK_MASS: f32 = 5.0;
 /// The groups a loose prop collides with.
 const LOOSE: Group = GROUP_WORLD.union(GROUP_PROP).union(GROUP_NPC).union(GROUP_PLAYER).union(crate::ragdoll::GROUP_RAGDOLL);
 
@@ -215,9 +217,57 @@ pub struct PropKnocks(pub Vec<(u32, f32)>);
 
 /// `SeqAct_SetPhysics` on props: falling (`PHYS_RigidBody`), held still (`PHYS_None`), or
 /// moved by a matinee (`PHYS_Interpolating`).
-fn script_physics(mut commands: Commands, vm: Option<ResMut<crate::kismet::Vm>>, level: Option<Res<LevelInfo>>, mut props: Query<&mut Prop>, mut bodies: Query<(&Transform, &mut Velocity), Without<Prop>>) {
+#[allow(clippy::type_complexity)]
+fn script_physics(
+    mut commands: Commands,
+    vm: Option<ResMut<crate::kismet::Vm>>,
+    level: Option<Res<LevelInfo>>,
+    mut props: Query<&mut Prop>,
+    mut bodies: Query<(&Transform, &mut Velocity), Without<Prop>>,
+    (time, mut lines): (Res<Time>, Local<Vec<(f32, Vec3, [f32; 7])>>),
+) {
     let (Some(mut vm), Some(level)) = (vm, level) else { return };
     let g = vm.g.clone();
+    // the scripts' pushes along a line (`RB_LineImpulseActor`): what lies on it within its reach
+    // is thrown along it, the nearest alone where it stops at the first; kept a moment for what the
+    // scripts put there that frame (the Oil Rain trial's tank, made at the wagon's door as the
+    // push goes off)
+    lines.extend(std::mem::take(&mut vm.line_impulses).into_iter().map(|(at, li)| (0.3, at, li)));
+    let dt = time.delta_secs();
+    lines.retain_mut(|(left, at, [dx, dy, dz, range, strength, vel_change, first])| {
+        *left -= dt;
+        let dir = Vec3::new(*dx, *dy, *dz).normalize_or(Vec3::X);
+        let mut hits: Vec<(f32, Entity, f32)> = Vec::new();
+        for p in &props {
+            let Some(m) = level.scene.movables.get(p.index).filter(|m| !m.fixed) else { continue };
+            let Some(b) = p.body else { continue };
+            let Ok((bt, _)) = bodies.get(b) else { continue };
+            let to = bt.translation - *at;
+            let t = to.dot(dir);
+            // (within its reach, and as near the line as a thing's half breadth)
+            if t < -0.3 || t > *range + 0.3 || (to - dir * t).length() > 0.6 {
+                continue;
+            }
+            // (a factory's tank its weight's mass, else our reading: the Oil Rain trial's, thrown
+            // from the wagons 23 m out and 18 m down to the platform Corvo starts on, 10.6 m/s)
+            hits.push((t, b, if m.tank.is_some() { TANK_MASS } else { MASS[m.weight.min(3) as usize] }));
+        }
+        if hits.is_empty() {
+            return *left > 0.0;
+        }
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let n = if *first > 0.0 { 1 } else { hits.len() };
+        for &(_, b, mass) in hits.iter().take(n) {
+            if let Ok((_, mut v)) = bodies.get_mut(b) {
+                v.linear += dir * *strength * 0.01 / if *vel_change > 0.0 { 1.0 } else { mass };
+            }
+            commands.entity(b).try_insert((RigidBody::Dynamic, Sleeping { sleeping: false, ..default() }));
+        }
+        if std::env::var_os("DH_PROP_LOG").is_some() {
+            info!("props: a push along a line from {at:.2} throws {n} thing(s)");
+        }
+        false
+    });
     // the scripts' physics bursts (`RB_RadialImpulseActor`): the loose things in reach are
     // thrown outward (an impulse over their weight, or a speed outright), less at the edge
     for (at, [radius, strength, vel_change, linear]) in std::mem::take(&mut vm.impulses) {
@@ -1255,7 +1305,17 @@ fn make_tanks(
         let r = |s: f32| (rand::random::<f32>() - 0.5) * s;
         let over = player.iter().next().map_or(pos, |t| t.translation) + Vec3::new(r(8.0), 5.0 + rand::random::<f32>() * 3.0, r(8.0));
         let secs = 1.6 + rand::random::<f32>() * 0.6;
-        let throw = (over - pos) / secs + Vec3::Y * 0.5 * 9.81 * secs;
+        // (thrown by the scripts' own push where one lies through the spawn point: the Oil Rain
+        // trial's wagons, `RB_LineImpulseActor`; else at Corvo)
+        let pushed = vm.g.actors.iter().any(|a| {
+            a.line_impulse.is_some_and(|li| {
+                let dir = Vec3::new(li[0], li[1], li[2]).normalize_or(Vec3::X);
+                let to = pos - Vec3::from(a.position);
+                let t = to.dot(dir);
+                (-0.3..=li[3] + 0.3).contains(&t) && (to - dir * t).length() < 0.3
+            })
+        });
+        let throw = if pushed { Vec3::ZERO } else { (over - pos) / secs + Vec3::Y * 0.5 * 9.81 * secs };
         if let Some(b) = prop.body {
             let spin = Vec3::new(r(1.0), r(1.0), r(1.0)) * 2.0;
             commands.entity(b).try_insert((

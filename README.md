@@ -189,7 +189,15 @@ are in the settings file, `pad_binding_set` 0-3):
   the assassins attack, no longer brought the Heart (and the crossbow) with it, nor the
   Prison's. Held in the left hand as the gadgets are (`Gadgets_Idle`), its fingers about
   it in its own grip (`Ply_Gadgets_Heart_as`'s `Gadgets_Heart_Fingers_Idle`, on the finger bones
-  alone); beats faster near runes and bone charms; whispers the original secrets about
+  alone); beats faster near runes and bone charms: its pulse's rate (`m_fMinPulseRate` 0.25 to
+  `m_fMaxPulseRate` 4) is its beating clip's pace (`Heart_Beat`, our reading), and its beats are
+  the clip's own, a lub and a dub (`DisNotify_Heartbeat` at 0.24 and 0.54 s, now cooked: each
+  its `m_Heartbeats` sound, `Heart_Gadget_Beat_1` and `_2`, and rumble), so what is heard and
+  felt keeps time with the heart pumping in his hand; before, the beats came on a timer of
+  their own, evenly spaced, while the heart pumped at one pace. Put away it still beats now
+  and then while one is in reach (`m_bUnequippedHeartBeats`: `Heart_Gadget_Beat_1` and its
+  rumble every `m_fUnequippedHeartBeatsFrequency`, 3.5 s, our reading of it as a period); before,
+  it was silent. It whispers the original secrets about
   the person targeted (by story group) or the place (by mission progress). Held, it marks the
   runes and bone charms still to be found with the HUD movie's `runeMarker` /
   `boneCharmMarker` as `m_RuneMarkerSettings` / `m_BoneCharmMarkerSettings` place them (90% at
@@ -2797,7 +2805,13 @@ fields no longer show their stand-in "WW" behind the title.
   the loose props in reach outward (`ImpulseRadius`, `ImpulseStrength`, falloff); thrown props
   hurt whom they strike (their tweak's `m_Damage`, `DisDamageType_Impact`) unless the scripts
   spare them (`DisSeqAct_NPCIgnoreRBDamages`); spring razors' shrapnel counts as their own
-  damage type.
+  damage type. Pushes along a line (`RB_LineImpulseActor`, now cooked: `ImpulseStrength`,
+  `ImpulseRange`, `bStopAtFirstHit`, along the actor's facing) throw what lies on it within its
+  reach, the nearest alone where it stops at the first. The Oil Drop trial's 34 of them throw
+  its tanks out of the train's wagons, two to each door, the scripts picking one at random as
+  a tank is made there: each tank now flies the way its door's push points (a tank's mass for
+  it our reading, 5, so the throws carry the 23 m out and 18 m down to the platform Corvo starts
+  on). Before, they weren't cooked, and each tank was thrown at wherever Corvo stood.
 - **Dynamic light passes** draw after everything opaque and before the fog and the translucent
   (as UE3 adds its lights), grouped by material and light (`Ue3Material::depth_bias`: their
   order among themselves doesn't matter, adding), sharing one material per surface material and
@@ -2853,7 +2867,11 @@ fields no longer show their stand-in "WW" behind the title.
     a start, a countdown's hourglass, flair names, round results, a drop's height as Corvo
     falls, a clockwork egg found, the kill chain's gauge and "Chain broken", the mystery man's
     clues then his portrait, and what was unlocked (powers with their levels, upgrades, their
-    pictures).
+    pictures). Each round's tools are on the number keys and the D-pad as the scripts put them
+    (`DisSeqAct_DLC05_SetPowerWheelShortcuts`: the keyboard's ten slots and the pad's four, by
+    their `EDisPowerWheelItem`, kept as if Corvo had set them); before, the trials' shortcuts were
+    left to the campaign's own filling, so Thief's Dark Vision, Blink and Bend Time round put
+    the crossbow on 1 instead of Dark Vision.
   - *Scoring* (`dlc05score.rs`, the rule sets cooked per map): kills by the victim's story
     group with the modifiers' flair (assassination, drop kill, adrenaline, headshot, in flames,
     dark kill, get back, severed limb, payback, perfect block, low blow, faction combo, power
@@ -2875,8 +2893,8 @@ fields no longer show their stand-in "WW" behind the title.
     the world stop his entrance sets off; the same goes for the campaign's Daud, the Outsider
     and Tower Return's executioner. Characters frozen in a stopped world see nothing.
   - *Oil Drop*: the factories' whale oil tanks (cooked as pools of hidden movables per tank
-    tweak, coloured by its material overrides) are thrown over Corvo from the tripods and burst
-    when shot. A shot reaches the damage events the scripts bind to each tank, so their
+    tweak, coloured by its material overrides) are thrown out of the wagons by the scripts'
+    line pushes (`RB_LineImpulseActor`, above) and burst when shot. A shot reaches the damage events the scripts bind to each tank, so their
     gifts are the scripts' own (`<kind>WoTShot`): gold bends time (the world at 0.3) for 2 s,
     pink heals half of Corvo's health, green gives Dark Vision for 10 s, and purple's blast is
     smoke. The scripts also play the combo and boiling-oil cues. Each tank scores, with combos
@@ -3231,7 +3249,12 @@ against the install's own data where it carries them, then implemented independe
     `m_fElectrocutedFadeEnd` (0) over `m_fElectrocutedFadeDuration` (1.5 s), the material's noise
     mask eating the body away, and nothing is left. A body goes the same way, lying as it is. That
     the fade's begin is a time and its end a value is our reading: the mask leaves nothing of the
-    body below 0.5, so the fade cannot start there. `DH_WALL_LOG` logs the walls' state and who
+    body below 0.5, so the fade cannot start there. One struck standing now fades as its death
+    clip says (`AnimNotify_PawnMaterialParam`, now cooked with every parameter it sets):
+    `O_Opacity` at 0.5 (0.6 a woman's) and its lightning's `LightningBrightness` at 20 as it is
+    struck (0.05 s), then `O_Opacity` to 0 over 1.5 s from 0.15 s, gone at 1.65 s; before, it
+    stayed whole for half a second and its lightning kept the material's own dimmer glow. A
+    body still takes the settings' fade. `DH_WALL_LOG` logs the walls' state and who
     they strike; the test script's `rewire` turns the nearest wall on its owners.
 - **Autosaves.**
   - A level script's autosave is denied while Corvo is fighting, unless it is a mission's start or

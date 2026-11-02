@@ -1260,6 +1260,11 @@ pub struct Vm {
     /// physics bursts the scripts set off (`RB_RadialImpulseActor` toggled): where, its
     /// impulse (reach, strength, speed change, falloff)
     pub impulses: Vec<(Vec3, [f32; 4])>,
+    /// the scripts' pushes along a line (`RB_LineImpulseActor`): from where, and its way, reach,
+    /// strength, speed set outright, first thing only
+    pub line_impulses: Vec<(Vec3, [f32; 7])>,
+    /// the trials' shortcuts (`DisSeqAct_DLC05_SetPowerWheelShortcuts`): the keyboard's ten, the pad's four
+    pub wheel_shortcuts: Vec<([Option<String>; 10], [Option<String>; 4])>,
     /// achievements the scripts judge (`DisSeqAct_EvalAchievement`), and whether the mission's
     /// statistics reset after (`m_bResetStats`)
     pub achievement_evals: Vec<(String, bool)>,
@@ -1480,6 +1485,8 @@ impl Vm {
             last_death: None,
             pylon_links: Vec::new(),
             impulses: Vec::new(),
+            line_impulses: Vec::new(),
+            wheel_shortcuts: Vec::new(),
             achievement_evals: Vec::new(),
             factory_sounds: HashMap::new(),
             factory_ambients: HashMap::new(),
@@ -2315,6 +2322,10 @@ impl Vm {
                     if let Some(ka) = if let Val::Actor(a) = &t { g.actors.get(*a as usize) } else { None } {
                         if let Some(imp) = ka.impulse {
                             self.impulses.push((Vec3::from(ka.position), imp));
+                            continue;
+                        }
+                        if let Some(imp) = ka.line_impulse {
+                            self.line_impulses.push((Vec3::from(ka.position), imp));
                             continue;
                         }
                         // (a volume: colliding with things or not, as `Volume.OnToggle`'s
@@ -4190,10 +4201,16 @@ impl Vm {
                 self.challenge_fx.push(crate::challenge::ChallengeFx::MysteryFoe { portrait, blue: self.pb(op, "m_bIsBlue").unwrap_or(false) });
                 self.fire(op, 0);
             }
-            // (no more than what they let go on: the wheel's shortcuts are Corvo's own, the
-            // arrows stay, the kill cam is the player's choice, the fall's camera effect and the
-            // bent time's desaturation are the post-process's)
-            "DisSeqAct_DLC05_SetPowerWheelShortcuts" | "DisSeqAct_DLC05_RemoveArrows" | "DisSeqAct_DLC05_ForceKillCam" | "DisSeqAct_DLC05_SetBendTimeDesaturation" | "SeqAct_SetBlockRigidBody" | "SeqAct_ForceGarbageCollection" | "SeqAct_GetProperty" => {
+            "DisSeqAct_DLC05_SetPowerWheelShortcuts" => {
+                let slot = |base: &str, i: usize| self.ps(op, &if i == 0 { base.to_string() } else { format!("{base}[{i}]") }).filter(|s| s != "DPWI_None");
+                let keys: [Option<String>; 10] = std::array::from_fn(|i| slot("m_KeyboardShortcuts", i));
+                let pad: [Option<String>; 4] = std::array::from_fn(|i| slot("m_GamepadShortcuts", i));
+                self.wheel_shortcuts.push((keys, pad));
+                self.fire(op, 0);
+            }
+            // (no more than what they let go on: the arrows stay, the kill cam is the player's choice,
+            // the fall's camera effect and the bent time's desaturation are the post-process's)
+            "DisSeqAct_DLC05_RemoveArrows" | "DisSeqAct_DLC05_ForceKillCam" | "DisSeqAct_DLC05_SetBendTimeDesaturation" | "SeqAct_SetBlockRigidBody" | "SeqAct_ForceGarbageCollection" | "SeqAct_GetProperty" => {
                 self.fire(op, 0);
             }
             "DisSeqAct_DLC05_FallSpeedFX" => {

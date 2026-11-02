@@ -1795,6 +1795,7 @@ fn animate_held(
     arms: Query<&Animator, With<ArmsRoot>>,
     mut held: Query<(&HeldRig, &mut Animator, &Visibility), Without<ArmsRoot>>,
     (powers, stats): (Res<Powers>, Res<PlayerStats>),
+    (mut heart, level, mut beats): (ResMut<crate::heart::Heart>, Option<Res<crate::level::LevelInfo>>, Local<Option<(ClipId, Vec<(f32, u8)>, f32)>>),
 ) {
     let Ok(arms) = arms.single() else { return };
     let arm = arms.overlay_state().0.map(|c| arms.lib.clip(c).name.clone()).unwrap_or_default();
@@ -1824,6 +1825,29 @@ fn animate_held(
         }
         if synced {
             anim.seek(t);
+        }
+        // (the Heart's beat: its clip at the pulse's rate, each beat at its `DisNotify_Heartbeat`,
+        // its tweak's `m_Heartbeats` sound and rumble for it)
+        if rig.0 == "heart" {
+            anim.time_scale = heart.rate.max(0.01);
+            if beats.as_ref().is_none_or(|b| b.0 != c) {
+                let marks = level.as_ref().map(|l| lib.marks(&l.scene).remove(&c).map(|m| m.heartbeats).unwrap_or_default()).unwrap_or_default();
+                *beats = Some((c, marks, -1.0));
+            }
+            if let (Some((_, marks, last)), Some(p)) = (beats.as_mut(), anim.current()) {
+                if *last >= 0.0 {
+                    let wrapped = p.t < *last;
+                    for &(at, i) in marks.iter() {
+                        if (!wrapped && at > *last && at <= p.t) || (wrapped && (at > *last || at <= p.t)) {
+                            heart.beats.push(i);
+                        }
+                    }
+                }
+                *last = p.t;
+            }
+            if std::env::var_os("DH_HEART_LOG").is_some() {
+                info!("heart: clip {} t {:?} rate {:.2} marks {:?}", lib.clip(c).name, anim.current().map(|p| p.t), heart.rate, beats.as_ref().map(|b| b.1.len()));
+            }
         }
     }
 }

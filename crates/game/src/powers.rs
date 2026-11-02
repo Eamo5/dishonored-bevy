@@ -31,7 +31,7 @@ impl Plugin for PowersPlugin {
             .add_systems(Update, bolt_focus.after(crate::interact::FocusSet).before(crate::gadgets::grenade_focus).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
             .add_systems(
                 Update,
-                (select_power, use_power, windblast_gusts, ignite, transversal_freeze, cook_grenade, blink_travel, update_projectiles, regenerate, dark_vision_post, crate::darkvision::update_dark_vision, crate::darkvision::dark_vision_sounds)
+                (script_shortcuts, select_power, use_power, windblast_gusts, ignite, transversal_freeze, cook_grenade, blink_travel, update_projectiles, regenerate, dark_vision_post, crate::darkvision::update_dark_vision, crate::darkvision::dark_vision_sounds)
                     .chain()
                     .after(crate::gadgets::grenade_focus)
                     .run_if(in_state(GameState::InGame)),
@@ -137,6 +137,34 @@ fn order_for(base: &[Power], daud: bool) -> Vec<Power> {
 }
 
 impl Power {
+    /// The power wheel's item of a name (`EDisPowerWheelItem`: the scripts' shortcuts).
+    pub fn of_wheel_item(name: &str) -> Option<Power> {
+        Some(match name.strip_prefix("DPWI_")? {
+            "RegularBolt" => Power::Crossbow,
+            "SleepDart" => Power::SleepDart,
+            "FlareBolt" => Power::IncendiaryBolt,
+            "Heart" => Power::Heart,
+            "SpringRazor" => Power::SpringRazor,
+            "RegularGrenade" => Power::Grenade,
+            "StickyGrenade" => Power::StickyGrenade,
+            "RegularBullet" => Power::Pistol,
+            "ExplosiveBullet" => Power::ExplosiveBullet,
+            "DLC06_ExplosiveBolt" => Power::ExplosiveBolt,
+            "DLC06_ArcMine" => Power::ArcMine,
+            "DLC06_FlashSmoke" => Power::Chokedust,
+            "DLC06_ArcMineStun" => Power::StunMine,
+            "DarkVision" | "DLC06_DaudDarkVision" => Power::DarkVision,
+            "WindBlast" => Power::Windblast,
+            "DevouringSwarm" => Power::DevouringSwarm,
+            "Blink" | "DLC06_Transversal" => Power::Blink,
+            "BendTime" => Power::BendTime,
+            "Possession" => Power::Possess,
+            "DLC06_SummonAssassin" => Power::SummonAssassin,
+            "DLC07_Pull" => Power::Pull,
+            _ => return None,
+        })
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Power::Empty => "",
@@ -863,6 +891,26 @@ impl Shortcuts {
     /// The next slot holding something, on from `from` the given way (round the end).
     fn step(&self, from: usize, way: i32) -> Option<usize> {
         (1..=10).map(|k| (from as i32 + way * k).rem_euclid(10) as usize).find(|i| self.slots[*i].is_some())
+    }
+}
+
+/// The trials set the shortcuts to their own tools (`DisSeqAct_DLC05_SetPowerWheelShortcuts`: the
+/// keyboard's ten, the pad's four), each slot as they name it or empty, and kept so: as if Corvo
+/// had chosen them.
+fn script_shortcuts(vm: Option<ResMut<crate::kismet::Vm>>, mut slots: ResMut<Shortcuts>) {
+    let Some(mut vm) = vm else { return };
+    for (keys, pad) in std::mem::take(&mut vm.wheel_shortcuts) {
+        for (i, k) in keys.iter().enumerate() {
+            slots.slots[i] = k.as_deref().and_then(Power::of_wheel_item);
+            slots.mine[i] = true;
+        }
+        for (i, k) in pad.iter().enumerate() {
+            slots.pad[i] = k.as_deref().and_then(Power::of_wheel_item);
+            slots.pad_mine[i] = true;
+        }
+        if std::env::var_os("DH_POWER_LOG").is_some() {
+            info!("powers: the scripts set the shortcuts to {:?}, the pad's to {:?}", slots.slots, slots.pad);
+        }
     }
 }
 

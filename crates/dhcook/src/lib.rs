@@ -1343,6 +1343,25 @@ impl<'a> Cooker<'a> {
                     });
                     Ok(())
                 }
+                "RB_LineImpulseActor" => {
+                    // a push along a line the scripts set off (`SeqAct_Toggle`: `FireLineImpulse`): the
+                    // Oil Rain trial's tanks thrown out of the train's wagons
+                    let ch = self.chain(&obj);
+                    let rot = ch.rotator("Rotation").unwrap_or([0, 0, 0]);
+                    let dir = crate::xform::rot_matrix(rot).x_axis.truncate().to_array();
+                    let d = crate::xform::ue_dir(dir);
+                    let imp = [
+                        d[0],
+                        d[1],
+                        d[2],
+                        ch.float("ImpulseRange").unwrap_or(200.0) * UNIT,
+                        ch.float("ImpulseStrength").unwrap_or(900.0),
+                        ch.bool("bVelChange").unwrap_or(false) as u8 as f32,
+                        ch.bool("bStopAtFirstHit").unwrap_or(false) as u8 as f32,
+                    ];
+                    self.actor_ref(&obj).line_impulse = Some(imp);
+                    Ok(())
+                }
                 "RB_RadialImpulseActor" => {
                     // a physics burst the scripts set off (`SeqAct_Toggle`: `FireImpulse`)
                     let ch = self.chain(&obj);
@@ -7043,6 +7062,10 @@ impl<'a> Cooker<'a> {
                     "DishonoredNotify_ReleaseCorpse" if m.release_corpse.is_none() => m.release_corpse = Some(t),
                     "DisNotify_EndSurprise" if m.end_surprise.is_none() => m.end_surprise = Some(t),
                     "DisNotify_SwimStroke" => m.strokes.push(t),
+                    "DisNotify_Heartbeat" => {
+                        let i = upk::read_object(&seq.pkg, no).ok().and_then(|o| o.props.int("m_Index")).unwrap_or(0);
+                        m.heartbeats.push((t, i.clamp(0, 255) as u8));
+                    }
                     "DisNotify_SetLightningTarget" => {
                         let Ok(np) = upk::read_object(&seq.pkg, no).map(|o| o.props) else { continue };
                         let corner = match np.name("m_Origin") {
@@ -7084,17 +7107,19 @@ impl<'a> Cooker<'a> {
                             m.recolor.push((t, seq.pkg.obj_path(nm)));
                         }
                     }
-                    "DisNotify_PawnMaterialParam" => {
+                    // (each of its parameters; the engine's own notify too: a wall of light's dead
+                    // fading, `Generic_Electrified`'s `O_Opacity` and `LightningBrightness`)
+                    "DisNotify_PawnMaterialParam" | "AnimNotify_PawnMaterialParam" => {
                         let Ok(np) = upk::read_object(&seq.pkg, no).map(|o| o.props) else { continue };
-                        let first = |k: &str| np.array(k).and_then(|(c, o, sz)| parse_struct_array(&seq.pkg, o, sz, c).ok()).and_then(|a| a.into_iter().next());
-                        let end = first("m_EndScalarParameterInterpArray");
-                        if let Some(p) = first("ScalarParameterInterpArray") {
+                        let all = |k: &str| np.array(k).and_then(|(c, o, sz)| parse_struct_array(&seq.pkg, o, sz, c).ok()).unwrap_or_default();
+                        let ends = all("m_EndScalarParameterInterpArray");
+                        for (i, p) in all("ScalarParameterInterpArray").into_iter().enumerate() {
                             m.mat_params.push(ClipMatParam {
                                 time: t,
                                 name: p.name("ParameterName").unwrap_or_default().to_string(),
                                 value: p.float("ParameterValue").unwrap_or(0.0),
                                 interp: p.float("InterpTime").unwrap_or(0.0),
-                                end: end.map(|e| (e.float("ParameterValue").unwrap_or(0.0), e.float("InterpTime").unwrap_or(0.0))),
+                                end: ends.get(i).map(|e| (e.float("ParameterValue").unwrap_or(0.0), e.float("InterpTime").unwrap_or(0.0))),
                             });
                         }
                     }
@@ -7138,7 +7163,7 @@ impl<'a> Cooker<'a> {
             m.hooks.sort_by(|a, b| a.0.total_cmp(&b.0));
             m.fx.sort_by(|a, b| a.time.total_cmp(&b.time));
             m.footfalls.sort_by(|a, b| a.total_cmp(b));
-            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() || !m.look_off.is_empty() || !m.footfalls.is_empty() || !m.armor.is_empty() || !m.recolor.is_empty() || !m.mat_params.is_empty() || !m.open.is_empty() || !m.shakes.is_empty() || m.parry_zone.is_some() || !m.turn_control.is_empty() || m.chain_input.is_some() || m.chain_exit.is_some() || m.unlock.is_some() || m.state_exit.is_some() || !m.attach.is_empty() || !m.show_item.is_empty() || !m.lightning.is_empty() || m.mantle_end.is_some() || m.release_corpse.is_some() || m.end_surprise.is_some() || !m.strokes.is_empty() {
+            if !m.trails.is_empty() || m.zone.is_some() || !m.drops.is_empty() || m.ragdoll.is_some() || !m.feet.is_empty() || !m.hooks.is_empty() || !m.fires.is_empty() || !m.fx.is_empty() || !m.plague.is_empty() || !m.look_off.is_empty() || !m.footfalls.is_empty() || !m.armor.is_empty() || !m.recolor.is_empty() || !m.mat_params.is_empty() || !m.open.is_empty() || !m.shakes.is_empty() || m.parry_zone.is_some() || !m.turn_control.is_empty() || m.chain_input.is_some() || m.chain_exit.is_some() || m.unlock.is_some() || m.state_exit.is_some() || !m.attach.is_empty() || !m.show_item.is_empty() || !m.lightning.is_empty() || m.mantle_end.is_some() || m.release_corpse.is_some() || m.end_surprise.is_some() || !m.strokes.is_empty() || !m.heartbeats.is_empty() {
                 self.scene.clip_marks.push(m);
             }
         }

@@ -956,6 +956,12 @@ pub struct KActor {
     /// (`ImpulseFalloff` linear, else constant)
     #[serde(default)]
     pub impulse: Option<[f32; 4]>,
+    /// a physics push along a line (`RB_LineImpulseActor`, the scripts' `SeqAct_Toggle`): its way
+    /// (the actor's facing), its reach (`ImpulseRange`, m), its strength (`ImpulseStrength`, UE
+    /// units), whether it sets speeds outright (`bVelChange`) and stops at the first thing it meets
+    /// (`bStopAtFirstHit`)
+    #[serde(default)]
+    pub line_impulse: Option<[f32; 7]>,
     /// an animated usable object (`scene.usables`)
     #[serde(default)]
     pub usable: Option<u32>,
@@ -1139,6 +1145,10 @@ pub struct ClipMarks {
     /// when a swimmer's stroke pushes (`DisNotify_SwimStroke`: Corvo's `Empty_Swim*`)
     #[serde(default)]
     pub strokes: Vec<f32>,
+    /// the Heart's beats (`DisNotify_Heartbeat`): when, and which of its tweak's `m_Heartbeats`,
+    /// each its sound and rumble
+    #[serde(default)]
+    pub heartbeats: Vec<(f32, u8)>,
 }
 
 /// A material parameter a clip drives on its character (`DisNotify_PawnMaterialParam`).
