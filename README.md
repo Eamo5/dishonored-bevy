@@ -1790,7 +1790,7 @@ fields no longer show their stand-in "WW" behind the title.
   the assassinations are. They are paced as the sword's tweak has it (roshan's r614/blink
   research decoded the rules): a killing blow is a slow-motion finisher three times in four
   (`m_fSlomoFinisherRandomChance`) when the victim is the one foe on Corvo, not within 30 s of
-  the last (`m_fMinTimeBetweenRandomSlomoFinisher`), else an ordinary blow; a finisher is a full
+  the last (`m_fMinTimeBetweenRandomSlomoFinisher`), else a short fatality; a finisher is a full
   one (`Front`) with no more than that one foe, no Bend Time, and its 4-8 fast ones
   (`m_NumFinishersBeforeSlow`) spent or 90-120 s (`m_fTimeBeforeSlow`) gone since the last full
   one, else a fast one (`FastFront`). Their slow motion is the clips' own
@@ -1798,6 +1798,15 @@ fields no longer show their stand-in "WW" behind the title.
   out): the dramatic deaths' always, the finishers' (`..AdrenalineBendTime..`) for a Blood
   Thirst kill or a slow-motion finisher as the `Kill Cam Mode` option has it: Off never, Normal
   one time in ten (`m_fChanceSlomoFinisherWillBeNormalSpeed` 0.9), Frequent always.
+  *Short fatalities*: a killing blow that isn't a finisher, on someone facing Corvo whose armour
+  doesn't take it, is played out with its victim (the sword's `DisTweaks_MeleeAttackPlayer`:
+  `m_ForehandKill_Synced` / `m_BackhandKill_Synced` at `m_fChanceOfSyncedAttack`, 1). His
+  forehand's states, `ShortFatality_ForehandA` / `B`, are `Ready_Fatality_SmallFront_Right_A` /
+  `B_Master` in his animation tweaks' state table, the backhand's the `Left` ones; the victim's
+  `DisNPCAnim_ShortFatality_Forehand` / `_Backhand` (`DisNPCAnimDefinitions` entries 93 and 94)
+  play the matching `Generic_Fatality_SmallFront_<side>_<A|B>_Slave`, with their blood, dying
+  cry and fall. Corvo is held for the 1.3 s of the clip. When it plays (the blow lands and would
+  kill) is our reading. Before, such a blow was an ordinary hit and the victim fell on its own.
   Blood: the contact system's sword against a body (`Pfx_BloodMotion` spurting along the blow,
   held to the body; within 5 m one time in three `blood_light` on the lens) on every blade hit,
   and in the finishers and assassinations at their clips' own moments

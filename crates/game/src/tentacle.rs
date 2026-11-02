@@ -227,7 +227,7 @@ fn tentacle_hits(
         if matches!(t.state, State::Leaving) {
             continue;
         }
-        let sword = matches!(s.kind, HitKind::Sword | HitKind::Assassinate | HitKind::Fatality);
+        let sword = matches!(s.kind, HitKind::Sword | HitKind::Assassinate | HitKind::Fatality | HitKind::ShortFatality);
         fx.write(SpawnEffect { rot: Transform::IDENTITY.looking_to(s.at - g.translation(), Vec3::Y).rotation, ..SpawnEffect::at(if sword { "tentacle_hit_sword" } else { "tentacle_hit" }, s.at) });
         sfx.write(PostEvent::named("Snd_DLC07_AI_Tentacles_Hit", Some(s.at)));
         t.hp -= s.damage.max(1.0);

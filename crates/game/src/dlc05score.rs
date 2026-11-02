@@ -177,7 +177,7 @@ fn entry_of(r: &ScoreRuleDef, fallback: &str) -> String {
 }
 
 fn blade(k: HitKind) -> bool {
-    matches!(k, HitKind::Sword | HitKind::Assassinate | HitKind::Fatality)
+    matches!(k, HitKind::Sword | HitKind::Assassinate | HitKind::Fatality | HitKind::ShortFatality)
 }
 
 fn shot(k: HitKind) -> bool {

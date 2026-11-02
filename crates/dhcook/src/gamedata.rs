@@ -1008,6 +1008,15 @@ fn arms(game: &Package, startup: &Package, d: &mut GameData) {
             }
         }
     }
+    // how often a killing blow is played out with its victim (`m_fChanceOfSyncedAttack`: the
+    // short fatalities, `m_ForehandKill_Synced` / `m_BackhandKill_Synced`; the class's under
+    // Corvo's sword's)
+    let corvo_melee = "Twk_Inv_PlayerSpecific.Twk_Inv_SwordCorvo.DisTweaks_InventoryItem_PlayerSpecific_1.DisTweaks_MeleeAttackPlayer_1";
+    for p in [game.find_export("Default__DisTweaks_MeleeAttackPlayer").and_then(|i| props(game, i)), startup.find_export(corvo_melee).and_then(|i| props(startup, i))].iter().flatten() {
+        if let Some(v) = p.float("m_fChanceOfSyncedAttack") {
+            d.pawn.insert("melee.m_fChanceOfSyncedAttack".into(), v);
+        }
+    }
     // the pistol's and crossbow's aim: their dispersion by difficulty
     // (`DisTweaks_WeaponRanged_Attributes`: `<weapon>.DispersionMin.<difficulty>`...), when it
     // goes to its widest (`DisTweaks_WeaponRanged.m_bMaxDispersionOn*` over the class's) and the

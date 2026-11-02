@@ -577,6 +577,21 @@ fn fatality_pair(lib: &crate::anim::CharAnims, full: bool, behind: bool, behead:
     Some((format!("Sword_Ready_Fatality_{pick}_Master"), format!("Generic_Fatality_{pick}_Slave")))
 }
 
+/// A short fatality's pair (`DisTweaks_MeleeAttackPlayer`'s `m_ForehandKill_Synced` /
+/// `m_BackhandKill_Synced`): the forehand's states `ShortFatality_ForehandA` / `B` are
+/// `Ready_Fatality_SmallFront_Right_A` / `B_Master` (his animation tweaks' state table, with the
+/// sword's prefix), the backhand's the `Left` ones; the victim's `DisNPCAnim_ShortFatality_Forehand`
+/// / `_Backhand` has the same two as its groups (`Generic_Fatality_SmallFront_<side>_<A|B>_Slave`,
+/// `DisNPCAnimDefinitions`' entries 93 and 94). One of the two, where the victim has its part.
+fn short_fatality_pair(lib: &crate::anim::CharAnims, forehand: bool) -> Option<(String, String)> {
+    let side = if forehand { "Right" } else { "Left" };
+    let first = if rand::random::<bool>() { "A" } else { "B" };
+    [first, if first == "A" { "B" } else { "A" }].into_iter().find_map(|ab| {
+        let slave = format!("Generic_Fatality_SmallFront_{side}_{ab}_Slave");
+        lib.find(&slave).map(|_| (format!("Sword_Ready_Fatality_SmallFront_{side}_{ab}_Master"), slave))
+    })
+}
+
 /// Corvo's finishers' pacing (`DisItemContext_Finisher`, as roshan's r614/blink research
 /// decoded it): the fast ones left before a full one (`m_NumFinishersBeforeSlow`, 4-8), the
 /// time after which a full one is due anyway once a fast one has played (`m_fTimeBeforeSlow`,
@@ -698,7 +713,7 @@ fn sword_input(
         MessageWriter<crate::particles::SpawnEffect>,
         Option<Res<crate::level::LevelInfo>>,
     ),
-    (mut pace, clock, rapier, surfaces, mut shake): (ResMut<FinisherPace>, Res<crate::gameplay::TimeControl>, ReadRapierContext, Query<&crate::footsteps::ColliderSurfaces>, MessageWriter<crate::player::ShakeCamera>),
+    (mut pace, clock, rapier, surfaces, mut shake, attached): (ResMut<FinisherPace>, Res<crate::gameplay::TimeControl>, ReadRapierContext, Query<&crate::footsteps::ColliderSurfaces>, MessageWriter<crate::player::ShakeCamera>, Query<&crate::npcparts::NpcAttached>),
 ) {
     if paused.0 { return; }
     let Ok((pe, pt, mut p, mut sword)) = player.single_mut() else { return };
@@ -927,6 +942,29 @@ fn sword_input(
                     shake.write(crate::player::ShakeCamera(CAM_SHAKE_PARRIED));
                 } else {
                     npc.parries = 0;
+                    // a blow that kills someone before Corvo, its armour not taking it: played out
+                    // with the victim (`m_fChanceOfSyncedAttack`: a short fatality)
+                    let ty = level.as_ref().and_then(|l| npc.npc_type.and_then(|i| l.scene.npc_types.get(i as usize)));
+                    let blade = crate::worlddamage::hit_type(HitKind::ShortFatality, 0.0, &attrs);
+                    let short = (attrs.sword_damage >= npc.health
+                        && npc.min_health <= 0.0
+                        && npc.kind != crate::npc::Kind::Creature
+                        && !p.crouched
+                        && npc.forward().dot(to_player) > 0.0
+                        && !crate::npc::armour_takes(ty, attached.iter().filter(|a| a.npc == e).map(|a| a.index), blade, false, true)
+                        && rand::random::<f32>() < data.pawn("melee.m_fChanceOfSyncedAttack", 1.0))
+                        .then(|| rigs.get(e).ok().and_then(|a| short_fatality_pair(&a.lib, sword.swing_dir > 0.0)))
+                        .flatten();
+                    if let Some((master, slave)) = short {
+                        hits.write(NpcHit { npc: e, damage: attrs.sword_damage, kind: HitKind::ShortFatality, from: pt.translation });
+                        npc.attack_t = None;
+                        crate::rumble::play("contact.Sword.Body.striker");
+                        if std::env::var_os("DH_MELEE_LOG").is_some() {
+                            info!("melee: short fatality on {}: {master} / {slave}", npc.name);
+                        }
+                        begin_sync_kill(&mut commands, pe, &mut sword, &mut p, e, master, slave, (false, false));
+                        return;
+                    }
                     hits.write(NpcHit { npc: e, damage: attrs.sword_damage, kind: HitKind::Sword, from: pt.translation });
                     crate::rumble::play("contact.Sword.Body.striker");
                 }

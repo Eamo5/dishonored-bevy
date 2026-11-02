@@ -1558,6 +1558,18 @@ fn burning(
         }
     }
 }
+/// Whether a character's worn armour takes a blow of damage type `kind` in its place
+/// (`DisTweaks_Armor`'s `m_DamageTypesToAbsorb`, on its region, from its side): its type, and the
+/// attachments it wears (by index).
+pub fn armour_takes(ty: Option<&dhcook::format::NpcType>, worn: impl Iterator<Item = usize>, kind: &str, head: bool, front: bool) -> bool {
+    let Some(ty) = ty else { return false };
+    worn.filter_map(|i| ty.attachments.get(i)).any(|a| {
+        a.absorb_head == head
+            && (a.absorb_side == 0 || (a.absorb_side == 1) == front)
+            && a.absorb.iter().any(|(t, exact)| if *exact { kind.eq_ignore_ascii_case(t) } else { crate::worlddamage::is_a(kind, t) })
+    })
+}
+
 /// Shadow Kill's dead (`DisTweaks_NPCPawn`): after `m_fShadowKillDelay` (0.1 s) the body takes the
 /// fiery material (`m_pFieryMaterial`: `Shadow_kill_inst`, black: its `D_Diffuse_Brightness` 0) and its
 /// limbs, spine and head smoulder (`m_ShadowKillFXs`: `ps_SK_Leg_Arms` on ten bones); it burns away over
@@ -3306,13 +3318,7 @@ fn npc_hits(
         let kind = crate::worlddamage::hit_type(h.kind, h.from.distance(t.translation), &attrs);
         let front = (h.from - t.translation).with_y(0.0).dot(npc.forward()) > 0.0;
         let worn = level.as_ref().and_then(|l| npc.npc_type.and_then(|i| l.scene.npc_types.get(i as usize)));
-        let absorbed = worn.is_some_and(|ty| {
-            parts.iter().filter(|p| p.npc == e).filter_map(|p| ty.attachments.get(p.index)).any(|a| {
-                a.absorb_head == head
-                    && (a.absorb_side == 0 || (a.absorb_side == 1) == front)
-                    && a.absorb.iter().any(|(t, exact)| if *exact { kind.eq_ignore_ascii_case(t) } else { crate::worlddamage::is_a(kind, t) })
-            })
-        });
+        let absorbed = armour_takes(worn, parts.iter().filter(|p| p.npc == e).map(|p| p.index), kind, head, front);
         let mut h = *h;
         if absorbed {
             if std::env::var("DH_HIT_LOG").is_ok() {
@@ -3340,7 +3346,7 @@ fn npc_hits(
         // answer's line, and, `ResponseCategory_Hostile`, it turns on him. The Hound Pits' people
         // and Emily forget a warning in a tenth of a second: they never turn. Without its brain's
         // answers, as before)
-        let by_corvo = !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats | HitKind::Assassinate | HitKind::Fatality | HitKind::Choke | HitKind::SleepDart | HitKind::WallOfLight | HitKind::EnemyWallOfLight | HitKind::StunMine);
+        let by_corvo = !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::Rats | HitKind::Assassinate | HitKind::Fatality | HitKind::ShortFatality | HitKind::Choke | HitKind::SleepDart | HitKind::WallOfLight | HitKind::EnemyWallOfLight | HitKind::StunMine);
         if !npc.enemy && by_corvo && (npc.fighter() || h.damage > 0.0) {
             let key = if corvo_side { "HurtByPlayerAlly" } else { "HurtByPlayerNeutral" };
             match npc.arms.responses.iter().find(|r| r.name == key).cloned() {
@@ -3368,7 +3374,7 @@ fn npc_hits(
         let pos = t.translation;
         let unaware = npc.alert != Alert::Combat;
         // kept alive by the scripts: no killing blow takes it
-        if npc.min_health > 0.0 && matches!(h.kind, HitKind::Assassinate | HitKind::Fatality | HitKind::Fire | HitKind::WallOfLight | HitKind::EnemyWallOfLight) {
+        if npc.min_health > 0.0 && matches!(h.kind, HitKind::Assassinate | HitKind::Fatality | HitKind::ShortFatality | HitKind::Fire | HitKind::WallOfLight | HitKind::EnemyWallOfLight) {
             npc.hit_react = 0.35;
             continue;
         }
@@ -3377,7 +3383,7 @@ fn npc_hits(
         // roshan's r614/blink research decoded the gain; before, every assassination gave 60)
         if stats.power("BloodThirsty") > 0 {
             stats.gain_adrenaline(match h.kind {
-                HitKind::Sword => h.damage * 2.0,
+                HitKind::Sword | HitKind::ShortFatality => h.damage * 2.0,
                 HitKind::Assassinate => npc.health.max(0.0) * if drop.is_some() { 1.5 } else { 1.25 },
                 _ => 0.0,
             });
@@ -3442,7 +3448,7 @@ fn npc_hits(
                 sfx.write(crate::audio::PostEvent::named("Amb_Fire_Alcohol_Immolation", Some(pos + Vec3::Y)));
                 fx.write(crate::particles::SpawnEffect { follow: Some(e), secs: 1.6, ..crate::particles::SpawnEffect::at("immolation", Vec3::ZERO) });
             }
-            HitKind::Assassinate | HitKind::Fatality | HitKind::WallOfLight | HitKind::EnemyWallOfLight => {
+            HitKind::Assassinate | HitKind::Fatality | HitKind::ShortFatality | HitKind::WallOfLight | HitKind::EnemyWallOfLight => {
                 npc.health = 0.0;
                 npc.set_mode(Mode::Dead);
                 // (a wall's kill is his only if he rewired it: the stats credit the player's side,
@@ -9498,6 +9504,25 @@ mod response_tests {
         let plain = dhcook::format::Attention { stop_variance: [0.0; 4], ..att };
         assert_eq!(attention_level(&plain, 0.31, 3, &[0.0, 0.0, 1.0, 0.0]), 3);
         assert_eq!(attention_level(&plain, 0.29, 3, &[0.0, 0.0, -1.0, 0.0]), 2);
+    }
+}
+
+#[cfg(test)]
+mod armour_tests {
+    use super::armour_takes;
+
+    #[test]
+    fn a_music_box_takes_the_blade_only_from_before_it() {
+        let box_ = dhcook::format::NpcAttachment { absorb: vec![("DisDamageType_FastHit_Right".into(), true)], absorb_side: 1, ..Default::default() };
+        let ty = dhcook::format::NpcType { attachments: vec![Default::default(), box_], ..Default::default() };
+        let blade = "DisDamageType_FastHit_Right";
+        assert!(armour_takes(Some(&ty), [1].into_iter(), blade, false, true));
+        assert!(!armour_takes(Some(&ty), [1].into_iter(), blade, false, false));
+        // (not worn, or on the head, or another blow: the body takes it)
+        assert!(!armour_takes(Some(&ty), [0].into_iter(), blade, false, true));
+        assert!(!armour_takes(Some(&ty), [1].into_iter(), blade, true, true));
+        assert!(!armour_takes(Some(&ty), [1].into_iter(), "DisDamageType_Arrow", false, true));
+        assert!(!armour_takes(None, [1].into_iter(), blade, false, true));
     }
 }
 

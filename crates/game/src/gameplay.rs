@@ -126,6 +126,9 @@ pub enum HitKind {
     Windblast,
     /// Blood Thirst's adrenaline fatality
     Fatality,
+    /// a sword blow that kills, played out with its victim (`m_ForehandKill_Synced` /
+    /// `m_BackhandKill_Synced`: a short fatality)
+    ShortFatality,
     /// eaten by rats
     Rats,
     /// an incendiary bolt: immolated

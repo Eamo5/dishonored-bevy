@@ -800,7 +800,7 @@ fn scripted_spits(vm: Option<ResMut<crate::kismet::Vm>>, mut krusts: Query<&mut 
 /// The damage type a weapon deals, as the filters name it.
 fn damage_type(kind: HitKind) -> &'static str {
     match kind {
-        HitKind::Sword | HitKind::Choke => "DishonoredDamageType_FastHit",
+        HitKind::Sword | HitKind::ShortFatality | HitKind::Choke => "DishonoredDamageType_FastHit",
         HitKind::Assassinate | HitKind::Fatality => "DisDamageType_Assassination",
         HitKind::Bullet => "DishonoredDamageType_Bullet",
         HitKind::Explosion | HitKind::EnemyExplosion | HitKind::GrenadeThrowback | HitKind::StickyGrenade | HitKind::ExplosiveBullet => "DishonoredDamageType_Explosion",

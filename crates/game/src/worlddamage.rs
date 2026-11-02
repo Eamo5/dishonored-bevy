@@ -132,7 +132,7 @@ pub fn bullet_type(dist: f32, attrs: &Attrs) -> &'static str {
 pub fn hit_type(kind: HitKind, dist: f32, attrs: &Attrs) -> &'static str {
     match kind {
         // (a blow of the blade: the original tells its swings apart, left, right, up)
-        HitKind::Sword => "DisDamageType_FastHit_Right",
+        HitKind::Sword | HitKind::ShortFatality => "DisDamageType_FastHit_Right",
         HitKind::Assassinate => "DisDamageType_Assassination",
         HitKind::Choke => "DisDamageType_Choke",
         HitKind::SleepDart => "DisDamageType_Arrow_Sleep",
