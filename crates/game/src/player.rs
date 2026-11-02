@@ -463,6 +463,7 @@ mod look_tests {
             .init_resource::<crate::zoom::Zoom>()
             .init_resource::<crate::aim::Aim>()
             .init_resource::<Paused>()
+            .init_resource::<Time>()
             .add_systems(Update, player_look);
         let cursor = app.world_mut().spawn(CursorOptions { grab_mode: CursorGrabMode::Locked, ..default() }).id();
         let player = app.world_mut().spawn((Player {
@@ -528,6 +529,11 @@ pub struct LeanView(pub Option<(f32, f32)>);
 const LEAN_BREAK_SPEED: f32 = 2.0;
 const LEAN_RELEASE: f32 = 0.2;
 const LEAN_LOOK: (f32, f32) = (1.0471976, 0.6108652);
+/// How far Corvo looks about while choking (his sword tweak's `DisTweaks_Choke`:
+/// `m_fChokePlayerControlledYawDegrees_Left` 30 and `_Right` 20 from the way he took hold,
+/// `m_fChokePlayerControlledPitchDegrees_Top` 20 up and `_Bottom` 5 down), in radians: left, right,
+/// up, down. Before, he could turn anywhere, the victim swung round with him.
+pub const CHOKE_LOOK: (f32, f32, f32, f32) = (0.5235988, 0.34906584, 0.34906584, -0.08726646);
 
 /// The original's default mouse sensitivity (`DefaultInput.ini` `MouseSensitivity`), the
 /// options' 2.0, and the look's limits while peeking and sprinting.
@@ -560,7 +566,7 @@ fn player_look(
     (peek, game_settings): (Option<Res<crate::keyhole::Peek>>, Option<Res<crate::settings::Settings>>),
     (data, over): (Option<Res<crate::gamedata::Data>>, Option<Res<crate::crosshair::OverEnemy>>),
     mut slowed: Local<bool>,
-    lean_view: Option<Res<LeanView>>,
+    (lean_view, choking, time): (Option<Res<LeanView>>, Query<&crate::combat::Choking>, Res<Time>),
 ) {
     let Ok((mut p, mut t)) = q.single_mut() else { *last = Vec2::ZERO; return };
     if p.is_added() { *last = Vec2::ZERO; }
@@ -624,6 +630,17 @@ fn player_look(
         let dy = (p.yaw - y0 + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
         p.yaw = y0 + dy.clamp(-LEAN_LOOK.0, LEAN_LOOK.0);
         p.pitch = p.pitch.clamp(p0 - LEAN_LOOK.1, p0 + LEAN_LOOK.1);
+    }
+    // (choking: the look kept about the way he took hold, its own reach, eased into)
+    if let Ok(ch) = choking.single() {
+        let dy = (p.yaw - ch.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        p.yaw = ch.yaw + dy.clamp(-CHOKE_LOOK.1, CHOKE_LOOK.0);
+        let step = time.delta_secs() * 2.0;
+        if p.pitch < CHOKE_LOOK.3 {
+            p.pitch = (p.pitch + step).min(CHOKE_LOOK.3);
+        } else if p.pitch > CHOKE_LOOK.2 {
+            p.pitch = (p.pitch - step).max(CHOKE_LOOK.2);
+        }
     }
     t.rotation = Quat::from_rotation_y(p.yaw);
     if let Ok(mut ct) = cam.single_mut() {

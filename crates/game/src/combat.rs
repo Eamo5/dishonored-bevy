@@ -396,6 +396,8 @@ pub struct Choking {
     pub end: Option<ChokeEnd>,
     /// Use held through the Win (s)
     pub use_held: f32,
+    /// which way Corvo faced as it took hold: the victim held that way, his look kept about it
+    pub yaw: f32,
 }
 
 pub fn spawn_view_model(
@@ -1115,7 +1117,7 @@ mod pause_tests {
             grounded: true, lean: 0.0, noclip: false, eye_height: crate::player::STAND_EYE,
             locked: true, air_time: 0.0, spawn: Vec3::ZERO, mantle: None, step_timer: 0.0,
             fall_speed: 0.0, power_jump: 0.0, pull: Vec3::ZERO, air_peak: 0.0, speed_cap: 0.0, crawl: false, rise: false,
-        }, Transform::IDENTITY, Choking { npc: target, t: 0.5, duration: 3.0, end: None, use_held: 0.0 })).id();
+        }, Transform::IDENTITY, Choking { npc: target, t: 0.5, duration: 3.0, end: None, use_held: 0.0, yaw: 0.0 })).id();
         app.update();
         assert_eq!(app.world().get::<Choking>(player).map(|ch| ch.t), Some(0.5));
         assert!(app.world().get::<Player>(player).unwrap().locked);
@@ -1193,12 +1195,13 @@ fn chokehold(
             return;
         }
         let target = ch.npc;
-        let fwd = Quat::from_rotation_y(p.yaw) * Vec3::NEG_Z;
+        // (held the way he took it, whichever way he looks: `crate::player::CHOKE_LOOK`)
+        let fwd = Quat::from_rotation_y(ch.yaw) * Vec3::NEG_Z;
         if let Ok((_, mut npc, mut nt)) = npcs.get_mut(target) {
             // hold the victim in front of Corvo
             let want = pt.translation + fwd * 0.75;
             nt.translation = nt.translation.lerp(Vec3::new(want.x, nt.translation.y, want.z), 0.3);
-            npc.yaw = p.yaw;
+            npc.yaw = ch.yaw;
             npc.mode = Mode::Choked;
             // won: the victim goes limp as the Win chain begins (its own Win clip), Corvo held
             // through his
@@ -1241,7 +1244,7 @@ fn chokehold(
     }
     p.locked = true;
     // `ChokeTime` (Strong Arms shortens it) and the victim's In clip
-    commands.entity(pe).insert(Choking { npc: e, t: 0.0, duration: attrs.choke_time.max(0.0) + CHOKE_IN, end: None, use_held: 0.0 });
+    commands.entity(pe).insert(Choking { npc: e, t: 0.0, duration: attrs.choke_time.max(0.0) + CHOKE_IN, end: None, use_held: 0.0, yaw: p.yaw });
 }
 
 /// The assassination under way: the victim set where its clip has Corvo (its `anchor_jnt`
