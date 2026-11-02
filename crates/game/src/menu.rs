@@ -1101,17 +1101,18 @@ fn items(menu: &Menu, settings: &Settings, slots: &SaveSlots, data: &crate::game
             let pack = menu.dlc.unwrap_or(0);
             let base = "DisGFxMoviePlayerMainMenu_Texts";
             let own = "DisDLC06MoviePlayerMainMenu_Texts";
+            // (in its own order, `SetHomeMenu`: continue, new game, missions, load, credits, back;
+            // no options, those are the game's own menu's)
             let mut v = Vec::new();
             if has_saves {
                 v.push(("Continue".into(), Action::Continue));
             }
             v.push((data.text(base, "t_NewGame"), Action::NewCampaign(DLC_PACKS[pack].first)));
+            // (its own missions: `m_missions`, its map's `ToMissionsScreen`)
+            v.push((data.text(base, "t_Missions"), Action::Page(Page::Missions)));
             if has_saves {
                 v.push(("Load".into(), Action::Page(Page::Load)));
             }
-            // (its own missions: `m_missions`, its map's `ToMissionsScreen`)
-            v.push((data.text(base, "t_Missions"), Action::Page(Page::Missions)));
-            v.push(("Options".into(), Action::Page(Page::Options)));
             v.push((data.text(own, "t_Credits"), Action::DlcCredits(pack)));
             v.push((data.text(own, "t_BackToMainMenu"), Action::LeaveDlc));
             v

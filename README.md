@@ -1920,9 +1920,10 @@ fields no longer show their stand-in "WW" behind the title.
     `MainMenu_DLC06` and `_DLC07`): `MM_Home_Screen` with its blades, circles and texture, the
     pack's logo on its brush and Daud's portrait. The menu `MM_Home_Menu_item`s run down from
     the turned menu's top, 5 apart, and the chosen one moves 30 along and plays its `over`.
-  - Its items: Continue, New Game and Load for its own saves only, Options, Credits (its menu
-    tweak's `m_TrailerName`, `CreditsDLC06` / `CreditsDLC07`) and Back to Main Menu
-    (`t_BackToMainMenu`).
+  - Its items, in its movie's own order (`SetHomeMenu`): Continue (its own saves only), New
+    Game, Missions, Load (its own saves only), Credits (its menu tweak's `m_TrailerName`,
+    `CreditsDLC06` / `CreditsDLC07`) and Back to Main Menu (`t_BackToMainMenu`). Before, Load
+    came before Missions and an Options entry the packs' homes don't have stood among them.
   - Its new game uses its own difficulties' names and words (`t_difficulty<n>_DLC06`: Novice,
     Veteran, Elite, Master Assassin). Master Assassin stays locked, showing
     `t_LastDifficultyUnlockCondition`, until its campaign is finished; that is kept in the
