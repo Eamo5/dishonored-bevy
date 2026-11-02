@@ -57,7 +57,11 @@ Loading a cooked map takes about 0.1–0.6 s.
 A map started directly gives Corvo what he would have by then: Blink after the Outsider's
 dream, the pistol, crossbow and Heart from the Hound Pits, some runes, and the story flags of
 the missions before it. The dream itself comes before them: no pistol, crossbow or Heart (the
-Heart is the Outsider's to give there).
+Heart is the Outsider's to give there). It counts as a game started properly
+(`Global_RealGameStarted`): the base game's flag, and now the packs' too, every flag their
+campaign scripts set as that event goes off (The Brigmore Witches' in `DLC07_SF_Global`).
+Before, a Brigmore Witches mission started from its missions page ended in a black screen:
+after Daud's last fight the ending's way to its film and the credits is gated on that flag.
 
 ## Controls
 

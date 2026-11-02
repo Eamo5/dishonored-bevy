@@ -6100,6 +6100,17 @@ fn setup(
         // a map started directly: the game counts as started properly (`Global_RealGameStarted`:
         // the maps' debug loadouts stay off; the start loadout is the campaign's)
         vm.flags.insert(REAL_GAME_STARTED.into(), true);
+        // (and the packs' own: the flags their campaigns set as `Global_RealGameStarted` goes
+        // off, The Brigmore Witches' in `DLC07_SF_Global`: without it Daud's last fight ends in a
+        // black screen, its ending's branch to the credits gated on it)
+        for op in g.ops.iter().filter(|o| o.class == "SeqEvent_RemoteEvent" && matches!(o.props.get("EventName"), Some(KVal::Str(n)) if n == "Global_RealGameStarted")) {
+            for &(to, input, _) in op.outputs.iter().flat_map(|o| o.links.iter()) {
+                let Some(t) = g.ops.get(to as usize).filter(|t| t.class == "DisSeqAct_SetStoryFlag" && input == 0) else { continue };
+                if let Some(KVal::Str(flag)) = t.props.get("m_StoryFlag") {
+                    vm.flags.insert(flag.clone(), true);
+                }
+            }
+        }
         // and the missions before it are done (the flags the Heart's lines are labelled with)
         let idx = crate::save::mission_index(&level.scene.name);
         for n in data.0.heart.nodes.iter().filter(|n| n.class == "CheckStoryFlag" && !n.flag.is_empty()) {
