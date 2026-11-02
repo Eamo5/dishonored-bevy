@@ -1098,7 +1098,7 @@ fn explode(
     time: Res<Time>,
     mut fx: MessageWriter<SpawnEffect>,
     mut rats: MessageWriter<crate::swarm::KillRats>,
-    (rapier, attrs): (bevy_rapier3d::prelude::ReadRapierContext, Res<crate::gamedata::Attrs>),
+    (rapier, attrs, waters): (bevy_rapier3d::prelude::ReadRapierContext, Res<crate::gamedata::Attrs>, Option<Res<crate::swim::Waters>>),
     mut razors: Query<(&mut Razor, &Transform), Without<Npc>>,) {
     // a blast reaches what it can see (the original's `VisibleCollidingActors`)
     let ctx = rapier.single().ok();
@@ -1109,15 +1109,29 @@ fn explode(
         l < 0.3 || ctx.as_ref().is_none_or(|c| c.cast_ray(from, d / l, l - 0.2, true, walls).is_none())
     };
     for b in blasts.read() {
+        // (under water, within `m_fMaxDistanceBelowWaterSurface` (15 m) of its surface: the water's
+        // burst at the surface and the muffled blast, `m_pBelowWaterSurfaceEffect` / `..Sound`; our
+        // reading of the depth's use)
+        let water = waters.as_ref().and_then(|w| w.at(b.at)).map(|(_, surface)| surface).filter(|s| *s > b.at.y);
+        let surfaced = water.filter(|s| s - b.at.y <= UNDERWATER_BLAST_DEPTH);
         // (an explosive bolt's: `DLC06_DaudArrowExplosion.m_pSoundEvent`)
         if !b.silent {
-            sfx.write(PostEvent::named(if b.kind == HitKind::ExplosiveBolt { "Snd_AI_TBoy_Arrow_Fire_Expl" } else { "Snd_Grenade_Explosion" }, Some(b.at)));
+            let sound = if water.is_some() { "Snd_Grenade_Expl_Underwater" } else if b.kind == HitKind::ExplosiveBolt { "Snd_AI_TBoy_Arrow_Fire_Expl" } else { "Snd_Grenade_Explosion" };
+            sfx.write(PostEvent::named(sound, Some(b.at)));
         }
         rats.write(crate::swarm::KillRats { at: b.at, radius: b.full.max(2.0), by_player: !matches!(b.kind, HitKind::EnemyExplosion | HitKind::ByOthers), source: b.at });
         if !b.silent {
             crate::rumble::play_near("contact.Explosion.DisContactType.radius", b.at);
         }
-        fx.write(SpawnEffect::at(b.effect, b.at));
+        match (water, surfaced) {
+            (None, _) => {
+                fx.write(SpawnEffect::at(b.effect, b.at));
+            }
+            (Some(_), Some(s)) => {
+                fx.write(SpawnEffect::at("grenade_water", b.at.with_y(s)));
+            }
+            _ => {}
+        }
         noise.write(Noise { corvo: !matches!(b.kind, HitKind::EnemyExplosion | HitKind::ByOthers), pos: b.at, radius: 25.0, kind: NoiseKind::Threatening });
         let scale = |d: f32| if d <= b.full { 1.0 } else { (1.0 - (d - b.full) / (b.radius - b.full).max(0.1)).max(0.0) };
         // a blast sets off the Spring Razors it reaches (`m_fDamageReactionTime` 0.75 s)
@@ -1168,6 +1182,9 @@ fn explode(
 
 #[derive(Component)]
 struct ExplosionFlash(f32);
+
+/// How deep under water a blast still bursts at the surface (`m_fMaxDistanceBelowWaterSurface`, m).
+const UNDERWATER_BLAST_DEPTH: f32 = 15.0;
 
 /// Daud's mines: armed after `m_fArmingTime`, they strike whoever not of his comes into their
 /// cylinder (512 uu across, 256 uu above and below) and in their sight, `m_NumShots` times

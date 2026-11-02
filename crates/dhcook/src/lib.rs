@@ -7946,6 +7946,8 @@ impl<'a> Cooker<'a> {
         // the effects gameplay spawns (the weapons' and powers' tweaks name these)
         const GAME_EFFECTS: &[(&str, &str)] = &[
             ("grenade", "Vfx_Weapon.Effects.Grenade.ps_grenade"),
+            // (a blast under water: `DisTweaks_Explosion.m_pBelowWaterSurfaceEffect`)
+            ("grenade_water", "Vfx_Weapon.Effects.Grenade.Ps_Grenade_Surfwater_Expl"),
             ("grenade_water", "Vfx_Weapon.Effects.Grenade.Ps_Grenade_Surfwater_Expl"),
             ("grenade_trail", "Vfx_Weapon.Effects.Grenade.Ps_Grenade_Trail"),
             // (a sword's swing: `DisMeleeExtentTweak.m_ParticleSystemComponent`, an AnimTrail)

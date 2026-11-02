@@ -2020,6 +2020,12 @@ fields no longer show their stand-in "WW" behind the title.
     knocked down, and a death in it is no one's (`m_bInstigatorGetsBlame` false).
   - Script: `lob [NAME]` makes the nearest character with grenades lob its own at Corvo;
     `DH_GADGET_LOG` logs what each grenade strikes.
+- **Blasts under water** (`DisTweaks_Explosion`, `Twk_ExplosionBase`): a grenade gone off in the
+  water bursts at its surface, `m_pBelowWaterSurfaceEffect` (`Ps_Grenade_Surfwater_Expl`: a
+  column of spray and foam) over it while it's within `m_fMaxDistanceBelowWaterSurface` (15 m)
+  of the surface (our reading of the depth's use), and sounds muffled
+  (`m_pBelowWaterSurfaceSound`, `Snd_Grenade_Expl_Underwater`). Before, it burst in a fireball
+  under the water with the open-air blast.
 - **Characters warn Corvo before turning on him for a blow** (the brain's `m_pReactionTweaks`,
   `DisTweaks_AIBrain_Reaction`: `m_Response_HurtByPlayerAlly` for one of his side,
   `m_Response_HurtByPlayerNeutral` for the others; each `TweakAIResponse`'s fields over the class
