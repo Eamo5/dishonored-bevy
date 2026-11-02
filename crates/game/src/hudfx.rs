@@ -31,7 +31,7 @@ impl Plugin for HudFxPlugin {
             .add_systems(OnEnter(GameState::InGame), spawn_damage_fx)
             // (after the frame's blows, before the clips play and the interface's layout)
             .add_systems(PostUpdate, (take_damage, animate_damage).chain().before(crate::flash::PlayClips).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, (health_effects, water_exit_lens, adrenaline_full).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (health_effects, water_exit_lens, adrenaline_full, bend_time_specs).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -445,6 +445,23 @@ fn water_exit_lens(level: Option<Res<LevelInfo>>, swim: Res<crate::swim::Swim>, 
     let (Some(level), Some(mut vm)) = (level, vm) else { return };
     if let Some((sys, life)) = level.scene.water_exit_lens {
         vm.lens.push((GAMEPLAY_LENS + 0x100, Some((sys, false, life))));
+    }
+}
+
+/// Bend Time's camera effect (the pawn's `m_pBendTimeCameraEffect`: `ps_outsider_floatingspecs`, glowing
+/// specks drifting about the eye) while his power bends time, running out as it ends (our reading:
+/// held as the camera's lens effects are). Before, Bend Time had only its sounds and its colour.
+fn bend_time_specs(level: Option<Res<LevelInfo>>, tc: Res<crate::gameplay::TimeControl>, vm: Option<ResMut<crate::kismet::Vm>>, mut was: Local<bool>) {
+    let on = tc.bend_remaining > 0.0;
+    if on == *was {
+        return;
+    }
+    let (Some(level), Some(mut vm)) = (level, vm) else { return };
+    *was = on;
+    let op = GAMEPLAY_LENS + 0x600;
+    match level.scene.effects.iter().find(|(n, _)| n == "bend_time_specs").map(|e| e.1).filter(|_| on) {
+        Some(sys) => vm.lens.push((op, Some((sys, true, 0.0)))),
+        None => vm.lens.push((op, None)),
     }
 }
 

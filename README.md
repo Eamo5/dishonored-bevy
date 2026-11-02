@@ -3170,13 +3170,17 @@ against the install's own data where it carries them, then implemented independe
 - **Bend Time** from its tweak, per level. Level 1 runs 12 s with the world at 0.15 and Corvo at
   0.85; level 2 runs 8 s with the world stopped and Corvo at 0.9. Both come in over
   `m_fTimeDilationWarmupTime` (0.15 s) and go out over `..CooldownTime` (0.25 s). Characters
-  out of bent time (Daud's assassins with Arcane Bond II) keep Corvo's pace.
+  out of bent time (Daud's assassins with Arcane Bond II) keep Corvo's pace. While it runs,
+  glowing specks drift about his eye: the pawn's `m_pBendTimeCameraEffect`
+  (`Screen_Effects.PostProcessParticleSystems.ps_outsider_floatingspecs`), held as the camera's
+  lens effects are (our reading of how), running out as it ends. Before, Bend Time had only its
+  sounds and its post-process.
 - **Wind Blast** reaches its `m_Distance` (30 m) within its 135° cone with the factor
   k = (1 − d/R)² × ((cos − cos½)/(1 − cos½))². Its push is `m_Force` along the aim, its height
   raised to `m_ExtraUpForce` × (1 − d/R), times k; a body flies at half that momentum, at least
   4 m/s across. Its damage is `m_Damage` × k, plus `m_HitWallAdditionalDamage` (100) for one
   slammed into a wall. Doors take the same factor.
-  - It starts at the cast clip's DisNotify_WindBlast, 0.27 s in (and so do Bend Time, at
+  - It starts at the cast clip's `DisNotify_WindBlast`, 0.27 s in (and so do Bend Time, at
     `Powers_Cast_BendTime`'s `DisNotify_BendTime`, 0.14 s, and the Devouring Swarm, at
     `Powers_Cast_Swarm`'s `DisNotify_DevouringSwarm`, 0.165 s; before, those two came as the
     key was pressed). It gathers its targets once, then

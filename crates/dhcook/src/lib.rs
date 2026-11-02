@@ -8015,6 +8015,8 @@ impl<'a> Cooker<'a> {
             ("tattoo_glow_3", "Vfx_GamePlay.Powers.Ps_Tattoo_Glow_03"),
             ("tattoo_glow_4", "Vfx_GamePlay.Powers.Ps_Tattoo_Glow_04"),
             ("tattoo_glow_wb", "Vfx_GamePlay.Powers.Ps_Tattoo_Glow_WB"),
+            // Bend Time's specks about the eye (the pawn's `m_pBendTimeCameraEffect`)
+            ("bend_time_specs", "Screen_Effects.PostProcessParticleSystems.ps_outsider_floatingspecs"),
         ];
         // ... and Daud's gadgets': the arc mines' lightning (`m_pLightningParticleSystem`),
         // breaking (`m_pDestructionEffect`) and blast, rats shocked by them
