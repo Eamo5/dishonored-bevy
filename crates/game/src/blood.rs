@@ -49,7 +49,7 @@ pub struct Bled;
 fn bleed(
     mut commands: Commands,
     (level, waters, carry): (Option<Res<LevelInfo>>, Option<Res<crate::swim::Waters>>, Res<crate::carry::Carry>),
-    bodies: Query<(Entity, &Npc, &NpcRig, &Ragdoll), (Without<Bled>, Without<Ashes>, Without<ScriptedAnim>)>,
+    bodies: Query<(Entity, &Npc, &NpcRig, &Ragdoll), (Without<Bled>, Without<Ashes>, Without<crate::npc::ShadowKilled>, Without<ScriptedAnim>)>,
     joints: Query<&GlobalTransform>,
     rapier: ReadRapierContext,
     mut decals: MessageWriter<SpawnDecal>,

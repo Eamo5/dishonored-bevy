@@ -503,6 +503,8 @@ pub struct GameAssets {
     pub electrocuted_material: Option<(Handle<Ue3Material>, Vec<usize>)>,
     /// its parameters' names, by slot (the death clip's `AnimNotify_PawnMaterialParam` sets them)
     pub electrocuted_params: Vec<String>,
+    /// Shadow Kill's burning material (`Shadow_kill_inst`) and its parameters' names, by slot
+    pub shadow_kill_material: Option<(Handle<Ue3Material>, Vec<String>)>,
     /// a burning character's charred skin, and its `Fire_Amount` slots
     pub immolation_material: Option<(Handle<Ue3Material>, Vec<usize>)>,
     pub npc_types: Vec<Option<NpcVisual>>,
@@ -1776,6 +1778,10 @@ fn spawn_level(
             game_assets.electrocuted_material = Some((h, slots));
         }
         game_assets.electrocuted_params = scene.materials.get(id as usize).and_then(|m| m.ue3.as_ref()).map(|u| u.param_names.clone()).unwrap_or_default();
+    }
+    if let Some(h) = scene.shadow_kill_material.and_then(|id| mb.ue3_material(id, Policy::NoLightMap, &mut image_assets, &mut ue_assets, &mut ue_programs, &mut shader_assets)) {
+        let names = scene.shadow_kill_material.and_then(|id| scene.materials.get(id as usize)).and_then(|m| m.ue3.as_ref()).map(|u| u.param_names.clone()).unwrap_or_default();
+        game_assets.shadow_kill_material = Some((h, names));
     }
     if let Some(id) = scene.immolation_material {
         let slots: Vec<usize> = scene

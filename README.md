@@ -3280,6 +3280,14 @@ against the install's own data where it carries them, then implemented independe
     stayed whole for half a second and its lightning kept the material's own dimmer glow. A
     body still takes the settings' fade. `DH_WALL_LOG` logs the walls' state and who
     they strike; the test script's `rewire` turns the nearest wall on its owners.
+  - *Shadow Kill* (`DisTweaks_NPCPawn`'s settings): its dead burn away. After
+    `m_fShadowKillDelay` (0.1 s) the body takes `m_pFieryMaterial` (`Shadow_kill_inst`, black) and
+    its limbs, spine and head smoulder (`m_ShadowKillFXs`: `ps_SK_Leg_Arms` on its ten bones,
+    following them as it falls); over `m_fShadowKillFieryDuration` (2 s) the material's
+    `F_Firy_Amount` goes from 1 to 0.62, below which its mask leaves nothing (our reading of what
+    the duration drives), and it is ash. Before, one puff played where it fell and the body was
+    simply gone 0.6 s after its death. (What `m_fShadowKillFadeToBlackDuration` fades isn't known:
+    the material is black from the start.)
 - **Autosaves.**
   - A level script's autosave is denied while Corvo is fighting, unless it is a mission's start or
     `m_bEvenInCombat`.

@@ -8555,6 +8555,10 @@ impl<'a> Cooker<'a> {
         if let Some(mat) = self.assets.find("Shr_Characters.Effect.Electric_Vanish_inst") {
             self.scene.electrocuted_material = Some(self.material(&mat));
         }
+        // Shadow Kill's dead burning away (`DisTweaks_NPCPawn.m_pFieryMaterial`)
+        if let Some(mat) = self.assets.find("Vfx_GamePlay.ShadowKill.Shadow_kill_inst") {
+            self.scene.shadow_kill_material = Some(self.material(&mat));
+        }
         // a burning character's charred skin (`Generic_Immolation`'s `DisNotify_ReplaceMaterials`)
         if let Some(mat) = self.assets.find("Vfx_GamePlay.SpittingFire.Immolation_INST") {
             self.scene.immolation_material = Some(self.material(&mat));

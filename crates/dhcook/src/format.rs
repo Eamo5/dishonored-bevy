@@ -66,6 +66,9 @@ pub struct Scene {
     /// What a wall of light's dead are drawn with as they vanish (`Electric_Vanish_inst`).
     #[serde(default)]
     pub electrocuted_material: Option<u32>,
+    /// What Shadow Kill's dead are drawn with as they burn away (`Shadow_kill_inst`).
+    #[serde(default)]
+    pub shadow_kill_material: Option<u32>,
     /// What a burning character's skin turns to (`Vfx_GamePlay.SpittingFire.Immolation_INST`: charred,
     /// its fire by `Fire_Amount`)
     #[serde(default)]

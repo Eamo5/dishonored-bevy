@@ -54,7 +54,7 @@ impl Plugin for NpcPlugin {
                     npc_hits,
                     last_survivors,
                     age_corpses,
-                    (ash_marked, electrocute, burning, burn_ashes).chain(),
+                    (ash_marked, electrocute, burning, shadow_kill, burn_ashes).chain(),
                     npc_shots,
                     npc_hearing,
                     npc_perception.run_if(|| !skip("perception")),
@@ -1282,16 +1282,14 @@ pub struct Ashes(pub f32);
 /// Shadow Kill power's do.
 fn ash_marked(
     mut commands: Commands,
-    q: Query<(Entity, &Npc, &GlobalTransform), Without<Ashes>>,
+    q: Query<(Entity, &Npc, &GlobalTransform), (Without<Ashes>, Without<ShadowKilled>)>,
     mut sfx: MessageWriter<crate::audio::PostEvent>,
-    mut fx: MessageWriter<crate::particles::SpawnEffect>,
 ) {
     for (e, npc, g) in &q {
         if npc.ash_on_death && npc.mode == Mode::Dead && !npc.corpse {
             let pos = g.translation();
-            commands.entity(e).try_insert(Ashes(0.0));
+            commands.entity(e).try_insert(ShadowKilled::default());
             sfx.write(crate::audio::PostEvent::named("Snd_Power_Shadow_Kill", Some(pos)));
-            fx.write(crate::particles::SpawnEffect { secs: 2.0, ..crate::particles::SpawnEffect::at("shadow_kill", pos) });
         }
     }
 }
@@ -1531,6 +1529,92 @@ fn burning(
         // (burnt out: a charred body)
         if b.t > len + end.map_or(0.0, |e| e.1) + 0.1 {
             commands.entity(e).try_remove::<Immolated>();
+        }
+    }
+}
+/// Shadow Kill's dead (`DisTweaks_NPCPawn`): after `m_fShadowKillDelay` (0.1 s) the body takes the
+/// fiery material (`m_pFieryMaterial`: `Shadow_kill_inst`, black: its `D_Diffuse_Brightness` 0) and its
+/// limbs, spine and head smoulder (`m_ShadowKillFXs`: `ps_SK_Leg_Arms` on ten bones); it burns away over
+/// `m_fShadowKillFieryDuration` (2 s: its `F_Firy_Amount` from 1 down to 0.62, below which its mask
+/// leaves nothing; our reading of what the duration drives), then is ash. (What
+/// `m_fShadowKillFadeToBlackDuration`, 0.2 s, fades is not known: the material is black from the
+/// start.) Before, one
+/// effect played where it fell and the body was simply gone 0.6 s after its death.
+#[derive(Component, Default)]
+pub struct ShadowKilled {
+    t: f32,
+    mat: Option<Handle<crate::ue3mat::Ue3Material>>,
+}
+
+/// `m_fShadowKillDelay`, `m_fShadowKillFadeToBlackDuration`, `m_fShadowKillFieryDuration`
+/// (`Twk_Pawn_DefaultNPC`).
+const SHADOW_KILL: (f32, f32, f32) = (0.1, 0.2, 2.0);
+/// `m_ShadowKillFXs`' bones.
+const SHADOW_KILL_BONES: [&str; 10] = [
+    "upper_leg_L_jnt",
+    "lower_leg_L_jnt",
+    "upper_leg_R_jnt",
+    "lower_leg_R_jnt",
+    "upper_arm_L_jnt",
+    "lower_arm_L_jnt",
+    "upper_arm_R_jnt",
+    "lower_arm_R_jnt",
+    "spine_1_jnt",
+    "head_jnt",
+];
+
+#[allow(clippy::type_complexity)]
+fn shadow_kill(
+    mut commands: Commands,
+    time: Res<Time>,
+    assets: Option<Res<GameAssets>>,
+    mut materials: ResMut<Assets<crate::ue3mat::Ue3Material>>,
+    mut q: Query<(Entity, &mut ShadowKilled, &NpcRig)>,
+    children: Query<&Children>,
+    parts: Query<Option<&crate::fxlight::PartPasses>, With<NpcPart>>,
+    mut fx: MessageWriter<crate::particles::SpawnEffect>,
+) {
+    let (delay, _, fiery) = SHADOW_KILL;
+    let fire = assets.as_ref().and_then(|a| a.shadow_kill_material.clone());
+    for (e, mut sk, rig) in &mut q {
+        let t0 = sk.t;
+        sk.t += time.delta_secs();
+        if t0 < delay && sk.t >= delay {
+            for bone in SHADOW_KILL_BONES {
+                if let Some(j) = rig.joint(bone) {
+                    fx.write(crate::particles::SpawnEffect { follow: Some(j), secs: fiery, ..crate::particles::SpawnEffect::at("shadow_kill", Vec3::ZERO) });
+                }
+            }
+            // (each its own, to burn away at its own pace)
+            if let Some(m) = fire.as_ref().and_then(|(base, _)| materials.get(base).cloned()) {
+                let h = materials.add(m);
+                for c in children.iter_descendants(e) {
+                    if let Ok(passes) = parts.get(c) {
+                        crate::fxlight::drop_light_passes(&mut commands, c, passes);
+                        commands.entity(c).try_remove::<(MeshMaterial3d<crate::lightmap::WorldMaterial>, MeshMaterial3d<crate::ue3mat::Ue3Material>)>().try_insert(MeshMaterial3d(h.clone()));
+                    }
+                }
+                sk.mat = Some(h);
+            }
+            if std::env::var("DH_NPC_CLIP_LOG").is_ok() {
+                info!("npc burns away (shadow kill{})", if sk.mat.is_some() { "" } else { ", no fiery material" });
+            }
+        }
+        let k = (sk.t - delay).max(0.0);
+        if let (Some(mut m), Some((_, names))) = (sk.mat.as_ref().and_then(|h| materials.get_mut(h)), fire.as_ref()) {
+            let amount = 1.0 - 0.38 * (k / fiery).clamp(0.0, 1.0);
+            for (s, n) in names.iter().enumerate() {
+                let v = match n.as_str() {
+                    "F_Firy_Amount" => amount,
+                    _ => continue,
+                };
+                if s < m.params.p.len() {
+                    m.params.p[s] = Vec4::splat(v);
+                }
+            }
+        }
+        if sk.t >= delay + fiery {
+            commands.entity(e).try_remove::<ShadowKilled>().try_insert(Ashes(1.0));
         }
     }
 }
@@ -3485,9 +3569,8 @@ fn npc_hits(
         // Shadow Kill: the unaware dead (every one at level 2) turn to ash
         let shadow = stats.power("ShadowKill");
         if npc.mode == Mode::Dead && shadow > 0 && (unaware || shadow >= 2) && !matches!(h.kind, HitKind::Rats | HitKind::Fire | HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::EnemyWallOfLight) {
-            commands.entity(e).try_insert(Ashes(0.0));
+            commands.entity(e).try_insert(ShadowKilled::default());
             sfx.write(crate::audio::PostEvent::named("Snd_Power_Shadow_Kill", Some(pos)));
-            fx.write(crate::particles::SpawnEffect { secs: 2.0, ..crate::particles::SpawnEffect::at("shadow_kill", pos) });
         }
         if npc.is_down() {
             npc.attack_t = None;
