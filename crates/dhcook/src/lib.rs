@@ -4642,6 +4642,12 @@ impl<'a> Cooker<'a> {
         if let Some((_, Value::Str(t))) = self.tweak_prop(pawn, "m_AsleepCrosshairText", 0, 0) {
             st.asleep_text = t;
         }
+        // (out cold, it snores: `m_pStartSnoringEvent` / `m_pStopSnoringEvent`)
+        for (i, n) in ["m_pStartSnoringEvent", "m_pStopSnoringEvent"].iter().enumerate() {
+            if let Some(o) = self.tweak_obj(pawn, n) {
+                st.snoring[i] = o.name().to_string();
+            }
+        }
         st.hit_react = [2.0, 10.0];
         if let Some(c) = self.tweak_obj(pawn, "m_pCombatTweaks") {
             for (i, n) in ["m_HitReact_Min_Damage", "m_HitReact_High_Damage"].iter().enumerate() {

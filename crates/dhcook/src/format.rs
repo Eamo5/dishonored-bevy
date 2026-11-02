@@ -1366,6 +1366,9 @@ pub struct NpcStats {
     pub ammo: Vec<(String, i32)>,
     /// the crosshair's line over it asleep (`m_AsleepCrosshairText`: "(Unconscious)")
     pub asleep_text: String,
+    /// its snoring out cold, started and stopped (`m_pStartSnoringEvent`, `m_pStopSnoringEvent`)
+    #[serde(default)]
+    pub snoring: [String; 2],
     /// its combat tweak: the damage of a hit it reacts to and of a big one
     /// (`m_HitReact_Min_Damage`, `m_HitReact_High_Damage`), and what a rat swarm eating it does
     /// a second (`m_fRatSwarmDamagePerSecond`)

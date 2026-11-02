@@ -984,7 +984,9 @@ fields no longer show their stand-in "WW" behind the title.
   grenade with its own fuse and blast (`Twk_Proj_Grenade_Overseer_*`: 3.5 m to characters,
   6 m to Corvo); the HUD movie's `grenadeIndicator` warns of each live grenade in reach,
   its arc turned toward it and its glow pulsing faster as the fuse burns. The unconscious
-  are named `(Unconscious)` under the crosshair. Enemies in an ambient scene (a matinee's
+  are named `(Unconscious)` under the crosshair, and snore where they lie, carried or not, till
+  they come to, die or are gone (their pawn's `m_pStartSnoringEvent` / `m_pStopSnoringEvent`,
+  now cooked: `Guard_Snoring`, a loop of snores); before, they were silent. Enemies in an ambient scene (a matinee's
   loop: an overseer questioning a guard) break off it to fight Corvo. Swordsmen fight with
   their blade's moves (`DisTweaks_NPCAttackShort` within 2.35 m, `..Medium` lunging from
   2.35-3.75 m, `..Long` from 3.75-5.7 m, each within its angle and on its own cooldown, big

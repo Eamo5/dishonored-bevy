@@ -54,7 +54,7 @@ impl Plugin for NpcPlugin {
                     npc_hits,
                     last_survivors,
                     age_corpses,
-                    (ash_marked, electrocute, burning, shadow_kill, burn_ashes).chain(),
+                    (ash_marked, electrocute, burning, shadow_kill, burn_ashes, snoring).chain(),
                     npc_shots,
                     npc_hearing,
                     npc_perception.run_if(|| !skip("perception")),
@@ -74,6 +74,32 @@ impl Plugin for NpcPlugin {
                     .run_if(in_state(GameState::InGame)),
             );
     }
+}
+
+/// Out cold, a character snores (its pawn's `m_pStartSnoringEvent`: `Guard_Snoring`, a loop of its
+/// snores) from where it lies, carried or not, till it comes to, dies or is gone
+/// (`m_pStopSnoringEvent`). Before, the unconscious were silent.
+fn snoring(
+    level: Option<Res<LevelInfo>>,
+    npcs: Query<(Entity, &Npc, &GlobalTransform)>,
+    mut out: Local<std::collections::HashMap<Entity, String>>,
+    mut sfx: MessageWriter<crate::audio::PostEvent>,
+) {
+    let Some(level) = level else { return };
+    for (e, npc, g) in &npcs {
+        let cold = npc.mode == Mode::Unconscious;
+        if cold && !out.contains_key(&e) {
+            let Some(st) = npc.npc_type.and_then(|t| level.scene.npc_types.get(t as usize)).and_then(|t| t.stats.as_ref()).filter(|s| !s.snoring[0].is_empty()) else { continue };
+            sfx.write(crate::audio::PostEvent::named(&st.snoring[0], Some(g.translation())).following(e).from_object(e));
+            out.insert(e, st.snoring[1].clone());
+        } else if !cold {
+            if let Some(stop) = out.remove(&e).filter(|s| !s.is_empty()) {
+                sfx.write(crate::audio::PostEvent::named(&stop, Some(g.translation())).from_object(e));
+            }
+        }
+    }
+    // (the gone: their snores go with them)
+    out.retain(|e, _| npcs.contains(*e));
 }
 
 /// A sticky grenade stuck to someone (`gadgets`): they flail at it till it goes off.
