@@ -1842,9 +1842,10 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
         flatten(&startup, &top, "", &mut d.pawn, &mut BTreeMap::new());
         d.darkness = darkness(&startup, &p);
         log::info!("gamedata: chaos: {} levels, {} deeds", d.darkness.levels.len(), d.darkness.deeds.len());
-        // his breath's sounds (`m_pBreathlessnessIncreaseEvent` / `..DecreaseEvent`: Wwise events
+        // his breath's sounds and his mana's refilling (`m_pBreathlessnessIncreaseEvent` /
+        // `..DecreaseEvent`, `m_pStartManaRegenSound`: Wwise events
         // by name) as texts `Pawn.<property>`
-        for n in ["m_pBreathlessnessIncreaseEvent", "m_pBreathlessnessDecreaseEvent"] {
+        for n in ["m_pBreathlessnessIncreaseEvent", "m_pBreathlessnessDecreaseEvent", "m_pStartManaRegenSound"] {
             if let Some(o) = p.object(n).filter(|o| *o != 0) {
                 d.texts.insert(format!("Pawn.{n}"), object_name(&startup, o));
             }

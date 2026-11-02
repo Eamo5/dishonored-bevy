@@ -132,7 +132,9 @@ are in the settings file, `pad_binding_set` 0-3):
   keeps to the surface of water, a fish swims anywhere in its water without breathing; a river
   krust stays rooted and spits where he looks), Devouring Swarm
   (the original rats); enhancements Vitality, Blood Thirst, Shadow Kill, Agility. Runes buy
-  them in the journal. Mana regenerates a portion above the last expense, like the original.
+  them in the journal. Mana regenerates a portion above the last expense, like the original,
+  with the pawn's `m_pStartManaRegenSound` (`Snd_UI_Ingame_Regen_Mana`) as it starts refilling
+  (our reading of when: the first step after the delay); before, it refilled silently.
   A power cast without the mana for it gets the left hand's empty gesture (`Powers_OutOfMana`)
   and its sound (`Snd_Power_Empty`), with no line, as the original.
   Going into a host plays the original transition (`POSSESSION_IN_INST`, a

@@ -2401,7 +2401,7 @@ fn regenerate(
     attrs: Res<Attrs>,
     mut stats: ResMut<PlayerStats>,
     mut sfx: MessageWriter<PostEvent>,
-    mut last_health: Local<f32>,
+    (mut last_health, mut refilling, data): (Local<f32>, Local<bool>, Res<Data>),
 ) {
     if paused.0 { return; }
     let dt = time.delta_secs();
@@ -2413,7 +2413,14 @@ fn regenerate(
     // mana: after a delay, back up to the cap left by the last expense
     stats.mana_delay = (stats.mana_delay - dt).max(0.0);
     if stats.mana_delay <= 0.0 && stats.mana < stats.mana_cap {
+        // (its sound as it starts refilling: the pawn's `m_pStartManaRegenSound`, our reading of when)
+        if !*refilling {
+            sfx.write(PostEvent::named(&data.pawn_text("m_pStartManaRegenSound", "Snd_UI_Ingame_Regen_Mana"), None));
+        }
+        *refilling = true;
         stats.mana = (stats.mana + attrs.mana_regen_rate * dt).min(stats.mana_cap);
+    } else {
+        *refilling = false;
     }
     // health: hurt restarts the delay; then it regenerates up to its limit
     if stats.health < *last_health - 0.01 {
