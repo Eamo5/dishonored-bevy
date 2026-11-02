@@ -759,7 +759,11 @@ fields no longer show their stand-in "WW" behind the title.
   penalty. Healthy Appetite, Twist of Fortune (including automatic remedies), Unnerving
   Target, Plague Resistant and Plague Affinity now feed their gameplay effects. Remaining
   charm effects and original-game timing comparisons are still under audit.
-  Blood Thirst uses the original adrenaline cooldown and burn rate; Sustained Rage
+  Blood Thirst uses the original adrenaline cooldown and burn rate. Its gains are the decoded
+  ones (as roshan's r614/blink research found them): a sword blow its damage twice over, an
+  assassination its victim's health 1.25 times over and a drop assassination's 1.5 times
+  (`m_fAdrenalineMultOnHit`), and a won parry 20 (`m_fAdrenalineAddedParryWin`); before, every
+  assassination gave a flat 60 and a parry nothing. Sustained Rage
   extends the cooldown, Vengeance gains adrenaline from health actually lost (even if
   healed that frame), and Carrion Killer gains it for player rat kills. Enemy blasts
   and music boxes do not earn Corvo rat-kill adrenaline. Full, the adrenaline shows as the

@@ -94,6 +94,8 @@ const BLADE_WALL_REACH: f32 = 1.3;
 /// `DisTweaks_MeleeBlockPlayer.m_fBlockCameraShakeScale`.
 const CAM_SHAKE_ON_HIT_ENV: f32 = 200.0;
 const CAM_SHAKE_PARRIED: f32 = 175.0;
+/// Adrenaline for a won parry (`m_fAdrenalineAddedParryWin`).
+const PARRY_ADRENALINE: f32 = 20.0;
 const CAM_SHAKE_BLOCK_SCALE: f32 = 6.0;
 
 /// The sound of Corvo's sword on what it struck: the contact system's for its surface, else the
@@ -1447,6 +1449,11 @@ fn receive_hits(
                 stagger.write(NpcStagger { npc: h.npc, secs: 1.8, parried: true });
                 sword.parry_flash = 0.25;
                 sword.forced_block = 0.3;
+                // (Blood Thirst: a won parry's adrenaline, `Twk_Inv_SwordCorvo`'s
+                // `m_fAdrenalineAddedParryWin`, as roshan's r614/blink research found the blocker given it)
+                if stats.power("BloodThirsty") > 0 {
+                    stats.gain_adrenaline(PARRY_ADRENALINE);
+                }
                 stats.trackers.hints.push(crate::tutorials::Hint::Blocked(true));
             } else {
                 stagger.write(NpcStagger { npc: h.npc, secs: 0.5, parried: false });

@@ -3372,12 +3372,13 @@ fn npc_hits(
             npc.hit_react = 0.35;
             continue;
         }
-        // Blood Thirst: melee builds adrenaline (a blow's damage twice over:
-        // `m_fAdrenalineMultOnHit`)
+        // Blood Thirst: melee builds adrenaline (`m_fAdrenalineMultOnHit`: a blow's damage twice over,
+        // an assassination its victim's health 1.25 times over, a drop assassination's 1.5 times, as
+        // roshan's r614/blink research decoded the gain; before, every assassination gave 60)
         if stats.power("BloodThirsty") > 0 {
             stats.gain_adrenaline(match h.kind {
                 HitKind::Sword => h.damage * 2.0,
-                HitKind::Assassinate => 60.0,
+                HitKind::Assassinate => npc.health.max(0.0) * if drop.is_some() { 1.5 } else { 1.25 },
                 _ => 0.0,
             });
         }
