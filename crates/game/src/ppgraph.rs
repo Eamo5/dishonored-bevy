@@ -167,6 +167,10 @@ struct Timelines {
     poss_in: Option<f32>,
     poss_out: Option<f32>,
     possessed: bool,
+    /// the mask coming on (`Epp_MaskOn`): seconds in, and whether the scripts asked for it last
+    /// frame
+    mask_on: Option<f32>,
+    mask_asked: bool,
 }
 
 /// A time-varying material's parameters at `t` seconds, and whether it is still playing.
@@ -174,6 +178,25 @@ fn curves_at(assets: &GameAssets, name: &str, t: f32) -> Option<Vec<(String, Vec
     let m = assets.post.get(name)?;
     let end = m.curves.iter().map(|c| c.end()).fold(0.0, f32::max);
     (t <= end).then(|| m.curves.iter().map(|c| (c.param.clone(), Vec4::splat(c.at(t)))).collect())
+}
+
+/// The mask's lens at `t` seconds into its coming on: its `EffectStrength` (blur, bend, inner and
+/// outer radii) and frame's opacity, between the phases about `t`; none once over.
+fn mask_phase(pawn: &std::collections::BTreeMap<String, f32>, t: f32) -> Option<(Vec4, f32)> {
+    if t > pawn.get("m_fMaskOnCompleteEffectDuration").copied().unwrap_or(20.0) {
+        return None;
+    }
+    let field = |i: usize, n: &str| pawn.get(&format!("maskon.{i}.{n}")).copied();
+    let phases: Vec<(f32, Vec4, f32)> = (0..32)
+        .map_while(|i| {
+            let f = |n: &str| field(i, n).unwrap_or(0.0);
+            field(i, "m_fStart").map(|start| (start, Vec4::new(f("m_fBlurStrength"), f("m_fDistoStrength"), f("m_fMinRadius"), f("m_fMaxRadius")), f("m_fMaskOpacity")))
+        })
+        .collect();
+    let k = phases.iter().rposition(|p| p.0 <= t)?;
+    let (a, b) = (&phases[k], phases.get(k + 1).unwrap_or(&phases[k]));
+    let x = if b.0 > a.0 { ((t - a.0) / (b.0 - a.0)).clamp(0.0, 1.0) } else { 0.0 };
+    Some((a.1.lerp(b.1, x), a.2 + (b.2 - a.2) * x))
 }
 
 /// Seconds a scripted screen effect fades in and out over.
@@ -317,6 +340,25 @@ fn update_graph(
     for t in [&mut tl.poss_in, &mut tl.poss_out].into_iter().flatten() {
         *t += dt;
     }
+    // the mask coming on (`Epp_MaskOn`, the Hound Pits' first morning and the returns there): the
+    // mask's lens over the view (`LensSwitch`'s materials) through Corvo's `m_MaskOnBlurPhases`,
+    // each phase's blur, bend, radii and frame from its start, eased into the next's (our
+    // reading), over `m_fMaskOnCompleteEffectDuration`
+    let asked = scripted("Epp_MaskOn");
+    // (and ends as they let it go: the scene skipped)
+    if asked && !tl.mask_asked {
+        tl.mask_on = Some(0.0);
+    } else if !asked && tl.mask_asked {
+        tl.mask_on = None;
+    }
+    tl.mask_asked = asked;
+    let mask = tl.mask_on.as_mut().and_then(|t| {
+        *t += dt;
+        mask_phase(&data.0.pawn, *t)
+    });
+    if mask.is_none() {
+        tl.mask_on = None;
+    }
     let pf = |k: &str, d: f32| data.active("Possess").and_then(|a| a.params.get(k).copied()).unwrap_or(d);
     let under = water.0.is_some();
     // the graph's switches
@@ -385,7 +427,11 @@ fn update_graph(
             None => *t = None,
         }
     }
-    if lens > 0.01 {
+    if let Some((strength, frame)) = mask {
+        stages.extend(s("lens_vectors", &[("EffectStrength", strength)]));
+        nodes.push("LensVectors");
+        post_stages.extend(s("lens_compose", &[("MaskOpacity", Vec4::splat(frame))]));
+    } else if lens > 0.01 {
         stages.extend(s("lens_vectors", &[("EffectStrength", Vec4::new(130.0 * lens, 1.0, 0.38, 0.55))]));
         nodes.push("LensVectors");
         post_stages.extend(s("lens_compose", &[("MaskOpacity", Vec4::splat(0.5 * lens))]));
@@ -744,4 +790,24 @@ fn draw_field(
     full_screen(ctx, "ppg ko blend", post.destination, combine_pipeline, &bg);
     let Some(bg) = stage_bind_group(device, queue, layout, pipelines, images, fallback_view, backup, &[post.source], graph.time, res) else { return };
     full_screen(ctx, "ppg ko backup", last, backup_pipeline, &bg);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_mask_eases_between_its_phases_and_ends() {
+        let mut pawn = std::collections::BTreeMap::new();
+        for (i, (start, blur, frame)) in [(0.0, 0.0, 1.0), (0.8, 250.0, 1.0), (19.7, 0.0, 0.0)].into_iter().enumerate() {
+            pawn.insert(format!("maskon.{i}.m_fStart"), start);
+            pawn.insert(format!("maskon.{i}.m_fBlurStrength"), blur);
+            pawn.insert(format!("maskon.{i}.m_fMaskOpacity"), frame);
+        }
+        pawn.insert("m_fMaskOnCompleteEffectDuration".into(), 20.0);
+        assert_eq!(mask_phase(&pawn, 0.4).unwrap().0.x, 125.0);
+        assert_eq!(mask_phase(&pawn, 0.8).unwrap().0.x, 250.0);
+        assert_eq!(mask_phase(&pawn, 19.8).unwrap().1, 0.0);
+        assert!(mask_phase(&pawn, 20.5).is_none());
+    }
 }

@@ -1850,6 +1850,15 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
                 d.texts.insert(format!("Pawn.{n}"), object_name(&startup, o));
             }
         }
+        // the mask coming on (`m_MaskOnBlurPhases`: each phase's start and its lens's blur,
+        // bend, radii and frame) as `maskon.<i>.<field>`
+        for (i, s) in struct_array(&startup, &p, "m_MaskOnBlurPhases").iter().enumerate() {
+            for n in ["m_fStart", "m_fBlurStrength", "m_fDistoStrength", "m_fMinRadius", "m_fMaxRadius", "m_fMaskOpacity"] {
+                if let Some(v) = s.float(n) {
+                    d.pawn.insert(format!("maskon.{i}.{n}"), v);
+                }
+            }
+        }
         // and its own strings the localisation leaves out (the PC's elixir tutorials,
         // `m_AcquiredElixirTutorialMessage_PC[i]`...), each element as `Pawn.<property>[i]`
         for q in &p.0 {

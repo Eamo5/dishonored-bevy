@@ -681,6 +681,16 @@ fn run_script(
                 vm.remote_event(name);
             }
         }
+        "posteffect" => {
+            // posteffect EFFECT [off]: as the level scripts' DisSeqAct_PostProcess (Epp_MaskOn...)
+            if let (Some(name), Some(vm)) = (cmd.get(1), vm.as_mut()) {
+                vm.post_effects.retain(|e| e != name);
+                if cmd.get(2).map(String::as_str) != Some("off") {
+                    vm.post_effects.push(name.clone());
+                }
+                info!("script: post effects {:?}", vm.post_effects);
+            }
+        }
         "fx" => {
             // fx <effect> [distance]: play an original gameplay effect in front of the view
             if let Some(name) = cmd.get(1) {

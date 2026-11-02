@@ -179,7 +179,14 @@ are in the settings file, `pad_binding_set` 0-3):
   (`m_CoolDownWobbleCount`); under water the image ripples. The scripts' screen effects
   (`DisSeqAct_PostProcess`): `Epp_Knocked` blurs along the view's turning and blends in the
   last frame (`KO_Combine` / `TEST_PPG_BackupRed`), `Epp_Weepers` takes the plague's warp and
-  green, grainy grading. Each node's own grading (`m_bOverrideUberPp`, cooked into
+  green, grainy grading, and `Epp_MaskOn` (Piero handing Corvo the mask on the first morning at
+  the Hound Pits, the returns there) puts the mask's lens over the view (`LensSwitch`'s
+  `PPG_LensVectors` and `PPG_LensCompose`) through Corvo's `m_MaskOnBlurPhases`: each phase's
+  blur, bend, inner and outer radii (`EffectStrength`) and frame (`MaskOpacity`) from its
+  `m_fStart`, eased into the next (our reading), clear again at 19.7 s and over at
+  `m_fMaskOnCompleteEffectDuration` (20 s), or as the scripts let it go (the scene skipped).
+  Before, it was ignored. (Its blue flash, `m_fMaskOnBlueFlash*`, isn't drawn: no material of
+  the graph takes it.) Each node's own grading (`m_bOverrideUberPp`, cooked into
   `gamedata.post_nodes`) layers over the level's like Dark Vision's. `DH_NO_PPG=1` turns the
   branch off.
 - **Depth of field** (`dof.rs`): the level's (or the scripts') far blur, as the original's
