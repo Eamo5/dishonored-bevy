@@ -94,6 +94,9 @@ const BLADE_WALL_REACH: f32 = 1.3;
 /// `DisTweaks_MeleeBlockPlayer.m_fBlockCameraShakeScale`.
 const CAM_SHAKE_ON_HIT_ENV: f32 = 200.0;
 const CAM_SHAKE_PARRIED: f32 = 175.0;
+/// How far above and below the view a blow can be blocked (`DisTweaks_MeleeBlockPlayer`:
+/// `m_fBlockAngle_Vertical_Up` 30, `_Down` 50 degrees), in radians.
+const BLOCK_VERTICAL: (f32, f32) = (0.5235988, 0.87266463);
 /// Adrenaline for a won parry (`m_fAdrenalineAddedParryWin`).
 const PARRY_ADRENALINE: f32 = 20.0;
 const CAM_SHAKE_BLOCK_SCALE: f32 = 6.0;
@@ -1471,6 +1474,13 @@ fn receive_hits(
         // is a block begun within `m_fTapForPerfectParryWindow` (0.2 s) of the blow, or while its
         // clip's `DisNotify_BlockParryZone` lasts (0.431 s), as roshan's r614/blink research found
         let facing = fwd.dot(to_npc) > 50f32.to_radians().cos();
+        // (and up and down, `m_fBlockAngle_Vertical_Up` 30 and `_Down` 50 degrees off the view's
+        // pitch, as roshan's r614/blink research found the cone: the blow's height his attacker's
+        // chest, our reading)
+        let eye = cam.single().map(|c| c.translation()).unwrap_or(pt.translation);
+        let to_blow = h.from + Vec3::Y * 0.4 - eye;
+        let off = to_blow.y.atan2(to_blow.with_y(0.0).length().max(1e-3)) - p.pitch;
+        let facing = facing && (-BLOCK_VERTICAL.1..=BLOCK_VERTICAL.0).contains(&off);
         if sword.blocking && facing && !h.unblockable {
             noise.write(Noise { corvo: true, pos: pt.translation, radius: 8.0, kind: NoiseKind::Threatening });
             shake.write(crate::player::ShakeCamera(h.damage * CAM_SHAKE_BLOCK_SCALE));

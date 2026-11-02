@@ -1044,7 +1044,9 @@ fields no longer show their stand-in "WW" behind the title.
   clip's `DisNotify_BlockParryZone` lasts (`Sword_Ready_ParryIdle_In`, 0.001 to 0.431 s, now
   cooked), as roshan's r614/blink research decoded the block handler, within his sword's
   `m_fBlockAngle` (50 degrees). Before, a block raised 0.2 to 0.43 s before the blow was only
-  a plain block. When his blow and a guard's land together (their attack
+  a plain block. Up and down, his block takes blows within `m_fBlockAngle_Vertical_Up` (30
+  degrees) above his view and `_Down` (50) below it (the blow's height its attacker's chest:
+  our reading); before, he blocked looking at his feet or the sky. When his blow and a guard's land together (their attack
   zones within `m_fVersusZoneMaxTime`, each facing the other) the blades lock
   (`StatePlayerMasterVersus`): "Mash [Left Mouse Button] !" (`DUI_Context_Versus`), the guard straining in
   `Sword_Versus_MinigameUU` and his arms in `Sword_Ready_Versus_MinigameUU`. His presses over

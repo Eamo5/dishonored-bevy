@@ -1607,6 +1607,10 @@ fn run_script(
             p.yaw = f(1);
             p.pitch = f(2);
         }
+        "pitch" => {
+            // pitch DEG: the view's pitch alone (degrees, up positive)
+            p.pitch = f(1).to_radians();
+        }
         "aimbolt" => {
             // Aim at the nearest recoverable bolt without moving or granting ammo.
             commands.queue(|w: &mut World| {
