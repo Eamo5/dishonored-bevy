@@ -3548,7 +3548,11 @@ against the install's own data where it carries them, then implemented independe
   or blast, never below 1. Bites, electricity and the plague go round it.
 - **The guns load and reload.**
   - The pistol's magazine holds `1 + MagazineBonus` rounds (up to 4 with the magazine upgrades);
-    the crossbow holds one bolt. Another ammunition must be loaded first.
+    the crossbow holds one bolt. Another ammunition must be loaded first. Each magazine upgrade's
+    bonus is its total (1, 2, 3: "Adds another bullet to the magazine. (Total 3)"), so only the
+    latest counts, the earlier given way to it (`m_RevertedUpgrades`); before, they were added
+    up, and with all three the pistol fired 7 rounds between reloads (a map started after the
+    second's purchase, 4 instead of 3).
   - Emptied, a gun reloads after its fire action (0.4 s), playing the original's clips and sound:
     the pistol in 0.426 + 0.75 / `ReloadSpeed` + 0.302 s, the crossbow in 1.3 s.
   - `FastReload` replaces that with its own quick action: the pistol's second upgrade 1 s, the
@@ -3565,7 +3569,12 @@ against the install's own data where it carries them, then implemented independe
   - Their upgrades show on them (`DisTweaks_Upgrade.m_pAttachMesh`): the pistol's sights,
     loaders and drums (the cylinder its own, each magazine's drum replacing the last as
     `m_RevertedUpgrades` has it, none with explosive rounds loaded:
-    `m_RevertedUpgradesForExplosive`), the crossbow's scope, limbs and winder.
+    `m_RevertedUpgradesForExplosive`), the crossbow's scope, limbs and winder. A magazine's drum
+    is its own rig (`Gun_mag_regular_2`, the upgrades' `CorvoGun_Mag_as`): its rounds sit in it
+    as many as the magazine holds beyond the one in the chamber (`CorvoGun_Mag_Ammo0` to `3`),
+    one turns out of it with each shot (`CorvoGun_Mag_3to2`, `2to1`, `1to0`, at the hand's fire
+    clip's time), and the reload fills it (`CorvoGun_Mag_0to3`, `0to2`, `0to1` with the reload's
+    first stage). Before, the drum was a still mesh, its rounds always all there.
   - Corvo's folding sword is its own rig too (`Wpn_PlySword01`, `PlySword_Anim_as`): its blade
     snaps out and folds away with the arms' draws and sheathings of the same names (quick or
     not, standing or sneaking, and the first time he takes it up), open in his hand otherwise.
@@ -4040,8 +4049,9 @@ against the install's own data where it carries them, then implemented independe
   cutoff. A gameplay-system test verifies standing bites at 1.7m, no crouched bites
   there, crouched bites at 0.5m, and cooked overrides. All 70 game tests pass
   (`cache/parity_player_rat_tweaks.log`, `cache/parity_rat_stance_suite.log`).
-  This does not resolve Rat Scent's native reduction formula or Scavenger's grant
-  calculation; both charm effects still require source-behavior investigation.
+  Scavenger follows the grant roshan's r614/blink research decoded (each ammunition kind of a
+  pickup holding more than one round gives one more on a 0.5 roll); Rat Scent's reduction is
+  still our reading (the attack distance divided by one plus the charm's attribute).
 
 Full original-game parity has **not** been verified. Current regression coverage includes
 62 game release tests, plus isolated-profile gameplay checks for grenade throwback attribution,

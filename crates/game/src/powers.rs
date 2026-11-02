@@ -455,7 +455,7 @@ fn reload_stages(w: crate::aim::Weapon) -> [f32; 3] {
 }
 
 /// Rounds a gun's magazine holds (`1 + MagazineBonus` for the pistol, one bolt).
-fn magazine_size(data: &Data, stats: &PlayerStats, w: crate::aim::Weapon) -> u32 {
+pub fn magazine_size(data: &Data, stats: &PlayerStats, w: crate::aim::Weapon) -> u32 {
     1 + crate::aim::upgrade_sum(data, stats, w, "MagazineBonus").max(0.0) as u32
 }
 

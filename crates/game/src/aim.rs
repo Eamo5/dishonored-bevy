@@ -353,7 +353,17 @@ fn assist(
 
 /// What the weapon's upgrades owned add to one of its attributes.
 pub(crate) fn upgrade_sum(data: &Data, stats: &PlayerStats, w: Weapon, attr: &str) -> f32 {
-    data.0.upgrades.iter().filter(|u| u.id.starts_with(w.upgrades()) && stats.upgrades.contains(&u.id)).flat_map(|u| u.attributes.iter()).filter(|(n, _)| n == attr).map(|(_, v)| v).sum()
+    // (not those given way to a later one, `m_RevertedUpgrades`: the magazines' bonuses are their
+    // totals, 1, 2, 3, each in place of the last)
+    let owned = |id: &str| stats.upgrades.iter().any(|u| u == id);
+    let replaced = |id: &str| data.0.upgrades.iter().any(|u| owned(&u.id) && u.replaces.iter().any(|r| r == id));
+    data.0.upgrades
+        .iter()
+        .filter(|u| u.id.starts_with(w.upgrades()) && owned(&u.id) && !replaced(&u.id))
+        .flat_map(|u| u.attributes.iter())
+        .filter(|(n, _)| n == attr)
+        .map(|(_, v)| v)
+        .sum()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -408,6 +418,22 @@ mod tests {
     /// A square view down -z from the origin, 1 rad tall.
     fn view() -> Mat4 {
         Mat4::perspective_rh(1.0, 1.0, 0.1, 1000.0) * Mat4::look_to_rh(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y)
+    }
+
+    #[test]
+    fn magazine_upgrades_count_only_the_latest() {
+        let mut data = Data::default();
+        let up = |id: &str, bonus: f32, replaces: &str| dhcook::format::UpgradeDef { id: id.into(), attributes: vec![("MagazineBonus".into(), bonus)], replaces: vec![replaces.into()], ..Default::default() };
+        data.0.upgrades.push(up("Twk_Upgrade_PistolMagazine1", 1.0, "Twk_Upgrade_Pistol"));
+        data.0.upgrades.push(up("Twk_Upgrade_PistolMagazine2", 2.0, "Twk_Upgrade_PistolMagazine1"));
+        data.0.upgrades.push(up("Twk_Upgrade_PistolMagazine3", 3.0, "Twk_Upgrade_PistolMagazine2"));
+        let mut stats = PlayerStats::default();
+        assert_eq!(upgrade_sum(&data, &stats, Weapon::Pistol, "MagazineBonus"), 0.0);
+        stats.upgrades = vec!["Twk_Upgrade_PistolMagazine1".into(), "Twk_Upgrade_PistolMagazine2".into()];
+        // ("Adds another bullet to the magazine. (Total 3)")
+        assert_eq!(upgrade_sum(&data, &stats, Weapon::Pistol, "MagazineBonus"), 2.0);
+        stats.upgrades.push("Twk_Upgrade_PistolMagazine3".into());
+        assert_eq!(upgrade_sum(&data, &stats, Weapon::Pistol, "MagazineBonus"), 3.0);
     }
 
     #[test]

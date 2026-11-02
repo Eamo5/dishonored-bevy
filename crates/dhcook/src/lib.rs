@@ -8293,6 +8293,9 @@ impl<'a> Cooker<'a> {
                 // (his folding sword: its blade snapping out as it's drawn, `PlySword_Anim_as`)
                 ("player_sword", "Wpn_PlySwords.Wpn_PlySword01", "PlySword_Anim_as.PlySword_Anim_as"),
                 ("heart", "Heart.Heart", "Heart_as.Heart_as"),
+                // (the pistol's drum, its rounds sliding in and out: `CorvoGun_Mag_as`, the magazine
+                // upgrades' `m_pAnimSet`)
+                ("pistol_mag", "CorvoGuns.Gun_mag_regular_2", "CorvoGun_Mag_as.CorvoGun_Mag_as"),
             ] {
                 let (Some(m), Some(s)) = (self.assets.find(mesh), self.assets.find(set)) else { continue };
                 match self.cook_device(&m, vec![s]) {

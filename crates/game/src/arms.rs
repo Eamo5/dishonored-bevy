@@ -785,12 +785,48 @@ fn spawn_arms(
                 // (a gun's upgrades on it, each shown while owned: `show_upgrades`)
                 for (key, up) in a.props.iter().filter(|(k, _)| k.strip_prefix("upgrade:").and_then(|r| r.split_once(':')).is_some_and(|(g, _)| g == prop)) {
                     let id = key.rsplit(':').next().unwrap_or_default().to_string();
+                    // (a magazine's drum: skinned on its own rig, its rounds sliding in and out with
+                    // its clips, `CorvoGun_Mag_as`)
+                    let drum = id.starts_with("Twk_Upgrade_PistolMagazine").then(|| level.as_ref().and_then(|l| l.scene.prop_rigs.get("pistol_mag")).and_then(|t| a.npc_types.get(*t as usize)).and_then(|v| v.as_ref())).flatten();
                     let part = commands.spawn((Transform::IDENTITY, Visibility::Hidden, RenderLayers::layer(VIEW_LAYER), UpgradePart { id, explosive: power == Power::ExplosiveBullet })).id();
-                    for (mesh, mat) in &up.view_parts {
-                        let mut m = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), NotShadowCaster, RenderLayers::layer(VIEW_LAYER)));
-                        mat.apply(&mut m);
-                        let m = m.id();
-                        commands.entity(part).add_child(m);
+                    match drum {
+                        Some(rv) => {
+                            let bones = &rv.skeleton.bones;
+                            let dj: Vec<Entity> = bones
+                                .iter()
+                                .map(|b| commands.spawn((Transform::from_translation(Vec3::from(b.translation)).with_rotation(Quat::from_array(b.rotation).normalize()), Visibility::Inherited)).id())
+                                .collect();
+                            for (i, b) in bones.iter().enumerate() {
+                                let parent = if b.parent >= 0 && (b.parent as usize) < i { dj[b.parent as usize] } else { part };
+                                commands.entity(parent).add_child(dj[i]);
+                            }
+                            for (mesh, mat) in &rv.parts.view_parts {
+                                let mut m = commands.spawn((
+                                    Mesh3d(mesh.clone()),
+                                    MeshTag(slot),
+                                    SkinnedMesh { inverse_bindposes: rv.inverse_bindposes.clone(), joints: dj.clone() },
+                                    NotShadowCaster,
+                                    NoFrustumCulling,
+                                    RenderLayers::layer(VIEW_LAYER),
+                                ));
+                                mat.apply(&mut m);
+                                let m = m.id();
+                                commands.entity(part).add_child(m);
+                            }
+                            if let Some(lib) = rv.anims.clone() {
+                                let mut anim = Animator::new(lib, &rv.skeleton, dj);
+                                anim.sounds = false;
+                                commands.entity(part).insert((HeldRig("pistol_mag"), anim));
+                            }
+                        }
+                        None => {
+                            for (mesh, mat) in &up.view_parts {
+                                let mut m = commands.spawn((Mesh3d(mesh.clone()), MeshTag(slot), NotShadowCaster, RenderLayers::layer(VIEW_LAYER)));
+                                mat.apply(&mut m);
+                                let m = m.id();
+                                commands.entity(part).add_child(m);
+                            }
+                        }
                     }
                     commands.entity(holder).add_child(part);
                 }
@@ -1796,6 +1832,7 @@ fn animate_held(
     mut held: Query<(&HeldRig, &mut Animator, &Visibility), Without<ArmsRoot>>,
     (powers, stats): (Res<Powers>, Res<PlayerStats>),
     (mut heart, level, mut beats): (ResMut<crate::heart::Heart>, Option<Res<crate::level::LevelInfo>>, Local<Option<(ClipId, Vec<(f32, u8)>, f32)>>),
+    (data, mut drum): (Res<crate::gamedata::Data>, Local<(bool, bool)>),
 ) {
     let Ok(arms) = arms.single() else { return };
     let arm = arms.overlay_state().0.map(|c| arms.lib.clip(c).name.clone()).unwrap_or_default();
@@ -1805,7 +1842,37 @@ fn animate_held(
             continue;
         }
         let lib = anim.lib.clone();
+        // (the drum: the rounds the magazine has left, less the one fired next; its fire clip from
+        // the count before the shot as the pistol fires, its load to the full count as it reloads,
+        // `m_MagFireAnimName`, `m_MagReloadAnimNames`, `m_MagEmptyAnimName`; our reading of the counts)
+        let drum_clip;
         let (clip, synced) = match rig.0 {
+            "pistol_mag" => {
+                let size = crate::powers::magazine_size(&data, &stats, crate::aim::Weapon::Pistol);
+                let left = size.saturating_sub(powers.magazine[0].map_or(0, |m| m.1));
+                let reloading = powers.reload[0] > 0.0;
+                if reloading && !drum.0 {
+                    drum.1 = false;
+                }
+                drum.0 = reloading;
+                let firing = arm.starts_with("Pistol_Fire") || arm.starts_with("Pistol_Spyglass_Fire");
+                let full = size.saturating_sub(1).min(3);
+                let (name, synced) = if matches!(arm.as_str(), "Pistol_Reload_In" | "Pistol_FastReload") && full > 0 {
+                    drum.1 = true;
+                    (format!("CorvoGun_Mag_0to{full}"), true)
+                } else if reloading {
+                    (format!("CorvoGun_Mag_Ammo{}", if drum.1 { full } else { 0 }), false)
+                } else if firing && left >= 1 && left <= 3 {
+                    (format!("CorvoGun_Mag_{left}to{}", left - 1), true)
+                } else {
+                    (format!("CorvoGun_Mag_Ammo{}", left.saturating_sub(1).min(3)), false)
+                };
+                if std::env::var_os("DH_DRUM_LOG").is_some() {
+                    info!("drum: {name} size {size} left {left} reloading {reloading} arm {arm} found {}", lib.find(&name).is_some());
+                }
+                drum_clip = name;
+                (drum_clip.as_str(), synced)
+            }
             // (the Heart beats in his hand, its own tree's looping `Heart_Beat`: `Heart_at`)
             "heart" => ("Heart_Beat", false),
             "pistol" => match arm.as_str() {
@@ -1821,6 +1888,9 @@ fn animate_held(
         };
         let Some(c) = lib.find(clip) else { continue };
         if anim.current().map(|q| q.clip) != Some(c) {
+            if std::env::var_os("DH_ARMS_LOG").is_some() {
+                info!("arms: held {} plays {clip} (arms {arm})", rig.0);
+            }
             anim.restart(c, !synced, 1.0, 0.05);
         }
         if synced {
