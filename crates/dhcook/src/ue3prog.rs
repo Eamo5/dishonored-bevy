@@ -847,11 +847,12 @@ pub fn build(map: &CookedMap, vs_code: &[u8], ps_code: &[u8], light: Option<(&[u
         pixel_pass(&mut m, lps, "lps_", &lps_fill, "l", "color = color + vec4<f32>(1.0, 1.0, 1.0, 0.0) * ");
     }
     // DH_UE3_DEBUG: base | light | nac | dmc | ambient | atten | depth | alpha (its output's alpha past
-    // 0.3, 0.6, 0.9 in red, green, blue) | height
+    // 0.3, 0.6, 0.9 in red, green, blue) | height | depthdiff | opaque (translucent drawn opaque)
     match std::env::var("DH_UE3_DEBUG").as_deref() {
         Ok("base") => {
             m.push_str("    color = ps_io.oc0;\n");
         }
+        Ok("opaque") => m.push_str("    color.a = 1.0;\n"),
         Ok("alpha") => {
             m.push_str("    color = vec4<f32>(step(vec3<f32>(0.3, 0.6, 0.9), vec3<f32>(color.a)) * 0.1, 1.0);\n");
         }
@@ -868,6 +869,10 @@ pub fn build(map: &CookedMap, vs_code: &[u8], ps_code: &[u8], light: Option<(&[u
         Ok("atten") if light.is_some() => m.push_str("    color = vec4<f32>(ue_light_attenuation(vec4<f32>(1.0)).rgb, 1.0);\n"),
         Ok("attenlights") if light.is_some() && platform == Platform::Bevy => m.push_str(
             "#ifndef PREPASS_PIPELINE\n    color = vec4<f32>(f32(lights.n_directional_lights) * 0.5, f32(lights.directional_lights[0].num_cascades) * 0.25, f32(lights.directional_lights[0].flags & 1u), 1.0);\n#endif\n",
+        ),
+        // (the scene's depth behind the surface less its own, UE units: red to 100, green in bands of 500)
+        Ok("depthdiff") if platform == Platform::Bevy => m.push_str(
+            "#ifdef DEPTH_PREPASS\n    let ue_dd = ue_scene_color(in.position.xy / view.viewport.zw).a * 256.0 + view_transformations::depth_ndc_to_view_z(in.position.z) * 100.0;\n    color = vec4<f32>(clamp(ue_dd / 100.0, 0.0, 1.0), fract(ue_dd / 500.0), select(0.0, 1.0, ue_dd < 0.0), 1.0);\n#endif\n",
         ),
         Ok("depth") if platform == Platform::Bevy => m.push_str(
             "#ifdef DEPTH_PREPASS\n    color = vec4<f32>(vec3<f32>(fract(ue_scene_color(in.position.xy / view.viewport.zw).a * 256.0 / 500.0)), 1.0);\n#endif\n",
