@@ -2873,6 +2873,16 @@ fields no longer show their stand-in "WW" behind the title.
     their `EDisPowerWheelItem`, kept as if Corvo had set them); before, the trials' shortcuts were
     left to the campaign's own filling, so Thief's Dark Vision, Blink and Bend Time round put
     the crossbow on 1 instead of Dark Vision.
+  - *Drop Attack's fall* (`DisSeqAct_DLC05_FallSpeedFX`, now cooked and run): its streaks
+    (`DropAttack_FX.Effects.CameraSpeed_01`) are held about Corvo's eye, turned by the op's
+    `m_CameraFXOrientation` (a quarter turn up: they rise past him as he falls), and its
+    `m_CameraFXParameter`, `CameraSpeed_Rate`, goes from none at `m_fMinSpeed` (1300 uu/s) to
+    `m_fMaxParameter` (3) at `m_fMaxSpeed` (1400) of his fall (our reading: his downward speed);
+    the streaks' spawn rates read it (`DistributionFloatParticleParameter`, now cooked: the
+    parameter set, else its `Constant`, mapped from `MinInput`..`MaxInput` onto
+    `MinOutput`..`MaxOutput` as `ParamMode` says), so they come as he falls fast and not before;
+    its wind plays as it starts and stops (`m_pStartSoundEvent`, `m_pStopSoundEvent`). Before,
+    the op only passed its signal on: no streaks, no wind.
   - *Scoring* (`dlc05score.rs`, the rule sets cooked per map): kills by the victim's story
     group with the modifiers' flair (assassination, drop kill, adrenaline, headshot, in flames,
     dark kill, get back, severed limb, payback, perfect block, low blow, faction combo, power

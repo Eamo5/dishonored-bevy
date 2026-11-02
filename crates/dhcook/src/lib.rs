@@ -5539,6 +5539,20 @@ impl<'a> Cooker<'a> {
             props.insert("lens_looping".into(), KVal::Bool(looping));
             props.insert("lens_life".into(), KVal::Float(life));
         }
+        // (the Drop Attack trial's speed lines held before the eye as Corvo falls,
+        // `DisSeqAct_DLC05_FallSpeedFX`'s `m_pCameraFX`)
+        for i in 0..self.scene.kismet.ops.len() {
+            if self.scene.kismet.ops[i].class != "DisSeqAct_DLC05_FallSpeedFX" {
+                continue;
+            }
+            let Some(KVal::Str(path)) = self.scene.kismet.ops[i].props.get("m_pCameraFX").cloned() else { continue };
+            let Some(ps) = self.assets.find(&path) else {
+                log::debug!("fall effect {path} not found");
+                continue;
+            };
+            let Some(id) = self.particle_system(&ps) else { continue };
+            self.scene.kismet.ops[i].props.insert("lens_system".into(), KVal::Int(id as i32));
+        }
     }
 
     /// `DisDLC06SeqAct_NPCAddPutPocketInteraction`: the words of the thing to plant (its
@@ -9516,6 +9530,7 @@ fn raw_distribution(o: &Obj, p: &Props, defaults: Option<&Props>, vector: bool) 
                 scale: float("LookupTableTimeScale").unwrap_or(0.0),
                 start: float("LookupTableStartTime").unwrap_or(0.0),
                 table: table[2..].to_vec(),
+                param: None,
             });
         }
     }
@@ -9532,14 +9547,27 @@ fn raw_distribution(o: &Obj, p: &Props, defaults: Option<&Props>, vector: bool) 
     };
     if cls.ends_with("Constant") {
         let v = val("Constant").unwrap_or(vec![0.0; default_chunk as usize]);
-        return Some(Dist { op: 1, chunk: v.len() as u8, scale: 0.0, start: 0.0, table: v });
+        return Some(Dist { op: 1, chunk: v.len() as u8, scale: 0.0, start: 0.0, table: v, param: None });
     }
     if cls.ends_with("Uniform") {
         let lo = val("Min").unwrap_or(vec![0.0; default_chunk as usize]);
         let hi = val("Max").unwrap_or(vec![0.0; default_chunk as usize]);
         let mut t = lo.clone();
         t.extend(hi);
-        return Some(Dist { op: 2, chunk: t.len() as u8, scale: 0.0, start: 0.0, table: t });
+        return Some(Dist { op: 2, chunk: t.len() as u8, scale: 0.0, start: 0.0, table: t, param: None });
+    }
+    // (a parameter the game sets on the effect, its `Constant` where it doesn't: the Drop
+    // Attack trial's speed lines' rate; unnamed ones, as before, left to the module's default)
+    if cls == "DistributionFloatParticleParameter" {
+        let name = dp.name("ParameterName").filter(|n| !n.is_empty() && *n != "None")?.to_string();
+        let f = |n: &str, d: f32| dp.float(n).unwrap_or(d);
+        let mode = match dp.name("ParamMode") {
+            Some("DPM_Abs") => 1,
+            Some("DPM_Direct") => 2,
+            _ => 0,
+        };
+        let param = crate::format::DistParam { name, input: [f("MinInput", 0.0), f("MaxInput", 1.0)], output: [f("MinOutput", 0.0), f("MaxOutput", 1.0)], mode };
+        return Some(Dist { op: 1, chunk: 1, scale: 0.0, start: 0.0, table: vec![f("Constant", 0.0)], param: Some(param) });
     }
     None
 }

@@ -1176,6 +1176,8 @@ pub struct Vm {
     /// camera lens effects (`DisSeqAct_SpawnCameraLensEffect`): op, and to start (particle
     /// system, looping, life span) or else stop looping
     pub lens: Vec<(u32, Option<(u32, bool, f32)>)>,
+    /// the Drop Attack trial's fall effect started or stopped (`DisSeqAct_DLC05_FallSpeedFX`), by op
+    pub fall_fx: Vec<(u32, bool)>,
     /// the scripts' switches over Corvo's means
     pub switches: Switches,
     /// limbs the scripts cut (`DisSeqAct_SeverLimb`): targets, the joint, with gore
@@ -1407,6 +1409,7 @@ impl Vm {
             vanish: Vec::new(),
             player_track: None,
             lens: Vec::new(),
+            fall_fx: Vec::new(),
             equip: Vec::new(),
             rain: None,
             possess_overrides: Vec::new(),
@@ -4214,7 +4217,8 @@ impl Vm {
                 self.fire(op, 0);
             }
             "DisSeqAct_DLC05_FallSpeedFX" => {
-                // Start, Stop -> Started, Stopped
+                // Start, Stop -> Started, Stopped (`particles::fall_speed_fx`)
+                self.fall_fx.push((op, input == 0));
                 self.fire(op, if input == 0 { 0 } else { 1 });
             }
             "SeqAct_Interp" | "DisSeqAct_DLC05_Interp" => {

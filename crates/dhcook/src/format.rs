@@ -316,6 +316,35 @@ pub struct Dist {
     pub scale: f32,
     pub start: f32,
     pub table: Vec<f32>,
+    /// read from a parameter the game sets on the effect (`DistributionFloatParticleParameter`),
+    /// the table its `Constant` for where it isn't set
+    #[serde(default)]
+    pub param: Option<DistParam>,
+}
+
+/// A distribution's parameter: its name, its `MinInput` / `MaxInput` mapped onto `MinOutput` /
+/// `MaxOutput` (clamped), and how (`ParamMode`: 0 so, 1 its absolute value, 2 as it is).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct DistParam {
+    pub name: String,
+    pub input: [f32; 2],
+    pub output: [f32; 2],
+    pub mode: u8,
+}
+
+impl DistParam {
+    /// The distribution's value for the parameter at `v`.
+    pub fn map(&self, v: f32) -> f32 {
+        match self.mode {
+            2 => v,
+            m => {
+                let v = if m == 1 { v.abs() } else { v };
+                let [lo, hi] = self.input;
+                let k = if hi <= lo { 0.0 } else { (self.output[1] - self.output[0]) / (hi - lo) };
+                self.output[0] + (v.clamp(lo, hi.max(lo)) - lo) * k
+            }
+        }
+    }
 }
 
 /// A particle module: its class, distributions, and plain values (bools as 0/1).
@@ -4752,4 +4781,21 @@ pub struct ScoreModifierDef {
     pub novelty: i32,
     pub params: std::collections::BTreeMap<String, f32>,
     pub kinds: std::collections::BTreeMap<String, String>,
+}
+
+#[cfg(test)]
+mod dist_param_tests {
+    use super::DistParam;
+
+    #[test]
+    fn parameters_map_their_input_range_onto_their_output_range() {
+        // (the Drop Attack trial's speed lines: 0..3 set, 0..1 taken)
+        let p = DistParam { name: "CameraSpeed_Rate".into(), input: [0.0, 1.0], output: [0.0, 1.0], mode: 0 };
+        assert_eq!(p.map(3.0), 1.0);
+        assert_eq!(p.map(0.25), 0.25);
+        assert_eq!(p.map(-1.0), 0.0);
+        let abs = DistParam { mode: 1, input: [0.0, 10.0], output: [100.0, 200.0], ..p.clone() };
+        assert_eq!(abs.map(-5.0), 150.0);
+        assert_eq!(DistParam { mode: 2, ..p }.map(7.0), 7.0);
+    }
 }

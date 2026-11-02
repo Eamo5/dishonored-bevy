@@ -25,7 +25,7 @@ impl Plugin for ParticlePlugin {
             .init_resource::<LensDone>()
             .init_resource::<LensFov>()
             .add_systems(OnEnter(GameState::InGame), spawn_emitters.after(LevelSpawnSet))
-            .add_systems(Update, (lens_fov, lens_effects, spawn_effects, simulate).chain().after(crate::kismet::apply_effects).run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (lens_fov, lens_effects, fall_speed_fx, spawn_effects, simulate).chain().after(crate::kismet::apply_effects).run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -71,6 +71,8 @@ pub struct ParticleEmitter {
     last_pos: Vec3,
     /// its beams' far end, set by gameplay (`SpawnEffect::beam_to`)
     beam_to: Option<Vec3>,
+    /// the parameters gameplay sets on it (`SetFloatParameter`: the distributions that read one)
+    params: Vec<(String, f32)>,
 }
 
 struct Lens {
@@ -81,6 +83,94 @@ struct Lens {
     /// no more particles: the last ones run out
     stopping: bool,
     age: f32,
+}
+
+/// The Drop Attack trial's fall (`DisSeqAct_DLC05_FallSpeedFX`), while the scripts have it on:
+/// its effect held about the eye, turned by `m_CameraFXOrientation` (`CameraSpeed_01`'s streaks
+/// rising past him as he falls), its parameter (`m_CameraFXParameter`, `CameraSpeed_Rate`) from
+/// none at `m_fMinSpeed` to `m_fMaxParameter` at `m_fMaxSpeed` of his fall (our reading: his
+/// downward speed), its wind as it starts and stops (`m_pStartSoundEvent`, `m_pStopSoundEvent`).
+#[allow(clippy::type_complexity)]
+fn fall_speed_fx(
+    vm: Option<ResMut<crate::kismet::Vm>>,
+    level: Option<Res<LevelInfo>>,
+    cam: Query<Entity, With<PlayerCamera>>,
+    player: Query<&crate::player::Player>,
+    mut emitters: Query<(&EffectTag, &mut ParticleEmitter)>,
+    mut fx: MessageWriter<SpawnEffect>,
+    mut sfx: MessageWriter<crate::audio::PostEvent>,
+    mut on: Local<Option<(u32, u32, String, [f32; 3], Entity)>>,
+) {
+    let (Some(mut vm), Some(_level), Ok(ce)) = (vm, level, cam.single()) else { return };
+    // (a level of its own each time: the last one's gone with its view)
+    if on.as_ref().is_some_and(|o| o.4 != ce) {
+        *on = None;
+    }
+    let g = vm.g.clone();
+    let prop = |op: u32, k: &str| g.ops.get(op as usize).and_then(|o| o.props.get(k));
+    let float = |op: u32, k: &str, d: f32| match prop(op, k) {
+        Some(dhcook::format::KVal::Float(f)) => *f,
+        _ => d,
+    };
+    let text = |op: u32, k: &str| match prop(op, k) {
+        Some(dhcook::format::KVal::Str(s)) => Some(s.rsplit('.').next().unwrap_or(s).to_string()),
+        _ => None,
+    };
+    for (op, start) in std::mem::take(&mut vm.fall_fx) {
+        // (stopped, or started again: the last one's streaks run out)
+        if let Some((was, system, _, _, _)) = on.take() {
+            for (tag, mut em) in &mut emitters {
+                if tag.0 == ce && em.system() == system {
+                    em.set_param(&text(was, "m_CameraFXParameter").unwrap_or_default(), 0.0);
+                    em.fade_out(1.0);
+                }
+            }
+            if let Some(s) = text(was, "m_pStopSoundEvent") {
+                sfx.write(crate::audio::PostEvent::named(&s, None));
+            }
+        }
+        if !start {
+            continue;
+        }
+        let Some(dhcook::format::KVal::Int(system)) = prop(op, "lens_system").cloned() else { continue };
+        let [p, y, r] = match prop(op, "m_CameraFXOrientation") {
+            Some(dhcook::format::KVal::Vec3(v)) => *v,
+            _ => [0.0; 3],
+        };
+        // the orientation (a UE rotator, in the effect's own UE space) in ours, under the view's
+        // turn of UE's forward onto ours
+        let k = std::f32::consts::TAU / 65536.0;
+        let ((sp, cp), (sy, cy), (sr, cr)) = ((p * k).sin_cos(), (y * k).sin_cos(), (r * k).sin_cos());
+        let swap = |v: Vec3| Vec3::new(v.x, v.z, v.y);
+        let (xa, ya, za) = (
+            Vec3::new(cp * cy, cp * sy, sp),
+            Vec3::new(sr * sp * cy - cr * sy, sr * sp * sy + cr * cy, -sr * cp),
+            Vec3::new(-(cr * sp * cy + sr * sy), cy * sr - cr * sp * sy, cr * cp),
+        );
+        let turn = Quat::from_mat3(&Mat3::from_cols(swap(xa), swap(za), swap(ya)));
+        fx.write(SpawnEffect {
+            rot: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2) * turn,
+            secs: f32::INFINITY,
+            follow: Some(ce),
+            system: Some(system as u32),
+            turn: true,
+            tag: Some(ce),
+            ..SpawnEffect::at("", Vec3::ZERO)
+        });
+        if let Some(s) = text(op, "m_pStartSoundEvent") {
+            sfx.write(crate::audio::PostEvent::named(&s, None));
+        }
+        let name = text(op, "m_CameraFXParameter").unwrap_or_default();
+        *on = Some((op, system as u32, name, [float(op, "m_fMinSpeed", 0.0), float(op, "m_fMaxSpeed", 1.0), float(op, "m_fMaxParameter", 1.0)], ce));
+    }
+    let Some((_, system, name, [lo, hi, most], _)) = on.as_ref() else { return };
+    let fall = player.single().map_or(0.0, |p| -p.velocity.y * 100.0);
+    let v = ((fall - lo) / (hi - lo).max(1.0)).clamp(0.0, 1.0) * most;
+    for (tag, mut em) in &mut emitters {
+        if tag.0 == ce && em.system() == *system {
+            em.set_param(name, v);
+        }
+    }
 }
 
 /// Lens effects that ended (their ops' "Finished").
@@ -179,6 +269,7 @@ fn lens_effects(
                 lens: Some(Lens { op, looping, stopping: false, age: 0.0 }),
                 last_pos: xf.w_axis.truncate(),
                 beam_to: None,
+                params: Vec::new(),
             },
             DespawnOnExit(GameState::InGame),
         ));
@@ -189,6 +280,24 @@ impl ParticleEmitter {
     /// End a gameplay effect now.
     pub fn stop(&mut self) {
         self.life = Some(0.0);
+    }
+
+    /// Let a gameplay effect run out over `secs` (what it has already spawned lives on).
+    pub fn fade_out(&mut self, secs: f32) {
+        self.life = Some(self.life.map_or(secs, |l| l.min(secs)));
+    }
+
+    /// Set one of its parameters (`ParticleSystemComponent::SetFloatParameter`).
+    pub fn set_param(&mut self, name: &str, v: f32) {
+        match self.params.iter_mut().find(|p| p.0.eq_ignore_ascii_case(name)) {
+            Some(p) => p.1 = v,
+            None => self.params.push((name.to_string(), v)),
+        }
+    }
+
+    /// Its particle system (`scene.particle_systems`).
+    pub fn system(&self) -> u32 {
+        self.system
     }
 
     /// Where the emitter is (Bevy space).
@@ -316,6 +425,7 @@ fn spawn_effects(
                 view: m.view,
                 last_pos: Vec3::ZERO,
                 beam_to: m.beam_to,
+                params: Vec::new(),
             },
             DespawnOnExit(GameState::InGame),
         ));
@@ -399,6 +509,8 @@ struct StepCtx<'a> {
     emitter_vel: Vec3,
     /// a beam's far end given by gameplay
     beam_to: Option<Vec3>,
+    /// the effect's parameters
+    params: &'a [(String, f32)],
 }
 
 /// A beam emitter's noise (`ParticleModuleBeamNoise`): points along it, their reach (UE
@@ -474,6 +586,15 @@ pub(crate) fn f1(m: &ModuleDef, name: &str, t: f32, r: [f32; 3], default: f32) -
     }
 }
 
+/// `f1` for a distribution that may read a parameter of the effect (`DistributionFloatParticleParameter`:
+/// the value set, else its `Constant`, mapped from its input range onto its output range).
+fn pf1(m: &ModuleDef, name: &str, t: f32, r: [f32; 3], default: f32, params: &[(String, f32)]) -> f32 {
+    match m.dists.get(name).and_then(|d| d.param.as_ref().map(|p| (d, p))) {
+        Some((d, p)) => p.map(params.iter().find(|q| q.0.eq_ignore_ascii_case(&p.name)).map_or(d.table.first().copied().unwrap_or(0.0), |q| q.1)),
+        None => f1(m, name, t, r, default),
+    }
+}
+
 pub(crate) fn f3(m: &ModuleDef, name: &str, t: f32, r: [f32; 3], default: Vec3) -> Vec3 {
     let mut o = default.to_array();
     match m.dists.get(name) {
@@ -545,6 +666,7 @@ fn spawn_emitters(mut commands: Commands, level: Option<Res<LevelInfo>>, assets:
                 lens: None,
                 last_pos: xf.transform_point3(Vec3::ZERO),
                 beam_to: None,
+                params: Vec::new(),
             },
             DespawnOnExit(GameState::InGame),
         ));
@@ -748,7 +870,7 @@ fn step(e: &EmitterDef, st: &mut EmitterState, xf: &Mat4, scale: f32, dt: f32, h
     let spawning = !halt && st.time >= delay && (loops == 0 || st.loops < loops);
     let mut new = 0u32;
     if spawning {
-        let rate = f1(&e.spawn, "Rate", t_em, rand3(), 0.0) * f1(&e.spawn, "RateScale", t_em, rand3(), 1.0);
+        let rate = pf1(&e.spawn, "Rate", t_em, rand3(), 0.0, cx.params) * pf1(&e.spawn, "RateScale", t_em, rand3(), 1.0, cx.params);
         let rate = if rate <= 0.0 && e.spawn.dists.is_empty() { f1(req, "SpawnRate", t_em, rand3(), 0.0) } else { rate };
         st.accum += rate.max(0.0) * dt;
         new += st.accum.floor() as u32;
@@ -1197,8 +1319,8 @@ fn simulate(
         let at_now = xf.transform_point3(Vec3::ZERO);
         let emitter_vel = if dt > 0.0 { (at_now - em.last_pos) / dt } else { Vec3::ZERO };
         em.last_pos = at_now;
-        let cx = StepCtx { ray: Some(&ray_fn), emitter_vel: if emitter_vel.length() < 50.0 { emitter_vel } else { Vec3::ZERO }, beam_to: em.beam_to };
-        let quiet = StepCtx { ray: None, emitter_vel: Vec3::ZERO, beam_to: em.beam_to };
+        let cx = StepCtx { ray: Some(&ray_fn), emitter_vel: if emitter_vel.length() < 50.0 { emitter_vel } else { Vec3::ZERO }, beam_to: em.beam_to, params: &em.params };
+        let quiet = StepCtx { ray: None, emitter_vel: Vec3::ZERO, beam_to: em.beam_to, params: &em.params };
         let mut sys_events: Vec<PfxEvent> = Vec::new();
         if !em.awake {
             em.awake = true;
