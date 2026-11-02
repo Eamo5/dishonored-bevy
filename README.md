@@ -408,7 +408,9 @@ are in the settings file, `pad_binding_set` 0-3):
   camera_jnt and the view goes with it, scaled by `Head Bob Amount`; his arms keep to his body.
   The arms' own clips move the view the same way, as the original's camera has it (roshan's
   r614/blink research decoded it): it sits where the animated camera_jnt is and takes
-  `DishonoredPlayerCamera.m_RollAmount` (0.7) of its turn from its rest pose. The clips seen so
+  `DishonoredPlayerCamera.m_RollAmount` (0.7) of its turn from its rest pose. The view looks
+  down to 85 degrees and up to 90 (`DisTweaks_PlayerPawn_Camera`'s `m_fMinViewPitch` /
+  `m_fMaxViewPitch`, held a hair short of straight up); before, 86 either way. The clips seen so
   far move it little (about 4 cm in the idle, 5 cm through a mantle). The arms aren't held
   rigid to the view either: the look controls turn each collarbone by its hand's item's
   `m_ArmPitch_OffsetKeys` for the view's pitch, eased between the keys by a cosine (the sword,

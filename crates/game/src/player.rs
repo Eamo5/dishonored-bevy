@@ -102,6 +102,10 @@ pub struct Slide(pub Option<(f32, Vec3, f32)>);
 /// The slide (`StatePlayerMasterSlide`, as roshan's r614/blink research measured it): from a
 /// sprint of at least 400 uu/s, the speed eases to the sneaking one over 1.1 s, along the way
 /// it began; it ends there, or when the way turns more than 25 degrees; let go after 0.55 s.
+/// How far the view looks down and up (`DisTweaks_PlayerPawn_Camera`: `m_fMinViewPitch` -85 and
+/// `m_fMaxViewPitch` 90 degrees; up held a hair short of straight up, where the view's turn is lost).
+/// Before, 86 degrees either way.
+const VIEW_PITCH: (f32, f32) = (-85.0 * std::f32::consts::PI / 180.0, 89.9 * std::f32::consts::PI / 180.0);
 const SLIDE_TIME: f32 = 1.1;
 const SLIDE_MIN_SPEED: f32 = 4.0;
 const SLIDE_CANCEL: f32 = 0.55;
@@ -597,7 +601,7 @@ fn player_look(
         let f = friction(false);
         p.yaw -= d.x * sens * f.x;
         let dy = if settings.invert_y { -d.y } else { d.y };
-        p.pitch = (p.pitch - dy * sens * f.y).clamp(-1.5, 1.5);
+        p.pitch = (p.pitch - dy * sens * f.y).clamp(VIEW_PITCH.0, VIEW_PITCH.1);
     } else {
         // Menu/wheel motion belongs to the UI. Do not replay the last gameplay
         // delta through the smoothing filter when mouse-look resumes.
@@ -613,7 +617,7 @@ fn player_look(
             info!("aim friction: the pad's look x{f:.2}");
         }
         p.yaw += pad_look.x * k * f.x;
-        p.pitch = (p.pitch + pad_look.y * k * f.y).clamp(-1.5, 1.5);
+        p.pitch = (p.pitch + pad_look.y * k * f.y).clamp(VIEW_PITCH.0, VIEW_PITCH.1);
     }
     // (leaning: about where the look was as it began)
     if let Some((y0, p0)) = lean_view.as_ref().and_then(|l| l.0) {
