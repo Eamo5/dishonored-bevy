@@ -330,6 +330,8 @@ pub struct Powers {
     /// the landing's kind (its marker), and the marker shown
     pub blink_spot: Option<BlinkSpot>,
     pub blink_shown: Option<BlinkSpot>,
+    /// casts whose effect comes at their clip's notify (s left, the power, its level, where)
+    pub pending: Vec<(f32, Power, u8, Vec3)>,
 }
 
 /// A Wind Blast under way: since the cast (s), from where and which way, its level; who it
@@ -356,6 +358,11 @@ const GUST_IMPACT_SPACING: f32 = 2.0;
 /// The cast clip's `DisNotify_WindBlast` (s): when the blast starts (roshan's r614/blink
 /// research).
 const WINDBLAST_NOTIFY: f32 = 0.27;
+/// Bend Time's and the Devouring Swarm's cast clips' notifies (s): when time bends
+/// (`DisNotify_BendTime` in `Powers_Cast_BendTime`) and the rats come (`DisNotify_DevouringSwarm`
+/// in `Powers_Cast_Swarm`).
+const BEND_TIME_NOTIFY: f32 = 0.14;
+const SWARM_NOTIFY: f32 = 0.165;
 /// How hard a push throws a character (its momentum's magnitude, uu): from
 /// `m_fAnimRagdollThreshold` the animated throw (a moment's flight, then limp), from
 /// `m_fFullRagdollThreshold` limp at once; less, it reels (as roshan's r614/blink research read
@@ -389,6 +396,7 @@ impl Default for Powers {
             blink_body: crate::player::Body::Stand,
             blink_spot: None,
             blink_shown: None,
+            pending: Vec::new(),
         }
     }
 }
@@ -1125,6 +1133,38 @@ fn use_power(
     let dir = cg.forward().as_vec3();
     let Ok(ctx) = rapier.single() else { return };
     powers.blink_lock = (powers.blink_lock - dt).max(0.0);
+    // (a cast's effect at its clip's notify, as the cast's notify handler starts it: Bend Time's
+    // `DisNotify_BendTime` 0.14 s into `Powers_Cast_BendTime`, the swarm's `DisNotify_DevouringSwarm`
+    // 0.165 s into `Powers_Cast_Swarm`)
+    let mut due = Vec::new();
+    powers.pending.retain_mut(|(left, power, level, at)| {
+        *left -= dt;
+        if *left <= 0.0 {
+            due.push((*power, *level, *at));
+        }
+        *left > 0.0
+    });
+    for (power, level, at) in due {
+        match power {
+            Power::BendTime => {
+                // the level's: how long, the world's and Corvo's paces, coming in and going out
+                // (`Twk_BendTime`: 12 s at 0.15 / 0.85, then 8 s stopped / 0.9; 0.15 s in, 0.25 out)
+                tc.bend_remaining = data.power_f("BendTime", level, "m_TimeDuration", 12.0);
+                tc.world_dilation = data.power_f("BendTime", level, "m_WorldDilation", 0.15);
+                tc.player_dilation = data.power_f("BendTime", level, "m_PlayerDilation", 1.0);
+                tc.ramp_in = data.power_f("BendTime", level, "m_fTimeDilationWarmupTime", 0.15);
+                tc.ramp_out = data.power_f("BendTime", level, "m_fTimeDilationCooldownTime", 0.25);
+                tc.bend_turn();
+                sfx.write(PostEvent::named(data.power_sound("BendTime", level, "m_pBendTimeSoundStartEvent").unwrap_or("Snd_Power_P_Bend_Time"), None));
+                sfx.write(PostEvent::named("Snd_UI_Ingame_Slomo_Start", None));
+            }
+            Power::DevouringSwarm => {
+                swarm.write(crate::swarm::SummonSwarm { at, level });
+                sfx.write(PostEvent::named(data.power_sound("DevouringSwarm", level, "m_pUseSoundEvent").unwrap_or("Snd_Power_P_Devouring_Swarm_Spell"), None));
+            }
+            _ => {}
+        }
+    }
     // Dark Vision lasts its duration, and ends a while into a fight (as roshan's r614/blink
     // research decoded the original: `m_fDesactivateInCombatTimer`)
     if powers.dark_vision {
@@ -1292,17 +1332,8 @@ fn use_power(
         Power::BendTime => {
             stats.spend_mana(cost, &attrs);
             // level 2 stops time; its duration is counted in the stopped world's time in the
-            // original, so both levels last the level-1 span here
-            // the level's: how long, the world's and Corvo's paces, coming in and going out
-            // (`Twk_BendTime`: 12 s at 0.15 / 0.85, then 8 s stopped / 0.9; 0.15 s in, 0.25 out)
-            tc.bend_remaining = data.power_f("BendTime", level, "m_TimeDuration", 12.0);
-            tc.world_dilation = data.power_f("BendTime", level, "m_WorldDilation", 0.15);
-            tc.player_dilation = data.power_f("BendTime", level, "m_PlayerDilation", 1.0);
-            tc.ramp_in = data.power_f("BendTime", level, "m_fTimeDilationWarmupTime", 0.15);
-            tc.ramp_out = data.power_f("BendTime", level, "m_fTimeDilationCooldownTime", 0.25);
-            tc.bend_turn();
-            sfx.write(PostEvent::named(data.power_sound("BendTime", level, "m_pBendTimeSoundStartEvent").unwrap_or("Snd_Power_P_Bend_Time"), None));
-            sfx.write(PostEvent::named("Snd_UI_Ingame_Slomo_Start", None));
+            // original, so both levels last the level-1 span here (from the cast clip's notify)
+            powers.pending.push((BEND_TIME_NOTIFY, Power::BendTime, level, Vec3::ZERO));
             powers.cooldown = 0.5;
         }
         Power::Windblast => {
@@ -1327,8 +1358,7 @@ fn use_power(
             match spot {
                 Some(at) => {
                     stats.spend_mana(cost, &attrs);
-                    swarm.write(crate::swarm::SummonSwarm { at, level });
-                    sfx.write(PostEvent::named(data.power_sound("DevouringSwarm", level, "m_pUseSoundEvent").unwrap_or("Snd_Power_P_Devouring_Swarm_Spell"), None));
+                    powers.pending.push((SWARM_NOTIFY, Power::DevouringSwarm, level, at));
                     powers.cooldown = 1.0;
                 }
                 None => {

@@ -185,7 +185,7 @@ pub struct Npc {
     pub swing: Option<Swing>,
     pub melee_cd: Vec<f32>,
     /// a gesture to play once (1 its parry won, 2 its blow parried, 3 a shove; 12 a taunt, 13 a
-    /// weeper's cough) and its count;
+    /// weeper's cough; 24 broken free of Corvo's choke) and its count;
     /// a riposte due in (s)
     pub act: (u8, u32),
     pub riposte: f32,
@@ -6692,6 +6692,8 @@ pub struct NpcClips {
     versus: [Vec<ClipId>; 4],
     /// a rat stamped on
     stomp: Vec<ClipId>,
+    /// broken free of a choke (`Generic_Choke_Lose_Slave`)
+    choke_lose: Vec<ClipId>,
     /// an ambush: into hiding, waiting, springing out, giving up
     ambush: [Vec<ClipId>; 4],
     hit: Vec<ClipId>,
@@ -6891,6 +6893,7 @@ impl NpcClips {
             parry_lost: lib.all(&["Sword_Ready_ParryLost_LeftLeft", "Sword_Ready_ParryLost_LeftRight", "Sword_Ready_ParryLost_RightLeft", "Sword_Ready_ParryLost_RightRight"]),
             push: lib.all(&["Sword_PushBack_A", "Sword_PushBack_B"]),
             stomp: lib.all(&["Sword_StompRat", "Sword_StompRatff", "Empty_StompRat"]),
+            choke_lose: lib.all(&["Generic_Choke_Lose_Slave"]),
             ambush: [
                 lib.all(&["Sword_Ambush_In"]),
                 lib.all(&["Sword_Ambush_Loop", "Sword_Ambush_LoopDD"]),
@@ -8744,12 +8747,13 @@ fn npc_select_anim(
                 19 => &clips.corpse_check,
                 20 => &clips.magic[st.drawn as usize],
                 21 => &clips.sticky,
+                24 => &clips.choke_lose,
                 _ => &clips.push,
             };
             if let Some(c) = pick(pool) {
                 // (its pockets checked where it stands; the alarm pulled, a body looked over, Corvo
                 // gone by magic, a sticky grenade flailed at)
-                if matches!(npc.act.0, 14 | 18 | 19 | 20 | 21) {
+                if matches!(npc.act.0, 14 | 18 | 19 | 20 | 21 | 24) {
                     npc.stagger = npc.stagger.max(anim.lib.duration(c));
                 }
                 if matches!(npc.act.0, 15 | 16) && clips.dodge_attack[npc.act.0 as usize - 15].is_some() {

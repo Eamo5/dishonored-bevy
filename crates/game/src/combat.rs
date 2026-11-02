@@ -372,6 +372,9 @@ pub struct SwordRig;
 pub const CHOKE_IN: f32 = 0.667;
 pub const CHOKE_WIN: f32 = 2.470;
 pub const CHOKE_LOSE: f32 = 2.229;
+/// The victim's own way out of a lost choke (`Generic_Choke_Lose_Slave`, 1.5 s): free before
+/// Corvo is, who is open to its blows from 0.674 s (`DisNotify_VulnerablePlayer`).
+const CHOKE_LOSE_SLAVE: f32 = 1.5;
 pub const AUTO_CARRY_HOLD: f32 = 0.2;
 
 /// How a chokehold ended, and how long ago (s).
@@ -1180,7 +1183,8 @@ fn chokehold(
                 npc.mode = Mode::Combat;
                 npc.alert = Alert::Combat;
                 npc.awareness = 1.0;
-                npc.stagger = CHOKE_LOSE;
+                npc.stagger = CHOKE_LOSE_SLAVE;
+                npc.gesture(24);
                 npc.last_seen = Some(pt.translation);
             }
             ch.end = Some(ChokeEnd::Lose(0.0));

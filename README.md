@@ -724,8 +724,11 @@ fields no longer show their stand-in "WW" behind the title.
   Acrobat's `MantleAnimRate` speeds up the climb and its head animation together.
   Strong Arms shortens the choke hold and its progress indicator (the hold is `ChokeTime`,
   1.5 s, and the victim's In clip, 0.667 s: 2.2 s, as roshan's r614/blink research decoded the
-  choke's states; let go once its loop begins and the victim breaks free, both held through
-  the Lose chain, 2.23 s; won, the Win chain plays out, 2.47 s. His sword is put away as the
+  choke's states; let go once its loop begins and the victim breaks free: Corvo held through
+  his Lose chain, 2.23 s, open to its blows from 0.674 s (`DisNotify_VulnerablePlayer`), the
+  victim free after its own, `Generic_Choke_Lose_Slave` (now played), 1.5 s, so it can strike
+  him before he recovers; before, it stood dazed for his 2.23 s, playing no clip of its own,
+  and losing a choke cost nothing; won, the Win chain plays out, 2.47 s. His sword is put away as the
   choke takes hold and back in his hand as it lets go, where his clips say,
   `DishonoredNotify_ShowEquippedInvItem` (now cooked: hidden 0.02 s into `Sword_Choke_In_Master`,
   shown 2.02 s into the Win and Lose chains, 1.17 s into the Cancel), and drawing it, it shows
@@ -3138,7 +3141,10 @@ against the install's own data where it carries them, then implemented independe
   raised to `m_ExtraUpForce` × (1 − d/R), times k; a body flies at half that momentum, at least
   4 m/s across. Its damage is `m_Damage` × k, plus `m_HitWallAdditionalDamage` (100) for one
   slammed into a wall. Doors take the same factor.
-  - It starts at the cast clip's `DisNotify_WindBlast`, 0.27 s in. It gathers its targets once, then
+  - It starts at the cast clip's DisNotify_WindBlast, 0.27 s in (and so do Bend Time, at
+    `Powers_Cast_BendTime`'s `DisNotify_BendTime`, 0.14 s, and the Devouring Swarm, at
+    `Powers_Cast_Swarm`'s `DisNotify_DevouringSwarm`, 0.165 s; before, those two came as the
+    key was pressed). It gathers its targets once, then
     its front (`m_Speed`, 50 m/s) reaches each in turn.
   - A push whose momentum reaches `m_fAnimRagdollThreshold` (1000) throws a living character
     (the pawn's reaction tweak, as roshan's r614/blink research read it; a level 1 blast at 2 m
