@@ -846,11 +846,19 @@ pub fn build(map: &CookedMap, vs_code: &[u8], ps_code: &[u8], light: Option<(&[u
     if let Some((_, lps)) = &light {
         pixel_pass(&mut m, lps, "lps_", &lps_fill, "l", "color = color + vec4<f32>(1.0, 1.0, 1.0, 0.0) * ");
     }
-    // DH_UE3_DEBUG: base | light | nac | dmc | ambient | atten
+    // DH_UE3_DEBUG: base | light | nac | dmc | ambient | atten | depth | alpha (its output's alpha past
+    // 0.3, 0.6, 0.9 in red, green, blue) | height
     match std::env::var("DH_UE3_DEBUG").as_deref() {
         Ok("base") => {
             m.push_str("    color = ps_io.oc0;\n");
         }
+        Ok("alpha") => {
+            m.push_str("    color = vec4<f32>(step(vec3<f32>(0.3, 0.6, 0.9), vec3<f32>(color.a)) * 0.1, 1.0);\n");
+        }
+        // (the surface's height in bands of half a metre, its alpha in red)
+        Ok("height") if platform == Platform::Bevy => m.push_str(
+            "    color = vec4<f32>(color.a, fract(view_transformations::position_ndc_to_world(view_transformations::frag_coord_to_ndc(in.position)).y * 2.0), 0.0, 1.0);\n",
+        ),
         Ok("light") if light.is_some() => {
             m.push_str("    color = vec4<f32>(lps_io.oc0.rgb, 1.0);\n");
         }
