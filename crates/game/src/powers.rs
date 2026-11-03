@@ -2401,7 +2401,7 @@ fn regenerate(
     attrs: Res<Attrs>,
     mut stats: ResMut<PlayerStats>,
     mut sfx: MessageWriter<PostEvent>,
-    (mut last_health, mut refilling, data): (Local<f32>, Local<bool>, Res<Data>),
+    (mut last_health, mut refilling, data, mut healing): (Local<f32>, Local<bool>, Res<Data>, Local<bool>),
 ) {
     if paused.0 { return; }
     let dt = time.delta_secs();
@@ -2428,7 +2428,15 @@ fn regenerate(
     }
     stats.health_delay = (stats.health_delay - dt).max(0.0);
     if stats.health_delay <= 0.0 && stats.health < attrs.health_regen_limit.min(stats.max_health) {
+        // (its sound as it starts healing: his combat tweak's `m_pStartRegenSound`,
+        // `Snd_UI_Ingame_Regen_Life`, our reading of when as the mana's; before, it healed silently)
+        if !*healing {
+            sfx.write(PostEvent::named("Snd_UI_Ingame_Regen_Life", None));
+        }
+        *healing = true;
         stats.health = (stats.health + attrs.health_regen_rate * dt).min(attrs.health_regen_limit.min(stats.max_health));
+    } else {
+        *healing = false;
     }
     *last_health = stats.health;
     if bind.just_pressed(crate::bindings::Act::HealthElixir) {

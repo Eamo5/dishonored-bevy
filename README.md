@@ -134,7 +134,8 @@ are in the settings file, `pad_binding_set` 0-3):
   (the original rats); enhancements Vitality, Blood Thirst, Shadow Kill, Agility. Runes buy
   them in the journal. Mana regenerates a portion above the last expense, like the original,
   with the pawn's `m_pStartManaRegenSound` (`Snd_UI_Ingame_Regen_Mana`) as it starts refilling
-  (our reading of when: the first step after the delay); before, it refilled silently.
+  (our reading of when: the first step after the delay); before, it refilled silently. So does his
+  health as it starts healing (his combat tweak's `m_pStartRegenSound`, `Snd_UI_Ingame_Regen_Life`).
   A power cast without the mana for it gets the left hand's empty gesture (`Powers_OutOfMana`)
   and its sound (`Snd_Power_Empty`), with no line, as the original.
   Going into a host plays the original transition (`POSSESSION_IN_INST`, a
