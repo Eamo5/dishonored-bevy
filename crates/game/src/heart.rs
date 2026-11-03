@@ -40,6 +40,10 @@ pub struct Heart {
     /// within reach of a rune or charm (its hint given), and the hints given
     near_target: bool,
     hints_shown: u32,
+    /// in hand as last seen (its equip and unequip sounds)
+    held: bool,
+    /// a whisper's voice still speaking (s): its murmur stops as it ends
+    whisper_left: f32,
 }
 
 /// Unreal units to metres.
@@ -59,6 +63,22 @@ fn beat(
 ) {
     let dt = time.delta_secs();
     heart.cooldown = (heart.cooldown - dt).max(0.0);
+    // taken up and put away: its own sounds (`m_pEquipSoundEvent`: `Heart_Gadget_Equipped`;
+    // `m_pUnequipSoundEvent`: `Heart_Gadget_Unequipped`, its beats fading); before, only the wheel's
+    let held = powers.selected == Power::Heart;
+    if held != heart.held {
+        heart.held = held;
+        sfx.write(PostEvent::named(if held { "Heart_Gadget_Equipped" } else { "Heart_Gadget_Unequipped" }, None));
+    }
+    // a whisper over: its murmur's loop stopped and the world's sound brought back up (the second
+    // of its `m_FlavorSoundEvents`, `Snd_UI_Heart_Whisper_Stop`; before, the first's loop, and its
+    // hush on everything else, went on for good)
+    if heart.whisper_left > 0.0 {
+        heart.whisper_left -= dt;
+        if heart.whisper_left <= 0.0 {
+            sfx.write(PostEvent::named("Snd_UI_Heart_Whisper_Stop", None));
+        }
+    }
     heart.pulse = (heart.pulse - dt * 2.0).max(0.0);
     let Ok(cg) = cam.single() else { return };
     let eye = cg.translation();
@@ -233,5 +253,6 @@ fn whisper(
     let secs = crate::audio::event_length(&n.event).map(|l| l + 0.25).unwrap_or((2.0 + n.text.len() as f32 * 0.06).min(9.0));
     subs.write(crate::barks::Subtitle::heard(n.text.clone(), secs));
     heart.cooldown = secs.min(4.0);
+    heart.whisper_left = secs;
     heart.pulse = 1.0;
 }

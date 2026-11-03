@@ -206,8 +206,13 @@ are in the settings file, `pad_binding_set` 0-3):
   their own, evenly spaced, while the heart pumped at one pace. Put away it still beats now
   and then while one is in reach (`m_bUnequippedHeartBeats`: `Heart_Gadget_Beat_1` and its
   rumble every `m_fUnequippedHeartBeatsFrequency`, 3.5 s, our reading of it as a period); before,
-  it was silent. It whispers the original secrets about
-  the person targeted (by story group) or the place (by mission progress). Held, it marks the
+  it was silent. Taken up and put away it has its own sounds (`m_pEquipSoundEvent`,
+  `Heart_Gadget_Equipped`; `m_pUnequipSoundEvent`, `Heart_Gadget_Unequipped`, its beats fading).
+  It whispers the original secrets about
+  the person targeted (by story group) or the place (by mission progress), its murmur
+  (`m_FlavorSoundEvents`: `Snd_UI_Heart_Whisper`, a loop hushing the world's sound by 25 dB)
+  stopped as the line ends (`Snd_UI_Heart_Whisper_Stop`, the world's sound back up); before, the
+  murmur looped on, and the world stayed hushed, after the first whisper. Held, it marks the
   runes and bone charms still to be found with the HUD movie's `runeMarker` /
   `boneCharmMarker` as `m_RuneMarkerSettings` / `m_BoneCharmMarkerSettings` place them (90% at
   10 m to 150% at 5 m, fading as Corvo nears, the pickup's name shown near the middle (its
