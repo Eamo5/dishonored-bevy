@@ -756,7 +756,10 @@ fields no longer show their stand-in "WW" behind the title.
   `DishonoredNotify_ShowEquippedInvItem` (now cooked: hidden 0.02 s into `Sword_Choke_In_Master`,
   shown 2.02 s into the Win and Lose chains, 1.17 s into the Cancel), and drawing it, it shows
   as his hand takes it, 0.24 s into `Sword_Ready_Equip`; before, the blade stayed in his hand
-  through the hold, between his arms and the victim's neck). While he chokes, his look is kept
+  through the hold, between his arms and the victim's neck). When the scripts empty his hands
+  (`DishonoredItemEmpty`: the Hound Pits, before a talk) he puts the sword away
+  (`Sword_Ready_UnEquip`, `Sword_Sneak_UnEquip` crouched) before his empty hands take over;
+  before, it was gone at once. While he chokes, his look is kept
   about the way he took hold (his sword tweak's `DisTweaks_Choke`:
   `m_fChokePlayerControlledYawDegrees_Left` 30 and `_Right` 20 degrees,
   `m_fChokePlayerControlledPitchDegrees_Top` 20 up and `_Bottom` 5 down, eased into), the victim

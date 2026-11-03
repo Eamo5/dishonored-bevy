@@ -370,6 +370,8 @@ struct ArmClips {
     empty_sneak: [Option<ClipId>; 2],
     // drawing the sword (standing, sneaking)
     equip: [Option<ClipId>; 2],
+    // putting it away (`Sword_Ready_UnEquip`, `Sword_Sneak_UnEquip`)
+    unequip: [Option<ClipId>; 2],
     // a sword lock: the struggle, then won big, won, lost
     versus: [Option<ClipId>; 4],
     // the head's bob, by pace (walk, run, sprint, sneak) and way (forward, back, left, right):
@@ -448,6 +450,7 @@ impl ArmClips {
             empty_jump: [lib.find("Empty_Sneak_Jump"), lib.find("Empty_Sneak_JumpLandSmall")],
             empty_sneak: [lib.find("Empty_Sneak_Idle"), lib.find("Empty_Sneak_Walk")],
             equip: [lib.find("Sword_Ready_Equip"), lib.find("Sword_Sneak_Equip")],
+            unequip: [lib.find("Sword_Ready_UnEquip"), lib.find("Sword_Sneak_UnEquip")],
             versus: [
                 lib.find("Sword_Ready_Versus_MinigameUU"),
                 lib.find("Sword_Ready_Versus_BigWin"),
@@ -581,6 +584,8 @@ struct ArmsAnim {
     /// the hands emptied by the scripts, and the sword being drawn again
     sheathed: bool,
     equipping: bool,
+    /// putting the sword away (its clip playing through, the sword in hand till then)
+    unequipping: bool,
     /// the scene key the arms play (`matinee::SceneArms`)
     scene_key: Option<(u32, usize)>,
     /// his death's clip started
@@ -932,6 +937,7 @@ fn spawn_arms(
                 show_marks: level_marks.iter().filter(|(_, m)| !m.show_item.is_empty()).map(|(c, m)| (*c, m.show_item.clone())).collect(),
                 sheathed: false,
                 equipping: false,
+                unequipping: false,
                 scene_key: None,
                 died: false,
                 carry_seq: 0,
@@ -1085,7 +1091,11 @@ fn animate_arms(
         None => st.scene_key = None,
     }
     // swimming: both arms stroke (`Empty_Swim*` by the direction swum), the sword away
-    let empty = stats.unarmed || stats.sheathed;
+    if st.unequipping && anim.finished() {
+        st.unequipping = false;
+    }
+    // (and the sword in hand still while it's put away: `unequip`)
+    let empty = stats.unarmed || (stats.sheathed && !st.unequipping && st.sheathed == stats.sheathed);
     let full_body = scene_arms.playing(&anim.lib).is_some()
         || swim.swimming() || carry.carrying();
     // (and away as his sword clip says, `DishonoredNotify_ShowEquippedInvItem`: as a choke takes hold
@@ -1203,14 +1213,30 @@ fn animate_arms(
         }
         None => {}
     }
-    // the sword drawn again: its equip clip plays through
+    // the sword drawn again: its equip clip plays through; put away (the scripts' empty hands,
+    // `DishonoredItemEmpty`), its unequip clip (`Sword_Ready_UnEquip`; before, the sword was gone at
+    // once)
     if stats.sheathed != st.sheathed {
         st.sheathed = stats.sheathed;
         if !stats.sheathed && !base_busy {
+            st.unequipping = false;
             if let Some(cl) = c.equip[p.crouched as usize].or(c.equip[0]) {
                 anim.restart(cl, false, 1.0, 0.1);
                 st.equipping = true;
             }
+        } else if stats.sheathed && !stats.unarmed && !base_busy {
+            st.equipping = false;
+            if let Some(cl) = c.unequip[p.crouched as usize].or(c.unequip[0]) {
+                anim.restart(cl, false, 1.0, 0.1);
+                st.unequipping = true;
+            }
+        }
+    }
+    if st.unequipping {
+        if base_busy {
+            st.unequipping = false;
+        } else {
+            base_busy = true;
         }
     }
     if st.equipping {
