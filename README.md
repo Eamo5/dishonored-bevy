@@ -138,6 +138,8 @@ are in the settings file, `pad_binding_set` 0-3):
   health as it starts healing (his combat tweak's `m_pStartRegenSound`, `Snd_UI_Ingame_Regen_Life`).
   A power cast without the mana for it gets the left hand's empty gesture (`Powers_OutOfMana`)
   and its sound (`Snd_Power_Empty`), with no line, as the original.
+  The pistol or crossbow fired with nothing loaded clicks dry (their `m_pNoAmmoSound`,
+  `Snd_Weapon_Gun_Corvo_Empty`); before, it made the powers' no-mana sound.
   Going into a host plays the original transition (`POSSESSION_IN_INST`, a
   `MaterialInstanceTimeVarying` whose parameter curves are cooked into `scene.post_curves`:
   the eye opening, the retina's veins, the host's view coming in), coming out

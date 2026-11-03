@@ -1461,7 +1461,9 @@ fn use_power(
                 p => stats.items.entry(p.ammo_item().unwrap_or(crate::gadgets::FLARES).to_string()).or_default(),
             };
             if *ammo == 0 {
-                sfx.write(PostEvent::named("Snd_Power_Empty", None));
+                // (the gun's dry click: the pistol's and crossbow's `m_pNoAmmoSound`; before, the
+                // powers' no-mana sound)
+                sfx.write(PostEvent::named("Snd_Weapon_Gun_Corvo_Empty", None));
                 return;
             }
             if !chamber(&mut powers, &data, &stats, sel) {
@@ -1531,7 +1533,9 @@ fn use_power(
             let explosive = sel == Power::ExplosiveBullet;
             let ammo = if explosive { stats.items.entry(crate::gadgets::EXPLOSIVE.to_string()).or_default() } else { &mut stats.bullets };
             if *ammo == 0 {
-                sfx.write(PostEvent::named("Snd_Power_Empty", None));
+                // (the gun's dry click: the pistol's and crossbow's `m_pNoAmmoSound`; before, the
+                // powers' no-mana sound)
+                sfx.write(PostEvent::named("Snd_Weapon_Gun_Corvo_Empty", None));
                 return;
             }
             if !chamber(&mut powers, &data, &stats, sel) {
