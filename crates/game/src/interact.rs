@@ -19,7 +19,7 @@ impl Plugin for InteractPlugin {
             .add_message::<Interaction>()
             .add_systems(OnEnter(GameState::InGame), setup_interactables.after(LevelSpawnSet))
             .add_message::<DoorBlast>()
-            .add_systems(Update, (sing, find_focus.in_set(FocusSet), use_focus, npc_doors, wind_doors, animate_doors, break_doors).chain().run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (sing, find_focus.in_set(FocusSet), use_focus, npc_doors, wind_doors, animate_doors, break_doors, travel_to_user).chain().run_if(in_state(GameState::InGame)));
     }
 }
 
@@ -176,6 +176,41 @@ mod capacity_tests {
 /// A pickup to take now as if Use were pressed on it (one Pull drew to Daud's hand).
 #[derive(Resource, Default)]
 pub struct ForceUse(pub Option<Entity>);
+
+/// A taken pickup's mesh on its way to Corvo: it flies from where it lay to just under his
+/// eye (`DisTweaks_InventoryPickup` / `_StatPickup`: `m_fTravelToUserTime` 0.1 s,
+/// `m_TravelCameraOffset` -50 units, below the view, our reading of its axis, on every pickup
+/// tweak), then is gone; before, it vanished where it lay.
+#[derive(Component, Default)]
+pub struct TravelToUser {
+    t: f32,
+    from: Option<Vec3>,
+}
+
+const TRAVEL_TO_USER: f32 = 0.1;
+const TRAVEL_CAMERA_OFFSET: f32 = -0.5;
+
+fn travel_to_user(
+    mut commands: Commands,
+    time: Res<Time>,
+    cam: Query<&GlobalTransform, With<PlayerCamera>>,
+    mut meshes: Query<(Entity, &mut Transform, &mut TravelToUser, Has<ChildOf>)>,
+) {
+    let eye = cam.single().ok().map(|c| c.translation() + c.up().as_vec3() * TRAVEL_CAMERA_OFFSET);
+    for (e, mut t, mut tr, parented) in &mut meshes {
+        tr.t += time.delta_secs();
+        let Some(to) = eye.filter(|_| !parented && tr.t < TRAVEL_TO_USER) else {
+            commands.entity(e).try_despawn();
+            continue;
+        };
+        let from = *tr.from.get_or_insert(t.translation);
+        let k = (tr.t / TRAVEL_TO_USER).clamp(0.0, 1.0);
+        t.translation = from.lerp(to, k * k);
+        if std::env::var_os("DH_PICKUP_LOG").is_some() {
+            info!("pickup: travels to Corvo, {:.2} s: {:.2}", tr.t, t.translation);
+        }
+    }
+}
 
 /// The level scripts' stand-in actor for a pickup one of their factories made (the point it was
 /// made at): what they hang its events on.
@@ -1083,8 +1118,9 @@ pub fn use_focus(
             p.kind = PickupKind::Ammo(remaining);
             return;
         }
+        // (its mesh flies to him as he takes it: `travel_to_user`)
         for &m in &p.entities {
-            commands.entity(m).despawn();
+            commands.entity(m).try_insert(TravelToUser::default());
         }
         commands.entity(e).despawn();
         used.write(Interaction::Pickup(p.index, script_actor.map(|a| a.0)));

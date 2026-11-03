@@ -1296,6 +1296,10 @@ fields no longer show their stand-in "WW" behind the title.
   crosshair, the name of what Corvo looks at over a faint rule and what he can do with it,
   in the HUD tweak's `m_InteractionTexts` (`[F] Loot` to take, `Hold [F] Carry` a body; a
   prop's own interactable text, `[F] Carry`), on the window's brushed backing.
+- **Taking a pickup**: its mesh flies to Corvo as he takes it, from where it lay to just under
+  his eye, then is gone (every pickup tweak's `m_fTravelToUserTime` 0.1 s and
+  `m_TravelCameraOffset` -50 units; that the offset is below the view is our reading). Before, it
+  vanished where it lay. `DH_PICKUP_LOG=1` logs its flight.
 - **Move and context prompts** (`prompts.rs`): the HUD movie's `InteractionsIcons` at the
   bottom right — for each special move within reach, its `hud_interactionIc` icon and keys
   (assassinate `[Left Mouse Button]` and choke `[Left Control] [Hold]` behind someone
