@@ -1981,6 +1981,11 @@ fn run_script(
         "attack" => script.held.push((Input::Mouse(MouseButton::Left), 0.05)),
         "block" => script.held.push((Input::Key(KeyCode::ControlLeft), f(1))),
         "rmb" => script.held.push((Input::Mouse(MouseButton::Right), 0.05)),
+        "killcam" => {
+            // (tests) killcam N: the Kill Cam Mode option for this run (0 off, 1 normal, 2 frequent)
+            let mode = f(1) as u8;
+            commands.queue(move |w: &mut World| w.resource_mut::<crate::settings::Settings>().kill_cam = mode);
+        }
         "rmbhold" => script.held.push((Input::Mouse(MouseButton::Right), f(1))),
         "mmbhold" => script.held.push((Input::Mouse(MouseButton::Middle), f(1))),
         "bind" => {

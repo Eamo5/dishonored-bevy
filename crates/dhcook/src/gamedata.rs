@@ -981,6 +981,15 @@ fn arms(game: &Package, startup: &Package, d: &mut GameData) {
             d.pawn.insert("killcam.m_Rotation.pitch".into(), r[0] as f32);
         }
     }
+    // (and when it follows a bolt: `m_fChanceToCameraFollow`, `m_fCameraFollowMinDistance`,
+    // `m_fCameraFollowClearRadius`)
+    for p in def.iter().chain(inst.iter()) {
+        for n in ["m_fChanceToCameraFollow", "m_fCameraFollowMinDistance", "m_fCameraFollowClearRadius"] {
+            if let Some(v) = p.float(n) {
+                d.pawn.insert(format!("killcam.{n}"), v);
+            }
+        }
+    }
     // the finishers' chance of a beheading (`DisFatalityMoveSet.m_fBeheadRandomChance`, the
     // class's under Corvo's sword's)
     let corvo_fatality = "Twk_Inv_PlayerSpecific.Twk_Inv_SwordCorvo.DisTweaks_InventoryItem_PlayerSpecific_1.DisTweaks_Fatality_1";

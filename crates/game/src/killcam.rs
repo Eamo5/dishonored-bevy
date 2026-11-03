@@ -76,9 +76,9 @@ fn settings(data: &crate::gamedata::Data) -> Settings {
         follow: v("m_fFollowTimeScale", 0.1).max(0.01),
         end: v("m_fEndFollowTimeScale", 0.6).max(0.01),
         timeout: v("m_fTimeOut", 1.5),
-        stop: v("m_fCameraStopDistance", 750.0) * 0.01905,
+        stop: v("m_fCameraStopDistance", 750.0) * 0.01,
         // UE3 (x forward, y right, z up), unreal units -> behind, beside, above
-        offset: Vec3::new(v("m_Offset.y", 0.0), v("m_Offset.z", 4.5), -v("m_Offset.x", -60.0)) * 0.01905,
+        offset: Vec3::new(v("m_Offset.y", 0.0), v("m_Offset.z", 4.5), -v("m_Offset.x", -60.0)) * 0.01,
         pitch: v("m_Rotation.pitch", -546.0) * std::f32::consts::TAU / 65536.0,
     }
 }

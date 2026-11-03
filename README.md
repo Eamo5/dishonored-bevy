@@ -193,7 +193,10 @@ are in the settings file, `pad_binding_set` 0-3):
 - **Depth of field** (`dof.rs`): the level's (or the scripts') far blur, as the original's
   `FArkPpDofDownsample` + DOF uber pass do it: the scene mixed with a quarter-resolution copy
   by `saturate((depth - focus) / radius) x far blur`, before the grading, softening distant
-  views. `DH_NO_DOF=1` turns it off.
+  views. `DH_NO_DOF=1` turns it off. The scripts' and the tweaks' focus distances and radii
+  (`DisSeqAct_UberPostProcess`, a power's or the music box's grade) are scaled as the level's
+  are, a hundredth of a metre to the unit; before, they were scaled for real-world units (1.905
+  cm), putting the Tower's and the trials' focus nearly twice as far as the scene it was set for.
 - **The Heart**: Corvo has it once the Outsider gives it (`DisSeqAct_AddInventoryItem` of
   `Twk_Inv_HeartCorvo`) or a start loadout lists it, no sooner: the Tower's pistol, given as
   the assassins attack, no longer brought the Heart (and the crossbow) with it, nor the
@@ -446,7 +449,8 @@ are in the settings file, `pad_binding_set` 0-3):
   pushed along the bone) each take the mesh's dismemberment LOD (the last, its sections the
   mesh's `m_MaterialsToBodyParts`: whose piece, which cut, a cap shown once cut), so both show
   their stump's cap; `SLInfo_Default`'s blood plays at `Gore_Neck` and `Gore_Head`, and lands on
-  the lens nearby (`blood_heavy`). Cuts are saved.
+  the lens nearby (`blood_heavy`). Cuts are saved. The piece's push (its `m_fImpulse`) is at the
+  world's scale, a hundredth of a metre to the unit (before, at 1.905 cm, nearly twice as hard).
 - **Blood pools and decals** (`blood.rs`, `decals.rs`): a body lying still bleeds a pool on
   the floor under one of its bones (its `m_pBodyTweaks`' `m_BloodDecal`: `Splat_01/02/03_INST`
   at random, under `spine_3_jnt`, `spine_1_jnt` or `head_jnt`, drawn with the original splat
@@ -1837,9 +1841,12 @@ fields no longer show their stand-in "WW" behind the title.
   `m_KillCamSettings`): a bolt that will kill (`Twk_Proj_Arrow`'s `m_bKillCamEnabled`; the
   shot's damage against what the victim has left), when the `Kill Cam Mode` option takes it,
   is followed from just behind (`m_Offset`, pitched down a little) with a 30 degree view as the
-  world slows to a tenth; after 14 m the camera holds and watches it strike, the world at 0.6
+  world slows to a tenth; after 7.5 m (`m_fCameraStopDistance`, 750 units, at the world's scale;
+  before, 14 m) the camera holds and watches it strike, the world at 0.6
   for a second and a half, and then the view is Corvo's again. The HUD and his hands are put
-  away meanwhile.
+  away meanwhile. It follows only a victim at least `m_fCameraFollowMinDistance` (8 m) off; on
+  the Normal setting, the last foe always, others at the crossbow's `m_fChanceToCameraFollow` (one
+  in five; before, one in three, for a victim at any distance).
 - **Drop assassinations**: attacking while falling onto someone kills them from above, with
   the original paired clips by side (`Sword_Ready_Assassination_Drop*_Master` /
   `Generic_Assassination_Drop*_Slave`); the body breaks the fall, and the Falling Star charm

@@ -207,8 +207,8 @@ fn log_pieces(time: Res<Time>, pieces: Query<&GlobalTransform, With<SeveredPiece
     }
 }
 
-/// Unreal units to metres.
-const UU: f32 = 0.01905;
+/// Unreal units to metres (the world's scale, `dhcook::xform::UNIT`).
+const UU: f32 = 0.01;
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn sever(

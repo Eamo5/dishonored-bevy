@@ -253,7 +253,7 @@ pub fn uber_fields(params: &std::collections::BTreeMap<String, f32>, prefix: &st
         }
     }
     if flag("m_bOverrideDOFParameters", true) {
-        for (f, n, v, scale) in [("focus_distance", "FocusDistance", 1000.0, 0.01905), ("in_focus_radius", "InFocusRadius", 300.0, 0.01905), ("far_blur", "FarBlurAmount", 0.0, 1.0)] {
+        for (f, n, v, scale) in [("focus_distance", "FocusDistance", 1000.0, 0.01), ("in_focus_radius", "InFocusRadius", 300.0, 0.01), ("far_blur", "FarBlurAmount", 0.0, 1.0)] {
             if flag(&format!("m_DOFParameters.m_bOverride{n}"), true) {
                 out.push((f.to_string(), vec![get(&format!("m_DOFParameters.m_{n}")).unwrap_or(v) * scale]));
             }

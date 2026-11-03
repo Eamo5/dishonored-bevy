@@ -1498,11 +1498,19 @@ fn use_power(
                         return None;
                     }
                     let damage = attrs.bolt.damage(0.0, at.y - nt.translation.y > HEAD, n.alert != crate::npc::Alert::Combat);
-                    (!n.is_down() && n.min_health <= 0.0 && damage >= n.health).then_some(hit)
+                    (!n.is_down() && n.min_health <= 0.0 && damage >= n.health).then_some((hit, toi))
                 })
+                // (only for a victim far enough off to follow the bolt to, `m_fCameraFollowMinDistance`
+                // 8 m; on the Normal setting, the last foe always, others at `m_fChanceToCameraFollow`,
+                // one in five)
+                .filter(|&(_, toi)| toi >= data.pawn("killcam.m_fCameraFollowMinDistance", 800.0) * 0.01)
+                .map(|(hit, _)| hit)
                 .filter(|&hit| {
                     let last = !npcs.iter().any(|(e, t, n)| e != hit && !n.is_down() && n.mode == crate::npc::Mode::Combat && t.translation.distance(pt.translation) < 25.0);
-                    crate::combat::kill_cam(settings.kill_cam, last)
+                    match settings.kill_cam {
+                        1 => last || rand::random::<f32>() < data.pawn("killcam.m_fChanceToCameraFollow", 0.2),
+                        mode => crate::combat::kill_cam(mode, last),
+                    }
                 });
             let mut e = commands.spawn((
                 Projectile { vel: dir * Projectile::physics(&data, kind).0 * crate::aim::upgrade_sum(&data, &stats, crate::aim::Weapon::Crossbow, "Range").max(1.0), kind, life: 6.0, stuck: false, recoverable: kind == HitKind::Bolt && data.pawn("arrow.m_bCanRecoverAmmoInAir", 1.0) > 0.0, attachment: None },

@@ -616,7 +616,7 @@ pub fn cook(levels: &[Arc<Package>], refs: &HashMap<ActorKey, KActor>) -> Kismet
                     }
                 }
                 if flag(&pp, "m_bOverrideDOFParameters", true) {
-                    for (f, n, v, scale) in [("focus_distance", "FocusDistance", 1000.0, 0.01905), ("in_focus_radius", "InFocusRadius", 300.0, 0.01905), ("far_blur", "FarBlurAmount", 0.0, 1.0)] {
+                    for (f, n, v, scale) in [("focus_distance", "FocusDistance", 1000.0, crate::xform::UNIT), ("in_focus_radius", "InFocusRadius", 300.0, crate::xform::UNIT), ("far_blur", "FarBlurAmount", 0.0, 1.0)] {
                         if flag(&dof, &format!("m_bOverride{n}"), true) {
                             put(f, vec![dof.float(&format!("m_{n}")).unwrap_or(v) * scale]);
                         }
