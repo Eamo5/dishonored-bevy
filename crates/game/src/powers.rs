@@ -28,6 +28,7 @@ impl Plugin for PowersPlugin {
             .add_message::<PowerEquipped>()
             .add_systems(OnEnter(GameState::InGame), (reset_powers, spawn_blink_marker))
             .add_systems(Update, restore_projectiles.after(crate::save::restore_npcs).before(bolt_focus).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, remove_arrows.run_if(in_state(GameState::InGame)))
             .add_systems(Update, bolt_focus.after(crate::interact::FocusSet).before(crate::gadgets::grenade_focus).before(crate::interact::use_focus).run_if(in_state(GameState::InGame)))
             .add_systems(
                 Update,
@@ -571,6 +572,19 @@ pub struct Projectile {
     pub stuck: bool,
     pub recoverable: bool,
     attachment: Option<BoltAttachment>,
+}
+
+/// The trials clearing the bolts left stuck about between rounds (`DisSeqAct_DLC05_RemoveArrows`).
+fn remove_arrows(mut commands: Commands, vm: Option<ResMut<crate::kismet::Vm>>, bolts: Query<(Entity, &Projectile)>) {
+    let Some(mut vm) = vm else { return };
+    if !std::mem::take(&mut vm.remove_arrows) {
+        return;
+    }
+    for (e, p) in &bolts {
+        if p.stuck {
+            commands.entity(e).try_despawn();
+        }
+    }
 }
 
 /// Player-owned power state must travel with a save: a projectile saved in

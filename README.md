@@ -1346,6 +1346,12 @@ fields no longer show their stand-in "WW" behind the title.
   class): the crystal gauge swings in at the bottom right over its swirling backing, its fill
   masked to the breath left with the pointer at its top (tweened 0.45 s), a glow pulsing
   behind; it fades once he has his breath back. Script: `breath N`.
+- **The level scripts read health and mana** (`SeqAct_GetProperty`): Corvo's `Health` and
+  `m_Mana`, a character's `Health`, into the op's Int and Float variables. The Brigmore Witches'
+  opening hurts Daud with its poison only while he has more than 30 health, the Drop Attack
+  trial keeps his mana between rounds (at least 20), and the Draper sewers read their witch's
+  before her teleport; before, the op read nothing, so the poison never hurt him and the trial's
+  kept mana was always the 20.
 - **Which subtitle shows** (`kismet.rs`), as roshan's r614/blink research read the
   conversation manager's tick: every line said (conversations, barks, cutscenes) is listed
   until its voice stops or its speaker falls, as a main subtitle or a secondary one
@@ -2937,6 +2943,10 @@ fields no longer show their stand-in "WW" behind the title.
     `MinOutput`..`MaxOutput` as `ParamMode` says), so they come as he falls fast and not before;
     its wind plays as it starts and stops (`m_pStartSoundEvent`, `m_pStopSoundEvent`). Before,
     the op only passed its signal on: no streaks, no wind.
+  - *Between rounds* the bolts left stuck about are cleared (`DisSeqAct_DLC05_RemoveArrows`,
+    `m_bDestroyArrows`: the arena's and Bend Time Massacre's), and the Oil Rain trial lessens Bend
+    Time's grey (`DisSeqAct_DLC05_SetBendTimeDesaturation`: its pre- and post-desaturation 0.2
+    in place of the node's 0.95); before, both ops only passed their signal on.
   - *Scoring* (`dlc05score.rs`, the rule sets cooked per map): kills by the victim's story
     group with the modifiers' flair (assassination, drop kill, adrenaline, headshot, in flames,
     dark kill, get back, severed limb, payback, perfect block, low blow, faction combo, power

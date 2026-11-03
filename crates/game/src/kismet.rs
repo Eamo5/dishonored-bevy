@@ -401,6 +401,24 @@ mod flow_tests {
     }
 
     #[test]
+    fn get_property_reads_corvos_health_into_its_int() {
+        use dhcook::format::{KLink, KVar};
+        let mut g = Graph::default();
+        g.ops.push(KOp {
+            class: "SeqAct_GetProperty".into(),
+            props: [("PropertyName".to_string(), KVal::Str("Health".into()))].into_iter().collect(),
+            vars: vec![KLink { desc: "Target".into(), vars: vec![0], write: false }, KLink { desc: "Int".into(), vars: vec![1], write: true }],
+            ..Default::default()
+        });
+        g.vars.push(KVar { class: "SeqVar_Player".into(), ..Default::default() });
+        g.vars.push(KVar { class: "SeqVar_Int".into(), ..Default::default() });
+        let mut vm = Vm::new(Arc::new(g), &[]);
+        vm.readings.0 = 42.4;
+        vm.exec(0, 0);
+        assert!(matches!(vm.value(1), Val::Int(42)));
+    }
+
+    #[test]
     fn a_switch_with_auto_disable_fires_each_link_once() {
         let mut vm = switch("SeqAct_Switch", 2, &[("LinkCount", KVal::Int(2)), ("bLooping", KVal::Bool(true)), ("bAutoDisableLinks", KVal::Bool(true))]);
         let mut fired = Vec::new();
@@ -962,6 +980,8 @@ pub struct Vm {
     being_assassinated: HashMap<Entity, bool>,
     /// someone hostile is fighting Corvo (an autosave waits for peace: `DIAT_PlayerInCombat`)
     in_combat: bool,
+    /// Corvo's health and mana, and the characters' health by their spawner (`SeqAct_GetProperty`)
+    readings: (f32, f32, HashMap<u32, f32>),
     /// Corvo is in a rat
     in_rat: bool,
     /// the actors whose destruction the scripts were told of (`SeqEvent_Destroyed`)
@@ -1005,6 +1025,10 @@ pub struct Vm {
     pub usable_stages: Vec<(u32, Option<i32>)>,
     /// river krusts told to spit at something (`DisSeqAct_RiverKrustSpitAtTarget`): krust, where
     pub krust_spits: Vec<(u32, Vec3)>,
+    /// Bend Time's desaturation as the trials set it (`DisSeqAct_DLC05_SetBendTimeDesaturation`:
+    /// the Oil Rain trial's 0.2), and stuck bolts to be cleared (`DisSeqAct_DLC05_RemoveArrows`)
+    pub bend_desaturation: Option<f32>,
+    pub remove_arrows: bool,
     /// screen effects the scripts started (`DisSeqAct_PostProcess` `m_Effect`: "Epp_Knocked",
     /// "Epp_Weepers"...), for the post-process graph (`ppgraph`)
     pub post_effects: Vec<String>,
@@ -1334,6 +1358,7 @@ impl Vm {
             npc_attn: HashMap::new(),
             being_assassinated: HashMap::new(),
             in_combat: false,
+            readings: (0.0, 0.0, HashMap::new()),
             in_rat: false,
             destroyed: HashSet::new(),
             looted: HashSet::new(),
@@ -1359,6 +1384,8 @@ impl Vm {
             usable_stages: Vec::new(),
             krust_spits: Vec::new(),
             post_effects: Vec::new(),
+            bend_desaturation: None,
+            remove_arrows: false,
             knocked_until: 0.0,
             tower_shots: Vec::new(),
             highlights: HashSet::new(),
@@ -4213,7 +4240,35 @@ impl Vm {
             }
             // (no more than what they let go on: the arrows stay, the kill cam is the player's choice,
             // the fall's camera effect and the bent time's desaturation are the post-process's)
-            "DisSeqAct_DLC05_RemoveArrows" | "DisSeqAct_DLC05_ForceKillCam" | "DisSeqAct_DLC05_SetBendTimeDesaturation" | "SeqAct_SetBlockRigidBody" | "SeqAct_ForceGarbageCollection" | "SeqAct_GetProperty" => {
+            // a property of its target read into its variables: Corvo's health or mana (`Health`,
+            // `m_Mana`: the Brigmore intro's poison cloud hurting him only above 30, the Drop Attack
+            // trial keeping his mana), a character's health (the Draper sewers' witch carrying hers
+            // through her teleport); before, they read nothing
+            "SeqAct_GetProperty" => {
+                let name = self.ps(op, "PropertyName").unwrap_or_default();
+                let v = self.read(op, "Target").into_iter().find_map(|t| match (t, name.as_str()) {
+                    (Val::Player, "Health") => Some(self.readings.0),
+                    (Val::Player, "m_Mana") => Some(self.readings.1),
+                    (Val::Actor(a), "Health") => g.actors.get(a as usize).and_then(|ka| ka.spawner).and_then(|s| self.readings.2.get(&s).copied()),
+                    _ => None,
+                });
+                if let Some(v) = v {
+                    self.write(op, "Int", Val::Int(v.round() as i32));
+                    self.write(op, "Float", Val::Float(v));
+                }
+                self.fire(op, 0);
+            }
+            // the trials' rounds: bolts left stuck about the arena cleared (`m_bDestroyArrows`), and
+            // Bend Time's grey lessened (`m_fNewDesaturation`); before, both passed
+            "DisSeqAct_DLC05_RemoveArrows" => {
+                self.remove_arrows |= self.pb(op, "m_bDestroyArrows").unwrap_or(true);
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_SetBendTimeDesaturation" => {
+                self.bend_desaturation = self.pf(op, "m_fNewDesaturation");
+                self.fire(op, 0);
+            }
+            "DisSeqAct_DLC05_ForceKillCam" | "SeqAct_SetBlockRigidBody" | "SeqAct_ForceGarbageCollection" => {
                 self.fire(op, 0);
             }
             "DisSeqAct_DLC05_FallSpeedFX" => {
@@ -6493,6 +6548,10 @@ fn world_events(
 ) {
     let vm = &mut *vm;
     vm.in_combat = npcs.iter().any(|(_, n, _, _)| !n.is_down() && n.hostile() && n.mode == Mode::Combat);
+    vm.readings.0 = stats.health;
+    vm.readings.1 = stats.mana;
+    vm.readings.2.clear();
+    vm.readings.2.extend(npcs.iter().map(|(_, n, s, _)| (s.0, n.health)));
     // Corvo going into a rat and out (`DisSeqEvent_RatPossess`: the Lighthouse's sewers)
     let rat = possession.host.and_then(|h| hosts.get(h).ok()).is_some_and(|h| !h.fish && !h.rooted);
     if rat != vm.in_rat {

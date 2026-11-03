@@ -471,7 +471,16 @@ fn update_graph(
         let mut fields = Vec::new();
         for n in &nodes {
             if let Some(p) = data.0.post_nodes.get(*n) {
-                fields.extend(crate::postfx::uber_fields(p, ""));
+                let mut f = crate::postfx::uber_fields(p, "");
+                // (Bend Time's grey as a trial set it: `DisSeqAct_DLC05_SetBendTimeDesaturation`)
+                if let Some(d) = vm.as_ref().and_then(|v| v.bend_desaturation).filter(|_| n.starts_with("BendTime")) {
+                    for (name, v) in f.iter_mut() {
+                        if name.ends_with("desaturation") {
+                            *v = vec![d];
+                        }
+                    }
+                }
+                fields.extend(f);
             }
         }
         let (fade_in, fade_out) = if tl.bend > 0.0 { (bend_in, bend_out) } else { (f("m_fWarmupTime", 1.0) * 0.5, f("m_fCooldownTime", 1.0) * 0.5) };
