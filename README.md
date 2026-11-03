@@ -3050,7 +3050,9 @@ fields no longer show their stand-in "WW" behind the title.
       the lightning drawn from the mine to the one struck. An arc mine's dead are ash
       (`m_bAshDeadPawns`); a stun mine's victims fall asleep, limp (`m_bPutToSleep`,
       `m_bInstaRagdoll`). Spent, the mine breaks. While armed and unspent it can be picked
-      back up.
+      back up. Its break's sizzle (`m_pDestorySoundStartEvent`, `Snd_ArcMine_Destroy_Start`, a
+      loop after its crack) stops as its pieces settle, 2 s on (`m_pDestorySoundStopEvent`;
+      when is our reading); before, it sizzled on for good where the mine broke.
     - Keys 1-0 follow `DefaultUI.ini`'s `m_AutoAssign_KeyboardItemOrder`, Daud's items
       included (its arc mine set at `[29]`, so last). The wheel is the DLC's own movie
       (`UI_PowerWheel_DLC06`, `WheelHandler_DLC06`'s orders and illustrations). The icons are

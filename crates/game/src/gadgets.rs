@@ -1183,6 +1183,9 @@ fn explode(
 #[derive(Component)]
 struct ExplosionFlash(f32);
 
+/// How long a spent mine's break sizzles (s: its pieces' life, `ArcMine_Break`).
+const MINE_SIZZLE: f32 = 2.0;
+
 /// How deep under water a blast still bursts at the surface (`m_fMaxDistanceBelowWaterSurface`, m).
 const UNDERWATER_BLAST_DEPTH: f32 = 15.0;
 
@@ -1202,7 +1205,7 @@ fn mines(
     mut hits: MessageWriter<NpcHit>,
     mut sfx: MessageWriter<PostEvent>,
     mut noise: MessageWriter<Noise>,
-    mut fx: MessageWriter<SpawnEffect>,
+    (mut fx, mut timed): (MessageWriter<SpawnEffect>, ResMut<crate::audio::TimedSounds>),
 ) {
     let dt = time.delta_secs() * tc.world_scale();
     let Ok(ctx) = rapier.single() else { return };
@@ -1255,6 +1258,9 @@ fn mines(
             // spent: it breaks (`m_pDestructionEffect`; `m_DestructionNoiseLoudness` 20 m)
             sfx.write(PostEvent::named("Snd_ArcMine_Idle_Stop", Some(at)));
             sfx.write(PostEvent::named("Snd_ArcMine_Destroy_Start", Some(at)));
+            // (its sizzle's loop stopped as its pieces settle, 2 s on: `m_pDestorySoundStopEvent`,
+            // our reading of when; before, it sizzled on where it broke)
+            timed.schedule(&[(MINE_SIZZLE, "Snd_ArcMine_Destroy_Stop".to_string())], Some(at));
             fx.write(SpawnEffect { rot: t.rotation, ..SpawnEffect::at(if kind == MineKind::Stun { "stunmine_break" } else { "arcmine_break" }, at) });
             noise.write(Noise { corvo: false, pos: at, radius: 20.0, kind: NoiseKind::Threatening });
             commands.entity(e).despawn();
