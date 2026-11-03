@@ -177,6 +177,11 @@ mod capacity_tests {
 #[derive(Resource, Default)]
 pub struct ForceUse(pub Option<Entity>);
 
+/// The level scripts' stand-in actor for a pickup one of their factories made (the point it was
+/// made at): what they hang its events on.
+#[derive(Component, Clone, Copy)]
+pub struct ScriptActor(pub u32);
+
 #[derive(Component)]
 pub struct Pickup {
     pub kind: PickupKind,
@@ -350,7 +355,8 @@ pub struct Usable {
 /// The player used something (reported to the level scripts).
 #[derive(Message, Clone, Debug)]
 pub enum Interaction {
-    Pickup(u32),
+    /// a pickup taken (its index), and the scripts' actor for it if a factory made it
+    Pickup(u32, Option<u32>),
     /// door instance, opened (else closed), swung clockwise
     Door { instance: u32, opened: bool, cw: bool },
     DoorLocked(u32),
@@ -827,7 +833,7 @@ pub fn use_focus(
     mut msgs: ResMut<HudMessages>,
     mut noise: MessageWriter<Noise>,
     mut used: MessageWriter<Interaction>,
-    mut pickups: Query<(&mut Pickup, Option<&Song>)>,
+    mut pickups: Query<(&mut Pickup, Option<&Song>, Option<&ScriptActor>)>,
     usables: Query<(&Usable, Option<&NeedsItem>)>,
     mut doors: Query<(&mut Door, &GlobalTransform, &LevelInstance)>,
     player: Query<&Transform, With<Player>>,
@@ -851,8 +857,8 @@ pub fn use_focus(
     }
     // (the corrupted charms still lying about, this one with them: the scripts make one of
     // several, so the level's count is what is there)
-    let corrupted_left = pickups.iter().filter(|(p, _)| matches!(p.kind, PickupKind::CorruptedCharm)).count() as u32;
-    if let Ok((mut p, song)) = pickups.get_mut(e) {
+    let corrupted_left = pickups.iter().filter(|(p, ..)| matches!(p.kind, PickupKind::CorruptedCharm)).count() as u32;
+    if let Ok((mut p, song, script_actor)) = pickups.get_mut(e) {
         if p.kind.at_capacity(&stats, &attrs) {
             timed.schedule(&[(0.0, "Snd_UI_Ingame_Max_Ammo".to_string())], None);
             // (the pickup's `m_CannotUseMessage`: the elixirs' own, else the stat pickups')
@@ -1081,7 +1087,7 @@ pub fn use_focus(
             commands.entity(m).despawn();
         }
         commands.entity(e).despawn();
-        used.write(Interaction::Pickup(p.index));
+        used.write(Interaction::Pickup(p.index, script_actor.map(|a| a.0)));
         return;
     }
     if let Ok((u, need)) = usables.get(e) {

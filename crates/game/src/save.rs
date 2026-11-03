@@ -268,6 +268,9 @@ pub struct SaveGame {
     /// pickups the scripts' factories made, still there: (pickup, where)
     #[serde(default)]
     factory_made: Vec<(u32, [f32; 3])>,
+    /// and the scripts' actor standing for each (the point it was made at), in the same order
+    #[serde(default)]
+    factory_actors: Vec<Option<u32>>,
     /// props: (movable, `None` broken, else where a loose one lies)
     #[serde(default)]
     props: Vec<(u32, Option<([f32; 3], [f32; 4])>)>,
@@ -620,7 +623,7 @@ pub(crate) fn save_game(
     mut msgs: ResMut<HudMessages>,
     player: Query<(&Transform, &Player)>,
     npcs: Query<(Entity, &Npc, &FromSpawner, &Transform, Option<&crate::gore::Severed>, Option<&crate::carry::Falling>, Has<crate::npc::ConsumedBody>)>,
-    pickups: Query<(&Pickup, &Transform)>,
+    pickups: Query<(&Pickup, &Transform, Option<&crate::interact::ScriptActor>)>,
     instances: Query<(&LevelInstance, &Visibility, &Transform, Option<&Door>)>,
     lights: Query<(&LevelLight, &Visibility)>,
     (krusts, props, traps, usables, prop_bodies): (Res<crate::krust::KrustLog>, Query<(Entity, &crate::props::Prop, &Transform), Without<Player>>, Res<crate::traps::TrapLog>, Res<crate::usables::UsableLog>, Query<(&bevy_rapier3d::prelude::Velocity, &bevy_rapier3d::prelude::GravityScale, &bevy_rapier3d::prelude::RigidBody)>),
@@ -667,7 +670,7 @@ pub(crate) fn save_game(
         return;
     }
     let scene = &level.scene;
-    let present: std::collections::HashSet<u32> = pickups.iter().map(|(p, _)| p.index).collect();
+    let present: std::collections::HashSet<u32> = pickups.iter().map(|(p, ..)| p.index).collect();
     let mut s = SaveGame {
         version: VERSION,
         map: scene.name.clone(),
@@ -692,8 +695,9 @@ pub(crate) fn save_game(
         next_trip: 0,
         usables: usables.entered.iter().map(|(k, (s, d))| (*k, *s, *d)).collect(),
         usable_locks: usables.locks.iter().map(|(k, l)| (*k, *l)).collect(),
-        factory_made: pickups.iter().filter(|(p, _)| level.scene.pickups.get(p.index as usize).is_some_and(|sp| sp.factory)).map(|(p, t)| (p.index, t.translation.to_array())).collect(),
-        ammo_pickups: pickups.iter().filter_map(|(p, t)| match &p.kind {
+        factory_made: pickups.iter().filter(|(p, ..)| level.scene.pickups.get(p.index as usize).is_some_and(|sp| sp.factory)).map(|(p, t, _)| (p.index, t.translation.to_array())).collect(),
+        factory_actors: pickups.iter().filter(|(p, ..)| level.scene.pickups.get(p.index as usize).is_some_and(|sp| sp.factory)).map(|(_, _, a)| a.map(|a| a.0)).collect(),
+        ammo_pickups: pickups.iter().filter_map(|(p, t, _)| match &p.kind {
             crate::interact::PickupKind::Ammo(amounts) | crate::interact::PickupKind::Weapon(_, amounts) => Some(crate::interact::AmmoPickupSave { index: p.index, position: t.translation.to_array(), amounts: amounts.clone() }),
             _ => None,
         }).collect(),
@@ -1011,10 +1015,11 @@ fn apply_pending(
         *stats = s.stats.clone();
     }
     let factory_made = std::mem::take(&mut s.factory_made);
+    let factory_actors = std::mem::take(&mut s.factory_actors);
     if let (Some(mut vm), Some(k)) = (vm, s.kismet.take()) {
         // the factories' pickups that were lying about
-        for (p, at) in factory_made {
-            vm.ai_fx.push(crate::script_world::AiFx::SpawnPickup { pickup: p, at: Vec3::from(at) });
+        for (k, (p, at)) in factory_made.into_iter().enumerate() {
+            vm.ai_fx.push(crate::script_world::AiFx::SpawnPickup { pickup: p, at: Vec3::from(at), actor: factory_actors.get(k).copied().flatten() });
         }
         let ok = if level_only { vm.restore_level_state(k) } else { vm.restore_state(k) };
         if !ok {

@@ -74,7 +74,8 @@ pub enum AiFx {
     /// characters shoot at someone (`DisSeqAct_AIShoot`): shots, accuracy
     Shoot { shooters: Vec<Val>, target: Vec<Val>, shots: u32, accuracy: f32 },
     /// a factory's pickup appears (`scene.pickups`, at its spawn point)
-    SpawnPickup { pickup: u32, at: Vec3 },
+    /// a pickup a factory made, and the scripts' actor standing for it (the point it was made at)
+    SpawnPickup { pickup: u32, at: Vec3, actor: Option<u32> },
     /// things carried by others (`SeqAct_AttachToActor`): emitters follow a character or a prop
     Attach { targets: Vec<Val>, attachments: Vec<Val>, detach: bool },
     /// cinematic mode on (`Some(on)`) or toggled, hiding the HUD, holding Corvo
@@ -313,7 +314,7 @@ fn apply_ai_fx(
     (mut stats, mut sfx, attrs): (ResMut<PlayerStats>, MessageWriter<crate::audio::PostEvent>, Res<crate::gamedata::Attrs>),
     (mut noise, mut effects, mut plog): (MessageWriter<crate::gameplay::Noise>, MessageWriter<crate::particles::SpawnEffect>, ResMut<crate::pickuplog::PickupLog>),
     mut instances: Query<(Entity, &LevelInstance, &mut Transform, &mut Visibility), (Without<Npc>, Without<crate::player::Player>)>,
-    mut spawned: Local<std::collections::HashSet<u32>>,
+    mut spawned: Local<std::collections::HashSet<(u32, u32)>>,
     (mut cine, mut shots, mut swarms, mut overrides): (ResMut<Cinematic>, ResMut<ScriptedShots>, Query<&mut crate::swarm::Swarm>, ResMut<SpawnerOverrides>),
     (mut emitters, npc_ents, inst_ents, mut sent): (
         Query<&mut crate::particles::ParticleEmitter>,
@@ -689,7 +690,7 @@ fn apply_ai_fx(
                 let Some(p) = level.scene.pickups.get(pickup as usize) else { continue };
                 let sp = spawners(&targets);
                 let Some((npc, at)) = npc_ents.iter().find(|(_, f, _)| sp.contains(&f.0)).map(|(e, _, g)| (e, g.translation())) else { continue };
-                if !spawned.insert(pickup) {
+                if !spawned.insert((pickup, u32::MAX)) {
                     continue;
                 }
                 let mut meshes = Vec::new();
@@ -706,26 +707,37 @@ fn apply_ai_fx(
                 }
                 commands.spawn((pk, Transform::from_translation(at), crate::pickpocket::Pocket::new(npc, meshes, at, 1), DespawnOnExit(GameState::InGame)));
             }
-            AiFx::SpawnPickup { pickup, at } => {
+            AiFx::SpawnPickup { pickup, at, actor } => {
                 let Some(level) = level.as_ref() else { continue };
                 let Some(p) = level.scene.pickups.get(pickup as usize) else { continue };
-                if !spawned.insert(pickup) {
+                // (one for each point it was made at: the first the level's own mesh, moved there,
+                // the others copies of it)
+                let copy = spawned.iter().any(|k| k.0 == pickup);
+                if !spawned.insert((pickup, actor.unwrap_or(u32::MAX))) {
                     continue;
                 }
                 // its mesh, moved to the spawn point and shown
                 let mut entities = Vec::new();
                 for (e, li, mut t, mut v) in &mut instances {
                     if Some(li.index) == p.instance {
-                        t.translation = at;
-                        *v = Visibility::Inherited;
-                        entities.push(e);
+                        if copy {
+                            let c = commands.entity(e).clone_and_spawn().insert((Transform { translation: at, ..*t }, Visibility::Inherited)).id();
+                            entities.push(c);
+                        } else {
+                            t.translation = at;
+                            *v = Visibility::Inherited;
+                            entities.push(e);
+                        }
                     }
                 }
                 let pk = crate::interact::make_pickup(level, &data, pickup as usize, entities);
                 if log {
                     info!("level scripts: a factory makes {} at {at:.2} ({} meshes)", pk.label, pk.entities.len());
                 }
-                commands.spawn((pk, Transform::from_translation(at), DespawnOnExit(GameState::InGame)));
+                let mut made = commands.spawn((pk, Transform::from_translation(at), DespawnOnExit(GameState::InGame)));
+                if let Some(a) = actor {
+                    made.insert(crate::interact::ScriptActor(a));
+                }
             }
             AiFx::RatsGo { swarms: who, to } => {
                 let Some(at) = to.iter().find_map(|v| place(v)) else { continue };

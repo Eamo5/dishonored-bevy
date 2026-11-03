@@ -1832,6 +1832,27 @@ impl Vm {
     }
 
     /// Where a script value is: Corvo, a spawner's character, an actor.
+    /// A factory's spawn points: its "Spawn Point" (or "Spawn Location") variables' actors, else
+    /// its `SpawnPoints`.
+    fn factory_points(&self, op: u32) -> Vec<Val> {
+        let linked: Vec<Val> = self.read(op, "Spawn Point").into_iter().chain(self.read(op, "Spawn Location")).filter(|v| matches!(v, Val::Actor(_))).collect();
+        if !linked.is_empty() {
+            return linked;
+        }
+        match self.prop(op, "SpawnPoints") {
+            Some(KVal::List(l)) => l.iter().filter_map(|v| if let KVal::Actor(a) = v { Some(Val::Actor(*a)) } else { None }).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// How many a factory makes at once (`SpawnCount`, the Ex's; one for the plain one).
+    fn factory_count(&self, op: u32, class: &str) -> usize {
+        if class == "SeqAct_ActorFactoryEx" {
+            self.pi(op, "SpawnCount").unwrap_or(1).clamp(1, 16) as usize
+        } else {
+            1
+        }
+    }
     fn pos_of(&self, v: &Val) -> Option<Vec3> {
         match v {
             Val::Player => self.player_pos,
@@ -2640,25 +2661,33 @@ impl Vm {
                 self.fire(op, 0);
             }
             "SeqAct_ActorFactory" | "SeqAct_ActorFactoryEx" if self.prop(op, "factory_pool_actors").is_some() => {
-                // a whale oil tank (Oil Drop): its pool's next, made at the spawn point; the
-                // scripts' later actions on "Spawned" are on it
+                // a whale oil tank (Oil Drop, Bend Time Massacre): its pool's next, made at each
+                // spawn point (`SpawnCount` of them, the Ex's); the scripts' later actions on
+                // "Spawned 1".. are on them
                 if input == 0 {
                     let pool: Vec<u32> = match self.prop(op, "factory_pool_actors") {
                         Some(KVal::List(l)) => l.iter().filter_map(|v| if let KVal::Int(a) = v { Some(*a as u32) } else { None }).collect(),
                         _ => Vec::new(),
                     };
-                    let at = self.read(op, "Spawn Point").into_iter().find_map(|v| if let Val::Actor(a) = v { g.actors.get(a as usize).map(|ka| (Vec3::from(ka.position), ka.rotation)) } else { None });
-                    if let (Some(&first), Some((pos, rot))) = (pool.first(), at) {
+                    let points = self.factory_points(op);
+                    let count = self.factory_count(op, &class);
+                    for k in 0..count {
+                        let Some(Val::Actor(pa)) = points.get(k % points.len().max(1)).cloned() else { break };
+                        let Some(ka) = g.actors.get(pa as usize) else { break };
+                        let (pos, rot) = (Vec3::from(ka.position), ka.rotation);
+                        let Some(&first) = pool.first() else { break };
                         let n = self.pool_next.entry(first).or_default();
                         let tank = pool[*n % pool.len()];
                         *n += 1;
                         self.tank_spawns.push((tank, pos, rot));
-                        self.write(op, "Spawned", Val::Actor(tank));
-                        self.write(op, "Spawned 1", Val::Actor(tank));
-                    }
-                    if class == "SeqAct_ActorFactoryEx" {
-                        if let Some(i) = self.output_index(op, "Spawned 1") {
-                            self.fire(op, i);
+                        if k == 0 {
+                            self.write(op, "Spawned", Val::Actor(tank));
+                        }
+                        self.write(op, &format!("Spawned {}", k + 1), Val::Actor(tank));
+                        if class == "SeqAct_ActorFactoryEx" {
+                            if let Some(i) = self.output_index(op, &format!("Spawned {}", k + 1)) {
+                                self.fire(op, i);
+                            }
                         }
                     }
                 }
@@ -2668,37 +2697,48 @@ impl Vm {
             }
             "SeqAct_ActorFactory" | "SeqAct_ActorFactoryEx" => {
                 // what it makes stands at its spawn point: the scripts' later actions on
-                // "Spawned" (a PA speaker's announcements) happen there
+                // "Spawned" (a PA speaker's announcements) happen there; a pickup it makes lies
+                // there, each of `SpawnCount` (the Ex's: the Mystery Man's four clues) at the next
+                // point, that point standing for it (its "Spawned" N, its events); before, one
+                // was made, at the first
                 if input == 0 {
-                    if let Some(at) = self.read(op, "Spawn Point").into_iter().find(|v| matches!(v, Val::Actor(_))) {
+                    let points = self.factory_points(op);
+                    let count = self.factory_count(op, &class);
+                    let pickup = match self.prop(op, "factory_pickup") {
+                        Some(KVal::Int(p)) => Some(*p as u32),
+                        _ => None,
+                    };
+                    for k in 0..count {
+                        let Some(pt) = points.get(k % points.len().max(1)).cloned() else { break };
                         // (a sound it makes plays there when started)
-                        if let (Val::Actor(a), Some(ev)) = (&at, self.ps(op, "ambient_event")) {
+                        if let (0, Val::Actor(a), Some(ev)) = (k, &pt, self.ps(op, "ambient_event")) {
                             self.factory_sounds.insert(*a, ev);
                         }
-                        self.write(op, "Spawned", at.clone());
-                        self.write(op, "Spawned 1", at);
-                    }
-                }
-                // a pickup the factory makes, at its spawn point (or the place it's given:
-                // `SpawnLocations`, the Ex's)
-                if input == 0 {
-                    if let Some(KVal::Int(p)) = self.prop(op, "factory_pickup").cloned() {
-                        // (named "Spawn Location" in some: Coldridge's random cells' corrupted charm)
-                        let at = self
-                            .read(op, "Spawn Point")
-                            .into_iter()
-                            .chain(self.read(op, "Spawn Location"))
-                            .find_map(|v| if let Val::Actor(a) = v { g.actors.get(a as usize).map(|a| Vec3::from(a.position)) } else { None })
-                            .or_else(|| self.read(op, "SpawnLocations").into_iter().find_map(|v| if let Val::Vec3(p) = v { Some(Vec3::from(dhcook::xform::ue_point(p))) } else { None }));
-                        if let Some(at) = at {
-                            self.ai_fx.push(crate::script_world::AiFx::SpawnPickup { pickup: p as u32, at });
+                        if k == 0 {
+                            self.write(op, "Spawned", pt.clone());
+                        }
+                        self.write(op, &format!("Spawned {}", k + 1), pt.clone());
+                        if let (Some(p), Val::Actor(a)) = (pickup, &pt) {
+                            if let Some(ka) = g.actors.get(*a as usize) {
+                                self.ai_fx.push(crate::script_world::AiFx::SpawnPickup { pickup: p, at: Vec3::from(ka.position), actor: Some(*a) });
+                            }
+                        }
+                        if class == "SeqAct_ActorFactoryEx" {
+                            if let Some(i) = self.output_index(op, &format!("Spawned {}", k + 1)) {
+                                self.fire(op, i);
+                            }
                         }
                     }
-                }
-                // (the Ex: enable / disable / toggle only gate it)
-                if class == "SeqAct_ActorFactoryEx" && input == 0 {
-                    if let Some(i) = self.output_index(op, "Spawned 1") {
-                        self.fire(op, i);
+                    // (a place given as a vector, `SpawnLocations`, the Ex's)
+                    if points.is_empty() {
+                        if let (Some(p), Some(at)) = (pickup, self.read(op, "SpawnLocations").into_iter().find_map(|v| if let Val::Vec3(p) = v { Some(Vec3::from(dhcook::xform::ue_point(p))) } else { None })) {
+                            self.ai_fx.push(crate::script_world::AiFx::SpawnPickup { pickup: p, at, actor: None });
+                        }
+                        if class == "SeqAct_ActorFactoryEx" {
+                            if let Some(i) = self.output_index(op, "Spawned 1") {
+                                self.fire(op, i);
+                            }
+                        }
                     }
                 }
                 if input == 0 || class == "SeqAct_ActorFactory" {
@@ -7050,8 +7090,9 @@ fn world_events(
                     vm.actor_event(a, &["DisSeqEvent_Corpse"], OutSel::Index(*what as usize), Some(Val::Player));
                 }
             }
-            Interaction::Pickup(p) => {
-                if let Some(&a) = vm.pickup_actor.get(p) {
+            Interaction::Pickup(p, made) => {
+                // (a factory's: the point it was made at stands for it)
+                if let Some(a) = made.or_else(|| vm.pickup_actor.get(p).copied()) {
                     vm.actor_event(a, &["DisSeqEvent_PickupPickedUp"], OutSel::Index(0), Some(Val::Player));
                     vm.interacted(a);
                 }

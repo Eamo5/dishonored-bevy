@@ -2947,6 +2947,14 @@ fields no longer show their stand-in "WW" behind the title.
     `m_bDestroyArrows`: the arena's and Bend Time Massacre's), and the Oil Rain trial lessens Bend
     Time's grey (`DisSeqAct_DLC05_SetBendTimeDesaturation`: its pre- and post-desaturation 0.2
     in place of the node's 0.95); before, both ops only passed their signal on.
+  - *The Mystery Man's clues*: a factory makes as many as its `SpawnCount` (the Ex's), each at
+    the next of its spawn points (its "Spawn Point" list, the four `OL_ClueChosenHolders`, else
+    its `SpawnPoints`), each point standing for its pickup ("Spawned 1" to "4" written and fired,
+    the events the scripts hang on it, `DisSeqEvent_PickupPickedUp`, raised as it's taken: "Clue
+    found (3 remaining)"); Bend Time Massacre's bonus tanks likewise (three at `TargetPoint_73`
+    to `_75`, given only by `SpawnPoints`). Before, a factory made one, at the first point it was
+    given (and a tank factory with none, nothing): one clue of the four turned up, so the trial
+    couldn't be finished. Saves keep each made pickup's point.
   - *Scoring* (`dlc05score.rs`, the rule sets cooked per map): kills by the victim's story
     group with the modifiers' flair (assassination, drop kill, adrenaline, headshot, in flames,
     dark kill, get back, severed limb, payback, perfect block, low blow, faction combo, power
