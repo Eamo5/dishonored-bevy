@@ -215,7 +215,7 @@ struct Hushed;
 fn finish_voices(
     mut commands: Commands,
     q: Query<(Entity, &Voice), With<OneShot>>,
-    all: Query<(&Voice, Has<Hushed>, &Emitter)>,
+    all: Query<(&Voice, Has<Hushed>, &Emitter, Has<OneShot>)>,
     time: Res<Time>,
     mut log_t: Local<f32>,
     out: Option<Res<Output>>,
@@ -230,16 +230,27 @@ fn finish_voices(
     if *log_t > 1.0 && log_enabled() {
         *log_t = 0.0;
         let far = all.iter().map(|(v, ..)| v.player.get_pos().as_secs_f32()).fold(0.0, f32::max);
-        let hushed = all.iter().filter(|(_, h, _)| *h).count();
+        let hushed = all.iter().filter(|(_, h, ..)| *h).count();
         // (the events sounding most)
         let mut by: HashMap<u32, usize> = HashMap::new();
-        for (_, _, em) in &all {
+        for (_, _, em, _) in &all {
             *by.entry(em.event).or_default() += 1;
         }
         let mut top: Vec<(u32, usize)> = by.into_iter().collect();
         top.sort_by(|a, b| b.1.cmp(&a.1));
         let top: Vec<String> = top.iter().take(4).map(|(e, n)| format!("{} x{n}", event_name(*e))).collect();
         info!("audio: most: {}", top.join(", "));
+        // (DH_LOOP_LOG: the loops sounding, not the ambient emitters' nor music, by event)
+        if std::env::var_os("DH_LOOP_LOG").is_some() {
+            let mut loops: HashMap<u32, usize> = HashMap::new();
+            for (_, _, em, one) in &all {
+                if !one && !em.music && em.ambient.is_none() {
+                    *loops.entry(em.event).or_default() += 1;
+                }
+            }
+            let list: Vec<String> = loops.iter().map(|(e, n)| format!("{} x{n}", event_name(*e))).collect();
+            info!("audio: loops: {}", list.join(", "));
+        }
         let (rate, ch) = out.as_ref().map_or((48000, 2), |o| o.format());
         info!("audio: {} voices ({hushed} out of earshot), furthest {far:.1}s, mixing {:.0}% of real time", all.iter().len(), crate::speakers::mix_load(rate, ch) * 100.0);
     }
