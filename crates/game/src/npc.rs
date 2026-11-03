@@ -1759,6 +1759,10 @@ fn is_hound(npc: &Npc) -> bool {
     npc.name.contains("Wolfhound") || npc.pawn.to_ascii_lowercase().contains("wolfhound")
 }
 
+/// The least time between two knockdowns of Corvo (s: his combat tweak's
+/// `m_fMinTimeBetweenPlayerKnockdowns`).
+const PLAYER_KNOCKDOWN_GAP: f32 = 7.0;
+
 /// The weeper grab's turns: a lunge that lands (or not), the struggle, the release.
 #[allow(clippy::too_many_arguments)]
 fn weeper_grab(
@@ -1767,7 +1771,7 @@ fn weeper_grab(
     mut player: Query<(Entity, &Transform, &mut Player, Option<&Grabbed>)>,
     mut npcs: Query<(Entity, &mut Npc, &Transform), Without<Player>>,
     mut sfx: MessageWriter<crate::audio::PostEvent>,
-    (mut stats, settings): (ResMut<crate::gameplay::PlayerStats>, Res<crate::settings::Settings>),
+    (mut stats, settings, mut last_knockdown): (ResMut<crate::gameplay::PlayerStats>, Res<crate::settings::Settings>, Local<Option<f32>>),
 ) {
     let Ok((pe, pt, mut p, grabbed)) = player.single_mut() else { return };
     for (e, mut npc, t) in &mut npcs {
@@ -1785,8 +1789,19 @@ fn weeper_grab(
                     if hit {
                         let dmg = HOUND_KNOCKDOWN[(settings.difficulty as usize).min(3)];
                         crate::gameplay::hurt_player(&mut stats, &mut sfx, dmg);
-                        stats.knockdown = (stats.knockdown.0 + 1, crate::combat::side_of(t.translation, pt.translation, p.yaw));
-                        stats.knocked = KNOCKED_DOWN;
+                        // (not again within `m_fMinTimeBetweenPlayerKnockdowns` (7 s) of the last: a strong
+                        // hit instead, `m_bDoStrongHitsWhenKnockdownIsPrevented`; before, a pack's hounds
+                        // knocked him down one after another)
+                        let side = crate::combat::side_of(t.translation, pt.translation, p.yaw);
+                        let now = time.elapsed_secs();
+                        if last_knockdown.is_some_and(|at| now - at < PLAYER_KNOCKDOWN_GAP) {
+                            stats.hit_from = Some(t.translation);
+                            stats.blow = (stats.blow.0.wrapping_add(1), side);
+                        } else {
+                            *last_knockdown = Some(now);
+                            stats.knockdown = (stats.knockdown.0 + 1, side);
+                            stats.knocked = KNOCKED_DOWN;
+                        }
                     }
                     info!("wolfhound jump attack: {} {} ({d:.2} m)", npc.name, if hit { "knocks Corvo down" } else { "misses" });
                     npc.grab = Some((if hit && stats.dead { GrabPhase::Kill } else if hit { GrabPhase::Release } else { GrabPhase::Miss }, 0.0));

@@ -2252,7 +2252,10 @@ fields no longer show their stand-in "WW" behind the title.
     20-30 s. It springs at him (`Attack_JumpAttack_Jump_Minigame`) and, landing on him, knocks
     him down for `m_DamageOnKnockDown` (7/10/15/20 by difficulty): his arms thrown by the side it
     came from (`Sword_KnockdownFront`, `_Back`, `_Left`, `_Right`; `Empty_` empty-handed), down
-    for their 0.7 s. Then it steps back (`_StepBack_Minigame`). Killed by it, he goes down with
+    for their 0.7 s. Not again within his combat tweak's `m_fMinTimeBetweenPlayerKnockdowns`
+    (7 s) of the last: then the landing is a strong hit (`m_bDoStrongHitsWhenKnockdownIsPrevented`:
+    `Sword_BigHit_*` by its side), still hurting him; before, he was knocked down every time.
+    Then it steps back (`_StepBack_Minigame`). Killed by it, he goes down with
     `Sword_JumpAttack_TransToKill_Minigame` and `Sword_WolfhoundDeath_Minigame` as it makes its
     kill (`Attack_JumpAttack_TransToKill_Minigame`).
   Once one has used either on him, no other does for its inhibition (DefaultAI.ini's
