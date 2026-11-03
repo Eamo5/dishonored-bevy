@@ -966,6 +966,10 @@ fields no longer show their stand-in "WW" behind the title.
   loose body that lands beside it. A character struck flinches, and falls dead, by the side the
   blow came from: its front, left, right or back clips (`Sword_HitLeft_A`, `Empty_HitBack_A`,
   `Generic_DeathRightA`...), where it has them; hurt by no blow it knows of, it picks among them.
+  Its quick deaths go by eighths of the circle as `DisNPCAnimDefinitions` lists them (front,
+  front left, front right, left, right, and the back's three: `Generic_DeathFast_Front`,
+  `_FrontLeft`, `_FrontRight`, `_Left`, `_Right`, `_Back`); before, every quick death was the
+  front's, whichever side the blow came from.
   Corvo's blade, leaving it standing, gets its weak reaction instead: the additive flinch by the
   side struck (`HitReactSmall_Additive`: `ADD_Generic_SmallHit_Front`, `_Left`, `_Right`,
   `_Back`) laid over what it does, its blow or step not stopped and no stagger. The blade's damage

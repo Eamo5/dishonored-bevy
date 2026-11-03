@@ -6882,7 +6882,9 @@ pub struct NpcClips {
     /// the eyelids' `Blink`
     blink: Option<ClipId>,
     death: Vec<ClipId>,
-    death_fast: Option<ClipId>,
+    /// the quick deaths by the side struck from: front, front left, front right, left, right, back
+    /// (`DisNPCAnimDefinitions`' quick death: its chain by direction, `Generic_DeathFast_*`)
+    death_fast: [Option<ClipId>; 6],
     /// its dodge (`DisNPCAnim_Dodge`): in, out, by side (left, right), and its riposte out of
     /// it (`DisNPCAnim_RiposteLeft`, `_Right`: `Sword_DodgeLeftAttack_Small`, `_Big`)
     dodge_in: [Vec<ClipId>; 2],
@@ -7105,7 +7107,7 @@ impl NpcClips {
                     human
                 }
             },
-            death_fast: lib.find("Generic_DeathFast_Front"),
+            death_fast: ["Front", "FrontLeft", "FrontRight", "Left", "Right", "Back"].map(|d| lib.find(&format!("Generic_DeathFast_{d}"))),
             electrified: lib.find("Generic_Electrified"),
             immolate: lib.find("Generic_Immolation"),
             dodge_in: ["Left", "Right"].map(|s| lib.all(&[&format!("Sword_Dodge{s}In")])),
@@ -7421,6 +7423,25 @@ fn side_struck(npc: &Npc, at: Vec3) -> Option<usize> {
     } else {
         1
     })
+}
+
+/// The direction a character was struck from by eighths of the circle, as its quick deaths are
+/// chosen (0 front, 1 front left, 2 front right, 3 left, 4 right, 5 the back's three); none
+/// without a blow.
+fn octant_struck(npc: &Npc, at: Vec3) -> Option<usize> {
+    Some(octant((npc.hit_from? - at).with_y(0.0).normalize_or_zero(), npc.forward()))
+}
+
+/// `octant_struck` for a blow from `to` (flat) of one facing `f`.
+fn octant(to: Vec3, f: Vec3) -> usize {
+    let right = Vec3::new(-f.z, 0.0, f.x);
+    let deg = to.dot(right).atan2(to.dot(f)).to_degrees();
+    match deg.abs() {
+        a if a < 22.5 => 0,
+        a if a < 67.5 => if deg > 0.0 { 2 } else { 1 },
+        a if a < 112.5 => if deg > 0.0 { 4 } else { 3 },
+        _ => 5,
+    }
 }
 
 /// Time between blinks (s: `ArkComponentLookatConfig`'s `MinDurationBetweenBlink`,
@@ -8159,8 +8180,10 @@ fn npc_select_anim(
                     (clips.choke_out, clips.lie_back)
                 } else if st.last_alert == Alert::Unaware && npc.mode == Mode::Dead {
                     (pick(&clips.assassinated), clips.lie_front)
-                } else if rand::random::<f32>() < 0.5 && clips.death_fast.is_some() {
-                    (clips.death_fast, clips.lie_back)
+                } else if rand::random::<f32>() < 0.5 && clips.death_fast[0].is_some() {
+                    // (falling from the side the blow came: its eighth of the circle, the back's three
+                    // one)
+                    (octant_struck(&npc, t.translation).and_then(|o| clips.death_fast[o]).or(clips.death_fast[0]), clips.lie_back)
                 } else {
                     // (falling away from the blow, by the side it struck)
                     (side_struck(&npc, t.translation).and_then(|s| clips.death_dir[s]).or(pick(&clips.death)), None)
@@ -9504,6 +9527,25 @@ mod response_tests {
         let plain = dhcook::format::Attention { stop_variance: [0.0; 4], ..att };
         assert_eq!(attention_level(&plain, 0.31, 3, &[0.0, 0.0, 1.0, 0.0]), 3);
         assert_eq!(attention_level(&plain, 0.29, 3, &[0.0, 0.0, -1.0, 0.0]), 2);
+    }
+}
+
+#[cfg(test)]
+mod octant_tests {
+    use super::octant;
+    use bevy::prelude::Vec3;
+
+    #[test]
+    fn blows_fall_in_their_eighth() {
+        // (facing -z: its right is +x, as `side_struck` has it)
+        let f = Vec3::NEG_Z;
+        assert_eq!(octant(Vec3::NEG_Z, f), 0);
+        assert_eq!(octant(Vec3::new(1.0, 0.0, -1.0).normalize(), f), 2);
+        assert_eq!(octant(Vec3::new(-1.0, 0.0, -1.0).normalize(), f), 1);
+        assert_eq!(octant(Vec3::X, f), 4);
+        assert_eq!(octant(Vec3::NEG_X, f), 3);
+        assert_eq!(octant(Vec3::new(1.0, 0.0, 1.0).normalize(), f), 5);
+        assert_eq!(octant(Vec3::Z, f), 5);
     }
 }
 
