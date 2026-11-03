@@ -138,6 +138,8 @@ pub struct PostLayer {
 
 impl PowerPost {
     pub const GRAPH: u8 = 0;
+    /// a music box's tune heard (Corvo's `m_MusicalEffectUberParameters`)
+    pub const MUSICAL: u8 = 6;
     pub const DARK_VISION: u8 = 8;
     /// the menus' blur, over all
     pub const MENU: u8 = 20;

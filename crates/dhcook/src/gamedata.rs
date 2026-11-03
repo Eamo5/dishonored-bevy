@@ -1881,6 +1881,25 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
             }
         }
     }
+    // what his tweak leaves to its fallback (`m_FallbackChainCooked`: `Twk_Pawn_Corvo`, then
+    // `Twk_Pawn_DefaultPlayer`): the music box's grade, `m_MusicalEffectSpeed` /
+    // `m_MusicalEffectFadeOutTime`, and the grade itself (`m_MusicalEffectUberParameters`, over
+    // the class's) as `musical.<field>`
+    let chain: Vec<Props> = ["Twk_Pawn_Corvo.Twk_Pawn_Corvo_Release", "Twk_Pawn_Corvo.Twk_Pawn_Corvo", "Twk_Pawn_DefaultPlayer.Twk_Pawn_DefaultPlayer"]
+        .iter()
+        .filter_map(|path| startup.find_export(path).and_then(|i| props(&startup, i)))
+        .collect();
+    for n in ["m_MusicalEffectSpeed", "m_MusicalEffectFadeOutTime"] {
+        if let Some(v) = chain.iter().find_map(|p| p.float(n)) {
+            d.pawn.insert(n.into(), v);
+        }
+    }
+    let class_default = game.find_export("Default__DisTweaks_PlayerPawn").and_then(|i| props(&game, i));
+    for (pkg, p) in class_default.iter().map(|p| (&game, p)).chain(chain.iter().rev().map(|p| (&startup, p))) {
+        if let Some(Value::Struct(_, sub)) = p.get("m_MusicalEffectUberParameters") {
+            flatten(pkg, sub, "musical.", &mut d.pawn, &mut BTreeMap::new());
+        }
+    }
     // the avoidance's radii and forces (`ArkAvoidable`): Corvo's class defaults under his own,
     // and a character's (`Twk_Pawn_DefaultNPC` over its class's) as `npc.<property>`
     for (pkg, path, prefix) in [(&game, "Default__DisTweaks_PlayerPawn", ""), (&game, "Default__DisTweaks_NPCPawn", "npc."), (&startup, "Twk_Pawn_DefaultNPC.Twk_Pawn_DefaultNPC", "npc.")] {

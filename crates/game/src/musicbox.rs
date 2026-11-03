@@ -21,7 +21,7 @@ impl Plugin for MusicBoxPlugin {
         app.init_resource::<Tune>()
             .add_systems(OnEnter(GameState::InGame), |mut t: ResMut<Tune>| *t = Tune::default())
             .add_systems(Update, (hear_tunes, combat_tunes, mark_playing).before(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)))
-            .add_systems(Update, sway.after(crate::player::PlayerMoveSet).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (sway.after(crate::player::PlayerMoveSet), musical_grade.after(hear_tunes)).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, follow_wearer.before(crate::anim::AnimPose).run_if(in_state(GameState::InGame)));
     }
 }
@@ -271,6 +271,23 @@ fn combat_tunes(
         }
     }
     playing.retain(|e, _| live.contains(e));
+}
+
+/// The tune's grade over the world's while Corvo is within its disorient radius (his tweak's
+/// `m_MusicalEffectUberParameters`, from its fallback `Twk_Pawn_Corvo`: a cold blue cast, half
+/// greyed, brighter and grainy), in at `m_MusicalEffectSpeed` (6 a second) and out over
+/// `m_MusicalEffectFadeOutTime` (0.7 s).
+fn musical_grade(tune: Res<Tune>, data: Res<crate::gamedata::Data>, mut post: ResMut<crate::postfx::PowerPost>) {
+    use crate::postfx::{PostLayer, PowerPost};
+    if tune.in_disorient == post.layers.contains_key(&PowerPost::MUSICAL) {
+        return;
+    }
+    let layer = tune.in_disorient.then(|| PostLayer {
+        fields: crate::postfx::uber_fields(&data.0.pawn, "musical."),
+        fade_in: 1.0 / data.pawn("m_MusicalEffectSpeed", 6.0).max(0.1),
+        fade_out: data.pawn("m_MusicalEffectFadeOutTime", 0.7),
+    });
+    post.set(PowerPost::MUSICAL, layer);
 }
 
 /// The world swaying under the tune.

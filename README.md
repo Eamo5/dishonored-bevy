@@ -2287,7 +2287,12 @@ fields no longer show their stand-in "WW" behind the title.
   A musical Overseer fighting Corvo plays the protective tune, and so do the
   levels' tune sources (`DisProtectionTuneSource`): within 6 m the world sways, within 4 m
   Corvo's powers fail (`DisTweaks_Tune_Protection` radii and sounds, cooked from the music
-  box's `DisTweaks_NPCTune_Protection`). Facing Corvo within 20 m and 45 degrees the Overseer
+  box's `DisTweaks_NPCTune_Protection`). Within the disorient radius the world takes on the
+  tune's grade (the `MusicalOverseer` screen effect: Corvo's `m_MusicalEffectUberParameters`, which
+  his `Twk_Pawn_Corvo_Release` leaves to its fallback `Twk_Pawn_Corvo` (`m_FallbackChainCooked`):
+  a blue cast at half opacity, half greyed, exposure 1.25, gamma 1.5, film grain 10), in at
+  `m_MusicalEffectSpeed` (6 a second) and out over `m_MusicalEffectFadeOutTime` (0.7 s). The cooker
+  now reads that fallback; before, the grade was missing and only the sway showed. Facing Corvo within 20 m and 45 degrees the Overseer
   plays its combat tune at him (`DisTweaks_NPCTune_Combat`, `Music_Amp_Damage`), whose
   musical damage (90 every 0.3 s) tears through the rats of a swarm in the cone; it stops a
   second after he leaves the cone, five after he's out of sight.
