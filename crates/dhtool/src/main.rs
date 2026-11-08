@@ -962,6 +962,7 @@ fn main() -> Result<()> {
             let pkg = upk::Package::open(&pkg_path(&args[2]))?;
             let part = args.get(3).map(|s| s.to_ascii_lowercase());
             let (mut total, mut painted) = (0, 0);
+            let mut types = std::collections::BTreeMap::<u32, u32>::new();
             for i in 0..pkg.exports.len() {
                 let idx = i as i32 + 1;
                 if pkg.class_name(idx) != "StaticMeshComponent" {
@@ -1028,6 +1029,9 @@ fn main() -> Result<()> {
                     Ok((ty, has, stride, num, sample))
                 })();
                 total += 1;
+                if let Ok((ty, ..)) = &probe {
+                    *types.entry(*ty).or_default() += 1;
+                }
                 match probe {
                     Ok((ty, has, stride, num, sample)) if has != 0 => {
                         painted += 1;
@@ -1041,7 +1045,7 @@ fn main() -> Result<()> {
                     Err(err) => println!("{idx} {} probe failed: {err}", mesh),
                 }
             }
-            println!("{painted} of {total} components painted");
+            println!("{painted} of {total} components painted; light map types {types:?}");
         }
         Some("particlevf") => {
             // dhtool particlevf: shader maps whose particle base pass pixel shader reads the

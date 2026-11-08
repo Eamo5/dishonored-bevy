@@ -28,7 +28,7 @@ impl Plugin for ArmsPlugin {
         app.init_resource::<DeathFall>()
             .init_resource::<ArmSteps>().init_resource::<ParryZone>().init_resource::<SwingMarks>().init_resource::<MantleEnds>()
             .add_systems(OnEnter(GameState::InGame), spawn_arms.after(spawn_view_model))
-            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_steps.after(ArmsAnimSet), arm_effects.after(ArmsAnimSet), possess_hand.after(ArmsAnimSet), (animate_held, animate_sword, show_bolts).after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin, swap_arms).after(animate_view_model).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (animate_arms.in_set(ArmsAnimSet), arm_steps.after(ArmsAnimSet), arm_effects.after(ArmsAnimSet), possess_hand.after(ArmsAnimSet), heart_glow.after(ArmsAnimSet), (animate_held, animate_sword, show_bolts).after(ArmsAnimSet), show_upgrades, pose_arms_ik, mark_skin, swap_arms).after(animate_view_model).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, (align_arms.in_set(ArmsAlign), arm_pitch).after(AnimPose).before(TransformSystems::Propagate))
             .add_systems(Last, scene_align_log.run_if(|| std::env::var_os("DH_SCENE_ALIGN").is_some()));
     }
@@ -779,6 +779,14 @@ fn spawn_arms(
                                 commands.entity(part).add_child(m);
                             }
                             commands.entity(rj[bi]).add_child(part);
+                        }
+                    }
+                    // the Heart's glow socket (`DisTweaks_Heart.m_GlowFXSocket`): `heart_glow`
+                    if prop == "heart" {
+                        if let Some((bi, s)) = rv.skeleton.sockets.iter().find(|s| s.name.eq_ignore_ascii_case("Glow")).and_then(|s| bones.iter().position(|b| b.name.eq_ignore_ascii_case(&s.bone)).map(|bi| (bi, s))) {
+                            let at = Transform::from_translation(Vec3::from(s.translation)).with_rotation(Quat::from_array(s.rotation).normalize());
+                            let g = commands.spawn((at, Visibility::Inherited, RenderLayers::layer(VIEW_LAYER), HeartGlowSocket)).id();
+                            commands.entity(rj[bi]).add_child(g);
                         }
                     }
                     if let Some(lib) = rv.anims.clone() {
@@ -2007,6 +2015,35 @@ fn cast_clip(p: Power) -> &'static str {
         Power::Grenade | Power::StickyGrenade | Power::Chokedust => "Gadgets_Grenade_Deploy",
         Power::SpringRazor | Power::ArcMine | Power::StunMine => "Gadgets_SpringRazor_Deploy",
     }
+}
+
+/// The Heart's glow socket on its rig.
+#[derive(Component)]
+struct HeartGlowSocket;
+
+/// The Heart's glow while it is in his hand (`DisTweaks_Heart.m_pGlowFX`, `heart_glow`: faint red
+/// sparks at its `Glow` socket, `m_GlowFXSocket`); before, it had none.
+fn heart_glow(
+    sockets: Query<(Entity, &InheritedVisibility), With<HeartGlowSocket>>,
+    mut tagged: Query<(&crate::particles::EffectTag, &mut crate::particles::ParticleEmitter)>,
+    mut fx: MessageWriter<crate::particles::SpawnEffect>,
+    mut shown: Local<Option<Entity>>,
+) {
+    let target = sockets.iter().find(|(_, v)| v.get()).map(|(e, _)| e);
+    if *shown == target {
+        return;
+    }
+    if let Some(old) = shown.take() {
+        for (tag, mut em) in &mut tagged {
+            if tag.0 == old {
+                em.stop();
+            }
+        }
+    }
+    if let Some(s) = target {
+        fx.write(crate::particles::SpawnEffect { follow: Some(s), tag: Some(s), turn: true, view: true, secs: 3600.0, ..crate::particles::SpawnEffect::at("heart_glow", Vec3::ZERO) });
+    }
+    *shown = target;
 }
 
 /// Where Possession's glow sits on the left hand (`DisTweaks_Possess`'s

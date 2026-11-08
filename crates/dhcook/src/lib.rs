@@ -8118,6 +8118,8 @@ impl<'a> Cooker<'a> {
             ("windblast_2", "Vfx_GamePlay.Windblast.Windblast_lvl2"),
             ("windblast_underwater", "Vfx_GamePlay.Windblast.Windblast_UndWater_lvl1"),
             ("windblast_impact", "Vfx_GamePlay.Windblast.Windblast_GroundImpact_01"),
+            // (the Heart's glow on its `Glow` socket while held: `DisTweaks_Heart.m_pGlowFX`)
+            ("heart_glow", "Vfx_Weapon.Effects.Heart.heart_glow"),
             // (a character it strikes: `DisTweaks_NPCPawn_Combat.m_WindBlastEffectTemplate`)
             ("windblast_npc", "vrosier_TestFX3.Windblast_2.Windblast_NPC_02"),
             ("windblast_dirt", "Vfx_GamePlay.Windblast.Windblast_PLayerDirt_01"),

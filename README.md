@@ -206,7 +206,8 @@ are in the settings file, `pad_binding_set` 0-3):
   the assassins attack, no longer brought the Heart (and the crossbow) with it, nor the
   Prison's. Held in the left hand as the gadgets are (`Gadgets_Idle`), its fingers about
   it in its own grip (`Ply_Gadgets_Heart_as`'s `Gadgets_Heart_Fingers_Idle`, on the finger bones
-  alone); beats faster near runes and bone charms: its pulse's rate (`m_fMinPulseRate` 0.25 to
+  alone), glowing faintly while in hand (`m_pGlowFX` `heart_glow` at its rig's `Glow` socket,
+  `m_GlowFXSocket`; before, it had no glow); beats faster near runes and bone charms: its pulse's rate (`m_fMinPulseRate` 0.25 to
   `m_fMaxPulseRate` 4) is its beating clip's pace (`Heart_Beat`, our reading), and its beats are
   the clip's own, a lub and a dub (`DisNotify_Heartbeat` at 0.24 and 0.54 s, now cooked: each
   its `m_Heartbeats` sound, `Heart_Gadget_Beat_1` and `_2`, and rumble), so what is heard and
