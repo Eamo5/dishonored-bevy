@@ -3820,6 +3820,9 @@ against the install's own data where it carries them, then implemented independe
     sight; the Spring Razor upgrade doubles the radius. Corvo caught in it takes 50
     (`m_ImmuneNPCDamage`; the characters' `m_NonNPCDamage` 5 comes with the cut). A blast sets it
     off 0.75 s later.
+    It is set down where his hand lays it, 0.2 s into his clip (`Gadgets_SpringRazor_Deploy`'s
+    `DisNotify_PlaceSpringRazor`), on the surface his view then meets; Daud's mines likewise. Before,
+    it was set down the moment he pressed, before his hand had moved.
   - The blade reaches 2.1 m, growing to 2.835 m at a full sprint.
   - Thrown props fly at `ThrowStrength` whatever their weight, without his own speed. A dropped
     one is let go with no speed of its own, and damage taken drops it. Held, it sits where the

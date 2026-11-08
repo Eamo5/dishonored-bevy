@@ -392,6 +392,9 @@ const WINDBLAST_NOTIFY: f32 = 0.27;
 /// in `Powers_Cast_Swarm`).
 const BEND_TIME_NOTIFY: f32 = 0.14;
 const SWARM_NOTIFY: f32 = 0.165;
+/// When a spring razor (or a mine) is set down: its clip's `DisNotify_PlaceSpringRazor`, 0.2 s into
+/// `Gadgets_SpringRazor_Deploy`.
+const RAZOR_NOTIFY: f32 = 0.2;
 /// How hard a push throws a character (its momentum's magnitude, uu): from
 /// `m_fAnimRagdollThreshold` the animated throw (a moment's flight, then limp), from
 /// `m_fFullRagdollThreshold` limp at once; less, it reels (as roshan's r614/blink research read
@@ -1220,6 +1223,14 @@ fn use_power(
                 sfx.write(PostEvent::named(data.power_sound("BendTime", level, "m_pBendTimeSoundStartEvent").unwrap_or("Snd_Power_P_Bend_Time"), None));
                 sfx.write(PostEvent::named("Snd_UI_Ingame_Slomo_Start", None));
             }
+            Power::SpringRazor | Power::ArcMine | Power::StunMine => {
+                let g = match power {
+                    Power::ArcMine => crate::gadgets::Gadget::ArcMine,
+                    Power::StunMine => crate::gadgets::Gadget::StunMine,
+                    _ => crate::gadgets::Gadget::SpringRazor,
+                };
+                gadget.write(crate::gadgets::UseGadget { gadget: g, eye, dir, cooked: 0.0 });
+            }
             Power::DevouringSwarm => {
                 swarm.write(crate::swarm::SummonSwarm { at, level });
                 sfx.write(PostEvent::named(data.power_sound("DevouringSwarm", level, "m_pUseSoundEvent").unwrap_or("Snd_Power_P_Devouring_Swarm_Spell"), None));
@@ -1440,12 +1451,9 @@ fn use_power(
                 sfx.write(PostEvent::named("Snd_Grenade_Pin", None));
                 return;
             }
-            let g = match sel {
-                Power::ArcMine => crate::gadgets::Gadget::ArcMine,
-                Power::StunMine => crate::gadgets::Gadget::StunMine,
-                _ => crate::gadgets::Gadget::SpringRazor,
-            };
-            gadget.write(crate::gadgets::UseGadget { gadget: g, eye, dir, cooked: 0.0 });
+            // (set down at the clip's `DisNotify_PlaceSpringRazor`, 0.2 s into
+            // `Gadgets_SpringRazor_Deploy`, where his view then is; before, at the press)
+            powers.pending.push((RAZOR_NOTIFY, sel, 0, Vec3::ZERO));
             powers.cooldown = 1.0;
         }
         Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt => {
