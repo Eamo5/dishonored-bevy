@@ -105,6 +105,10 @@ const BLOCK_VERTICAL: (f32, f32) = (0.5235988, 0.87266463);
 /// Adrenaline for a won parry (`m_fAdrenalineAddedParryWin`).
 const PARRY_ADRENALINE: f32 = 20.0;
 const CAM_SHAKE_BLOCK_SCALE: f32 = 6.0;
+/// How hard a plain block (not a parry) pushes Corvo back (m/s: `DisTweaks_MeleeBlockPlayer`'s
+/// `m_fKnockbackImpulse_Min` 500 to `_Max` 800 uu, as roshan's r614/blink research found the
+/// blocker's hit handler applies it; where in that span a blow falls is our reading, at random).
+const BLOCK_KNOCKBACK: (f32, f32) = (5.0, 8.0);
 
 /// The sound of Corvo's sword on what it struck: the contact system's for its surface, else the
 /// plain environment's.
@@ -1565,6 +1569,12 @@ fn receive_hits(
             } else {
                 stagger.write(NpcStagger { npc: h.npc, secs: 0.5, parried: false });
                 sword.recoil = 0.25;
+                // (pushed back by the blow; before, he stood fast)
+                let push = BLOCK_KNOCKBACK.0 + rand::random::<f32>() * (BLOCK_KNOCKBACK.1 - BLOCK_KNOCKBACK.0);
+                p.velocity -= to_npc * push;
+                if std::env::var_os("DH_MELEE_LOG").is_some() {
+                    info!("melee: the blocked blow pushes Corvo back at {push:.1} m/s from {:.2}", pt.translation);
+                }
                 stats.trackers.hints.push(crate::tutorials::Hint::Blocked(false));
             }
             continue;

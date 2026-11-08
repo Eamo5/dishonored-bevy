@@ -1085,7 +1085,10 @@ fields no longer show their stand-in "WW" behind the title.
   `m_fBlockAngle` (50 degrees). Before, a block raised 0.2 to 0.43 s before the blow was only
   a plain block. Up and down, his block takes blows within `m_fBlockAngle_Vertical_Up` (30
   degrees) above his view and `_Down` (50) below it (the blow's height its attacker's chest:
-  our reading); before, he blocked looking at his feet or the sky. When his blow and a guard's land together (their attack
+  our reading); before, he blocked looking at his feet or the sky. A plain block (not a parry)
+  pushes him back (`DisTweaks_MeleeBlockPlayer`'s `m_fKnockbackImpulse_Min` / `_Max`, 5 to 8 m/s, as
+  roshan's r614/blink research found the blocker's hit handler applies it; at random within it, our
+  reading), a step of 0.2 to 0.4 m; before, he stood fast. When his blow and a guard's land together (their attack
   zones within `m_fVersusZoneMaxTime`, each facing the other) the blades lock
   (`StatePlayerMasterVersus`): "Mash [Left Mouse Button] !" (`DUI_Context_Versus`), the guard straining in
   `Sword_Versus_MinigameUU` and his arms in `Sword_Ready_Versus_MinigameUU`. His presses over
