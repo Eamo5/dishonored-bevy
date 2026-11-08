@@ -158,6 +158,9 @@ struct ComponentLightmap {
     scales: [[f32; 3]; 3],
     coord_scale: [f32; 2],
     coord_bias: [f32; 2],
+    /// the vertex colours painted on this component (`OverrideVertexColors`, after the light
+    /// map), RGBA
+    colors: Option<Vec<[u8; 4]>>,
 }
 
 fn read_component_lightmap(assets: &Assets, comp: &Obj) -> Option<ComponentLightmap> {
@@ -177,14 +180,36 @@ fn read_component_lightmap(assets: &Assets, comp: &Obj) -> Option<ComponentLight
     }
     let n = r.count(4).ok()?; // ShadowVertexBuffers
     r.skip(n * 4).ok()?;
-    if r.u32().ok()? != 2 {
-        // no texture lightmap, but shadow maps may still matter
+    let ty = r.u32().ok()?;
+    if ty != 2 {
+        // no texture lightmap, but shadow maps may still matter, and the colours painted on
+        // it after its light map (none, or a vertex light map: `FLightMap1D`'s guids, owner,
+        // directional samples, three scale vectors and simple samples)
+        let colors = (|| -> Option<Vec<[u8; 4]>> {
+            if ty == 1 {
+                let n = r.count(16).ok()?;
+                r.skip(n * 16).ok()?;
+                r.skip(4).ok()?;
+                for k in 0..2 {
+                    r.skip(8).ok()?;
+                    let size = r.u32().ok()? as usize;
+                    r.skip(4 + size).ok()?;
+                    if k == 0 {
+                        r.skip(3 * 12).ok()?;
+                    }
+                }
+            } else if ty != 0 {
+                return None;
+            }
+            override_colors(&mut r)
+        })();
         return Some(ComponentLightmap {
             shadow_maps,
             textures: [None, None, None],
             scales: [[1.0; 3]; 3],
             coord_scale: [0.0; 2],
             coord_bias: [0.0; 2],
+            colors,
         });
     }
     let n = r.count(16).ok()?; // LightGuids
@@ -203,7 +228,27 @@ fn read_component_lightmap(assets: &Assets, comp: &Obj) -> Option<ComponentLight
     if !(coord_scale[0].is_finite() && coord_scale[1].is_finite() && coord_scale[0] > 0.0) {
         return None;
     }
-    Some(ComponentLightmap { shadow_maps, textures, scales, coord_scale, coord_bias })
+    let colors = override_colors(&mut r);
+    Some(ComponentLightmap { shadow_maps, textures, scales, coord_scale, coord_bias, colors })
+}
+
+/// A static mesh component's painted vertex colours (`FStaticMeshComponentLODInfo`'s
+/// `OverrideVertexColors`: a flag, then an `FColorVertexBuffer`: stride, count, its bulk array of
+/// BGRA colours), as RGBA.
+fn override_colors(r: &mut Reader) -> Option<Vec<[u8; 4]>> {
+    if r.u8().ok()? == 0 {
+        return None;
+    }
+    let (_stride, num) = (r.u32().ok()?, r.u32().ok()? as usize);
+    if num == 0 {
+        return None;
+    }
+    let (esz, n) = (r.u32().ok()? as usize, r.u32().ok()? as usize);
+    if esz != 4 || n != num {
+        return None;
+    }
+    let data = r.bytes(n * 4).ok()?;
+    Some(data.chunks(4).map(|c| [c[2], c[1], c[0], c[3]]).collect())
 }
 
 struct Cooker<'a> {
@@ -1735,6 +1780,7 @@ impl<'a> Cooker<'a> {
         if !irrelevant.is_empty() {
             self.pending_irrelevant.push((inst_index, irrelevant.clone()));
         }
+        let colors = comp_lm.as_ref().and_then(|l| l.colors.clone());
         let lightmap = comp_lm.and_then(|lm| {
             // Identify the pair by name; fall back to slot order.
             let mut nac = None;
@@ -1799,6 +1845,7 @@ impl<'a> Cooker<'a> {
             irrelevant_lights: Vec::new(),
             reflect,
             soul,
+            colors,
         });
         Ok(())
     }
@@ -2013,6 +2060,7 @@ impl<'a> Cooker<'a> {
         let soul = self.soul(actor);
         self.scene.instances.push(Instance {
             soul,
+            colors: None,
             mesh: mesh_id,
             materials: section_mats,
             transform: world.to_cols_array(),
@@ -5519,6 +5567,7 @@ impl<'a> Cooker<'a> {
                 irrelevant_lights: Vec::new(),
                 reflect: 0,
                 soul: None,
+                colors: None,
             });
             let pickup = self.scene.pickups.len() as u32;
             self.scene.pickups.push(Pickup {
@@ -7548,6 +7597,7 @@ impl<'a> Cooker<'a> {
                 irrelevant_lights: Vec::new(),
                 reflect: 0,
                 soul: None,
+                colors: None,
             });
             let mut m = self.movable_of(tw, instance, Some(name.clone()), false);
             m.pool = Some(pool_index);

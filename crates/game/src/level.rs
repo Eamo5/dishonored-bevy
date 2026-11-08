@@ -1280,10 +1280,21 @@ fn spawn_level(
                         mat
                     }
                 };
-                let mh = mesh_cache
-                    .entry((inst.mesh, si, mirrored, full))
-                    .or_insert_with(|| mesh_assets.add(if full { make_mesh_full(sec, mirrored) } else { make_mesh(sec, mirrored) }))
-                    .clone();
+                // (an instance with painted colours: its own copy of the mesh with them,
+                // `OverrideVertexColors`; before, it took the mesh's own, or white: the Tower's
+                // intro boats' foam trail lay over the sea as an opaque sheet)
+                let painted = inst.colors.as_ref().filter(|_| sec.source.len() == sec.positions.len());
+                let mh = match painted {
+                    Some(cols) => {
+                        let mut own = sec.clone();
+                        own.colors = sec.source.iter().map(|&v| cols.get(v as usize).copied().unwrap_or([255; 4])).collect();
+                        mesh_assets.add(if full { make_mesh_full(&own, mirrored) } else { make_mesh(&own, mirrored) })
+                    }
+                    None => mesh_cache
+                        .entry((inst.mesh, si, mirrored, full))
+                        .or_insert_with(|| mesh_assets.add(if full { make_mesh_full(sec, mirrored) } else { make_mesh(sec, mirrored) }))
+                        .clone(),
+                };
                 if let Some(base) = base {
                     lit_parts.push((mh.clone(), mat_id, base));
                 }

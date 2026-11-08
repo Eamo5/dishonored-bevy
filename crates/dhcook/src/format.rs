@@ -2584,6 +2584,10 @@ pub struct Instance {
     /// what Dark Vision makes of it (its actor's): none, or how it is shown
     #[serde(default)]
     pub soul: Option<Soul>,
+    /// the vertex colours painted on this instance (`OverrideVertexColors`: the towers'
+    /// intro boats' foam trails, the sewers' water), RGBA, one per vertex of its mesh
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colors: Option<Vec<[u8; 4]>>,
 }
 
 /// How Dark Vision shows an actor (its `IDisSoulRenderInterface`: `IsSoulVisible`,

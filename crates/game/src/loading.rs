@@ -24,6 +24,7 @@ impl Plugin for LoadingPlugin {
 }
 
 /// One material section of a mesh with compacted vertex data.
+#[derive(Clone)]
 pub struct SubMesh {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
@@ -35,6 +36,9 @@ pub struct SubMesh {
     pub joints: Vec<[u16; 4]>,
     pub weights: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
+    /// each vertex's index in the whole mesh (kept for the meshes an instance paints: its
+    /// colours are by those)
+    pub source: Vec<u32>,
 }
 
 pub struct PreparedMesh {
@@ -153,8 +157,10 @@ fn load_level(cfg: &Config, tx: &Sender<LoadMsg>) -> anyhow::Result<LoadedLevel>
             }
         })
         .collect();
+    // (the meshes some instance has painted colours on keep each vertex's index in the whole mesh)
+    let painted: std::collections::HashSet<u32> = scene.instances.iter().filter(|i| i.colors.is_some()).map(|i| i.mesh).collect();
     let meshes: Vec<Option<Arc<PreparedMesh>>> =
-        raw.par_iter().map(|m| m.as_ref().map(|m| Arc::new(prepare_mesh(m)))).collect();
+        raw.par_iter().enumerate().map(|(k, m)| m.as_ref().map(|m| Arc::new(prepare_mesh(m, painted.contains(&(k as u32)))))).collect();
 
     progress(0.7, "Loading textures");
     // (the texture detail: the largest mips left out; the lighting's pages kept whole)
@@ -210,7 +216,7 @@ fn load_level(cfg: &Config, tx: &Sender<LoadMsg>) -> anyhow::Result<LoadedLevel>
 }
 
 /// Split a mesh into per-section compacted sub meshes.
-fn prepare_mesh(m: &MeshFile) -> PreparedMesh {
+fn prepare_mesh(m: &MeshFile, keep_source: bool) -> PreparedMesh {
     let n = m.positions.len();
     let has_uv1 = m.uv1.len() == n;
     let has_tan = m.tangents.len() == n;
@@ -235,6 +241,7 @@ fn prepare_mesh(m: &MeshFile) -> PreparedMesh {
                 joints: Vec::new(),
                 weights: Vec::new(),
                 indices: Vec::with_capacity(idx.len()),
+                source: Vec::new(),
             };
             for &i in idx {
                 if i as usize >= n {
@@ -254,6 +261,9 @@ fn prepare_mesh(m: &MeshFile) -> PreparedMesh {
                     }
                     if has_color {
                         s.colors.push(m.colors[i]);
+                    }
+                    if keep_source {
+                        s.source.push(i as u32);
                     }
                     if has_skin {
                         s.joints.push(m.joints[i]);

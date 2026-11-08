@@ -547,6 +547,13 @@ are in the settings file, `pad_binding_set` 0-3):
   bloom near the light (over `BloomThreshold`, `BloomScale`) is drawn out towards it twice and
   added tinted (`BloomTint`) where the scene is dark (`BloomScreenBlendThreshold`); fading as the
   light comes round behind. `Light Shafts` turns them off.
+- **Painted vertex colours** (`OverrideVertexColors`): the colours a level paints on a mesh where
+  it places it (its component's LOD data, after the light map: none, a vertex light map's samples
+  or a texture light map's) are cooked with the instance and drawn on its own copy of the mesh, as
+  the original shaders read them: the Tower's intro boats' foam trails (`IntroBoats_Foam_01`,
+  whose opacity is the paint's red and green), the sewers' and Kingsparrow's water effects (13
+  instances, all in the levels' FX). Before, they took the mesh's colours (white): the Tower's
+  foam lay over the sea as an opaque sheet. `dhtool smcolors <pkg>` lists them.
 - **Bloom parts** (`bloom.rs`), as the original renders them (its `BloomParts` pass,
   0x009251A0, after roshan's r614/blink research): no bright scene blooms, only surfaces whose
   material blooms (`MaterialInterface.bHasBloomPart`: lamps, sconces, lanterns). Those are drawn

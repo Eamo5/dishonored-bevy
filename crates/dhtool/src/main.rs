@@ -955,6 +955,94 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Some("smcolors") => {
+            // dhtool smcolors <pkg> [mesh part]: static mesh components whose LOD 0 carries
+            // painted vertex colours (`OverrideVertexColors`, after the light map), with the
+            // light map's type and the colours' count
+            let pkg = upk::Package::open(&pkg_path(&args[2]))?;
+            let part = args.get(3).map(|s| s.to_ascii_lowercase());
+            let (mut total, mut painted) = (0, 0);
+            for i in 0..pkg.exports.len() {
+                let idx = i as i32 + 1;
+                if pkg.class_name(idx) != "StaticMeshComponent" {
+                    continue;
+                }
+                let Ok(od) = upk::read_object(&pkg, idx) else { continue };
+                let mesh = match od.props.get("StaticMesh") {
+                    Some(upk::Value::Object(o)) if *o != 0 => pkg.obj_path(*o),
+                    _ => String::new(),
+                };
+                if part.as_ref().is_some_and(|p| !mesh.to_ascii_lowercase().contains(p)) {
+                    continue;
+                }
+                let mut r = od.reader;
+                let probe = (|| -> anyhow::Result<(u32, u8, u32, u32, Vec<u8>)> {
+                    let nlod = r.count(8)?;
+                    if nlod == 0 {
+                        return Ok((99, 0, 0, 0, Vec::new()));
+                    }
+                    let n = r.count(4)?;
+                    r.skip(n * 4)?;
+                    let n = r.count(4)?;
+                    r.skip(n * 4)?;
+                    let ty = r.u32()?;
+                    match ty {
+                        0 => {}
+                        1 => {
+                            // FLightMap1D: guids, owner, directional samples (bulk), three
+                            // scale vectors, simple samples (bulk)
+                            let n = r.count(16)?;
+                            r.skip(n * 16)?;
+                            r.skip(4)?;
+                            for k in 0..2 {
+                                let _flags = r.u32()?;
+                                let _count = r.u32()?;
+                                let size = r.u32()?;
+                                let _off = r.u32()?;
+                                r.skip(size as usize)?;
+                                if k == 0 {
+                                    r.skip(3 * 12)?;
+                                }
+                            }
+                        }
+                        2 => {
+                            let n = r.count(16)?;
+                            r.skip(n * 16)?;
+                            r.skip(3 * 16 + 16)?;
+                        }
+                        _ => return Ok((ty, 0, 0, 0, Vec::new())),
+                    }
+                    let has = r.u8()?;
+                    if has == 0 {
+                        return Ok((ty, 0, 0, 0, Vec::new()));
+                    }
+                    let stride = r.u32()?;
+                    let num = r.u32()?;
+                    let mut sample = Vec::new();
+                    if num > 0 {
+                        let es = r.u32()?;
+                        let cnt = r.u32()?;
+                        let data = r.bytes((es * cnt) as usize)?;
+                        sample = data[..data.len().min(32)].to_vec();
+                    }
+                    Ok((ty, has, stride, num, sample))
+                })();
+                total += 1;
+                match probe {
+                    Ok((ty, has, stride, num, sample)) if has != 0 => {
+                        painted += 1;
+                        println!("{idx} {} lm {ty} colours stride {stride} n {num} {:02x?}", mesh, sample);
+                    }
+                    Ok((ty, has, ..)) => {
+                        if part.is_some() {
+                            println!("{idx} {mesh} lm {ty} colours flag {has}, {} bytes left", r.remaining());
+                        }
+                    }
+                    Err(err) => println!("{idx} {} probe failed: {err}", mesh),
+                }
+            }
+            println!("{painted} of {total} components painted");
+        }
         Some("particlevf") => {
             // dhtool particlevf: shader maps whose particle base pass pixel shader reads the
             // particle's colour (TEXCOORD1) while the local vertex factory's reads no colour: the
