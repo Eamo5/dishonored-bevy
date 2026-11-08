@@ -7,6 +7,10 @@ version.workspace = true
 name = "dishonored"
 path = "src/main.rs"
 
+[features]
+# (development) the frame profiler: Bevy's tracing spans, summed by name (`DH_PROFILE=1`)
+profile = ["bevy/trace"]
+
 [dependencies]
 bevy = { version = "0.19.1", features = ["wav", "debug"] }
 rodio = { version = "0.22", default-features = false, features = ["playback"] }

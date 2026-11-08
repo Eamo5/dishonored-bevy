@@ -3,6 +3,8 @@
 //! core gameplay systems.
 
 mod anim;
+#[cfg(feature = "profile")]
+mod profile;
 mod audio;
 mod barks;
 mod matinee;
@@ -237,6 +239,8 @@ fn main() -> AppExit {
                 })
                 .set(bevy::log::LogPlugin {
                     filter: "info,wgpu=error,naga=warn,bevy_render=warn,bevy_rapier3d=warn".into(),
+                    #[cfg(feature = "profile")]
+                    custom_layer: profile::layer,
                     ..default()
                 }),
         )
@@ -279,6 +283,13 @@ fn main() -> AppExit {
         .add_plugins((gamedata::GameDataPlugin, journal::JournalPlugin, possession::PossessionPlugin, store::StorePlugin, swarm::SwarmPlugin, gadgets::GadgetsPlugin, whiskey::WhiskeyPlugin, thrown::ThrownPlugin, campaign::CampaignPlugin, heart::HeartPlugin, security::SecurityPlugin, wheel::WheelPlugin, travel::TravelPlugin, magic::MagicPlugin))
         .add_plugins((bloom::BloomPlugin, danger::DangerPlugin, avoid::AvoidPlugin, distrust::DistrustPlugin, patrol::PatrolPlugin, crumbs::CrumbsPlugin))
         .add_plugins(dock::DockPlugin)
+        .add_plugins({
+            #[cfg(feature = "profile")]
+            let p = profile::ProfilePlugin;
+            #[cfg(not(feature = "profile"))]
+            let p = |_: &mut App| {};
+            p
+        })
         .add_plugins(dpad::DpadPlugin)
         .add_plugins(quickpotion::QuickPotionPlugin)
         .add_plugins(elixirs::ElixirsPlugin)

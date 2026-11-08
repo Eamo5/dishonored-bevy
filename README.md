@@ -4495,7 +4495,9 @@ the nearest whose name holds NAME, moved D m before him), `stream NAME [out]` (a
 `ko [NAME]` (a sleep dart into the nearest, or the nearest whose name or pawn holds NAME),
 `side [N|lone|NAME]` (3 m off a character's right), `face [NAME]` (aim at the nearest
 character), `save N` / `load N`,
-`travel MAP`, `log` (position, stats, powers, nearby NPCs), `census`, `shot NAME`, `exit`. `DH_NOVSYNC=1` disables vsync for benchmarking; `cache/sweep.sh` loads
+`travel MAP`, `log` (position, stats, powers, nearby NPCs), `census`, `shot NAME`, `exit`. `DH_NOVSYNC=1` disables vsync for benchmarking; a profiling build (`cargo build --release -p dishonored --features profile --target-dir target-prof`,
+Bevy's tracing spans) run with `DH_PROFILE=1` logs the costliest systems and schedules every five seconds,
+in milliseconds a frame; `cache/sweep.sh` loads
 and screenshots every map. `camat NAME [D] [YAW]` holds the view on a character's face (the one speaking, from
 Corvo's side; `camat -` lets go). `DH_INTRO=1` keeps the new game's intro in scripted runs;
 `DH_MOVIE_SHOT=SECS:PATH` screenshots a movie that far in; `DH_NPC_CLIP_LOG` logs the clips
