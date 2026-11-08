@@ -480,6 +480,9 @@ pub struct Npc {
     pub plague_escape: Option<(Vec3, f32)>,
     /// robbed while it stood: how long until it misses what was taken (`DisBehaviorStolen`)
     pub robbed: Option<f32>,
+    /// out of Corvo's view, warned (`COMBAT_THREAT_OFFSCREEN`): the seconds before it may strike
+    /// him from there (its pacing's `offscreen_warning`)
+    pub offscreen_wait: Option<f32>,
     /// caught panicking with Corvo upon it: how long it has begged, and how long he has been
     /// back off; then the seconds left getting up again
     pub caught: Option<(f32, f32)>,
@@ -1236,6 +1239,30 @@ fn material_swaps(scene: &dhcook::format::Scene, tid: u32, seed: u64) -> Vec<(bo
         }
     }
     out
+}
+
+/// Whether a fighter may start a blow at Corvo now as far as his view goes: in it, always; out of
+/// it (behind its plane, as the original's offscreen test), once it has warned him
+/// (`COMBAT_THREAT_OFFSCREEN`) and waited its pacing's `offscreen_warning` (1-2 s). Back in his
+/// view, the warning is spent.
+fn offscreen_ready(npc: &mut Npc, pos: Vec3, ppos: Vec3, view: Vec3) -> bool {
+    let Some(r) = npc.arms.pacing.as_ref().and_then(|p| p.offscreen_warning) else { return true };
+    let offscreen = view.dot((pos - ppos).with_y(0.0)) < 0.0;
+    if !offscreen {
+        npc.offscreen_wait = None;
+        return true;
+    }
+    match npc.offscreen_wait {
+        None => {
+            npc.offscreen_wait = Some(r[0] + rand::random::<f32>() * (r[1] - r[0]).max(0.0));
+            npc.bark_req = (npc.bark_req.0.wrapping_add(1), "COMBAT_THREAT_OFFSCREEN");
+            if std::env::var_os("DH_MELEE_LOG").is_some() {
+                info!("melee: {} warns Corvo before striking from out of his view", npc.name);
+            }
+            false
+        }
+        Some(w) => w <= 0.0,
+    }
 }
 
 /// A fight's pacing (`DisAISubProcessManageAttacks`, as roshan's r614/blink research decoded
@@ -2818,6 +2845,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         yaw_v: 0.0,
         plague_escape: None,
         robbed: None,
+        offscreen_wait: None,
         rising: 0.0,
         hold: None,
         trespass: None,
@@ -4743,6 +4771,8 @@ pub(crate) fn npc_brain(
     }
     let Ok((pe, pt, psword, pl)) = player.single() else { return };
     let ppos = pt.translation;
+    // (his view's way, flat: what lies behind its plane is out of his view)
+    let pview = Vec3::new(-pl.yaw.sin(), 0.0, -pl.yaw.cos());
     let space_log = std::env::var("DH_SPACE_LOG").is_ok();
     // (his feet: his capsule's centre above them, standing or crouched)
     let pfeet = ppos.y - pl.body().depth();
@@ -4795,6 +4825,9 @@ pub(crate) fn npc_brain(
         npc.mode_timer += dt;
         npc.attack_cd = (npc.attack_cd - dt).max(0.0);
         npc.check_cd = (npc.check_cd - dt).max(0.0);
+        if let Some(w) = npc.offscreen_wait.as_mut() {
+            *w -= dt;
+        }
         npc.reacting = (npc.reacting - dt).max(0.0);
         if !matches!(npc.mode, Mode::Search | Mode::Investigate) {
             npc.scripted_search = false;
@@ -5797,6 +5830,7 @@ pub(crate) fn npc_brain(
                         aggression: [-0.5, 0.1, 1.0],
                         line_of_fire: None,
                         fire_from_head: false,
+                        offscreen_warning: None,
                     });
                     npc.dodging = (npc.dodging - dt).max(0.0);
                     npc.incoming.1 += dt;
@@ -6042,6 +6076,10 @@ pub(crate) fn npc_brain(
                         && pace_ready(&npc)
                         // (not at Corvo in or across a device it no longer trusts)
                         && !crate::distrust::strike_barred(&npc, &devices, pos, ppos)
+                        // (out of his view, only after its warning and the wait after it: its combat
+                        // barks' `m_TimeBetweenWarningAndOffscreenAttack`, 1-2 s; before, it struck
+                        // from behind unheralded)
+                        && offscreen_ready(&mut npc, pos, ppos, pview)
                     {
                         // (outside the ring of those at Corvo, or with him out of reach, only the
                         // moves for there)

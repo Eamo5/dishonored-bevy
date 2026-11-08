@@ -1069,7 +1069,11 @@ fields no longer show their stand-in "WW" behind the title.
   (2-3 s), it steps aside (`DisTweaks_NPCSideStep`, 2.5 m, `Sword_SideStep_Left`, `_Right`); each
   step within its reach and on its cooldown. Its flurries and the rest between them
   (`m_AttacksPerFlurry`, an elite guard's 2-3; `m_StaminaRecoveryDuration`, 4-5 s) and its
-  aggression are its own behaviour's. A blow (a kick too) throws his arms from the side it came (`Sword_BigHit_Front`,
+  aggression are its own behaviour's. Out of his view (behind its plane, as the original's
+  offscreen test) a fighter strikes only after a warning (`COMBAT_THREAT_OFFSCREEN`: "Cut this
+  bastard up for the hagfish!") and the wait after it (its combat barks'
+  `m_TimeBetweenWarningAndOffscreenAttack`, 1-2 s for the guards and thugs); before, it struck from
+  behind unheralded. A blow (a kick too) throws his arms from the side it came (`Sword_BigHit_Front`,
   `_Back`, `_Left`, `_Right`; empty-handed, `Empty_BigHit_*`, and a knockdown's `Empty_Knockdown*`);
   other harm, as from ahead. A big blow leaves Corvo reeling for `m_fVulnerableTime_BigHit_Dizzy`, and the world
   half greyed while he is vulnerable after it (`m_fVulnerableTime_BigHit` 2.5 s; 2 s after a knockdown,

@@ -4098,7 +4098,15 @@ impl<'a> Cooker<'a> {
             .filter(|b| b.class().contains("Combat"))
             .collect();
         for b in behaviours {
-            let Some(m) = self.tweak_objs(&b, "m_SubProcessTweaks").into_iter().find(|o| o.class().contains("ManageAttacks")) else { continue };
+            let subs = self.tweak_objs(&b, "m_SubProcessTweaks");
+            let offscreen_warning = subs.iter().find(|o| o.class() == "DisTweaks_AISubProcess_CombatBarks").cloned().and_then(|c| match self.tweak_prop(&c, "m_TimeBetweenWarningAndOffscreenAttack", 0, 0) {
+                Some((_, Value::Struct(_, r))) => {
+                    let p = Props(r);
+                    Some([p.float("m_fMinValue").unwrap_or(0.0), p.float("m_fMaxValue").unwrap_or(0.0)]).filter(|r| r[1] > 0.0)
+                }
+                _ => None,
+            });
+            let Some(m) = subs.into_iter().find(|o| o.class().contains("ManageAttacks")) else { continue };
             let f = |s: &mut Self, n: &str, d: f32| s.tweak_float(&m, n, 0).unwrap_or(d);
             let ranged = |s: &mut Self, n: &str, d: [f32; 2]| match s.tweak_prop(&m, n, 0, 0) {
                 Some((_, Value::Struct(_, r))) => {
@@ -4127,6 +4135,7 @@ impl<'a> Cooker<'a> {
                     _ => None,
                 },
                 fire_from_head: matches!(self.tweak_prop(&m, "m_SecondaryUsageInfo", 0, 0), Some((_, Value::Struct(_, u))) if Props(u.clone()).name("m_AttackOrigin") == Some("DHR_HEAD")),
+                offscreen_warning,
             });
         }
         None

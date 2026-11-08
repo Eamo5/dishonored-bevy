@@ -1611,6 +1611,11 @@ pub struct NpcPacing {
     pub line_of_fire: Option<[f32; 2]>,
     #[serde(default)]
     pub fire_from_head: bool,
+    /// how long after its warning (`COMBAT_THREAT_OFFSCREEN`) it may strike Corvo from out of his
+    /// view (its combat barks' `m_TimeBetweenWarningAndOffscreenAttack`, s: the city guards' 1-2;
+    /// none, no wait)
+    #[serde(default)]
+    pub offscreen_warning: Option<[f32; 2]>,
 }
 
 /// A plague carrier's (a weeper's pawn: `m_bHasPlague`). The cloud its cough starts deals
