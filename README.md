@@ -985,6 +985,9 @@ fields no longer show their stand-in "WW" behind the title.
   front left, front right, left, right, and the back's three: `Generic_DeathFast_Front`,
   `_FrontLeft`, `_FrontRight`, `_Left`, `_Right`, `_Back`); before, every quick death was the
   front's, whichever side the blow came from.
+  A character struck dead in a fight always falls quickly where it has the clips (every pawn's
+  `DisTweaks_NPCPawn_Combat.m_fChanceOfFastDeath` is 1, `Twk_Pawn_DefaultNPC`'s and the levels');
+  before, one time in two it played a slow, stumbling death (`Generic_DeathFrontA`...).
   Corvo's blade, leaving it standing, gets its weak reaction instead: the additive flinch by the
   side struck (`HitReactSmall_Additive`: `ADD_Generic_SmallHit_Front`, `_Left`, `_Right`,
   `_Back`) laid over what it does, its blow or step not stopped and no stagger. The blade's damage

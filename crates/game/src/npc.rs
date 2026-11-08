@@ -7440,6 +7440,11 @@ fn side_struck(npc: &Npc, at: Vec3) -> Option<usize> {
     })
 }
 
+/// How often a character struck dead falls quickly (`DisTweaks_NPCPawn_Combat.m_fChanceOfFastDeath`:
+/// 1 in `Twk_Pawn_DefaultNPC` and every level's pawn tweaks; before, one time in two), its slow,
+/// stumbling deaths (`Generic_DeathFrontA`...) left to those without quick ones.
+const FAST_DEATH_CHANCE: f32 = 1.0;
+
 /// The direction a character was struck from by eighths of the circle, as its quick deaths are
 /// chosen (0 front, 1 front left, 2 front right, 3 left, 4 right, 5 the back's three); none
 /// without a blow.
@@ -8195,7 +8200,7 @@ fn npc_select_anim(
                     (clips.choke_out, clips.lie_back)
                 } else if st.last_alert == Alert::Unaware && npc.mode == Mode::Dead {
                     (pick(&clips.assassinated), clips.lie_front)
-                } else if rand::random::<f32>() < 0.5 && clips.death_fast[0].is_some() {
+                } else if rand::random::<f32>() < FAST_DEATH_CHANCE && clips.death_fast[0].is_some() {
                     // (falling from the side the blow came: its eighth of the circle, the back's three
                     // one)
                     (octant_struck(&npc, t.translation).and_then(|o| clips.death_fast[o]).or(clips.death_fast[0]), clips.lie_back)
