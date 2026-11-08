@@ -1772,8 +1772,10 @@ fn weeper_grab(
     mut npcs: Query<(Entity, &mut Npc, &Transform), Without<Player>>,
     mut sfx: MessageWriter<crate::audio::PostEvent>,
     (mut stats, settings, mut last_knockdown): (ResMut<crate::gameplay::PlayerStats>, Res<crate::settings::Settings>, Local<Option<f32>>),
+    data: Res<crate::gamedata::Data>,
 ) {
     let Ok((pe, pt, mut p, grabbed)) = player.single_mut() else { return };
+    let knockdown_vulnerable = data.pawn("combat.m_fVulnerableTime_Knockdown", 2.0);
     for (e, mut npc, t) in &mut npcs {
         let Some((phase, el)) = npc.grab else { continue };
         let el = el + time.delta_secs();
@@ -1801,6 +1803,7 @@ fn weeper_grab(
                             *last_knockdown = Some(now);
                             stats.knockdown = (stats.knockdown.0 + 1, side);
                             stats.knocked = KNOCKED_DOWN;
+                            stats.vulnerable = stats.vulnerable.max(knockdown_vulnerable);
                         }
                     }
                     info!("wolfhound jump attack: {} {} ({d:.2} m)", npc.name, if hit { "knocks Corvo down" } else { "misses" });

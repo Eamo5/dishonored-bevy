@@ -59,12 +59,34 @@ fn update_dof(
     script: Res<crate::postfx::ScriptPost>,
     (data, blur): (Res<crate::gamedata::Data>, Res<crate::postfx::MenuBlur>),
     cams: Query<(Entity, &Projection, Option<&ArkDof>), With<crate::player::PlayerCamera>>,
+    (time, power, mut weights): (Res<Time<bevy::time::Real>>, Res<crate::postfx::PowerPost>, Local<std::collections::BTreeMap<u8, (f32, crate::postfx::PostLayer)>>),
 ) {
     let Some(level) = level else { return };
     if std::env::var("DH_NO_DOF").is_ok() {
         return;
     }
     let mut p = script.0.as_ref().map(|s| s.1).unwrap_or(level.scene.post);
+    // the powers' and spells' gradings' focus over it (a big blow's blur...), each as far as it
+    // has faded in, or out once gone
+    let dt = time.delta_secs();
+    for (id, l) in &power.layers {
+        let w = weights.entry(*id).or_insert((0.0, l.clone()));
+        w.1 = l.clone();
+        w.0 = (w.0 + dt / l.fade_in.max(1e-3)).min(1.0);
+    }
+    weights.retain(|id, (w, l)| {
+        if !power.layers.contains_key(id) {
+            *w -= dt / l.fade_out.max(1e-3);
+        }
+        *w > 0.0
+    });
+    for (w, l) in weights.values() {
+        let mut q = p;
+        crate::postfx::apply_fields(&mut q, l.fields.iter().map(|(n, v)| (n.as_str(), v.as_slice())));
+        p.focus_distance += (q.focus_distance - p.focus_distance) * w;
+        p.in_focus_radius += (q.in_focus_radius - p.in_focus_radius) * w;
+        p.far_blur += (q.far_blur - p.far_blur) * w;
+    }
     // the menus' blur over it, as far as it has faded in (or out)
     if blur.0 > 0.0 {
         let mut q = p;

@@ -2056,7 +2056,7 @@ fn run_script(
             stats.dead = true;
         }
         "hurt" => {
-            // hurt D ANGLE: a blow of D from ANGLE degrees off his view (clockwise; tests: the
+            // hurt D ANGLE [big]: a blow of D from ANGLE degrees off his view (clockwise; tests: the
             // damage feedback)
             let a = f(2).to_radians();
             let (fwd, right) = (Vec3::new(-p.yaw.sin(), 0.0, -p.yaw.cos()), Vec3::new(p.yaw.cos(), 0.0, -p.yaw.sin()));
@@ -2066,6 +2066,10 @@ fn run_script(
             stats.hit_from = Some(from);
             // (the side it came from, as a real blow's)
             stats.blow = (stats.blow.0.wrapping_add(1), crate::combat::side_of(from, t.translation, p.yaw));
+            // (hurt D ANGLE big: a big blow's vulnerable spell, its grade, too)
+            if cmd.get(3).map(String::as_str) == Some("big") {
+                stats.vulnerable = stats.vulnerable.max(2.5);
+            }
         }
         "epp" => {
             // epp <Epp_Knocked|Epp_Weepers|...> [0|1]: a scripted screen effect off / on

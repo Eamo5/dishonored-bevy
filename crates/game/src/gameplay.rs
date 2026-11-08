@@ -369,6 +369,10 @@ pub struct PlayerStats {
     pub knockdown: (u32, u8),
     #[serde(skip)]
     pub knocked: f32,
+    /// a big blow's or a knockdown's vulnerable spell left (s: his combat tweak's
+    /// `m_fVulnerableTime_BigHit` 2.5, `_Knockdown` 2), its grade over the world's
+    #[serde(skip)]
+    pub vulnerable: f32,
     /// he died of a fall, or drowned (his death's clip)
     #[serde(skip)]
     pub died_falling: bool,
@@ -722,6 +726,7 @@ impl Default for PlayerStats {
             blow: (0, 0),
             knockdown: (0, 0),
             knocked: 0.0,
+        vulnerable: 0.0,
             died_falling: false,
             died_drowning: false,
             chaos_level: 0,

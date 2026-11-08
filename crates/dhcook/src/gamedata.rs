@@ -1909,6 +1909,27 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
             flatten(pkg, sub, "musical.", &mut d.pawn, &mut BTreeMap::new());
         }
     }
+    // his combat tweak's vulnerable spell after a big blow or a knockdown (its fallbacks
+    // `Twk_Pawn_Corvo`'s and `Twk_Pawn_DefaultPlayer`'s, over the class's): how long
+    // (`m_fVulnerableTime_BigHit` / `_Knockdown`), its blend speed, as `combat.<property>`, and
+    // its grade (`m_VulnerableTime_PpOverride`'s `m_UberPpParameters`) as `vulnerable.<field>`
+    let combat: Vec<Props> = ["Twk_Pawn_Corvo.Twk_Pawn_Corvo_Release.pCombatTweaks", "Twk_Pawn_Corvo.Twk_Pawn_Corvo.DisTweaks_PlayerPawn_Combat_1", "Twk_Pawn_DefaultPlayer.Twk_Pawn_DefaultPlayer.DisTweaks_PlayerPawn_Combat_0"]
+        .iter()
+        .filter_map(|path| startup.find_export(path).and_then(|i| props(&startup, i)))
+        .collect();
+    for n in ["m_fVulnerableTime_BigHit", "m_fVulnerableTime_Knockdown", "m_fVulnerableTime_BlendSpeed"] {
+        if let Some(v) = combat.iter().find_map(|p| p.float(n)) {
+            d.pawn.insert(format!("combat.{n}"), v);
+        }
+    }
+    let combat_default = game.find_export("Default__DisTweaks_PlayerPawn_Combat").and_then(|i| props(&game, i));
+    for (pkg, p) in combat_default.iter().map(|p| (&game, p)).chain(combat.iter().rev().map(|p| (&startup, p))) {
+        if let Some(Value::Struct(_, cfg)) = p.get("m_VulnerableTime_PpOverride") {
+            if let Some(Value::Struct(_, sub)) = Props(cfg.clone()).get("m_UberPpParameters") {
+                flatten(pkg, sub, "vulnerable.", &mut d.pawn, &mut BTreeMap::new());
+            }
+        }
+    }
     // the avoidance's radii and forces (`ArkAvoidable`): Corvo's class defaults under his own,
     // and a character's (`Twk_Pawn_DefaultNPC` over its class's) as `npc.<property>`
     for (pkg, path, prefix) in [(&game, "Default__DisTweaks_PlayerPawn", ""), (&game, "Default__DisTweaks_NPCPawn", "npc."), (&startup, "Twk_Pawn_DefaultNPC.Twk_Pawn_DefaultNPC", "npc.")] {

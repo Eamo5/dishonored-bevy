@@ -141,6 +141,8 @@ impl PowerPost {
     /// a music box's tune heard (Corvo's `m_MusicalEffectUberParameters`)
     pub const MUSICAL: u8 = 6;
     pub const DARK_VISION: u8 = 8;
+    /// Corvo's vulnerable spell after a big blow or a knockdown (his `m_VulnerableTime_PpOverride`)
+    pub const VULNERABLE: u8 = 10;
     /// the menus' blur, over all
     pub const MENU: u8 = 20;
 

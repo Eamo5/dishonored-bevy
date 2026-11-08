@@ -1063,7 +1063,14 @@ fields no longer show their stand-in "WW" behind the title.
   (`m_AttacksPerFlurry`, an elite guard's 2-3; `m_StaminaRecoveryDuration`, 4-5 s) and its
   aggression are its own behaviour's. A blow (a kick too) throws his arms from the side it came (`Sword_BigHit_Front`,
   `_Back`, `_Left`, `_Right`; empty-handed, `Empty_BigHit_*`, and a knockdown's `Empty_Knockdown*`);
-  other harm, as from ahead. A big blow leaves Corvo reeling for `m_fVulnerableTime_BigHit_Dizzy`; his perfect
+  other harm, as from ahead. A big blow leaves Corvo reeling for `m_fVulnerableTime_BigHit_Dizzy`, and the world
+  half greyed while he is vulnerable after it (`m_fVulnerableTime_BigHit` 2.5 s; 2 s after a knockdown,
+  `_Knockdown`), as his combat tweak's `m_VulnerableTime_PpOverride` has it once its fallbacks
+  (`Twk_Pawn_Corvo`, `Twk_Pawn_DefaultPlayer`) clear its other overrides: `m_PostDesaturation` 0.5,
+  blending in and out at `m_fVulnerableTime_BlendSpeed` (2 a second); before, nothing showed it.
+  The powers' and spells' gradings now set the depth of field too where they override it (the
+  music box's tune clears the level's far blur); before, only the colours took them. Script
+  `hurt D ANGLE big` starts the spell. His perfect
   parry is a block begun within `m_fTapForPerfectParryWindow` (0.2 s), or while his block
   clip's `DisNotify_BlockParryZone` lasts (`Sword_Ready_ParryIdle_In`, 0.001 to 0.431 s, now
   cooked), as roshan's r614/blink research decoded the block handler, within his sword's

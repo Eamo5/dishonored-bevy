@@ -25,7 +25,7 @@ impl Plugin for CombatPlugin {
             .add_systems(OnEnter(GameState::InGame), spawn_view_model.after(LevelSpawnSet).after(crate::player::spawn_player))
             .add_systems(
                 Update,
-                (sword_input, assassinating, drop_hold, chokehold, receive_hits, versus, animate_view_model, special_moves).chain().after(crate::gadgets::grenade_focus).run_if(in_state(GameState::InGame)),
+                (sword_input, assassinating, drop_hold, chokehold, receive_hits, vulnerable_post, versus, animate_view_model, special_moves).chain().after(crate::gadgets::grenade_focus).run_if(in_state(GameState::InGame)),
             )
             .add_systems(Update, slide_into.run_if(in_state(GameState::InGame)));
     }
@@ -1466,9 +1466,11 @@ fn receive_hits(
     attrs: Res<crate::gamedata::Attrs>,
     (mut fx, level, mut shake): (MessageWriter<crate::particles::SpawnEffect>, Option<Res<crate::level::LevelInfo>>, MessageWriter<crate::player::ShakeCamera>),
     (pull, mut shielded, zone): (Option<Res<crate::pull::PullAim>>, MessageWriter<NpcHit>, Res<crate::arms::ParryZone>),
+    data: Res<crate::gamedata::Data>,
 ) {
     use crate::audio::PostEvent;
     let Ok((pt, mut p, mut sword)) = player.single_mut() else { return };
+    let big_hit_vulnerable = data.pawn("combat.m_fVulnerableTime_BigHit", 2.5);
     let fwd = cam.single().map(|c| c.forward().as_vec3()).unwrap_or(Vec3::NEG_Z);
     // (the one Pull holds up before him: his shield)
     let shield = pull.as_ref().and_then(|a| a.shield()).filter(|e| npcs.get(*e).is_ok_and(|(n, _)| n.pulled.as_ref().is_some_and(|pl| pl.lifted) && !n.is_down()));
@@ -1599,6 +1601,7 @@ fn receive_hits(
         // a big blow leaves him reeling (`m_fVulnerableTime_BigHit_Dizzy` 0.9 s: no blocking),
         // knocked back a step
         if h.big {
+            stats.vulnerable = stats.vulnerable.max(big_hit_vulnerable);
             sword.recoil = sword.recoil.max(0.9);
             sword.blocking = false;
             p.velocity += (pt.translation - h.from).with_y(0.0).normalize_or_zero() * 3.0;
@@ -1612,6 +1615,27 @@ fn receive_hits(
             sfx.write(PostEvent::named(bark, None));
         }
     }
+}
+
+/// Corvo's vulnerable spell after a big blow or a knockdown: the distance fully blurred and the
+/// world half greyed (his combat tweak's `m_VulnerableTime_PpOverride`: `m_FarBlurAmount` 1,
+/// `m_PostDesaturation` 0.5, over the class's), for its `m_fVulnerableTime_BigHit` (2.5 s) or
+/// `_Knockdown` (2 s), blending in and out at `m_fVulnerableTime_BlendSpeed` (2 a second).
+fn vulnerable_post(time: Res<Time>, mut stats: ResMut<PlayerStats>, data: Res<crate::gamedata::Data>, mut post: ResMut<crate::postfx::PowerPost>) {
+    use crate::postfx::{PostLayer, PowerPost};
+    if stats.vulnerable > 0.0 {
+        stats.vulnerable = if stats.dead { 0.0 } else { (stats.vulnerable - time.delta_secs()).max(0.0) };
+    }
+    let on = stats.vulnerable > 0.0;
+    if on == post.layers.contains_key(&PowerPost::VULNERABLE) {
+        return;
+    }
+    let blend = 1.0 / data.pawn("combat.m_fVulnerableTime_BlendSpeed", 2.0).max(0.1);
+    let layer = on.then(|| PostLayer { fields: crate::postfx::uber_fields(&data.0.pawn, "vulnerable."), fade_in: blend, fade_out: blend });
+    if std::env::var_os("DH_MELEE_LOG").is_some() {
+        info!("vulnerable: {} {:?}", if on { "on" } else { "off" }, layer.as_ref().map(|l| &l.fields));
+    }
+    post.set(PowerPost::VULNERABLE, layer);
 }
 
 pub fn animate_view_model(
