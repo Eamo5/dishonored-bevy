@@ -143,6 +143,8 @@ impl PowerPost {
     pub const DARK_VISION: u8 = 8;
     /// Corvo's vulnerable spell after a big blow or a knockdown (his `m_VulnerableTime_PpOverride`)
     pub const VULNERABLE: u8 = 10;
+    /// a whaler's Attract Spell pulling Corvo (its `m_AttractPpOverride`)
+    pub const ATTRACT: u8 = 11;
     /// the menus' blur, over all
     pub const MENU: u8 = 20;
 

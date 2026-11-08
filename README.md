@@ -2162,6 +2162,11 @@ fields no longer show their stand-in "WW" behind the title.
   blades till he arrives for the coup de grace (`DisTweaks_NPCAttractSpellCoupDeGrace`: a big
   slash within 2.7 m, from any angle, that no sword lock can catch: its `m_bDisableVersus`), and shoot their wrist bows (`DisTweaks_NPCFireBow`,
   damage by difficulty).
+  - While the spell holds him his view takes its grade (`m_AttractPpOverride`: two stops darker, a
+    green cast in the shadows and middle tones, gamma 0.9), blending in and out at
+    `m_fAttractPpOverrideBlendSpeed` (2 a second). The cooker reads the struct down the tweak's lineage
+    (the class's default, `Twk_Inv_AssassinHand`, Daud's hand, the level's), as each sets only part
+    of it. Before, the view stayed as it was. Script `whalerpull S` makes the nearest whaler pull.
   - The spell has its clips: the hand raised (`Sword_Power_Attract_In`), held while he comes
     (`_Loop`), standing for it. Then the coup de grace (`_Attack`, carried at him as far as the clip
     steps), or the spell let go (`_Cancel`). Their sounds play at the clips' cues.

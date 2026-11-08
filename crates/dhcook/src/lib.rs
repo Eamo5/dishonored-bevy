@@ -938,6 +938,35 @@ impl Chain {
     }
 }
 
+/// A struct's numbers flattened: `field`, `outer.inner`, an array element's `field[i]`, a
+/// vector's `.x .y .z`; booleans as 0 / 1.
+fn flat_numbers(props: &[upk::props::Prop], prefix: &str, out: &mut std::collections::BTreeMap<String, f32>) {
+    for p in props {
+        let key = if p.index > 0 { format!("{prefix}{}[{}]", p.name, p.index) } else { format!("{prefix}{}", p.name) };
+        match &p.value {
+            Value::Float(f) => {
+                out.insert(key, *f);
+            }
+            Value::Int(i) => {
+                out.insert(key, *i as f32);
+            }
+            Value::Bool(b) => {
+                out.insert(key, if *b { 1.0 } else { 0.0 });
+            }
+            Value::Byte(b) => {
+                out.insert(key, *b as f32);
+            }
+            Value::Vector(v) => {
+                for (c, x) in ["x", "y", "z"].iter().zip(v) {
+                    out.insert(format!("{key}.{c}"), *x);
+                }
+            }
+            Value::Struct(_, sub) => flat_numbers(sub, &format!("{key}."), out),
+            _ => {}
+        }
+    }
+}
+
 impl<'a> Cooker<'a> {
     fn chain(&mut self, obj: &Obj) -> Chain {
         let mut v = Vec::new();
@@ -4615,6 +4644,15 @@ impl<'a> Cooker<'a> {
             if w.class() == "DisTweaks_WepMusicBox" {
                 st.tunes = self.music_box_tunes(&w);
             }
+            if st.attract.is_none() {
+                if let Some(c) = self.npc_contexts(&w).into_iter().find(|c| c.class() == "DisTweaks_NPCAttractSpell") {
+                    let mut post = std::collections::BTreeMap::new();
+                    self.tweak_struct_flat(&c, "m_AttractPpOverride", 0, &mut post);
+                    // (its `ArkPpConfig`'s grade)
+                    let post = post.into_iter().filter_map(|(k, v)| k.strip_prefix("m_UberPpParameters.").map(|k| (k.to_string(), v))).collect();
+                    st.attract = Some(NpcAttract { post, blend_speed: self.tweak_float(&c, "m_fAttractPpOverrideBlendSpeed", 0).unwrap_or(2.0) });
+                }
+            }
             if w.class() == "DisDLC06Tweaks_WepWitchHand" && st.witch.is_none() {
                 st.witch = Some(self.witch_hand(&w));
             }
@@ -7764,6 +7802,46 @@ impl<'a> Cooker<'a> {
         }
         self.scene.particle_systems.push(def);
         Ok(Some(self.scene.particle_systems.len() as u32 - 1))
+    }
+
+    /// A tweak's struct property as flat numbers (`flat_numbers`' keys), each level of its
+    /// lineage over the one before: the class's default, its archetypes, its fallbacks (the last
+    /// first), itself; for the structs a tweak sets only in part.
+    fn tweak_struct_flat(&mut self, tw: &Obj, name: &str, depth: u32, out: &mut std::collections::BTreeMap<String, f32>) {
+        if depth == 0 {
+            if let Some(Value::Struct(_, s)) = self.class_defaults(&tw.class()).as_ref().and_then(|d| d.get(name).cloned()) {
+                flat_numbers(&s, "", out);
+            }
+        }
+        let ch = self.chain(tw);
+        let Some((own_pkg, own)) = ch.0.first().cloned() else { return };
+        for (_, p) in ch.0[1..].iter().rev() {
+            if let Some(Value::Struct(_, s)) = p.get(name) {
+                flat_numbers(s, "", out);
+            }
+        }
+        let fallbacks: Vec<String> = match own.get("m_FallbackChainCooked") {
+            Some(Value::Array { count, offset, size }) => parse_struct_array(&own_pkg, *offset, *size, *count)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|f| match f.get("m_FallbackName") {
+                    Some(Value::Str(s)) | Some(Value::Name(s)) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        if depth < 6 {
+            for fb in fallbacks.iter().rev() {
+                let path = fb.split(' ').next().unwrap_or("").replace("+++", ".");
+                if let Some(o) = self.assets.find(&path) {
+                    self.tweak_struct_flat(&o, name, depth + 1, out);
+                }
+            }
+        }
+        if let Some(Value::Struct(_, s)) = own.get(name) {
+            flat_numbers(s, "", out);
+        }
     }
 
     /// Properties of a class's default object (`Default__<Class>`), cached.

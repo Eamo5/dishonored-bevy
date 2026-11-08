@@ -1406,6 +1406,10 @@ pub struct NpcStats {
     /// tentacles (The Brigmore Witches)
     #[serde(default)]
     pub witch: Option<NpcWitch>,
+    /// a whaler's Attract Spell (`DisTweaks_NPCAttractSpell`): the grade over Corvo's view while
+    /// it pulls him
+    #[serde(default)]
+    pub attract: Option<NpcAttract>,
     /// a grave hound's bones (`DisDLC07Tweaks_Gravehound`): its skull, and its coming back
     #[serde(default)]
     pub gravehound: Option<NpcGravehound>,
@@ -1788,6 +1792,15 @@ pub struct PatternOverride {
 pub struct PatternShape {
     pub ideal: String,
     pub flank: f32,
+}
+
+/// A whaler's Attract Spell: its grade over Corvo's view as it pulls him (`m_AttractPpOverride`'s
+/// `m_UberPpParameters` flattened, its lineage's levels over the class's) and the speed it blends
+/// in and out at (`m_fAttractPpOverrideBlendSpeed`, a second).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct NpcAttract {
+    pub post: std::collections::BTreeMap<String, f32>,
+    pub blend_speed: f32,
 }
 
 /// A musical Overseer's tunes.

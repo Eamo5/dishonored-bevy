@@ -62,6 +62,13 @@ pub struct Whaler {
     pulling: Option<(f32, f32)>,
 }
 
+impl Whaler {
+    /// (tests) its Attract Spell cast now, for so long
+    pub fn force_pull(&mut self, secs: f32) {
+        self.pulling = Some((secs, secs));
+    }
+}
+
 fn rand_in(r: (f32, f32)) -> f32 {
     r.0 + (r.1 - r.0) * rand::random::<f32>()
 }
@@ -86,6 +93,7 @@ fn whaler_powers(
     (mut sfx, mut stop, mut fx): (MessageWriter<PostEvent>, MessageWriter<StopEvent>, MessageWriter<SpawnEffect>),
     mut was_pulling: Local<bool>,
     mut teleports: MessageWriter<Teleported>,
+    mut post: ResMut<crate::postfx::PowerPost>,
 ) {
     let (dt_world, dt_own) = (time.delta_secs() * tc.world_scale(), time.delta_secs() * tc.own_scale());
     let Ok((pt, mut p)) = player.single_mut() else { return };
@@ -99,6 +107,7 @@ fn whaler_powers(
     };
     let mut pull = Vec3::ZERO;
     let mut any_pulling = false;
+    let mut grade: Option<dhcook::format::NpcAttract> = None;
     for (mut w, mut npc, mut t) in &mut whalers {
         let dt = if npc.out_of_bend { dt_own } else { dt_world };
         w.teleport_cd -= dt;
@@ -140,6 +149,9 @@ fn whaler_powers(
                 let k = 1.0 - left / total;
                 pull += (to / d.max(0.1)) * (PULL_SPEED.0 + (PULL_SPEED.1 - PULL_SPEED.0) * k);
                 any_pulling = true;
+                if grade.is_none() {
+                    grade = npc.arms.attract.clone();
+                }
                 // facing him (`to` runs from Corvo to the assassin)
                 let flat = to.with_y(0.0);
                 if flat.length() > 0.1 {
@@ -207,6 +219,22 @@ fn whaler_powers(
         }
     }
     p.pull = pull;
+    // the spell's grade over his view while it holds him (`m_AttractPpOverride`: darker by two
+    // stops, a green cast in the shadows and middle tones, gamma 0.9), blending in and out at
+    // `m_fAttractPpOverrideBlendSpeed` (2 a second); before, the view stayed as it was
+    use crate::postfx::{PostLayer, PowerPost};
+    if any_pulling != post.layers.contains_key(&PowerPost::ATTRACT) {
+        let layer = grade.filter(|_| any_pulling).map(|g| {
+            let blend = 1.0 / g.blend_speed.max(0.1);
+            PostLayer { fields: crate::postfx::uber_fields(&g.post, ""), fade_in: blend, fade_out: blend }
+        });
+        if any_pulling == layer.is_some() {
+            if std::env::var("DH_WHALER_LOG").is_ok() {
+                info!("whaler pull grade: {:?}", layer.as_ref().map(|l| &l.fields));
+            }
+            post.set(PowerPost::ATTRACT, layer);
+        }
+    }
     if *was_pulling && !any_pulling {
         stop.write(StopEvent(event_id(PULL_SOUND)));
     }

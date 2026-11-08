@@ -1496,6 +1496,18 @@ fn run_script(
                 });
             }
         }
+        "whalerpull" => {
+            // (tests) whalerpull S: the nearest whaler's Attract Spell pulls Corvo for S seconds
+            let secs = f(1).max(0.5);
+            let at = t.translation;
+            commands.queue(move |w: &mut World| {
+                let mut q = w.query::<(&mut crate::assassin::Whaler, &Transform)>();
+                if let Some((mut wh, _)) = q.iter_mut(w).min_by(|a, b| a.1.translation.distance(at).total_cmp(&b.1.translation.distance(at))) {
+                    wh.force_pull(secs);
+                    info!("script: whaler pulls for {secs} s");
+                }
+            });
+        }
         "lock" => {
             // (tests) lock N: the blades locked with the nearest standing hostile swordsman, N
             // presses already in
