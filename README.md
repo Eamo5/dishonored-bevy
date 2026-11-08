@@ -1864,7 +1864,9 @@ fields no longer show their stand-in "WW" behind the title.
 - **Drop assassinations**: attacking while falling onto someone kills them from above, with
   the original paired clips by side (`Sword_Ready_Assassination_Drop*_Master` /
   `Generic_Assassination_Drop*_Slave`); the body breaks the fall, and the Falling Star charm
-  gives mana (`DropAssassinationManaBonus`).
+  gives mana (`DropAssassinationManaBonus`). Down on the body, Corvo is held as his clip plays until
+  it unlocks him (its `DisNotify_AnimStateUnlock`: 1.84 s front, 1.79 back, 1.77 left, 1.59 right),
+  neither moving nor striking meanwhile; before, he could walk off and swing again as it played.
 - **Chains**: the levels' hanging chains (`DisClimbable`) can be climbed: walk or jump into
   one, forward and back climb it, jump lets go (or mantles onto a ledge), crouch drops; the
   chain rattles as Corvo climbs.

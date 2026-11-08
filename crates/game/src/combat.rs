@@ -25,7 +25,7 @@ impl Plugin for CombatPlugin {
             .add_systems(OnEnter(GameState::InGame), spawn_view_model.after(LevelSpawnSet).after(crate::player::spawn_player))
             .add_systems(
                 Update,
-                (sword_input, assassinating, chokehold, receive_hits, versus, animate_view_model, special_moves).chain().after(crate::gadgets::grenade_focus).run_if(in_state(GameState::InGame)),
+                (sword_input, assassinating, drop_hold, chokehold, receive_hits, versus, animate_view_model, special_moves).chain().after(crate::gadgets::grenade_focus).run_if(in_state(GameState::InGame)),
             )
             .add_systems(Update, slide_into.run_if(in_state(GameState::InGame)));
     }
@@ -684,6 +684,41 @@ fn finisher_dilates(mode: u8, roll: FinisherRoll) -> bool {
         }
 }
 
+/// A drop assassination under way: Corvo held, once he is down, until his clip unlocks him
+/// (`Sword_Ready_Assassination_Drop*_Master`'s `DisNotify_AnimStateUnlock`: 1.84 s front, 1.79
+/// back, 1.77 left, 1.59 right), no blow or block meanwhile; before, he could move and strike
+/// again as the kill played.
+#[derive(Component)]
+pub struct DropHold {
+    t: f32,
+    unlock: Option<f32>,
+    clip: String,
+}
+
+fn drop_hold(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut player: Query<(Entity, &mut Player, &mut DropHold)>,
+    arms: Query<&crate::anim::Animator, With<crate::arms::ArmsRoot>>,
+    level: Option<Res<crate::level::LevelInfo>>,
+) {
+    let Ok((pe, mut p, mut h)) = player.single_mut() else { return };
+    if h.unlock.is_none() {
+        let clip = h.clip.clone();
+        h.unlock = Some(arms.iter().next().zip(level.as_ref()).and_then(|(anim, l)| anim.lib.find(&clip).and_then(|c| anim.lib.marks(&l.scene).remove(&c)).and_then(|m| m.unlock)).unwrap_or(1.8));
+    }
+    h.t += time.delta_secs();
+    if h.t >= h.unlock.unwrap_or(1.8) {
+        p.locked = false;
+        commands.entity(pe).remove::<DropHold>();
+        return;
+    }
+    if p.grounded && !p.locked {
+        p.locked = true;
+        p.velocity = Vec3::ZERO;
+    }
+}
+
 /// A synchronized kill begun (an assassination, a finisher): the victim's clip given it, Corvo's
 /// to his arms, and him held for it.
 #[allow(clippy::too_many_arguments)]
@@ -732,8 +767,9 @@ fn sword_input(
         Option<Res<crate::level::LevelInfo>>,
     ),
     (mut pace, clock, rapier, surfaces, mut shake, attached): (ResMut<FinisherPace>, Res<crate::gameplay::TimeControl>, ReadRapierContext, Query<&crate::footsteps::ColliderSurfaces>, MessageWriter<crate::player::ShakeCamera>, Query<&crate::npcparts::NpcAttached>),
+    holding: Query<(), With<DropHold>>,
 ) {
-    if paused.0 { return; }
+    if paused.0 || !holding.is_empty() { return; }
     let Ok((pe, pt, mut p, mut sword)) = player.single_mut() else { return };
     if std::env::var("DH_ATTACK_LOG").is_ok() && bind.just_pressed(crate::bindings::Act::Primary) {
         info!("attack: versus {} busy {} carrying {} dead {} locked {} host {} unarmed {} sheathed {}", versus.npc.is_some(), held.busy(), carry.carrying(), stats.dead, p.locked, possession.host.is_some(), stats.unarmed, stats.sheathed);
@@ -850,6 +886,8 @@ fn sword_input(
             sfx.write(crate::audio::PostEvent::named("Snd_Imp_Sword_on_Body_cue_ak", Some(nt.translation + Vec3::Y)));
             sword.drop_seq += 1;
             sword.drop_dir = dir;
+            // (held through his clip until it unlocks him, once he's down: `drop_hold`)
+            commands.entity(pe).insert(DropHold { t: 0.0, unlock: None, clip: ["Front", "Back", "Left", "Right"].map(|d| format!("Sword_Ready_Assassination_Drop{d}_Master"))[dir as usize % 4].clone() });
             // Falling Star: a little mana
             if attrs.drop_mana > 0.0 {
                 stats.mana = (stats.mana + attrs.drop_mana).min(stats.max_mana);
