@@ -3854,6 +3854,8 @@ against the install's own data where it carries them, then implemented independe
 - **Weapons.**
   - The crossbow's Range upgrade doubles its bolts' speed.
   - Bolts double on the head or torso of someone not fighting Corvo, and do at most 15 to a limb.
+    A head shot that kills outright (`m_bKillOnHeadshot`) sounds its stinger, the bolt's and the
+    pistol ball's `m_pInstaKillSound` (`Snd_UI_One_Shot_Kill`); before, it fell silent.
   - An incendiary bolt does 50, never killing outright, and sets its target alight 0.5 s later.
     It burns flailing in the flames with its own clip (`DisNPCAnim_Immolate`:
     `Generic_Immolation`) rather than falling as from a blow (the bolt's damage type,

@@ -1591,6 +1591,10 @@ fn use_power(
                     let damage = attrs.bullet.damage(toi, head, n.alert != crate::npc::Alert::Combat);
                     if head {
                         commands.entity(hit).try_insert(crate::npc::HeadHit);
+                        // (a head shot's outright kill: its stinger, the ball's `m_pInstaKillSound`)
+                        if attrs.bullet.head_kill && !n.is_down() && n.min_health <= 0.0 {
+                            sfx.write(PostEvent::named("Snd_UI_One_Shot_Kill", None));
+                        }
                     } else if at.y - nt.translation.y < LEGS {
                         let f = n.forward();
                         commands.entity(hit).try_insert(crate::npc::LegHit((at - nt.translation).dot(Vec3::new(-f.z, 0.0, f.x)) > 0.0));
@@ -2069,6 +2073,11 @@ pub(crate) fn update_projectiles(
                     let came = t.translation - step / len * 2.0;
                     if head {
                         commands.entity(hit).try_insert(crate::npc::HeadHit);
+                        // (a head shot's outright kill: its stinger, the bolt's `m_pInstaKillSound`,
+                        // `Snd_UI_One_Shot_Kill`; before, none)
+                        if pr.kind == HitKind::Bolt && attrs.bolt.head_kill && !npc.is_down() && npc.min_health <= 0.0 {
+                            sfx.write(PostEvent::named("Snd_UI_One_Shot_Kill", None));
+                        }
                     } else if local.y < LEGS {
                         commands.entity(hit).try_insert(crate::npc::LegHit(local.with_y(0.0).dot(Vec3::new(-f.z, 0.0, f.x)) > 0.0));
                     }
