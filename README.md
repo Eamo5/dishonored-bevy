@@ -1906,7 +1906,8 @@ fields no longer show their stand-in "WW" behind the title.
 - **Pickpocketing**: what a character carries (its spawner's `m_pStealablePickup`: a coin
   purse, a key) hangs at its belt; Corvo can take it from behind someone who hasn't noticed
   him, or from the body. Robbed while it stands, a character misses it a while later
-  (`DisBehaviorStolen`, at its 100% occurrence; 4 s is our reading): if nothing has set it on
+  (`DisBehaviorStolen`, at its 100% occurrence; 3 to 5 s on, the brains' `m_fStolenMinDelay` /
+  `m_fStolenMaxDelay`, where before it was 4 s every time): if nothing has set it on
   edge it stops and checks its pockets (the guards' `Empty_CheckPockets`) and says so
   (`ROBBED`: "Hey, I got snaked.", "How did I lose that? It was right here.").
 - **Whale butchers' saws** (`saw.rs`; The Knife of Dunwall's `DLC06_Pwn_SawButcher`, holding

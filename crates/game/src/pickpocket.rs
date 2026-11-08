@@ -169,9 +169,9 @@ fn plant(
     commands.entity(e).despawn();
 }
 
-/// How long after a theft its victim misses what was taken (s: our reading; the original's
-/// `DisBehaviorStolen` timing isn't in its data).
-const ROBBED_AFTER: f32 = 4.0;
+/// How long after a theft its victim misses what was taken (s: the brains' `DisTweaks_AIBrain`
+/// `m_fStolenMinDelay` 3 to `m_fStolenMaxDelay` 5, at random; before, 4 every time).
+const ROBBED_AFTER: [f32; 2] = [3.0, 5.0];
 
 /// A pocket emptied while its wearer stands (`DisBehaviorStolen`, `m_fOccurencePercentage` 1):
 /// the wearer misses it a while later (`Npc::robbed`). One the scripts only take off its belt
@@ -195,7 +195,7 @@ fn notice_thefts(
         let standing = npcs.get(npc).is_ok_and(|n| !n.is_down());
         if let Ok(mut n) = npcs.get_mut(npc) {
             if !n.is_down() && n.robbed.is_none() {
-                n.robbed = Some(ROBBED_AFTER);
+                n.robbed = Some(ROBBED_AFTER[0] + rand::random::<f32>() * (ROBBED_AFTER[1] - ROBBED_AFTER[0]));
             }
         }
         if !standing {
