@@ -645,7 +645,9 @@ fn player_look(
     t.rotation = Quat::from_rotation_y(p.yaw);
     if let Ok(mut ct) = cam.single_mut() {
         // (a shot's kick on top: `aim`)
-        ct.rotation = Quat::from_rotation_z(-p.lean * 0.18) * Quat::from_rotation_x(p.pitch + aim.view_kick());
+        // (and a blow's flinch: `aim`)
+        let flinch = aim.view_flinch();
+        ct.rotation = Quat::from_rotation_y(flinch.x) * Quat::from_rotation_z(-p.lean * 0.18) * Quat::from_rotation_x(p.pitch + aim.view_kick() + flinch.y);
     }
 }
 

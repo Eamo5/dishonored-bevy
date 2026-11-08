@@ -1470,7 +1470,7 @@ fn receive_hits(
     attrs: Res<crate::gamedata::Attrs>,
     (mut fx, level, mut shake): (MessageWriter<crate::particles::SpawnEffect>, Option<Res<crate::level::LevelInfo>>, MessageWriter<crate::player::ShakeCamera>),
     (pull, mut shielded, zone): (Option<Res<crate::pull::PullAim>>, MessageWriter<NpcHit>, Res<crate::arms::ParryZone>),
-    data: Res<crate::gamedata::Data>,
+    (data, mut aim): (Res<crate::gamedata::Data>, ResMut<crate::aim::Aim>),
 ) {
     use crate::audio::PostEvent;
     let Ok((pt, mut p, mut sword)) = player.single_mut() else { return };
@@ -1605,6 +1605,23 @@ fn receive_hits(
         // (the contact system's rumble for the one struck: a blade's, or a thing thrown)
         crate::rumble::play(if h.missile { "contact.DishonoredGameContent.Body.struck" } else { "contact.Weapon.Body.struck" });
         stats.blow = (stats.blow.0.wrapping_add(1), side_of(h.from, pt.translation, p.yaw));
+        // his view flinches away from the blow (his combat tweak's `m_fMinHitReact_Camera` 400 to
+        // `m_fMaxHitReact_Camera` 700 by its damage from `m_HitReact_Min_Damage` 1 to
+        // `_High_Damage` 10, `m_fHitReactRandomness` 0.3 about it; read as rotator units, our
+        // reading); before, only the arms and the screen's edges showed it
+        {
+            let v = |k: &str, d: f32| data.pawn(&format!("combat.{k}"), d);
+            let (lo, hi) = (v("m_HitReact_Min_Damage", 1.0), v("m_HitReact_High_Damage", 10.0));
+            let k = ((damage - lo) / (hi - lo).max(1e-3)).clamp(0.0, 1.0);
+            let units = v("m_fMinHitReact_Camera", 400.0) + (v("m_fMaxHitReact_Camera", 700.0) - v("m_fMinHitReact_Camera", 400.0)) * k;
+            let jitter = 1.0 + (rand::random::<f32>() * 2.0 - 1.0) * v("m_fHitReactRandomness", 0.3);
+            let to = (h.from - pt.translation).with_y(0.0).normalize_or_zero();
+            let right = Vec3::new(p.yaw.cos(), 0.0, -p.yaw.sin());
+            aim.flinch(Vec2::new(to.dot(right), to.dot(fwd)), units * jitter * std::f32::consts::TAU / 65536.0);
+            if std::env::var_os("DH_MELEE_LOG").is_some() {
+                info!("melee: the blow ({damage:.0}) flinches his view {:.1} degrees", units * jitter * 360.0 / 65536.0);
+            }
+        }
         if !h.missile {
             sfx.write(PostEvent::named("Snd_Imp_Sword_on_Body_cue_ak", None));
         }

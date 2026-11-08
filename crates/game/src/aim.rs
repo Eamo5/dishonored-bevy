@@ -89,6 +89,9 @@ pub struct Aim {
     /// the view's kick (radians) and the seconds since the shot
     kick: f32,
     kick_t: f32,
+    /// the view's flinch from a blow (yaw, pitch: radians) and the seconds since it
+    flinch: Vec2,
+    flinch_t: f32,
     /// what the aim assist holds the weapon to
     pub assist: Option<Assisted>,
     /// where the HUD's crosshair stands (normalised from the middle, y up), sliding to the
@@ -135,7 +138,26 @@ impl Aim {
         self.kick = units.max(0.0) * TAU / 65536.0;
         self.kick_t = 0.0;
     }
-    /// The kick's pitch now (radians): up in 50 ms, then settling.
+    /// A blow struck him: his view flinches, turned away from where it came (`dir`: the blow's
+    /// way in his view's frame, x right, y ahead) by `angle` radians.
+    pub fn flinch(&mut self, dir: Vec2, angle: f32) {
+        let d = dir.normalize_or(Vec2::Y);
+        // (struck from the right, the view swings left: a positive turn; from ahead, it tips up)
+        self.flinch = Vec2::new(d.x, d.y * 0.5) * angle;
+        self.flinch_t = 0.0;
+    }
+    /// The flinch now (yaw, pitch: radians): in over 60 ms, then settling.
+    pub fn view_flinch(&self) -> Vec2 {
+        if self.flinch == Vec2::ZERO {
+            return Vec2::ZERO;
+        }
+        const IN: f32 = 0.06;
+        if self.flinch_t < IN {
+            self.flinch * self.flinch_t / IN
+        } else {
+            self.flinch * (-(self.flinch_t - IN) * 7.0).exp()
+        }
+    }    /// The kick's pitch now (radians): up in 50 ms, then settling.
     pub fn view_kick(&self) -> f32 {
         if self.kick <= 0.0 {
             return 0.0;
@@ -378,6 +400,7 @@ fn disperse(
 ) {
     let dt = time.delta_secs();
     aim.kick_t += dt;
+    aim.flinch_t += dt;
     let Some(w) = Weapon::of(powers.selected) else {
         aim.weapon = None;
         aim.cone = 0.0;

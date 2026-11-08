@@ -1075,6 +1075,10 @@ fields no longer show their stand-in "WW" behind the title.
   `m_TimeBetweenWarningAndOffscreenAttack`, 1-2 s for the guards and thugs); before, it struck from
   behind unheralded. A blow (a kick too) throws his arms from the side it came (`Sword_BigHit_Front`,
   `_Back`, `_Left`, `_Right`; empty-handed, `Empty_BigHit_*`, and a knockdown's `Empty_Knockdown*`);
+  his view flinches away from the blow too (his combat tweak's `m_fMinHitReact_Camera` 400 to
+  `m_fMaxHitReact_Camera` 700 by its damage from `m_HitReact_Min_Damage` 1 to `_High_Damage` 10,
+  `m_fHitReactRandomness` 0.3 about it, read as rotator units: 2 to 4 degrees, our reading; before, the
+  view held still);
   other harm, as from ahead. A big blow leaves Corvo reeling for `m_fVulnerableTime_BigHit_Dizzy`, and the world
   half greyed while he is vulnerable after it (`m_fVulnerableTime_BigHit` 2.5 s; 2 s after a knockdown,
   `_Knockdown`), as his combat tweak's `m_VulnerableTime_PpOverride` has it once its fallbacks

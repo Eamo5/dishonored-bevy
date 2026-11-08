@@ -1917,8 +1917,10 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
         .iter()
         .filter_map(|path| startup.find_export(path).and_then(|i| props(&startup, i)))
         .collect();
-    for n in ["m_fVulnerableTime_BigHit", "m_fVulnerableTime_Knockdown", "m_fVulnerableTime_BlendSpeed"] {
-        if let Some(v) = combat.iter().find_map(|p| p.float(n)) {
+    // (and his view's flinch as a blow lands: `m_fMinHitReact_Camera` / `_Max` by its damage between
+    // `m_HitReact_Min_Damage` and `_High_Damage`, `m_fHitReactRandomness` about it)
+    for n in ["m_fVulnerableTime_BigHit", "m_fVulnerableTime_Knockdown", "m_fVulnerableTime_BlendSpeed", "m_fMinHitReact_Camera", "m_fMaxHitReact_Camera", "m_fHitReactRandomness", "m_HitReact_Min_Damage", "m_HitReact_High_Damage"] {
+        if let Some(v) = combat.iter().find_map(|p| p.float(n).or_else(|| p.int(n).map(|i| i as f32))) {
             d.pawn.insert(format!("combat.{n}"), v);
         }
     }
