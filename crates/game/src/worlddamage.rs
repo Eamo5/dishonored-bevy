@@ -170,6 +170,9 @@ fn npc_damage(mut hits: MessageReader<NpcHit>, vm: Option<ResMut<Vm>>, npcs: Que
         let now = vm.time;
         vm.recent_hits.insert(h.npc, now);
         let kind = hit_type(h.kind, h.from.distance(t.translation), &attrs);
+        let by_player = !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion | HitKind::EnemyWallOfLight);
+        let own_hand = matches!(h.kind, HitKind::Sword | HitKind::ShortFatality | HitKind::Assassinate | HitKind::Choke | HitKind::Fatality | HitKind::Slide);
+        vm.last_blow.insert(actor, (kind.to_string(), by_player, own_hand));
         vm.take_damage(actor, kind, h.damage, !matches!(h.kind, HitKind::ByOthers | HitKind::EnemyExplosion));
     }
 }

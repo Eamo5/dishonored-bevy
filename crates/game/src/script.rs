@@ -726,11 +726,12 @@ fn run_script(
             info!("script: flare at {at:.1}");
         }
         "explode" => {
-            // explode [distance]: a grenade's blast in front of the view
+            // explode [distance [damage]]: a grenade's blast in front of the view
             let d = cmd.get(1).and_then(|v| v.parse::<f32>().ok()).unwrap_or(5.0);
             let fwd = Quat::from_euler(EulerRot::YXZ, p.yaw, p.pitch, 0.0) * Vec3::NEG_Z;
             let at = t.translation + Vec3::Y * 0.3 + fwd * d;
-            explosions.write(crate::gadgets::Explosion { at, radius: 6.0, full: 2.0, damage: 0.0, effect: "grenade", player: None, kind: crate::gameplay::HitKind::Explosion, silent: false });
+            let damage = cmd.get(2).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+            explosions.write(crate::gadgets::Explosion { at, radius: 6.0, full: 2.0, damage, effect: "grenade", player: None, kind: crate::gameplay::HitKind::Explosion, silent: false });
             info!("script: explode at {at:.1}");
         }
         "chokedust" => {

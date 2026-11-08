@@ -3028,6 +3028,14 @@ fields no longer show their stand-in "WW" behind the title.
     kill. The combos follow their settings: Death Streak's gap between kills, Brutal Streak's
     five by the blade, Multiple Shots' and Blast's windows for shot and blast kills, each
     combo's multiplier gain.
+  - *How each died* (`DisSeqAct_DLC05_GetDeathInfo`): the dead one's last blow, its damage type,
+    whether Corvo dealt it (`Instigator`) and whether by his own hand (`Damage Causing Actor` his
+    pawn: his blade, a choke, an assassination). The trials' scripts sort deaths by it (Chain Kill's
+    explosion / electricity / whiskey fire / wall of light / water / impact counts, Bend Time
+    Massacre's sword kills), through `SeqCond_SwitchClass`, which now takes the first output the
+    class *is* (`IsA`: a grenade's damage is an explosion's), as UE3's does; Corvo is his pawn's
+    class, an actor its own. Before, the death was never known (Error every time) and the class
+    had to match exactly, so those counts never ran. Script `explode D DMG` sets off a lethal blast.
   - *Out of bent time*: characters whose pawn tweak sets `m_bAlwaysOutOfBendTime` go on
     through bent or stopped time on Corvo's own clock. Back Alley Brawl's Daud fights through
     the world stop his entrance sets off; the same goes for the campaign's Daud, the Outsider

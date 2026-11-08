@@ -1278,8 +1278,10 @@ pub struct Vm {
     pub busted: Option<u32>,
     pub dlc_markers: std::collections::BTreeSet<u32>,
     pub ammo: [(u32, u32); 8],
-    /// the damage type of the last death the challenge saw (`DisSeqAct_DLC05_GetDeathInfo`)
-    pub last_death: Option<String>,
+    /// the last blow each character took, by its actor (`DisSeqAct_DLC05_GetDeathInfo`): its damage
+    /// type, whether Corvo dealt it, whether by his own hand (his blade, a choke: the damage's
+    /// causer his pawn, not a missile)
+    pub last_blow: std::collections::HashMap<u32, (String, bool, bool)>,
     /// movers' navigation meshes the scripts join to the rest (true) or part from it
     /// (`ArkSeqAct_ChangePylonConnection`): the pylon's actor
     pub pylon_links: Vec<(String, bool)>,
@@ -1512,7 +1514,7 @@ impl Vm {
             busted: None,
             dlc_markers: Default::default(),
             ammo: [(0, 0); 8],
-            last_death: None,
+            last_blow: Default::default(),
             pylon_links: Vec::new(),
             impulses: Vec::new(),
             line_impulses: Vec::new(),
@@ -3880,17 +3882,33 @@ impl Vm {
                 self.fire(op, 0);
             }
             "SeqCond_SwitchClass" => {
-                // the output named after the object's class, else "Default"
-                let class_of = self.read(op, "Object").into_iter().find_map(|v| if let Val::Str(s) = v { Some(s) } else { None }).unwrap_or_default();
+                // the first output whose class the object is (`IsA`: a grenade's damage is an
+                // explosion's), else "Default"; Corvo is his pawn's class, an actor its own
+                let class_of = self.read(op, "Object").into_iter().find_map(|v| match v {
+                    Val::Str(s) => Some(s),
+                    Val::Player => Some("DishonoredPlayerPawn".to_string()),
+                    Val::Actor(a) => g.actors.get(a as usize).map(|x| x.class.clone()),
+                    _ => None,
+                }).unwrap_or_default();
                 let cls = class_of.rsplit('.').next().unwrap_or(&class_of).to_string();
-                let out = self.output_index(op, &cls).or_else(|| self.output_index(op, "Default")).unwrap_or(0);
+                let out = opd.outputs.iter().position(|o| o.desc != "Default" && (o.desc.eq_ignore_ascii_case(&cls) || crate::worlddamage::is_a(&cls, &o.desc)));
+                let out = out.or_else(|| self.output_index(op, "Default")).unwrap_or(0);
                 self.fire(op, out);
             }
             "DisSeqAct_DLC05_GetDeathInfo" => {
-                // the last death the challenge saw: its damage type (Out), or none (Error)
-                match self.last_death.clone() {
-                    Some(kind) => {
+                // how the dead one (Target) died: the type of its last blow ("Damage Type"), who
+                // dealt it ("Instigator": Corvo, or none for the world's), and what ("Damage
+                // Causing Actor": his pawn for his own hand's, else the missile or the device);
+                // none known, Error. (Before, it was never known: the trials' kill scoring by
+                // cause, Chain Kill's and Bend Time Massacre's, never ran.)
+                let blow = self.read(op, "Target").into_iter().find_map(|v| if let Val::Actor(a) = v { self.last_blow.get(&a).cloned() } else { None });
+                match blow {
+                    Some((kind, by_player, own_hand)) => {
                         self.write(op, "Damage Type", Val::Str(kind));
+                        if by_player {
+                            self.write(op, "Instigator", Val::Player);
+                        }
+                        self.write(op, "Damage Causing Actor", if own_hand { Val::Player } else { Val::Str("Actor".into()) });
                         self.fire(op, 0);
                     }
                     None => self.fire(op, 1),
