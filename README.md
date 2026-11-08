@@ -3680,7 +3680,8 @@ against the install's own data where it carries them, then implemented independe
     and rests loaded or, with no bolts left, empty: `Crossbow_Idle`, `Crossbow_OutOfAmmo_Idle`).
     The bolt it's loaded with sits on its `Bolt_Socket` (`m_ArrowSocketName`: a bolt, a sleep
     dart or an incendiary one, as selected), gone from the shot until a reload brings the next
-    in on its `Bolt_Reload_Socket`, and not there with none left.
+    in on its `Bolt_Reload_Socket`, and not there with none left. With the fast reload the next bolt
+    shows 0.183 s into `Crossbow_Fire_FastReload` (its `DisNotify_ShowArrowHighRes`; before, 0.25 s).
   - A shot jolts the sword hand too, when it's doing nothing else (the pistol's and crossbow's
     `m_SwordhandReaction` / `_Sneaking`: their `PistolReaction` / `CrossbowReaction` states,
     `Sword_Ready_GunshotReaction`, `Sword_Sneak_GunshotReaction` crouched); before, it held still.

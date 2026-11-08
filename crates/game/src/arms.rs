@@ -149,14 +149,18 @@ struct LoadedBolt {
     reload: bool,
 }
 
+/// When the fast reload's next bolt shows (s: `Crossbow_Fire_FastReload`'s
+/// `DisNotify_ShowArrowHighRes`, 0.183; before, 0.25).
+const FAST_RELOAD_BOLT: f32 = 0.183;
+
 /// The crossbow's bolt shows while it's loaded (not from the shot until the reload brings the
 /// next, nor with none left); the reload's bolt while the reload plays.
 fn show_bolts(arms: Query<&Animator, With<ArmsRoot>>, mut bolts: Query<(&LoadedBolt, &mut Visibility)>, (powers, stats): (Res<Powers>, Res<PlayerStats>)) {
     let Ok(arms) = arms.single() else { return };
     let arm = arms.overlay_state().0.map(|c| arms.lib.clip(c).name.as_str()).unwrap_or("");
     let t = arms.overlay_time().unwrap_or(0.0);
-    let reloading = matches!(arm, "Crossbow_Reload_In" | "Crossbow_RapidReload") || (arm == "Crossbow_Fire_FastReload" && t > 0.25);
-    let shot = matches!(arm, "Crossbow_Fire" | "Crossbow_Spyglass_Fire") || (arm == "Crossbow_Fire_FastReload" && t <= 0.25);
+    let reloading = matches!(arm, "Crossbow_Reload_In" | "Crossbow_RapidReload") || (arm == "Crossbow_Fire_FastReload" && t > FAST_RELOAD_BOLT);
+    let shot = matches!(arm, "Crossbow_Fire" | "Crossbow_Spyglass_Fire") || (arm == "Crossbow_Fire_FastReload" && t <= FAST_RELOAD_BOLT);
     let none = powers.selected.ammo(&stats).unwrap_or(1) == 0;
     for (b, mut v) in &mut bolts {
         let show = if b.reload { reloading } else { !reloading && !shot && !none };
