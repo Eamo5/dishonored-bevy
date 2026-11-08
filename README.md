@@ -1537,7 +1537,9 @@ fields no longer show their stand-in "WW" behind the title.
   Deactivated), warn, and fire volleys of explosive arrows (`WatchTowerExplosiveArrow_twk`)
   at the tweak's cadence until he's out of sight for `m_fStateAttackTimeout`; without their
   tank they go dark, and looking into the beam up close blinds (the post-process graph's
-  Blinded node). Rewired, a tower turns its beam and arrows on its owners; the scripts can
+  Blinded node): over Corvo's `m_fBlindnessAttackTime` (1 s to the full glare), his eyes recovering
+  with `m_fBlindnessReleaseHalflife` (half the blindness gone each 0.5 s), none with
+  `m_bWatchTowerBlinding` off; before, the glare struck at once and faded evenly over 1.25 s. Rewired, a tower turns its beam and arrows on its owners; the scripts can
   turn towers and pylons off, on or round (`DisSeqAct_WallofLightControl`,
   `DisSeqAct_DefenceTower`) and order a volley at something
   (`DisSeqAct_WatchTowerShootAtTarget`). As the tower's own code has it (decoded from the

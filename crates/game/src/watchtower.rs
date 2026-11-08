@@ -38,13 +38,14 @@ impl Plugin for WatchTowerPlugin {
             .init_resource::<ArrowRestore>()
             .init_resource::<TowerRestore>()
             .add_systems(OnEnter(GameState::InGame), setup_towers.after(LevelSpawnSet))
-            .add_systems(Update, (restore_arrows.after(crate::save::restore_npcs), restore_towers, towers, fly_arrows).chain().run_if(in_state(GameState::InGame)));
+            .add_systems(Update, (restore_arrows.after(crate::save::restore_npcs), restore_towers, towers, eyes, fly_arrows).chain().run_if(in_state(GameState::InGame)));
     }
 }
 
-/// How blinded Corvo is by a searchlight, 0..1 (the Blinded node's opacity).
+/// How blinded Corvo is by a searchlight, 0..1 (the Blinded node's opacity), and how much the
+/// beams in his eyes would blind him now.
 #[derive(Resource, Default)]
-pub struct Blinding(pub f32);
+pub struct Blinding(pub f32, pub f32);
 
 #[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 enum State {
@@ -685,8 +686,46 @@ fn towers(
     if blind > 0.0 && std::env::var("DH_TOWER_LOG").is_ok() {
         info!("watch tower: blinding {blind:.2}");
     }
-    // (eyes adjust)
-    blinding.0 = if blind > blinding.0 { blind } else { (blinding.0 - dt * 0.8).max(blind) };
+    blinding.1 = blind;
+}
+
+/// His eyes taking the glare: blinded over Corvo's `m_fBlindnessAttackTime` (1 s to the full
+/// glare), recovering with `m_fBlindnessReleaseHalflife` (0.5 s: half the blindness gone each half
+/// second), none at all without `m_bWatchTowerBlinding`; before, the glare struck at once and
+/// faded evenly over 1.25 s.
+fn eyes(time: Res<Time>, data: Res<crate::gamedata::Data>, mut blinding: ResMut<Blinding>) {
+    let dt = time.delta_secs();
+    let target = if data.pawn("m_bWatchTowerBlinding", 1.0) > 0.0 { blinding.1 } else { 0.0 };
+    let (attack, half) = (data.pawn("m_fBlindnessAttackTime", 1.0).max(0.01), data.pawn("m_fBlindnessReleaseHalflife", 0.5).max(0.01));
+    blinding.0 = adapt(blinding.0, target, dt, attack, half);
+}
+
+/// The glare's step: up towards `target` at a full glare each `attack` s, down by half each
+/// `half` s.
+fn adapt(cur: f32, target: f32, dt: f32, attack: f32, half: f32) -> f32 {
+    let next = if target > cur { (cur + dt / attack).min(target) } else { (cur * 0.5f32.powf(dt / half)).max(target) };
+    if next < 1e-3 {
+        0.0
+    } else {
+        next
+    }
+}
+
+#[cfg(test)]
+mod eye_tests {
+    use super::adapt;
+
+    #[test]
+    fn glare_builds_over_a_second_and_halves_every_half_second() {
+        // a second of full glare to be fully blinded, half of it after half a second
+        assert!((adapt(0.0, 1.0, 0.5, 1.0, 0.5) - 0.5).abs() < 1e-6);
+        assert!((adapt(0.5, 1.0, 0.5, 1.0, 0.5) - 1.0).abs() < 1e-6);
+        // out of the beam: half gone each half second, never below what still shines
+        assert!((adapt(1.0, 0.0, 0.5, 1.0, 0.5) - 0.5).abs() < 1e-6);
+        assert!((adapt(1.0, 0.0, 1.0, 1.0, 0.5) - 0.25).abs() < 1e-6);
+        assert!((adapt(1.0, 0.8, 1.0, 1.0, 0.5) - 0.8).abs() < 1e-6);
+        assert_eq!(adapt(0.0005, 0.0, 0.1, 1.0, 0.5), 0.0);
+    }
 }
 
 /// A tower's aim, its target lost (seconds since): swayed across the line from the tower, at
