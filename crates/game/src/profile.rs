@@ -23,12 +23,12 @@ struct NameVisitor(Option<String>);
 
 impl Visit for NameVisitor {
     fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name() == "name" {
+        if field.name() == "name" || field.name() == "system" {
             self.0 = Some(value.to_string());
         }
     }
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "name" && self.0.is_none() {
+        if (field.name() == "name" || field.name() == "system") && self.0.is_none() {
             self.0 = Some(format!("{value:?}"));
         }
     }
@@ -96,7 +96,8 @@ fn report(time: Res<Time<bevy::time::Real>>, mut since: Local<f32>, mut frames: 
     let mut rows: Vec<(String, f64, u64)> = map.into_iter().map(|(k, (ms, c))| (k, ms / n, c)).collect();
     rows.sort_by(|a, b| b.1.total_cmp(&a.1));
     info!("profile: {:.2} ms a frame over {} frames", *since * 1000.0 / n as f32, *frames);
-    for (name, ms, c) in rows.iter().take(40) {
+    let top = std::env::var("DH_PROFILE").ok().and_then(|v| v.parse::<usize>().ok()).filter(|n| *n > 1).unwrap_or(40);
+    for (name, ms, c) in rows.iter().take(top) {
         info!("profile: {ms:7.3} ms/frame {:6} runs  {name}", c);
     }
     *since = 0.0;

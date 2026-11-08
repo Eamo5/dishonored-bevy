@@ -238,7 +238,7 @@ fn main() -> AppExit {
                     ..default()
                 })
                 .set(bevy::log::LogPlugin {
-                    filter: "info,wgpu=error,naga=warn,bevy_render=warn,bevy_rapier3d=warn".into(),
+                    filter: if cfg!(feature = "profile") { "info,wgpu=error,naga=warn,bevy_rapier3d=warn" } else { "info,wgpu=error,naga=warn,bevy_render=warn,bevy_rapier3d=warn" }.into(),
                     #[cfg(feature = "profile")]
                     custom_layer: profile::layer,
                     ..default()
