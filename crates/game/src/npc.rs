@@ -6858,8 +6858,8 @@ pub struct NpcClips {
     parry_win: Vec<ClipId>,
     parry_lost: Vec<ClipId>,
     push: Vec<ClipId>,
-    /// a sword lock: the struggle, lost badly, lost, won
-    versus: [Vec<ClipId>; 4],
+    /// a sword lock: the struggle, lost badly, lost, won, won well
+    versus: [Vec<ClipId>; 5],
     /// a rat stamped on
     stomp: Vec<ClipId>,
     /// broken free of a choke (`Generic_Choke_Lose_Slave`)
@@ -7072,7 +7072,7 @@ impl NpcClips {
                 lib.all(&["Sword_Ambush_Out", "Sword_Ambush_Out33"]),
                 lib.all(&["Sword_Ambush_Cancel", "Sword_Ambush_Cancelfff"]),
             ],
-            versus: [lib.all(&["Sword_Versus_MinigameUU"]), lib.all(&["Sword_Versus_BigLose"]), lib.all(&["Sword_Versus_MediumLoseDD"]), lib.all(&["Sword_Versus_MediumWin", "Sword_Versus_BigWin"])],
+            versus: [lib.all(&["Sword_Versus_MinigameUU"]), lib.all(&["Sword_Versus_BigLose"]), lib.all(&["Sword_Versus_MediumLoseDD"]), lib.all(&["Sword_Versus_MediumWin"]), lib.all(&["Sword_Versus_BigWin", "Sword_Versus_MediumWin"])],
             // (with the sword in hand; the empty-handed ones flail their arms)
             hit: lib.all(&[
                 "Sword_HitFront_A",
@@ -8927,6 +8927,7 @@ fn npc_select_anim(
                 1 => &clips.parry_win,
                 2 => &clips.parry_lost,
                 4..=7 => &clips.versus[npc.act.0 as usize - 4],
+                25 => &clips.versus[4],
                 8 => &clips.stomp,
                 9 => &clips.ambush[0],
                 10 => &clips.ambush[2],

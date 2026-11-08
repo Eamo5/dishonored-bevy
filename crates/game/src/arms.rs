@@ -376,8 +376,8 @@ struct ArmClips {
     equip: [Option<ClipId>; 2],
     // putting it away (`Sword_Ready_UnEquip`, `Sword_Sneak_UnEquip`)
     unequip: [Option<ClipId>; 2],
-    // a sword lock: the struggle, then won big, won, lost
-    versus: [Option<ClipId>; 4],
+    // a sword lock: the struggle, then won big, won, lost, lost badly
+    versus: [Option<ClipId>; 5],
     // the head's bob, by pace (walk, run, sprint, sneak) and way (forward, back, left, right):
     // `Ply_Head_Locomotion_as`' additive `ADD_Head_<pace><N|S|W|E>`
     bob: [[Option<ClipId>; 4]; 4],
@@ -460,6 +460,7 @@ impl ArmClips {
                 lib.find("Sword_Ready_Versus_BigWin"),
                 lib.find("Sword_Ready_Versus_MediumWin"),
                 lib.find("Sword_Ready_Versus_MediumLose"),
+                lib.find("Sword_Ready_Versus_BigLose"),
             ],
             swim: [lib.find("Empty_SwimN"), lib.find("Empty_SwimE"), lib.find("Empty_SwimS"), lib.find("Empty_SwimW")],
             powers_idle: lib.find("Powers_Idle"),
@@ -1364,12 +1365,9 @@ fn animate_arms(
         base_busy = true;
     } else if versus.done_seq != st.versus_seq.1 {
         st.versus_seq.1 = versus.done_seq;
-        let k = match versus.outcome {
-            1 => 1,
-            2 | 3 => 2,
-            _ => 3,
-        };
-        if let Some(cl) = c.versus[k] {
+        // (big win, medium win, medium loss, big loss)
+        let k = versus.outcome.clamp(1, 4) as usize;
+        if let Some(cl) = c.versus[k].or(c.versus[3]) {
             anim.restart(cl, false, 1.0, 0.08);
             st.oneshot = true;
             base_busy = true;

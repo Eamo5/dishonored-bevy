@@ -1070,9 +1070,17 @@ fields no longer show their stand-in "WW" behind the title.
   (`StatePlayerMasterVersus`): "Mash [Left Mouse Button] !" (`DUI_Context_Versus`), the guard straining in
   `Sword_Versus_MinigameUU` and his arms in `Sword_Ready_Versus_MinigameUU`. His presses over
   1.6 s against his `MeleeVersusMiniGame_WinBig` (10) / `_WinMedium` (5) / `_LoseMedium` (2)
-  settle it: a big win leaves it reeling (`Sword_Versus_BigLose`, the next blow a fatality),
-  a win staggers it, a stand-off parts the blades, and fewer throws him back with the guard
-  pressing on (how the three thresholds combine is our reading; the data names them only).
+  settle it, one outcome to each pair of clips: at least `_WinBig` presses a big win, leaving it
+  reeling (his `Sword_Ready_Versus_BigWin`, its `Sword_Versus_BigLose`, the next blow a fatality),
+  `_WinMedium` a win that staggers it (`_MediumWin` / `_MediumLose`), `_LoseMedium` a loss, his
+  blade forced aside (`Sword_Ready_Versus_MediumLose` / `Sword_Versus_MediumWin`), and fewer a big
+  loss: thrown off balance (`Sword_Ready_Versus_BigLose`, then stunned: its
+  `DishonoredNotify_Stunned` at 1.3 s and `StatePlayerMasterStunned`'s 0.1 s) as it presses on
+  (`Sword_Versus_BigWin`). He can't strike or block until his clip unlocks him (its
+  `DisNotify_AnimStateUnlock`: 1.46 s into the big win, 1.29 into the win, 1.88 into the loss;
+  1.4 s for the big loss). Before, a loss played a medium one, the big loss and the guards'
+  big win went unplayed, a middling count was a stand-off of our own, and he could strike again at
+  once. Script `lock N` locks blades with the nearest hostile swordsman, N presses in.
   Piero's Sword Crossing upgrade (`Twk_Upgrade_Sword`: `VersusMiniGameBonus` 3) counts as three
   presses to the good (our reading of "more effective when locking blades").
   Script `clash` sets one up with the nearest guard. Having lost sight of Corvo within 7 m,

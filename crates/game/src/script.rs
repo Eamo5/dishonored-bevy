@@ -1496,6 +1496,26 @@ fn run_script(
                 });
             }
         }
+        "lock" => {
+            // (tests) lock N: the blades locked with the nearest standing hostile swordsman, N
+            // presses already in
+            let n = f(1) as u32;
+            if let Some((e, _, _)) = npc_ents.iter().filter(|(_, n, _)| n.hostile() && !n.is_down() && n.has_sword).min_by(|a, b| a.2.translation.distance(t.translation).total_cmp(&b.2.translation.distance(t.translation))) {
+                commands.queue(move |w: &mut World| {
+                    if let Some(mut npc) = w.get_mut::<Npc>(e) {
+                        npc.versus = true;
+                        npc.attack_t = None;
+                        npc.swing = None;
+                        npc.gesture(4);
+                    }
+                    let mut v = w.resource_mut::<crate::combat::Versus>();
+                    v.npc = Some(e);
+                    v.t = 0.0;
+                    v.presses = n;
+                    v.seq += 1;
+                });
+            }
+        }
         "clash" => {
             // (tests) the nearest living hostile swordsman's blow comes as Corvo strikes: it
             // faces him mid-swing (its blow due as his lands), and he attacks — a sword lock
@@ -1510,7 +1530,7 @@ fn run_script(
                         n.stagger = 0.0;
                         n.yaw = yaw;
                         n.swing = Some(crate::npc::Swing { kind: crate::npc::MoveKind::Short, big: false, len: 0.85, hit: 0.4, reach: 2.6, lunge: 0.0, no_versus: false, more: Vec::new() });
-                        n.attack_t = Some(0.4 - 0.18);
+                        // (its Short blow lands 0.83 s in, by its clip's zone; Corvo's 0.29 s after                        // his press)                        n.attack_t = Some(0.83 - 0.29);
                     }
                 });
                 script.held.push((Input::Mouse(MouseButton::Left), 0.05));

@@ -62,22 +62,27 @@ fn slide_into(
 /// zones within `m_fVersusZoneMaxTime` of each other). Corvo mashes [Primary]
 /// (`DUI_Context_Versus`: "Mash `GBA_Primary` !") and his presses, against his
 /// `MeleeVersusMiniGame_WinBig` / `_WinMedium` / `_LoseMedium`, settle it: a big win leaves
-/// the guard reeling (a fatality's opening), a medium one staggers it, a stand-off parts the
-/// blades, fewer presses and Corvo is thrown back.
+/// the guard reeling (a fatality's opening), a medium one staggers it, a medium loss forces his
+/// blade aside, and fewer presses throw him off balance, reeling, as it presses on.
 #[derive(Resource, Default)]
 pub struct Versus {
     pub npc: Option<Entity>,
     pub t: f32,
     pub presses: u32,
     /// locks begun and settled (the arms play each), and how the last went (1 big win,
-    /// 2 medium win, 3 stand-off, 4 lost)
+    /// 2 medium win, 3 medium loss, 4 big loss)
     pub seq: u32,
     pub done_seq: u32,
     pub outcome: u8,
+    /// the lock's aftermath left (s, its clip's until it unlocks): he can neither strike nor block
+    pub reeling: f32,
 }
 
 /// How long the blades stay locked (s).
 const VERSUS_TIME: f32 = 1.6;
+/// How long a big loss leaves Corvo reeling (s: `Sword_Ready_Versus_BigLose`, 1.4, its
+/// `DishonoredNotify_Stunned` at 1.3 then `StatePlayerMasterStunned`'s `m_fStunDuration` 0.1).
+const VERSUS_BIG_LOSE: f32 = 1.4;
 /// How near in time the two blows must land to lock (s: `m_fVersusZoneMaxTime` is 0.07 on
 /// Corvo's attack zones; widened for the guards' coarser blow timing).
 const VERSUS_ZONE: f32 = 0.12;
@@ -162,6 +167,7 @@ fn versus(
     mut player: Query<(&Transform, &mut Player, &mut Sword), Without<Npc>>,
     mut npcs: Query<(&mut Npc, &Transform), Without<Player>>,
     mut sfx: MessageWriter<crate::audio::PostEvent>,
+    (arms, level): (Query<&crate::anim::Animator, With<crate::arms::ArmsRoot>>, Option<Res<crate::level::LevelInfo>>),
 ) {
     if paused.0 { return; }
     let Some(e) = v.npc else { return };
@@ -216,22 +222,31 @@ fn versus(
         npc.gesture(6);
         2
     } else if n >= lose {
-        // the blades part
-        npc.stagger = 0.4;
-        npc.attack_cd = npc.attack_cd.max(0.6);
-        sword.recoil = 0.3;
-        p.velocity += away * 2.0;
+        // a medium loss: his blade forced aside (`Sword_Ready_Versus_MediumLose`), its own win
+        // (`Sword_Versus_MediumWin`)
+        npc.gesture(7);
+        npc.attack_cd = npc.attack_cd.max(0.3);
+        sword.recoil = 0.6;
+        p.velocity += away * 2.5;
         3
     } else {
-        // Corvo is thrown back, off balance, and it presses on
-        npc.gesture(7);
-        npc.attack_cd = 0.0;
-        sword.recoil = 0.9;
+        // a big loss: Corvo is thrown off balance, reeling (`Sword_Ready_Versus_BigLose`), and it
+        // presses on (`Sword_Versus_BigWin`)
+        npc.gesture(25);
+        // (its win's swing under way before it strikes again, while he still reels: our reading)
+        npc.attack_cd = 0.6;
+        sword.recoil = VERSUS_BIG_LOSE;
         p.velocity += away * 5.0;
         sfx.write(crate::audio::PostEvent::named("Snd_Imp_Sword_vs_Sword_ak", Some(nt.translation + Vec3::Y)));
         4
     };
-    info!("sword lock: {} presses in {:.2} s -> {}", v.presses, v.t, ["", "big win", "win", "stand-off", "lost"][v.outcome as usize]);
+    // (his hands his own again at its clip's `DisNotify_AnimStateUnlock`: 1.46 s into the big win,
+    // 1.29 into the medium one, 1.88 into the medium loss; the big loss, its `DishonoredNotify_Stunned`
+    // and the stun, 1.4 s)
+    let clip = ["", "Sword_Ready_Versus_BigWin", "Sword_Ready_Versus_MediumWin", "Sword_Ready_Versus_MediumLose", "Sword_Ready_Versus_BigLose"][v.outcome as usize];
+    let unlock = arms.iter().next().zip(level.as_ref()).and_then(|(anim, l)| anim.lib.find(clip).and_then(|c| anim.lib.marks(&l.scene).remove(&c)).and_then(|m| m.unlock));
+    v.reeling = unlock.unwrap_or(if v.outcome == 4 { VERSUS_BIG_LOSE } else { 0.0 });
+    info!("sword lock: {} presses in {:.2} s -> {} (his hands back in {:.2} s)", v.presses, v.t, ["", "big win", "win", "loss", "big loss"][v.outcome as usize], v.reeling);
 }
 
 /// What Corvo could do to someone now, as his attacks would find them (the HUD's special
@@ -723,8 +738,9 @@ fn sword_input(
     if std::env::var("DH_ATTACK_LOG").is_ok() && bind.just_pressed(crate::bindings::Act::Primary) {
         info!("attack: versus {} busy {} carrying {} dead {} locked {} host {} unarmed {} sheathed {}", versus.npc.is_some(), held.busy(), carry.carrying(), stats.dead, p.locked, possession.host.is_some(), stats.unarmed, stats.sheathed);
     }
-    // locked blades: the presses are the lock's
-    if versus.npc.is_some() {
+    // locked blades: the presses are the lock's; a lock lost badly leaves him reeling
+    versus.reeling = (versus.reeling - time.delta_secs()).max(0.0);
+    if versus.npc.is_some() || versus.reeling > 0.0 {
         return;
     }
     // (with a body on the shoulder only an assassination is possible)
