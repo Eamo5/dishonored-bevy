@@ -4378,7 +4378,11 @@ Known outstanding gameplay gaps from source and original-data inspection:
   A normal aimed level-two cast selected an unaware guard and spent 60 mana.
   Wild-swarm bite intervals, initial delays and minimum/maximum damage now use their
   original tweak values, with regression coverage for slow-frame timing; runtime
-  comparison with the original remains outstanding.
+  comparison with the original remains outstanding. A bite is a whole number, as the attack
+  group's rule has it (`(int)clamp(count x m_fDamagePerBite, m_fMinDamage, m_fMaxDamage)`,
+  decoded by roshan's r614/blink research), and on Corvo the swarm doesn't wait its
+  `m_fInitialDelayBeforeDealingDamage` (that is for the characters it attacks); before, bites
+  carried fractions and Corvo was spared the first second.
   Wild and summoned swarms check walls and movable cover before targeting, biting
   or feeding; a physics-backed regression verifies obstruction and removal of cover.
   Devouring Swarm now reads its level-specific detection, bite interval/damage,

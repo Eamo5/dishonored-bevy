@@ -138,7 +138,9 @@ fn summon_setting(data: &Data, level: u8, name: &str, fallback: f32) -> f32 {
 fn summoned_bite_damage(data: &Data, level: u8, rats: usize) -> f32 {
     let min = summon_setting(data, level, "m_fMinDamage", 2.0).max(0.0);
     let max = summon_setting(data, level, "m_fMaxDamage", if level >= 2 { 10.0 } else { 5.0 }).max(min);
-    (summon_setting(data, level, "m_fDamagePerBite", 0.4) * rats as f32).clamp(min, max)
+    // (a whole number: `(int)clamp(count x m_fDamagePerBite, min, max)`, as roshan's r614/blink
+    // research decoded the attack group's bite)
+    (summon_setting(data, level, "m_fDamagePerBite", 0.4) * rats as f32).clamp(min, max).trunc()
 }
 
 /// Bites Corvo took from rats (`DisSeqEvent_AttackedByRats`).
@@ -238,7 +240,7 @@ pub struct Wild {
 
 impl Wild {
     fn bite_damage(&self, rats: usize) -> f32 {
-        (self.bite * rats as f32).clamp(self.min_damage, self.max_damage.max(self.min_damage))
+        (self.bite * rats as f32).clamp(self.min_damage, self.max_damage.max(self.min_damage)).trunc()
     }
 }
 
@@ -1235,6 +1237,9 @@ fn swarm_brain(
                     busy = true;
                     if d < attack_distance {
                         let swarm = &mut *s;
+                        // (no wait before the first bite when it's Corvo: `m_fInitialDelayBeforeDealingDamage`
+                        // is the NPCs')
+                        swarm.delay = 0.0;
                         let count = advance_bites(&mut swarm.delay, &mut swarm.bite_t, dt, w.bite_interval);
                         if count > 0 {
                             stats.take_damage(w.bite_damage(n) * count as f32);
