@@ -1932,7 +1932,11 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
             }
         }
     }
-    // the avoidance's radii and forces (`ArkAvoidable`): Corvo's class defaults under his own,
+    // the mask's optics: the zoomed field of view (`Twk_EmptyHands_NPC`'s player-specific
+    // `m_fZoomFOV`, the first lens's) as `zoom.m_fZoomFOV`
+    if let Some(v) = startup.find_export("Twk_EmptyHands_NPC.Twk_EmptyHands_NPC.DisTweaks_ItemEmpty_PlayerSpecific_0").and_then(|i| props(&startup, i)).and_then(|p| p.float("m_fZoomFOV")) {
+        d.pawn.insert("zoom.m_fZoomFOV".into(), v);
+    }    // the avoidance's radii and forces (`ArkAvoidable`): Corvo's class defaults under his own,
     // and a character's (`Twk_Pawn_DefaultNPC` over its class's) as `npc.<property>`
     for (pkg, path, prefix) in [(&game, "Default__DisTweaks_PlayerPawn", ""), (&game, "Default__DisTweaks_NPCPawn", "npc."), (&startup, "Twk_Pawn_DefaultNPC.Twk_Pawn_DefaultNPC", "npc.")] {
         let Some(p) = pkg.find_export(path).and_then(|i| props(pkg, i)) else { continue };

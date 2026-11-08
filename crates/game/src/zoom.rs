@@ -24,8 +24,16 @@ impl Plugin for ZoomPlugin {
     }
 }
 
-/// Magnification of each lens.
-const LEVELS: [f32; 3] = [1.0, 2.0, 4.0];
+/// Each lens's field of view (horizontal degrees, as UE3's): none, the first's (the empty hand's
+/// `m_fZoomFOV`, 30), the second's (the second optics upgrade's `ZoomLevel2` attribute, 10, read as
+/// its field of view: our reading); the magnification is the player's field of view's against it.
+/// Before, the lenses magnified 2 and 4 times whatever the field of view.
+fn levels(data: &crate::gamedata::Data, fov: f32) -> [f32; 3] {
+    let half = |deg: f32| (deg.clamp(1.0, 170.0).to_radians() * 0.5).tan();
+    let second = data.0.upgrades.iter().find(|u| u.id == "Twk_Upgrade_Spyglass2").and_then(|u| u.attributes.iter().find(|(a, _)| a == "ZoomLevel2").map(|(_, v)| *v)).unwrap_or(10.0);
+    let base = half(fov);
+    [1.0, (base / half(data.pawn("zoom.m_fZoomFOV", 30.0))).max(1.0), (base / half(second)).max(1.0)]
+}
 
 #[derive(Resource)]
 pub struct Zoom {
@@ -49,6 +57,7 @@ fn zoom_input(
     player: Query<&Player>,
     menu: Res<crate::hud::Paused>,
     mut sfx: MessageWriter<PostEvent>,
+    (data, settings): (Res<crate::gamedata::Data>, Res<crate::settings::Settings>),
 ) {
     let Ok(p) = player.single() else { return };
     let has = |u: &str| stats.upgrades.iter().any(|x| x == u);
@@ -69,7 +78,7 @@ fn zoom_input(
         };
         sfx.write(PostEvent::named(ev, None));
     }
-    let target = LEVELS[zoom.level as usize % 3];
+    let target = levels(&data, settings.fov.clamp(55.0, 110.0))[zoom.level as usize % 3];
     let k = (time.delta_secs() * 10.0).min(1.0);
     zoom.factor += (target - zoom.factor) * k;
     if (zoom.factor - target).abs() < 1e-3 {

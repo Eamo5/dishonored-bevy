@@ -2482,6 +2482,10 @@ fields no longer show their stand-in "WW" behind the title.
   frame by `AltScreen_Effects.SpyGlass_Lens_01_m` (`MaskOpacity`), and the node's grading
   (neutral colour balance) comes in with the magnification; the second
   adds a stronger lens ([Use] while zoomed) and a distance read-out (`SpyglassDistance`).
+  The lenses narrow the view to their own fields of view, whatever the options' field of view: the
+  first to the empty hand's `m_fZoomFOV` (30 degrees), the second to the second upgrade's
+  `ZoomLevel2` (10, read as its field of view: our reading); before, they magnified a fixed 2 and 4
+  times, so the first lens framed 45 degrees at the default 90.
   Aiming slows with the magnification, sprinting puts it away, with the original lens sounds.
   With the pistol or crossbow in hand, zooming raises it to the eye (`Pistol_Spyglass_In`,
   `Crossbow_Spyglass_In`), holds it there (`_Idle`), shoots from it (`_Fire`: the item tweaks'
