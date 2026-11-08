@@ -2319,7 +2319,11 @@ fields no longer show their stand-in "WW" behind the title.
   now reads that fallback; before, the grade was missing and only the sway showed. Facing Corvo within 20 m and 45 degrees the Overseer
   plays its combat tune at him (`DisTweaks_NPCTune_Combat`, `Music_Amp_Damage`), whose
   musical damage (90 every 0.3 s) tears through the rats of a swarm in the cone; it stops a
-  second after he leaves the cone, five after he's out of sight.
+  second after he leaves the cone, five after he's out of sight. It hurts Corvo too, in its cone and
+  sight: each 0.3 s its 0.3 x 90 less his `MusicDamageResilience` (0.96 / 0.93 / 0.90 / 0.86 by
+  difficulty: 1.9 a tick on Normal), and pushes him away (`m_fRepulseForceRange`, 10 m/s a second at
+  its 20 m reach to 30 up close), as roshan's r614/blink research decoded the tune's tick. Before,
+  it harmed only rats.
 - **Physics props**: the levels' movables (`DishonoredMovable`: bottles, pans, cups, helmets)
   are physical, at rest until disturbed: held still where the level put them, as UE3's rigid
   bodies start asleep, until something moving touches them (a thrown thing, a falling body, a

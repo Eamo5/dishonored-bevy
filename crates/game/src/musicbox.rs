@@ -221,12 +221,13 @@ struct Playing {
 fn combat_tunes(
     time: Res<Time>,
     mut playing: Local<std::collections::HashMap<Entity, Playing>>,
-    player: Query<&Transform, With<Player>>,
+    mut player: Query<(&Transform, &mut Player)>,
     npcs: Query<(Entity, &Npc, &Transform, &crate::npc::FromSpawner), Without<Player>>,
     (mut sfx, mut stop, mut kill): (MessageWriter<PostEvent>, MessageWriter<StopEvent>, MessageWriter<crate::swarm::KillRats>),
     vm: Option<Res<crate::kismet::Vm>>,
+    (mut stats, data, settings): (ResMut<crate::gameplay::PlayerStats>, Res<crate::gamedata::Data>, Res<crate::settings::Settings>),
 ) {
-    let Ok(pt) = player.single() else { return };
+    let Ok((pt, mut pl)) = player.single_mut() else { return };
     let dt = time.delta_secs();
     let mut live = std::collections::HashSet::new();
     for (e, n, t, from) in &npcs {
@@ -257,9 +258,31 @@ fn combat_tunes(
         }
         let Some(p) = playing.get_mut(&e) else { continue };
         live.insert(e);
+        // Corvo in its cone and its sight is pushed away, the harder the nearer
+        // (`m_fRepulseForceRange`: 10 to 30 m/s a second across its reach, as roshan's r614/blink
+        // research decoded the push)
+        let hits = in_cone && n.sees_player && !stats.dead;
+        if hits {
+            let k = (1.0 - d / tu.combat_range.max(0.1)).clamp(0.0, 1.0);
+            let push = tu.repulse_range[0] + (tu.repulse_range[1] - tu.repulse_range[0]) * k;
+            pl.velocity += to.with_y(0.0).normalize_or_zero() * push * dt;
+        }
         p.next -= dt;
         if p.next <= 0.0 {
             p.next = tu.period.max(0.05);
+            // and hurt: each period `period x m_iMusicEffectDamage` musical damage, less his
+            // `MusicDamageResilience` (0.96 / 0.93 / 0.90 / 0.86 by difficulty: 2 a tick on Normal)
+            if hits {
+                let res = data.attribute("MusicDamageResilience", settings.difficulty, &stats.powers, &stats.charms);
+                let dmg = tu.period * tu.damage * (1.0 - res).max(0.0);
+                if dmg > 0.0 {
+                    crate::gameplay::hurt_player(&mut stats, &mut sfx, dmg);
+                    stats.hit_from = Some(t.translation);
+                    if std::env::var_os("DH_TUNE_LOG").is_some() {
+                        info!("music box: {} hurts Corvo for {dmg:.2} at {d:.1} m (health {:.1})", n.name, stats.health);
+                    }
+                }
+            }
             // the blow down the cone: spheres along it, as wide as the cone there
             let fwd = n.forward().with_y(0.0).normalize_or_zero();
             let half = tu.combat_angle.to_radians().tan();

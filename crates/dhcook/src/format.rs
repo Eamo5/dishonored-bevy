@@ -1801,6 +1801,10 @@ pub struct NpcTunes {
     pub damage: f32,
     pub period: f32,
     pub repulse: f32,
+    /// the push away while it hurts (`m_fRepulseForceRange`, m/s a second): the least at its reach,
+    /// the most up close
+    #[serde(default)]
+    pub repulse_range: [f32; 2],
     pub damage_sounds: [String; 2],
     pub stop_out_of_range: f32,
     pub stop_unseen: f32,

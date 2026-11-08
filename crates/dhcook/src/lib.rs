@@ -4201,6 +4201,10 @@ impl<'a> Cooker<'a> {
                         _ => 1.0,
                     };
                     t.repulse = self.tweak_float(&c, "m_fMusicEffectRepulseForce", 0).unwrap_or(0.0) * UNIT;
+                    if let Some((_, Value::Struct(_, r))) = self.tweak_prop(&c, "m_fRepulseForceRange", 0, 0) {
+                        let get = |n: &str| r.iter().find(|f| f.name == n).and_then(|f| if let Value::Float(v) = f.value { Some(v) } else { None }).unwrap_or(0.0);
+                        t.repulse_range = [get("m_fMinValue") * UNIT, get("m_fMaxValue") * UNIT];
+                    }
                     t.stop_out_of_range = self.tweak_float(&c, "m_fStopWhenOutOfRangeTimer", 0).unwrap_or(1.0);
                     t.stop_unseen = self.tweak_float(&c, "m_fStopWhenNotSeeingTimer", 0).unwrap_or(5.0);
                     t.damage_sounds = [sound(self, &c, "m_SFX_Damage_Start"), sound(self, &c, "m_SFX_Damage_Stop")];
