@@ -7990,6 +7990,8 @@ impl<'a> Cooker<'a> {
             ("windblast_2", "Vfx_GamePlay.Windblast.Windblast_lvl2"),
             ("windblast_underwater", "Vfx_GamePlay.Windblast.Windblast_UndWater_lvl1"),
             ("windblast_impact", "Vfx_GamePlay.Windblast.Windblast_GroundImpact_01"),
+            // (a character it strikes: `DisTweaks_NPCPawn_Combat.m_WindBlastEffectTemplate`)
+            ("windblast_npc", "vrosier_TestFX3.Windblast_2.Windblast_NPC_02"),
             ("windblast_dirt", "Vfx_GamePlay.Windblast.Windblast_PLayerDirt_01"),
             ("windblast_water", "Vfx_GamePlay.Windblast.Windblast_PLayerWater_01"),
             ("blood_limb", "Vfx_PhysMat.Blood.SeveredLimbs.Pfx_BloodSLimbBody"),

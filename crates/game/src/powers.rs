@@ -392,6 +392,9 @@ const WINDBLAST_NOTIFY: f32 = 0.27;
 /// in `Powers_Cast_Swarm`).
 const BEND_TIME_NOTIFY: f32 = 0.14;
 const SWARM_NOTIFY: f32 = 0.165;
+/// The least of Wind Blast's force that shows on a character it strikes (`Twk_Pawn_DefaultNPC`'s
+/// `m_WindBlastEffectMinForce`).
+const WINDBLAST_NPC_FX: f32 = 0.15;
 /// When a spring razor (or a mine) is set down: its clip's `DisNotify_PlaceSpringRazor`, 0.2 s into
 /// `Gadgets_SpringRazor_Deploy`.
 const RAZOR_NOTIFY: f32 = 0.2;
@@ -1796,6 +1799,11 @@ fn windblast_gusts(
             }
             npc.velocity += vel;
             stag.write(NpcStagger { npc: e, secs: 2.0, parried: false });
+            // (its gust on the body, struck hard enough: `m_WindBlastEffectTemplate`,
+            // `Windblast_NPC_02` from `m_WindBlastEffectMinForce` 0.15 of the full force)
+            if k >= WINDBLAST_NPC_FX {
+                fx.write(crate::particles::SpawnEffect { follow: Some(e), rot: Quat::from_rotation_arc(Vec3::X, dir), secs: 2.0, ..crate::particles::SpawnEffect::at("windblast_npc", Vec3::Y * 1.2) });
+            }
             // blown hard, off its feet (limp, then up again: `npc.rs`); less, it reels back
             // (`Sword_HitWindblast`)
             if momentum.length() >= ANIM_RAGDOLL_THRESHOLD {

@@ -124,7 +124,9 @@ are in the settings file, `pad_binding_set` 0-3):
   (`m_EffectTemplate`, `m_UnderwaterEffectTemplate`), the ground under him kicked up, dirt or
   water with its burst (`Windblast_Ground`), and a puff where its front meets the world in its
   cone (`Windblast_Wall` / `_Floor` / `_Ceil`: `Windblast_GroundImpact_01`, traced along its
-  middle and two rings, the puffs at least 2 m apart, our reading of its sweep); it turns back every projectile in its cone, as
+  middle and two rings, the puffs at least 2 m apart, our reading of its sweep), and its gust on
+  the body of whoever it strikes at least `m_WindBlastEffectMinForce` (0.15) of its force
+  (`Twk_Pawn_DefaultNPC`'s `m_WindBlastEffectTemplate`, `Windblast_NPC_02`; before, none); it turns back every projectile in its cone, as
   the original's gathers every actor (roshan's r614/blink research): grenades, a tallboy's
   arrows, a krust's spit, bolts),
   Possession (animals, and unaware people at level 2; inside a wolfhound,
