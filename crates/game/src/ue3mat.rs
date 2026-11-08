@@ -108,6 +108,18 @@ fn build_program(map_id: u32, policy: Policy, with_light: bool, shaders: &mut As
     let (vst, pst) = policy.shader_types();
     let vs = lib.code.get(&map.shader("FLocalVertexFactory", vst)?)?;
     let ps = lib.code.get(&map.shader("FLocalVertexFactory", pst)?)?;
+    // (a particle material whose local program drops the particle's colour, its erosion by the
+    // particle's alpha folded to 1, `SubUV_HeightMap_PMAT` and `Blood_PMAT`'s splashes: drawn with its
+    // particle vertex factory's pixel shader, which reads it; before, they never showed)
+    let reads = |code: &[u8], usage: u32, index: u32| dhcook::sm3::parse(code).ok().is_some_and(|sh| sh.decls.iter().any(|d| d.ty == 1 && d.usage == usage && d.index == index));
+    let particle_ps = (policy == Policy::NoLightMap && !with_light && !reads(ps, 10, 0) && !reads(ps, 10, 1))
+        .then(|| ["FParticleSubUVVertexFactory", "FParticleVertexFactory"].iter().find_map(|vf| lib.code.get(&map.shader(vf, pst)?)))
+        .flatten()
+        .filter(|p| reads(p, 5, 1));
+    let (ps, particle_color) = match particle_ps {
+        Some(p) => (p, true),
+        None => (ps, false),
+    };
     // opaque surfaces also take the dominant light's pass
     // the dominant light through its distance-field shadow maps (else the plain factor variant)
     // (`DH_SUN_FACTOR` forces the plain variant, for comparison)
@@ -116,7 +128,7 @@ fn build_program(map_id: u32, policy: Policy, with_light: bool, shaders: &mut As
         .into_iter()
         .find_map(|(lv, lp)| Some((lib.code.get(&map.shader("FLocalVertexFactory", lv)?)?.as_slice(), lib.code.get(&map.shader("FLocalVertexFactory", lp)?)?.as_slice())))
         .filter(|_| with_light);
-    let prog = match ue3prog::build(map, vs, ps, sun, ue3prog::Platform::Bevy) {
+    let prog = match ue3prog::build_with(map, vs, ps, sun, ue3prog::Platform::Bevy, particle_color) {
         Ok(p) => p,
         Err(e) => {
             warn!("program {} {policy:?}: {e:#}", map.name);

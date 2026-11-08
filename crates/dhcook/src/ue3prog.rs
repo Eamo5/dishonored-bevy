@@ -679,6 +679,13 @@ fn ue_setup_model(model: mat4x4<f32>, tag: u32) {
 /// Build a program for a material shader map: its base pass shaders, plus optionally the
 /// dominant directional light's pass (added to the base pass result).
 pub fn build(map: &CookedMap, vs_code: &[u8], ps_code: &[u8], light: Option<(&[u8], &[u8])>, platform: Platform) -> Result<Program> {
+    build_with(map, vs_code, ps_code, light, platform, false)
+}
+
+/// `build`, the pixel shader perhaps a particle vertex factory's (`particle_color`): its particle
+/// colour (`TEXCOORD1`) the mesh's vertex colour, its sub-image blend (`COLOR0.w`) none; its other
+/// interpolants the base pass's own, as the local vertex shader writes them.
+pub fn build_with(map: &CookedMap, vs_code: &[u8], ps_code: &[u8], light: Option<(&[u8], &[u8])>, platform: Platform, particle_color: bool) -> Result<Program> {
     let vs = stage(vs_code, "vs_")?;
     let ps = stage(ps_code, "ps_")?;
     if vs.sh.stage != Some(Stage::Vertex) || ps.sh.stage != Some(Stage::Pixel) {
@@ -801,6 +808,9 @@ pub fn build(map: &CookedMap, vs_code: &[u8], ps_code: &[u8], light: Option<(&[u
         Ok(())
     };
     vertex_pass(&mut m, &vs, "vs_", &vs_fill, &base_sem, "s", true)?;
+    if particle_color && base_sem.contains(&(5, 1)) {
+        m.push_str("    out.s5_1 = v.color;\n");
+    }
     if let Some((lvs, _)) = &light {
         vertex_pass(&mut m, lvs, "lvs_", &lvs_fill, &light_sem, "l", false)?;
     }

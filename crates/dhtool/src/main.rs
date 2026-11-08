@@ -955,6 +955,29 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Some("particlevf") => {
+            // dhtool particlevf: shader maps whose particle base pass pixel shader reads the
+            // particle's colour (TEXCOORD1) while the local vertex factory's reads no colour: the
+            // materials whose particle colour and alpha are lost drawn with the local programs
+            let lib = dhcook::shadercache::CookedLibrary::read(&std::path::Path::new("cache").join("shaders.bin"))?;
+            let ps = |list: &Vec<(String, [u8; 16])>| -> Option<dhcook::sm3::Shader> {
+                let (_, g) = list.iter().find(|(ty, _)| ty == "TBasePassPixelShaderFNoLightMapPolicyNoSkyLightFALSEFALSE")?;
+                dhcook::sm3::parse(lib.code.get(g)?).ok()
+            };
+            let (mut total, mut lost) = (0, 0);
+            for (i, m) in lib.maps.iter().enumerate() {
+                let find = |part: &str| m.mesh_maps.iter().find(|(vf, _)| vf == part).and_then(|(_, l)| ps(l));
+                let Some(local) = find("FLocalVertexFactory") else { continue };
+                let Some(part) = find("FParticleSubUVVertexFactory").or_else(|| find("FParticleVertexFactory")) else { continue };
+                total += 1;
+                let reads = |sh: &dhcook::sm3::Shader, usage: u32, index: u32| sh.decls.iter().any(|d| d.ty == 1 && d.usage == usage && d.index == index);
+                if reads(&part, 5, 1) && !reads(&local, 10, 1) && !reads(&local, 10, 0) {
+                    lost += 1;
+                    println!("{i} {}", m.name);
+                }
+            }
+            println!("{lost} of {total} particle-capable maps lose the particle colour in the local programs");
+        }
         Some("findguid") => {
             // dhtool findguid <pkg> <32 hex digits as printed by the cooker>: exports containing it
             let pkg = upk::Package::open(&pkg_path(&args[2]))?;

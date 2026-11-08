@@ -2771,6 +2771,13 @@ fields no longer show their stand-in "WW" behind the title.
   follow moves or turns; axis-locked sprites (`ParticleModuleOrientationAxisLock`
   EPAL_X..) lie in the plane UE3's `GetAxisLockValues` gives them with size X along its up
   (the near-death glow fills the view instead of a band down its middle).
+  The blood splashes' materials (`SubUV_HeightMap_PMAT`, `Blood_PMAT`, the DLC's
+  `DLC07_SubUV_Height_PMAT`: 8 of the 576 shader maps a particle draws with) erode their splash by the
+  particle's alpha (`height - alpha`, sharpened by `Mask_Multiply`), which their local vertex
+  factory's pixel shader folds to 1; they are drawn with their particle vertex factory's pixel
+  shader (`FParticleSubUVVertexFactory`), the particle's colour in its `TEXCOORD1`, so a splash
+  shows and wears away over its life as its `AlphaOverLife` rises. Before, every one was clipped
+  away. `dhtool particlevf` lists such maps.
 - **Pickups**: notes take their text from their tweak's abstract item (the bread note opens in
   the journal); weapons (`DishonoredInventoryPickup`: the Prison's guard sword, pistols,
   grenades, springrazors, the Flooded District's blades) give what they are; the scripts
