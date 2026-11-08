@@ -79,7 +79,8 @@ fn zoom_input(
         sfx.write(PostEvent::named(ev, None));
     }
     let target = levels(&data, settings.fov.clamp(55.0, 110.0))[zoom.level as usize % 3];
-    let k = (time.delta_secs() * 10.0).min(1.0);
+    // (blending to it as UE3's `FInterpTo` at the empty hand's `m_fZoomBlendSpeed`, 5; before, 10)
+    let k = (time.delta_secs() * data.pawn("zoom.m_fZoomBlendSpeed", 5.0)).min(1.0);
     zoom.factor += (target - zoom.factor) * k;
     if (zoom.factor - target).abs() < 1e-3 {
         zoom.factor = target;

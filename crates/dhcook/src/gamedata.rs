@@ -1934,8 +1934,13 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
     }
     // the mask's optics: the zoomed field of view (`Twk_EmptyHands_NPC`'s player-specific
     // `m_fZoomFOV`, the first lens's) as `zoom.m_fZoomFOV`
-    if let Some(v) = startup.find_export("Twk_EmptyHands_NPC.Twk_EmptyHands_NPC.DisTweaks_ItemEmpty_PlayerSpecific_0").and_then(|i| props(&startup, i)).and_then(|p| p.float("m_fZoomFOV")) {
-        d.pawn.insert("zoom.m_fZoomFOV".into(), v);
+    if let Some(p) = startup.find_export("Twk_EmptyHands_NPC.Twk_EmptyHands_NPC.DisTweaks_ItemEmpty_PlayerSpecific_0").and_then(|i| props(&startup, i)) {
+        // (and how fast the view blends to it: `m_fZoomBlendSpeed`)
+        for n in ["m_fZoomFOV", "m_fZoomBlendSpeed", "m_fZoomDOFBlendSpeed", "m_fZoomDOF_ForegroundBlurDist"] {
+            if let Some(v) = p.float(n) {
+                d.pawn.insert(format!("zoom.{n}"), v);
+            }
+        }
     }    // the avoidance's radii and forces (`ArkAvoidable`): Corvo's class defaults under his own,
     // and a character's (`Twk_Pawn_DefaultNPC` over its class's) as `npc.<property>`
     for (pkg, path, prefix) in [(&game, "Default__DisTweaks_PlayerPawn", ""), (&game, "Default__DisTweaks_NPCPawn", "npc."), (&startup, "Twk_Pawn_DefaultNPC.Twk_Pawn_DefaultNPC", "npc.")] {
