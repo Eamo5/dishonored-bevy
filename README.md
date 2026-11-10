@@ -3778,11 +3778,15 @@ against the install's own data where it carries them, then implemented independe
   - Its aggression is rolled anew each fight, regained at 0.1 a second and drops 0.5 when it is
     hurt. Low aggression stretches its moves' cooldowns, up to twice as long.
 - **Assassinations.**
-  - An assassination reaches 2.75 m and comes from any side. The target's awareness must be one the
-    table allows (unaware, surprised, suspicious, begging): not fighting him, fleeing or choked, and
-    not running.
-  - A drop assassination needs only a fall: no speed floor, the target within 3.5 m below, checked
-    every moment the button is held.
+  - An assassination reaches its context's `m_fMaxContextRange` (275 uu), grown with Corvo's speed
+    along his facing by its `m_fRayScalePercent` (1.25) of the sword's speed factor, and comes from any
+    side. The target's awareness must be one the table allows (unaware, surprised, suspicious,
+    begging): not fighting him, fleeing or choked, and not running. Before, 2.75 m at any speed.
+  - A drop assassination needs only a fall: no speed floor, the target no more than
+    `m_fMaxDropDistToTarget` (350 uu) below and within its context's reach of his eye (250 uu, grown
+    by 2.0 of the speed factor), checked every moment the button is held, its awareness gated as an
+    assassination's (`DisItemContext_DropAssassinate`, 0x00C09A50, as roshan's r614/blink research
+    decoded it). Before, within 1.6 m across of his feet, whatever the target knew of him.
 - **The knocked out can be killed** where they lie, by a blade, bolt, shot, blast, fire or the
   rats, and it counts as a kill. Rats eat knocked-out bodies too.
 - **Armour.** The Improved Armor upgrade takes its whole `DamageReduction` (5) off each blow, shot
