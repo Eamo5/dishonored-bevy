@@ -3915,7 +3915,7 @@ fn npc_hearing(
     // at turning to look there (0x00B438C0, 0x00B3F7F0, decoded for this rewrite)
     for c in calls.iter().filter(|c| c.kind != CallKind::Help) {
         let reach = if c.kind == CallKind::Search { 25.0 } else { 8.0 };
-        for (mut npc, t, scripted) in &mut npcs {
+        for (mut npc, t, _) in &mut npcs {
             if npc.is_down() || !npc.hostile() || npc.kind == Kind::Story || npc.deaf || npc.alert == Alert::Combat || t.translation.distance(c.from) < 0.05 || !heeds(&npc, c) {
                 continue;
             }

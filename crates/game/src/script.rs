@@ -1374,7 +1374,21 @@ fn run_script(
                 }
             });
         }
-        "tentacle" => {
+        "launch" => {
+            // (tests) launch VY [NAME]: the nearest standing character (whose name holds NAME)
+            // knocked off its feet, flung up at VY m/s (a fall from its height)
+            let vy = f(1);
+            let named = cmd.get(2).cloned().unwrap_or_default();
+            let at = t.translation;
+            commands.queue(move |w: &mut World| {
+                let mut q = w.query::<(Entity, &mut Npc, &Transform)>();
+                if let Some((e, mut n, _)) = q.iter_mut(w).filter(|(_, n, _)| !n.is_down() && (n.name.contains(&named) || n.pawn.contains(&named))).min_by(|a, b| a.2.translation.distance(at).total_cmp(&b.2.translation.distance(at))) {
+                    info!("script: {} launched at {vy} m/s", n.name);
+                    n.floored = true;
+                    w.entity_mut(e).insert(crate::ragdoll::GoLimp::now(Vec3::Y * vy, None));
+                }
+            });
+        }        "tentacle" => {
             // (tests) tentacle [REACH]: a witch's tentacle called up at the spot nearest Corvo
             let at = t.translation;
             let reach = if cmd.len() > 1 { f(1) } else { 12.0 };

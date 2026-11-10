@@ -1785,7 +1785,10 @@ fields no longer show their stand-in "WW" behind the title.
   Once still the bodies are put away and the bones kept where they lay, in saves too. Blasts and
   Wind Blast push bodies already lying there. Picking one up gives it back to its clips; the
   unconscious who land in water drown. The bodies meet the world and loose props, not Corvo or
-  the living. Pre-placed corpses drape over what is under them. `DH_RAGDOLL_LOG`.
+  the living. Pre-placed corpses drape over what is under them. One knocked off its feet that falls
+  further than its `m_FallingDeathHeight` (the characters' 750 uu: Wind Blast off a roof, a blast off a
+  walkway) dies of the fall where it lands, Corvo's kill; before, every one got up again.
+  `DH_RAGDOLL_LOG`; script `launch VY [NAME]` flings a character up at VY m/s.
 - **Feet on the ground** (`feet.rs`): characters within 30 m standing or walking on stairs and
   slopes put each foot on what is under it (a ray down from the foot, from
   `m_fMaxFootIKCastHeight` above). Their hips drop for the lower foot, each leg bends to its foot

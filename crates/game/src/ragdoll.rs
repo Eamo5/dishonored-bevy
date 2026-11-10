@@ -61,12 +61,18 @@ impl GoLimp {
 
 /// A limp character: its bodies (each's physics entity and bone) while they move; once they
 /// lie still, its body bones where they lay (in the character's frame).
+/// The fall a character knocked off its feet dies of (m: the default character's
+/// `m_FallingDeathHeight`, 750 uu).
+const FALLING_DEATH_HEIGHT: f32 = 7.5;
+
 #[derive(Component, Default)]
 pub struct Ragdoll {
     parts: Vec<(Entity, usize)>,
     rest: Vec<(usize, Transform)>,
     t: f32,
     still: f32,
+    /// its hips' highest since it went limp (the fall it takes)
+    top: Option<f32>,
 }
 
 impl Ragdoll {
@@ -605,7 +611,13 @@ fn pose_ragdolls(
                     stats.knockouts = stats.knockouts.saturating_sub(1);
                 }
             }
-            let lost = hips.is_some_and(|h| h.y < kill_y || !h.is_finite());
+            if let Some(h) = hips.filter(|h| h.is_finite()) {
+                rd.top = Some(rd.top.map_or(h.y, |t| t.max(h.y)));
+            }
+            // (knocked off a height: dead of the fall past its `m_FallingDeathHeight`, the
+            // characters' 750 uu; before, they got up from any fall)
+            let fell_to_death = hips.zip(rd.top).is_some_and(|(h, top)| top - h.y > FALLING_DEATH_HEIGHT);
+            let lost = hips.is_some_and(|h| h.y < kill_y || !h.is_finite()) || fell_to_death && rd.still > 0.3;
             // knocked off its feet and lying still: up again from where it lies (blown out of the
             // world, dead)
             if npc.floored && !npc.is_down() && lost {
