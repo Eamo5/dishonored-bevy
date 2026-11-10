@@ -480,6 +480,9 @@ pub struct Npc {
     pub plague_escape: Option<(Vec3, f32)>,
     /// robbed while it stood: how long until it misses what was taken (`DisBehaviorStolen`)
     pub robbed: Option<f32>,
+    /// when it last reacted to something harmless Corvo did before it (its reaction tweak's
+    /// `m_Response_PlayerThreats` / `_Breakable_Broke`: the clock's seconds)
+    pub reacted_at: f32,
     /// out of Corvo's view, warned (`COMBAT_THREAT_OFFSCREEN`): the seconds before it may strike
     /// him from there (its pacing's `offscreen_warning`)
     pub offscreen_wait: Option<f32>,
@@ -2869,6 +2872,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         plague_escape: None,
         robbed: None,
         offscreen_wait: None,
+        reacted_at: -100.0,
         rising: 0.0,
         hold: None,
         trespass: None,
@@ -3697,10 +3701,16 @@ fn npc_hits(
     }
 }
 
+/// How near a harmless thing Corvo does draws a reaction from one who isn't his enemy (m), and
+/// how often one reacts at most (s): our reading.
+const HARMLESS_REACH: f32 = 15.0;
+const HARMLESS_EVERY: f32 = 10.0;
+
 fn npc_hearing(
+    time: Res<Time>,
     mut noises: MessageReader<Noise>,
     mut calls: MessageReader<AllyCall>,
-    mut npcs: Query<(&mut Npc, &Transform)>,
+    mut npcs: Query<(&mut Npc, &Transform, Has<ScriptedAnim>)>,
     level: Option<Res<LevelInfo>>,
     player: Query<&Transform, (With<Player>, Without<Npc>)>,
     rooms: Res<crate::audiorooms::AudioRooms>,
@@ -3708,6 +3718,7 @@ fn npc_hearing(
 ) {
     let corvo = player.single().ok().map(|t| t.translation);
     let ctx = rapier.single().ok();
+    let now = time.elapsed_secs();
     let walls = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD));
     let log = std::env::var_os("DH_HEAR_LOG").is_some();
     // (not in one room with it, heard only with a clear line from it past the level's walls, as
@@ -3737,8 +3748,8 @@ fn npc_hearing(
     for (n, call) in &heard {
         // (his own noises: where he is)
         let his = corvo.is_some_and(|p| p.distance(n.pos) < 2.0);
-        for (mut npc, t) in &mut npcs {
-            if npc.is_down() || npc.kind == Kind::Story || matches!(npc.mode, Mode::Choked) {
+        for (mut npc, t, scripted) in &mut npcs {
+            if npc.is_down() || matches!(npc.mode, Mode::Choked) {
                 continue;
             }
             // (from another room: through the doorways, muffled by each)
@@ -3755,7 +3766,33 @@ fn npc_hearing(
                 }
                 continue;
             }
-            if log {
+            // a harmless thing Corvo did before one who isn't his enemy (its reaction tweak's
+            // `ResponseCategory_Harmless` responses: no hostility, a line): his shot or his blade
+            // ringing near it (`m_Response_PlayerThreats`, `DDH_NOTICE_THREATENING_ACTIVITY`:
+            // "What in the blazes was that? Did you do that?"), or a thing breaking while it
+            // watches him (`m_Response_Breakable_Broke`, `DDH_NOTICE_SUSPICIOUS_ACTIVITY`:
+            // "Corvo? What are you up to?"); taken aback by it, but in a scene of its own; once in
+            // `HARMLESS_EVERY`. Before, his friends and the neutrals took no notice
+            if !npc.hostile() && call.is_none() && d <= HARMLESS_REACH && now - npc.reacted_at > HARMLESS_EVERY && matches!(npc.mode, Mode::Idle | Mode::Patrol | Mode::Return) && npc.alert != Alert::Combat {
+                let hook = match n.kind {
+                    NoiseKind::Danger | NoiseKind::Threatening if n.corvo => Some("NOTICE_THREATENING_ACTIVITY"),
+                    NoiseKind::Anomaly | NoiseKind::Threatening if !n.corvo && npc.sees_player && corvo.is_some_and(|c| c.distance(n.pos) < HARMLESS_REACH) => Some("NOTICE_SUSPICIOUS_ACTIVITY"),
+                    _ => None,
+                };
+                if let Some(hook) = hook {
+                    npc.reacted_at = now;
+                    npc.bark_req = (npc.bark_req.0.wrapping_add(1), hook);
+                    if npc.kind != Kind::Story && !scripted {
+                        npc.startle = Some(n.pos);
+                    }
+                    if log {
+                        info!("hearing: {} reacts to {:?} {:.1} m off ({hook})", npc.name, n.kind, d);
+                    }
+                }
+            }
+            if npc.kind == Kind::Story {
+                continue;
+            }            if log {
                 info!("hearing: {} hears {:?} {:.1} m off (at {:.1}, Corvo's {})", npc.name, n.kind, d, n.pos, n.corvo);
             }
             if his {
@@ -3871,7 +3908,7 @@ fn npc_hearing(
     // at turning to look there (0x00B438C0, 0x00B3F7F0, decoded for this rewrite)
     for c in calls.iter().filter(|c| c.kind != CallKind::Help) {
         let reach = if c.kind == CallKind::Search { 25.0 } else { 8.0 };
-        for (mut npc, t) in &mut npcs {
+        for (mut npc, t, scripted) in &mut npcs {
             if npc.is_down() || !npc.hostile() || npc.kind == Kind::Story || npc.deaf || npc.alert == Alert::Combat || t.translation.distance(c.from) < 0.05 || !heeds(&npc, c) {
                 continue;
             }

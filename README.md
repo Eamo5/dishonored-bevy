@@ -2141,6 +2141,13 @@ fields no longer show their stand-in "WW" behind the title.
     (`BrainTweaks_Guard_Elite_Party`, `_ShawGuard`) warn him once, and seen at it again within a
     minute, turn on him (`COMBAT_BLIND_ATTACK`). Before, no one minded. Script: `faceme [NAME]`
     turns a character to face Corvo.
+  - The harmless responses (`ResponseCategory_Harmless`) now play too: one who isn't his enemy,
+    within 15 m, hearing his shot or his blade ring (`m_Response_PlayerThreats`) answers with
+    `NOTICE_THREATENING_ACTIVITY` (Boyle's party guards' "Now what?", Havelock's "What in the blazes
+    was that?"); a thing breaking while it watches him (`m_Response_Breakable_Broke`),
+    `NOTICE_SUSPICIOUS_ACTIVITY` ("Corvo? What are you up to?"). It is taken aback by it (but in a
+    scene of its own, or a story character), once in 10 s at most (our reading). Before, his friends
+    and the neutrals took no notice; a voice without the line stays quiet, as the original's would.
 - **Hound masters whistle for their wolfhounds** (`aiworld::summon_hounds`, the brain's
   `DisTweaks_AIBehavior_SummonWolfhound`). Before, overseers fought alone, and the backyard's
   kennel hounds came only when another hound called for help.
