@@ -1839,7 +1839,8 @@ fields no longer show their stand-in "WW" behind the title.
   can't see `COMBAT_HELP_FOUND` ("Where is it?"); fighting him with no way to him over the
   navigation mesh (up on a ledge or a roof: the original's reachability, a path to him), a
   taunt after 2 s and every 8 s (`UNREACH_TAUNT`: "Come a little closer."); the fight losing
-  him `COMBAT_LOST` ("Lost him!"), or after he was out of its reach `UNREACH_GIVEUP` ("Where
+  him `COMBAT_LOST` ("Lost him!": only a fight of 2 s or more, the city guards'
+  `m_fMinTimeInCombatForCombatLostBark`; before, any), or after he was out of its reach `UNREACH_GIVEUP` ("Where
   did you go?!"), and the search after it given up `SEARCH_STOPHUNTING` ("You got lucky this
   time!"); a suspicion-level
   hook says the lines of its output for whether the speaker suspects anything, a notice those

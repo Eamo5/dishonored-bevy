@@ -83,6 +83,8 @@ pub struct BarkState {
     /// how long it has fought Corvo out of its reach, and whether it has this fight
     stuck: f32,
     was_stuck: bool,
+    /// how long its fight has lasted (its `COMBAT_LOST` only after `m_fMinTimeInCombatForCombatLostBark`)
+    fought: f32,
     /// a taunt due, said once it can speak
     taunt: bool,
     /// begging: time to its next plea
@@ -193,6 +195,10 @@ const HELP_REACH: f32 = 15.0;
 
 /// A begging civilian pleads again every this long (s).
 const BEG_BARK: [f32; 2] = [5.0, 9.0];
+
+/// How long a fight must have lasted for its loss to be told (s: the city guards' combat
+/// `m_fMinTimeInCombatForCombatLostBark`).
+const COMBAT_LOST_AFTER: f32 = 2.0;
 
 /// Fighting Corvo out of its reach this long (s) brings its first taunt, then again each this
 /// long (the `UNREACH` hooks' refire, 8 s).
@@ -336,6 +342,7 @@ fn npc_barks(
                 looked: false,
                 stuck: 0.0,
                 was_stuck: false,
+                fought: 0.0,
                 taunt: false,
                 beg: 0.0,
                 swinging: false,
@@ -500,7 +507,9 @@ fn npc_barks(
                 (true, false) => &["SEARCH_ADETECTION", "ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"],
                 _ => &["ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"],
             });
-        } else if !down && st.mode == Mode::Combat && npc.mode == Mode::Search && npc.alert == Alert::Combat {
+        // (a fight that lasted at least the city guards' `m_fMinTimeInCombatForCombatLostBark`, 2 s;
+        // before, one lost at once said it too)
+        } else if !down && st.mode == Mode::Combat && npc.mode == Mode::Search && npc.alert == Alert::Combat && st.fought >= COMBAT_LOST_AFTER {
             // the fight lost him (it goes on looking, its alarm held): after he got out of its
             // reach `UNREACH_GIVEUP`, else `COMBAT_LOST` (with others of its side about, their
             // group's)
@@ -590,6 +599,9 @@ fn npc_barks(
         st.witnessed_death = npc.witnessed_death;
         if npc.mode != Mode::Combat {
             st.was_stuck = false;
+            st.fought = 0.0;
+        } else {
+            st.fought += dt;
         }
         if npc.alert == Alert::Unaware {
             st.hunted = false;
