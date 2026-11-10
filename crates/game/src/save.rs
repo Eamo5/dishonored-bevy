@@ -251,6 +251,9 @@ pub struct SaveGame {
     /// instances shown / hidden differently from the level's start
     shown: Vec<(u32, bool)>,
     lights: Vec<(u32, bool)>,
+    /// reflection captures switched from their start (`SceneCaptureActor.OnToggle`): (capture, on)
+    #[serde(default)]
+    captures: Vec<(u32, bool)>,
     /// instances moved by matinees: (instance, translation, rotation, scale)
     moved: Vec<(u32, [f32; 3], [f32; 4], [f32; 3])>,
     /// river krusts killed: (krust, pearl taken)
@@ -639,7 +642,7 @@ pub(crate) fn save_game(
         Query<(Entity, &crate::fish::Fish, &Transform, Option<&crate::anim::Animator>)>, Query<(Entity, &crate::krust::Krust, Option<&crate::anim::Animator>)>, Res<crate::fish::FishMeals>,
     ),
     (cine, script_ui, mut campaign, powers, tc, carry, matinee, krust_spit, trap_parts, darts, tower_arrows, tower_state, ragdolls, globals): (Res<crate::script_world::Cinematic>, Option<Res<crate::kismet::ScriptUi>>, ResMut<crate::gameplay::Campaign>, Res<crate::powers::Powers>, Res<crate::gameplay::TimeControl>, Res<crate::carry::Carry>, Res<crate::matinee::MatineeState>, Query<(&crate::krust::Spit, &Transform)>, Query<(&crate::traps::TrapPart, Option<&crate::anim::Animator>)>, Query<(&crate::traps::Dart, &Transform)>, Query<(&crate::watchtower::Arrow, &Transform)>, Query<&crate::watchtower::Tower>, Query<(&crate::ragdoll::Ragdoll, &crate::npc::NpcRig, &GlobalTransform)>, Query<&GlobalTransform>),
-    (mut saving, mut waiting, handled_bodies): (MessageWriter<crate::globalui::ShowSaving>, Local<Option<(usize, f32)>>, Res<crate::npc::HandledBodies>),
+    (mut saving, mut waiting, handled_bodies, captures): (MessageWriter<crate::globalui::ShowSaving>, Local<Option<(usize, f32)>>, Res<crate::npc::HandledBodies>, Res<crate::reflections::Captures>),
 ) {
     // the scripts keeping the map's state for a return (`DisSeqAct_SaveLevelState`; a partial
     // one, the Hound Pits': only its pickups, `Campaign::hub_taken`)
@@ -761,6 +764,7 @@ pub(crate) fn save_game(
         doors: Vec::new(),
         shown: Vec::new(),
         lights: Vec::new(),
+        captures: Vec::new(),
         moved: Vec::new(),
     };
     for (li, vis, t, door) in &instances {
@@ -787,6 +791,11 @@ pub(crate) fn save_game(
         let on = *vis != Visibility::Hidden;
         if scene.lights.get(ll.0 as usize).is_some_and(|l| l.enabled != on) {
             s.lights.push((ll.0, on));
+        }
+    }
+    for (i, (r, on)) in scene.reflections.iter().zip(&captures.0).enumerate() {
+        if r.enabled != *on {
+            s.captures.push((i as u32, *on));
         }
     }
     if keep.is_some() {
@@ -960,7 +969,7 @@ fn apply_pending(
     mut stats: ResMut<PlayerStats>,
     mut player: Query<(&mut Transform, &mut Player, &mut bevy_rapier3d::prelude::Collider)>,
     npcs: Query<Entity, With<Npc>>,
-    (pickups, mut ammo_pickups): (Query<(Entity, &Pickup)>, ResMut<crate::interact::AmmoPickupRestore>),
+    (pickups, mut ammo_pickups, mut captures): (Query<(Entity, &Pickup)>, ResMut<crate::interact::AmmoPickupRestore>, ResMut<crate::reflections::Captures>),
     mut instances: Query<(Entity, &LevelInstance, &mut Visibility, &mut Transform, Option<&mut Door>, Option<&crate::level::InstanceCollider>), Without<Player>>,
     mut lights: Query<(&LevelLight, &mut Visibility), (Without<LevelInstance>, Without<Player>)>,
     (mut krusts, mut prop_restore, mut traps, mut usables, mut carry_restore, mut krust_spit, mut krust_state, mut trap_state, mut tower_arrows, mut tower_state): (ResMut<crate::krust::KrustLog>, ResMut<crate::props::PropRestore>, ResMut<crate::traps::TrapLog>, ResMut<crate::usables::UsableLog>, ResMut<crate::carry::CarryRestore>, ResMut<crate::krust::SpitRestore>, ResMut<crate::krust::KrustRestore>, ResMut<crate::traps::TrapRestore>, ResMut<crate::watchtower::ArrowRestore>, ResMut<crate::watchtower::TowerRestore>),
@@ -1111,6 +1120,11 @@ fn apply_pending(
             }
             *t = restored;
         }
+    }
+    // (the reflections' captures as they were switched)
+    captures.0 = level.scene.reflections.iter().map(|r| r.enabled).collect();
+    for &(i, on) in &s.captures {
+        captures.set(i as usize, Some(on));
     }
     let lit: std::collections::HashMap<u32, bool> = s.lights.iter().copied().collect();
     for (ll, mut vis) in &mut lights {

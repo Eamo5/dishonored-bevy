@@ -19,6 +19,7 @@ pub struct ReflectionsPlugin;
 impl Plugin for ReflectionsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ReflectionTargets>()
+            .init_resource::<Captures>()
             .add_systems(OnEnter(GameState::InGame), spawn_cameras.after(crate::level::LevelSpawnSet))
             .add_systems(Update, (activate, resize_targets).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, follow.after(bevy::transform::TransformSystems::Propagate).before(bevy::camera::CameraUpdateSystems).before(bevy::camera::visibility::VisibilitySystems::UpdateFrusta).run_if(in_state(GameState::InGame)));
@@ -33,6 +34,20 @@ const FLIP_LAYER: usize = 26;
 const KIND_CHANNELS: u16 = 0b11;
 /// A reflection is drawn while Corvo is this near its plane's origin (m).
 const REACH: f32 = 120.0;
+
+/// Which of the level's reflection captures draw (by their index in `scene.reflections`): their
+/// `bEnabled` at the start, then as the scripts switch them (`SceneCaptureActor.OnToggle`).
+#[derive(Resource, Default)]
+pub struct Captures(pub Vec<bool>);
+
+impl Captures {
+    /// On, off, or the other way (`None`: `SeqAct_Toggle`'s Toggle).
+    pub fn set(&mut self, i: usize, on: Option<bool>) {
+        if let Some(c) = self.0.get_mut(i) {
+            *c = on.unwrap_or(!*c);
+        }
+    }
+}
 
 /// The level's render-target textures (by texture id) and the images drawn into them.
 #[derive(Resource, Default)]
@@ -141,19 +156,18 @@ struct ReflectCam {
     point: Vec3,
     normal: Vec3,
     flip: Entity,
+    /// its capture (`Captures`) and the target it draws into
+    index: usize,
+    texture: u32,
 }
 
-fn spawn_cameras(mut commands: Commands, level: Option<Res<crate::level::LevelInfo>>, targets: Res<ReflectionTargets>, mut images: ResMut<Assets<Image>>) {
+fn spawn_cameras(mut commands: Commands, level: Option<Res<crate::level::LevelInfo>>, targets: Res<ReflectionTargets>, mut images: ResMut<Assets<Image>>, mut captures: ResMut<Captures>) {
     let Some(level) = level.filter(|_| std::env::var("DH_NO_REFLECT").is_err()) else { return };
-    // (captures drawing into the same target are one camera, showing all their channels)
-    let mut merged: Vec<dhcook::format::Reflection> = Vec::new();
-    for r in &level.scene.reflections {
-        match merged.iter_mut().find(|m| m.texture == r.texture) {
-            Some(m) => m.channels |= r.channels,
-            None => merged.push(r.clone()),
-        }
-    }
-    for (i, r) in merged.iter().enumerate() {
+    // (each capture its own camera, its own plane and channels: the sewers' water has several
+    // into one target, at their own heights, the scripts switching them on as Corvo goes; before,
+    // they were one camera on the first one's plane)
+    captures.0 = level.scene.reflections.iter().map(|r| r.enabled).collect();
+    for (i, r) in level.scene.reflections.iter().enumerate() {
         let Some(target) = targets.0.get(&r.texture) else { continue };
         let Some(size) = images.get(target).map(|im| im.size()) else { continue };
         let drawn = images.add(Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None));
@@ -182,7 +196,7 @@ fn spawn_cameras(mut commands: Commands, level: Option<Res<crate::level::LevelIn
             Msaa::Off,
             layers,
             Projection::custom(Oblique { persp: PerspectiveProjection::default(), plane: Vec4::ZERO }),
-            ReflectCam { point: Vec3::from(r.point), normal: Vec3::from(r.normal).normalize_or(Vec3::Y), flip },
+            ReflectCam { point: Vec3::from(r.point), normal: Vec3::from(r.normal).normalize_or(Vec3::Y), flip, index: i, texture: r.texture },
             DespawnOnExit(GameState::InGame),
         ));
     }
@@ -288,16 +302,29 @@ mod tests {
     }
 }
 
-/// Which reflections draw: those whose plane the view is above, and near (decided before the
-/// frame's lights are prepared: a camera that came on later in the frame would have no shadow
-/// cascades of the sun, which the renderer can't do without).
-fn activate(main: Query<&GlobalTransform, (With<PlayerCamera>, Without<ReflectCam>)>, mut cams: Query<(&ReflectCam, &mut Camera)>, mut flips: Query<&mut Camera, Without<ReflectCam>>) {
+/// Which reflections draw: those switched on whose plane the view is above, and near, one to a
+/// target (the nearest: each capture into it would draw over the others whole, as UE3's do;
+/// decided before the frame's lights are prepared: a camera that came on later in the frame
+/// would have no shadow cascades of the sun, which the renderer can't do without).
+fn activate(main: Query<&GlobalTransform, (With<PlayerCamera>, Without<ReflectCam>)>, mut cams: Query<(&ReflectCam, &mut Camera)>, mut flips: Query<&mut Camera, Without<ReflectCam>>, captures: Res<Captures>) {
     let Ok(eye) = main.single() else { return };
     let at = eye.translation();
+    let wanted = |rc: &ReflectCam| captures.0.get(rc.index).copied().unwrap_or(true) && (at - rc.point).dot(rc.normal) > 0.0 && at.distance(rc.point) < REACH;
+    let mut best: HashMap<u32, (usize, f32)> = HashMap::new();
+    for (rc, _) in &cams {
+        if wanted(rc) {
+            let d = at.distance(rc.point);
+            if best.get(&rc.texture).is_none_or(|b| d < b.1) {
+                best.insert(rc.texture, (rc.index, d));
+            }
+        }
+    }
     for (rc, mut cam) in &mut cams {
-        let height = (at - rc.point).dot(rc.normal);
-        let on = height > 0.0 && at.distance(rc.point) < REACH;
+        let on = best.get(&rc.texture).is_some_and(|b| b.0 == rc.index);
         if cam.is_active != on {
+            if std::env::var_os("DH_REFLECT_LOG").is_some() {
+                info!("reflections: capture {} {}", rc.index, if on { "draws" } else { "stops" });
+            }
             cam.is_active = on;
             if let Ok(mut f) = flips.get_mut(rc.flip) {
                 f.is_active = on;

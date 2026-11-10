@@ -2968,7 +2968,14 @@ fields no longer show their stand-in "WW" behind the title.
   along the water (nothing below it), and a flat pass turns its image over into the target, as
   UE3's mirrored view draws it (`DH_NO_REFLECT`, `DH_SHOW_REFLECT` shows the target).
   Screen-relative targets follow the physical viewport on resolution changes; the oblique
-  clip preserves the far corner across FOVs, aspect ratios and camera subviews.
+  clip preserves the far corner across FOVs, aspect ratios and camera subviews. Each capture is
+  its own camera, its own plane and channels, drawing while its `SceneCapture.bEnabled` is set: the
+  scripts switch them with `SeqAct_Toggle` on their actors (`SceneCaptureActor.OnToggle`, as roshan's
+  r614/blink research found: the Prison sewers' four planes, the street sewers' and the flooded
+  streets' one at a time as Corvo goes), saved with the game. Of several drawing into one target,
+  the nearest draws (each would draw over the others whole). Before, the captures into one target
+  were one camera on the first one's plane with all their channels, always on, so the sewers'
+  water mirrored from the wrong height. `DH_REFLECT_LOG`.
 - **Physics bursts** (`RB_RadialImpulseActor`, set off by the scripts' `SeqAct_Toggle`) throw
   the loose props in reach outward (`ImpulseRadius`, `ImpulseStrength`, falloff); thrown props
   hurt whom they strike (their tweak's `m_Damage`, `DisDamageType_Impact`) unless the scripts

@@ -2651,6 +2651,12 @@ pub struct Reflection {
     pub point: [f32; 3],
     pub normal: [f32; 3],
     pub channels: u16,
+    /// drawing from the start (its capture's `bEnabled`: some the scripts switch on and off,
+    /// `SeqAct_Toggle` on its actor), and that actor's name
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub actor: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]

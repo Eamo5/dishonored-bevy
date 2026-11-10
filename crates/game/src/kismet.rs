@@ -7570,6 +7570,7 @@ pub fn apply_effects(
         ResMut<crate::pickuplog::PickupLog>,
         ResMut<crate::patrol::Patrols>,
     ),
+    mut captures: ResMut<crate::reflections::Captures>,
 ) {
     if std::mem::take(&mut vm.clear_tutorials) {
         msgs.clear_tutorials();
@@ -7778,6 +7779,21 @@ pub fn apply_effects(
             }
             Effect::Light(v, on) => {
                 let Some(a) = actor(&v) else { continue };
+                // a reflection's capture switched on or off (`SceneCaptureActor.OnToggle`: its
+                // `SceneCapture.bEnabled`, as roshan's r614/blink research found; the sewers' and the
+                // flooded streets' water, one plane at a time)
+                if let Some(level) = level.as_ref() {
+                    let mut hit = false;
+                    for (i, r) in level.scene.reflections.iter().enumerate() {
+                        if !r.actor.is_empty() && r.actor == a.name {
+                            captures.set(i, on);
+                            hit = true;
+                        }
+                    }
+                    if hit {
+                        continue;
+                    }
+                }
                 // a route switched on or off (`DishonoredRoute.OnToggle`: `m_bIsActive`)
                 if let Some(ri) = level.as_ref().and_then(|l| l.scene.routes.iter().position(|r| r.name == a.name)) {
                     patrols.toggle(ri, on);

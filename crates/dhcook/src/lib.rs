@@ -1475,7 +1475,7 @@ impl<'a> Cooker<'a> {
                             let dir = [pitch.cos() * yaw.cos(), pitch.cos() * yaw.sin(), pitch.sin()];
                             let p = ue_point(ch.vector("Location").unwrap_or([0.0; 3]));
                             let n = ue_point(dir);
-                            self.scene.reflections.push(Reflection { texture, point: p, normal: n, channels: reflect_bits(cc.get("ReflectionChannels"), 0b1010_1111) });
+                            self.scene.reflections.push(Reflection { texture, point: p, normal: n, channels: reflect_bits(cc.get("ReflectionChannels"), 0b1010_1111), enabled: cc.bool("bEnabled").unwrap_or(true), actor: obj.name().to_string() });
                         }
                     }
                     Ok(())
