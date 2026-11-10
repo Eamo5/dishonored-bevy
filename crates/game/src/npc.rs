@@ -2168,7 +2168,9 @@ fn head_track(
         let spot = match spot {
             Some(mut s) => {
                 s.left -= dt;
-                let gone = if s.left > -900.0 { s.left <= 0.0 } else { (s.at - head).with_y(0.0).length() > s.reach };
+                // (held while it lies within 90 degrees of its way: 0x00b2b080)
+                let behind = (s.at - head).with_y(0.0).normalize_or_zero().dot(npc.forward()) < 0.0;
+                let gone = behind || if s.left > -900.0 { s.left <= 0.0 } else { (s.at - head).with_y(0.0).length() > s.reach };
                 if gone || npc.is_down() || npc.mode == Mode::Combat {
                     commands.entity(e).try_remove::<LookAtSpot>();
                     None
