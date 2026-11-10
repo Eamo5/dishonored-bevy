@@ -1020,6 +1020,19 @@ fn arms(game: &Package, startup: &Package, d: &mut GameData) {
     // how often a killing blow is played out with its victim (`m_fChanceOfSyncedAttack`: the
     // short fatalities, `m_ForehandKill_Synced` / `m_BackhandKill_Synced`; the class's under
     // Corvo's sword's)
+    // the assassination's and the drop assassination's reach and its growth with speed
+    // (`DisTweaks_Assassinate` / `DisTweaks_DropAssassinate`: the class's under Corvo's sword's) as
+    // `assassinate.<property>` and `drop.<property>`
+    for (class, path, prefix) in [("Default__DisTweaks_Assassinate", "DisTweaks_Assassinate_1", "assassinate."), ("Default__DisTweaks_DropAssassinate", "DisTweaks_DropAssassinate_1", "drop.")] {
+        let own = format!("Twk_Inv_PlayerSpecific.Twk_Inv_SwordCorvo.DisTweaks_InventoryItem_PlayerSpecific_1.{path}");
+        for p in [game.find_export(class).and_then(|i| props(game, i)), startup.find_export(&own).and_then(|i| props(startup, i))].iter().flatten() {
+            for n in ["m_fMaxContextRange", "m_fRayScalePercent", "m_fMaxDropDistToTarget"] {
+                if let Some(v) = p.float(n) {
+                    d.pawn.insert(format!("{prefix}{n}"), v);
+                }
+            }
+        }
+    }
     let corvo_melee = "Twk_Inv_PlayerSpecific.Twk_Inv_SwordCorvo.DisTweaks_InventoryItem_PlayerSpecific_1.DisTweaks_MeleeAttackPlayer_1";
     for p in [game.find_export("Default__DisTweaks_MeleeAttackPlayer").and_then(|i| props(game, i)), startup.find_export(corvo_melee).and_then(|i| props(startup, i))].iter().flatten() {
         // (and its reach, its growth with speed, the rats its cut misses)

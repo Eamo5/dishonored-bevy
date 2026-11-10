@@ -2093,6 +2093,7 @@ fn run_script(
             commands.queue(move |w: &mut World| w.resource_mut::<crate::settings::Settings>().kill_cam = mode);
         }
         "rmbhold" => script.held.push((Input::Mouse(MouseButton::Right), f(1))),
+        "lmbhold" => script.held.push((Input::Mouse(MouseButton::Left), f(1))),
         "mmbhold" => script.held.push((Input::Mouse(MouseButton::Middle), f(1))),
         "bind" => {
             // (tests) bind ACT INPUT: an action (its `PSI_GBA_` name: Primary, OpenNotes, Shortcut_0)

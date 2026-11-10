@@ -153,8 +153,15 @@ const BLOCK_VERTICAL: (f32, f32) = (0.5235988, 0.87266463);
 /// The sword's reach (m) at this speed along Corvo's facing (m/s), as its context's range test
 /// has it (0x00C0A060 with the speed factor 0x00AB2050).
 pub fn sword_reach(data: &crate::gamedata::Data, ahead: f32) -> f32 {
-    let range = data.pawn("melee.m_fMaxContextRange", 210.0);
-    let percent = data.pawn("melee.m_fRayScalePercent", 0.5);
+    context_reach(data, "melee.", (210.0, 0.5), ahead)
+}
+
+/// A context's reach (m) at this speed along Corvo's facing: its `<prefix>m_fMaxContextRange`
+/// grown by its `m_fRayScalePercent` of the speed factor (the assassination's 275 uu and 1.25, the
+/// drop assassination's 250 and 2.0; 0x00C0A060, 0x00C09D80).
+pub fn context_reach(data: &crate::gamedata::Data, prefix: &str, (range, percent): (f32, f32), ahead: f32) -> f32 {
+    let range = data.pawn(&format!("{prefix}m_fMaxContextRange"), range);
+    let percent = data.pawn(&format!("{prefix}m_fRayScalePercent"), percent);
     let f = 1.0 + ((ahead * 100.0 - data.pawn("combat.m_fMinSpeedRayScale", 400.0)) * data.pawn("combat.m_fRaySpeedScale", 0.005)).clamp(0.0, data.pawn("combat.m_fRaySpeedScale_Max", 1.5));
     range * ((f - 1.0) * percent + 1.0) * 0.01
 }
@@ -879,7 +886,10 @@ fn sword_input(
     // its side as the victim sees Corvo, quick unless he's sneaking, the carried body's
     // variant with one on his shoulder
     if grabbed && p.grounded && bind.just_pressed(crate::bindings::Act::Primary) && !bind.pressed(crate::bindings::Act::Block) {
-        let target = nearest_target(eye, fwd, 2.75, 0.55, npcs.iter().map(|(e, n, t)| (e, n, t)));
+        // (in its context's reach, 275 uu grown with his speed by 1.25 of the factor: as roshan's
+        // r614/blink research decoded it; before, 2.75 m whatever his speed)
+        let ahead = p.velocity.with_y(0.0).dot(fwd.with_y(0.0).normalize_or_zero()).max(0.0);
+        let target = nearest_target(eye, fwd, context_reach(&data, "assassinate.", (275.0, 1.25), ahead), 0.55, npcs.iter().map(|(e, n, t)| (e, n, t)));
         if let Some((e, _)) = target {
             let (_, mut npc, nt) = npcs.get_mut(e).unwrap();
             let from = (pt.translation - nt.translation).with_y(0.0).normalize_or_zero();
@@ -921,12 +931,20 @@ fn sword_input(
     }
     // a drop assassination: attacking while falling onto someone
     if grabbed && bind.pressed(crate::bindings::Act::Primary) && !p.grounded && p.velocity.y < 0.0 && sword.swing == 0.0 {
+        // (as roshan's r614/blink research decoded `DisItemContext_DropAssassinate`, 0x00C09A50: one
+        // the assassination's awareness would allow, below him by no more than
+        // `m_fMaxDropDistToTarget` (350 uu), within its context's reach of his eye (250 uu grown
+        // with his speed by 2.0 of the factor); before, within 1.6 m across of his feet, whatever it
+        // knew of him)
         let feet = pt.translation - Vec3::Y * (crate::player::STAND_HALF + crate::player::RADIUS);
+        let ahead = p.velocity.with_y(0.0).dot(fwd.with_y(0.0).normalize_or_zero()).max(0.0);
+        let reach = context_reach(&data, "drop.", (250.0, 2.0), ahead);
+        let deepest = data.pawn("drop.m_fMaxDropDistToTarget", 350.0) * 0.01;
         let below = npcs
             .iter()
-            .filter(|(_, n, _)| !n.is_down() && n.kind != crate::npc::Kind::Creature)
+            .filter(|(_, n, _)| !n.is_down() && n.kind != crate::npc::Kind::Creature && assassinable(n))
             .map(|(e, n, nt)| (e, n, nt, nt.translation + Vec3::Y * crate::npc::NPC_CENTER - feet))
-            .filter(|(_, _, _, d)| d.with_y(0.0).length() < 1.6 && d.y < 0.6 && d.y > -3.5)
+            .filter(|(_, _, nt, d)| d.y < 0.6 && pt.translation.y - (nt.translation.y + crate::npc::NPC_CENTER) <= deepest && (nt.translation + Vec3::Y * crate::npc::NPC_CENTER).distance(eye) < reach)
             .min_by(|a, b| a.3.length().total_cmp(&b.3.length()));
         if let Some((e, n, nt, _)) = below {
             // the side Corvo came from, as the victim faces
