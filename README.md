@@ -2460,12 +2460,14 @@ fields no longer show their stand-in "WW" behind the title.
   then `DisBehaviorInteract`. (It had sent them to look about the spot instead: the Tower's
   servant, sent to the railing at the boat's arrival, began a citizen's stationary search, and
   the Tower's script ended the game: "You committed a capital offense".)
-  A passer-by that doesn't stop may look at it instead (its component's `m_fChanceToLook`, calm or
-  wary: the prison's guards glancing into the cells as they pass, 0.75; Boyle's guests, 0.2 / 0.6):
-  its head and torso turn to the spot for the distractor's `m_DistractionTime` (2-4 s; now read from
-  its baked lookup table too, the distribution object being stripped), or while it is near when it
-  has none; the scripts hear `Distracted Looked At start`. Before, none looked. `DH_DISTRACT_LOOK`
-  makes every passer-by look (tests).
+  A passer-by may look at it instead (its component's `m_fChanceToLook`, calm or wary: the prison's
+  guards glancing into the cells as they pass, 0.75; Boyle's guests, 0.2 / 0.6), one roll deciding
+  between stopping and looking (the two chances over their sum where it passes 1, 0x00b83bb0 as
+  roshan's r614/blink research decoded it): its head and torso turn to the spot for the
+  distractor's `m_DistractionTime` (2-4 s; now read from its baked lookup table too, the
+  distribution object being stripped), or while it is near when it has none, as long as the spot
+  lies within 90 degrees of its way; the scripts hear `Distracted Looked At start`. Before, none
+  looked. `DH_DISTRACT_LOOK` makes every passer-by look (tests).
 - **Keyholes**: a shut door whose mesh has a keyhole (`KeyHole` socket) shows "Hold [Use]
   Keyhole": a tap opens the door, a hold puts Corvo's eye to the keyhole (the view from the
   far side through the HUD movie's keyhole shape, at `m_fKeyHoleFOV`, the look free (the keyhole
