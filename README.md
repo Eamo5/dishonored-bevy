@@ -1902,7 +1902,9 @@ fields no longer show their stand-in "WW" behind the title.
   neither moving nor striking meanwhile; before, he could walk off and swing again as it played.
 - **Chains**: the levels' hanging chains (`DisClimbable`) can be climbed: walk or jump into
   one, forward and back climb it, jump lets go (or mantles onto a ledge), crouch drops; the
-  chain rattles as Corvo climbs.
+  chain rattles as Corvo climbs, a step's sound once more than `m_fClimbingSoundMinDelay` + (`Max` -
+  `Min`) x |pitch| / 90 degrees has passed (0.3 s looking level, 1.8 s straight up or down, as roshan's
+  r614/blink research decoded the climb state); before, every 0.55 s.
 - **Objective markers** (Options > Objective Markers, `markers.rs`): the HUD movie's
   `objectiveMarker_primary` (a downward chevron) over the target the level scripts give each
   visible active task (`DisSeqAct_UpdateTaskTarget`; a character is followed), as the HUD

@@ -86,6 +86,10 @@ fn build_climbables(mut commands: Commands, level: Option<Res<LevelInfo>>, mut c
     commands.insert_resource(Climbables(out));
 }
 
+/// The least and most time between a climb's step sounds (Corvo's `m_fClimbingSoundMinDelay`,
+/// `m_fClimbingSoundMaxDelay`, s).
+const CLIMB_SOUND_DELAY: (f32, f32) = (0.3, 1.8);
+
 /// Grab a chain within reach (walking into it, or in the air), or climb the one held. Returns
 /// true while climbing (the controller then does nothing else).
 #[allow(clippy::too_many_arguments)]
@@ -161,9 +165,13 @@ pub fn climb_move(
         return false;
     }
     if v.y.abs() > 0.1 {
-        climb.sound_t -= dt;
-        if climb.sound_t <= 0.0 {
-            climb.sound_t = 0.55;
+        // (a step's sound once more than `m_fClimbingSoundMinDelay` + (`Max` - `Min`) x |pitch| / 90
+        // degrees have passed since the last: 0.3 s looking level, 1.8 s straight up or down, as
+        // roshan's r614/blink research decoded the climb state; before, every 0.55 s)
+        climb.sound_t += dt;
+        let wait = CLIMB_SOUND_DELAY.0 + (CLIMB_SOUND_DELAY.1 - CLIMB_SOUND_DELAY.0) * (p.pitch.abs() / std::f32::consts::FRAC_PI_2).min(1.0);
+        if climb.sound_t > wait {
+            climb.sound_t = 0.0;
             sounds.write(crate::audio::PostEvent::named("Snd_P_Chain_Climbing", Some(t.translation)));
         }
     }
