@@ -479,6 +479,23 @@ fn run_script(
             p.noclip = cmd[0] == "fly";
             info!("script: {} to {}", cmd[0], t.translation);
         }
+        "under" => {
+            // (tests) under: what Corvo stands on (the collider below him, its components)
+            let (Ok(ctx), Ok(pe)) = (rapier.single(), player_ent.single()) else { return };
+            let filter = bevy_rapier3d::prelude::QueryFilter::default().exclude_collider(pe).exclude_sensors();
+            if let Some((e, toi)) = ctx.cast_ray(t.translation, Vec3::NEG_Y, 4.0, true, filter) {
+                info!("script: under at {toi:.3} m: {e:?}");
+                commands.queue(move |w: &mut World| {
+                    let names: Vec<String> = w.inspect_entity(e).map(|it| it.map(|c| c.name().to_string()).collect()).unwrap_or_default();
+                    let parent = w.get::<ChildOf>(e).map(|c| c.parent());
+                    let li = w.get::<crate::level::LevelInstance>(e).map(|l| l.index).or_else(|| parent.and_then(|p| w.get::<crate::level::LevelInstance>(p).map(|l| l.index)));
+                    let tr = w.get::<GlobalTransform>(e).map(|g| g.translation());
+                    info!("script: under {e:?} instance {li:?} at {tr:?} parent {parent:?}: {}", names.join(", "));
+                });
+            } else {
+                info!("script: under nothing");
+            }
+        }
         "spotlit" => {
             // (tests) spotlit [D]: the nearest dominant spot light that casts characters' shadows:
             // the nearest hostile character stood where its cone's axis meets the floor, Corvo D m

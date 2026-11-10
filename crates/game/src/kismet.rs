@@ -5887,8 +5887,10 @@ impl Vm {
                     }
                 }
                 let (lo, hi) = if *rate >= 0.0 { (prev, *t) } else { (*t, prev) };
+                // (a key at a held section's very end is where it goes on from once let go, not its
+                // loop's: the Prison's helper says `You're out!` there; before, it said it every loop)
                 let crossed = |k: f32| match wrap {
-                    Some((s, end)) => k > prev && k <= end || k >= s && k <= hi,
+                    Some((s, end)) => k > prev && k < end || k >= s && k <= hi,
                     None if *rate >= 0.0 => k > lo && k <= hi || (prev == 0.0 && k == 0.0),
                     None => k >= lo && k < hi,
                 };

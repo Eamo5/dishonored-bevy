@@ -24,7 +24,7 @@ impl Plugin for MatineePlugin {
             .init_resource::<SceneArms>()
             .add_systems(OnEnter(GameState::InGame), reset)
             // (skipping: held, `skip`)
-            .add_systems(Update, (play_matinees, ride_platforms).chain().after(crate::save::restore_npcs).run_if(in_state(GameState::InGame)))
+            .add_systems(Update, (play_matinees, settle_released_player, ride_platforms).chain().after(crate::save::restore_npcs).run_if(in_state(GameState::InGame)))
             .add_systems(PostUpdate, cinematic_camera.before(TransformSystems::Propagate).run_if(in_state(GameState::InGame)));
     }
 }
@@ -87,6 +87,8 @@ pub struct MatineeState {
     player_staged: HashSet<u32>,
     /// held by a scene of his group (`StatePlayerMasterSoiree`: movement disabled)
     player_held: bool,
+    /// that scene let him go this frame (to stand him where it left his eye)
+    player_released: bool,
 }
 
 impl MatineeState {
@@ -413,11 +415,13 @@ fn play_matinees(
         st.ride_base.clear();
         st.player_stage = None;
         st.player_staged.clear();
-        if st.player_base.take().is_some() | std::mem::take(&mut st.player_held) {
+        let held = std::mem::take(&mut st.player_held);
+        if st.player_base.take().is_some() | held {
             if let Ok((_, mut p)) = player.single_mut() {
                 p.locked = false;
             }
         }
+        st.player_released |= held;
         return;
     }
     if st.by_instance.is_empty() {
@@ -1010,6 +1014,9 @@ fn play_matinees(
         }
     }
     // his scene held him, and let go
+    if std::env::var("DH_MATINEE_LOG").is_ok() && player_scene != st.player_held {
+        info!("matinee: player scene {player_scene} (held {}, rides {player_rides})", st.player_held);
+    }
     if player_scene {
         if let Ok((_, mut p)) = player.single_mut() {
             p.locked = true;
@@ -1020,6 +1027,7 @@ fn play_matinees(
         if let Ok((_, mut p)) = player.single_mut() {
             p.locked = false;
         }
+        st.player_released = true;
     }
     // characters whose scene ended return to their AI
     let ended: Vec<Entity> = st.npc_keys.keys().chain(st.scene_npcs.iter()).filter(|e| !scripted.contains(e)).copied().collect();
@@ -1060,6 +1068,66 @@ fn ride_platforms(
     let f = delta.transform_vector3(Vec3::NEG_Z).with_y(0.0);
     if f.length_squared() > 1e-6 {
         p.yaw += (-f.x).atan2(-f.z);
+    }
+}
+
+/// A scene of his own let Corvo go: he stands where its animation left his eye (its camera bone),
+/// on the floor below it, where he fits; else, if its mark left him half inside something (the
+/// Prison's waking on the cot: the mark is on the cot, the clip ends with him sitting on its edge),
+/// on the nearest floor beside it he fits on. Before, he was left half in the cot, his eye half a
+/// metre high, rising slowly out of it. (Our reading of the soiree state's exit, not decoded.)
+fn settle_released_player(
+    mut st: ResMut<MatineeState>,
+    cam: Query<&GlobalTransform, With<PlayerCamera>>,
+    mut player: Query<(Entity, &mut Transform, &Player)>,
+    rapier: bevy_rapier3d::prelude::ReadRapierContext,
+) {
+    if !std::mem::take(&mut st.player_released) {
+        return;
+    }
+    let (Ok(eye), Ok((pe, mut pt, p)), Ok(ctx)) = (cam.single(), player.single_mut(), rapier.single()) else { return };
+    let eye = eye.translation();
+    let own = pt.translation + Vec3::Y * p.eye_height;
+    use bevy_rapier3d::prelude::{Collider, CollisionGroups, Group, QueryFilter};
+    let world = QueryFilter::default().exclude_collider(pe).exclude_sensors().groups(CollisionGroups::new(Group::ALL, crate::level::GROUP_WORLD | crate::level::GROUP_PROP));
+    let half = crate::player::STAND_HALF + crate::player::RADIUS;
+    let capsule = Collider::capsule_y(crate::player::STAND_HALF, crate::player::RADIUS - 0.02);
+    let fits = |at: Vec3| {
+        let mut blocked = false;
+        ctx.intersect_shape(at, Quat::IDENTITY, &*capsule.raw, world, |_| {
+            blocked = true;
+            false
+        });
+        !blocked
+    };
+    // standing on the floor below a point (from no higher than `from`), if he fits there
+    let stand = |x: f32, z: f32, from: f32| -> Option<Vec3> {
+        let (_, toi) = ctx.cast_ray(Vec3::new(x, from, z), Vec3::NEG_Y, 3.0, true, world)?;
+        let at = Vec3::new(x, from - toi + half + 0.02, z);
+        fits(at).then_some(at)
+    };
+    let log = std::env::var("DH_MATINEE_LOG").is_ok();
+    let moved_eye = eye.distance(own) > 0.3 && (eye - pt.translation).with_y(0.0).length() < 2.0;
+    let mut to = moved_eye.then(|| stand(eye.x, eye.z, eye.y)).flatten();
+    if to.is_none() && !fits(pt.translation) {
+        // (the floor about him he fits on, the lowest within a step of his feet, then the
+        // nearest: off the cot rather than onto it)
+        let feet = pt.translation.y - half;
+        let here = pt.translation;
+        to = (1..=6)
+            .flat_map(|r| (0..12).map(move |a| (r as f32 * 0.2, a as f32 * std::f32::consts::TAU / 12.0)))
+            .filter_map(|(r, a)| {
+                let at = stand(here.x + r * a.cos(), here.z + r * a.sin(), feet + 0.45 + half)?;
+                (at.y - half <= feet + 0.45 && at.y - half >= feet - 0.6).then_some((at, r))
+            })
+            .min_by(|a, b| ((a.0.y * 10.0).round(), a.1).partial_cmp(&((b.0.y * 10.0).round(), b.1)).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(at, _)| at);
+    }
+    if log {
+        info!("matinee: his scene let him go at {:.2}, his eye at {eye:.2} (his own {own:.2}): to {to:.2?}", pt.translation);
+    }
+    if let Some(to) = to {
+        pt.translation = to;
     }
 }
 

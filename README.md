@@ -2678,6 +2678,13 @@ fields no longer show their stand-in "WW" behind the title.
   straight through: Coldridge's pillory scene ended at once, its "Released" put Lizzy Stride to
   sleep with a 1000-point `DisDamageType_InstantSleep` hit that killed her, and the mission was
   lost at the start. A scripted hit of that type now puts its target to sleep, unharmed.
+  A key at a held section's very end belongs to what follows once it is let go, not to its loop:
+  the Prison's helper (`Prisoner Help`, whose crouched loop ends on `You're out! Good for you.`
+  `Cut some throats!`) no longer says it every 3 s from the moment Corvo wakes in his cell.
+  When his own scene lets him go he stands where it left his eye, on the floor below it, if he fits
+  there; else, if its mark left him half inside something, on the lowest floor within a step about
+  him (our reading of the soiree state's exit). Before, the Prison's waking on the cot (its mark
+  on the cot) left him half in it, his eye half a metre high, rising slowly out of it.
   Of a group's several animation tracks the key started last that still plays is the one
   played (the cough over the long clip, the accusation's start between its other keys). While a
   scene plays his full-body keys the view is its camera bone's, whole, cinematic mode or not
