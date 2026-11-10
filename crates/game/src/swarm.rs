@@ -1194,7 +1194,7 @@ fn swarm_brain(
     mut sfx: MessageWriter<PostEvent>,
     (player, mut stats, mut bites): (Query<(&Transform, &crate::player::Player), (Without<Swarm>, Without<Npc>)>, ResMut<crate::gameplay::PlayerStats>, ResMut<RatBites>),
     (level, settings, mut severs): (Option<Res<LevelInfo>>, Res<crate::settings::Settings>, MessageWriter<crate::gore::SeverLimb>),
-    (lights, mut shunned_seen): (Query<(&crate::level::LevelLight, &Visibility)>, Local<usize>),
+    (lights, mut shunned_seen, slide): (Query<(&crate::level::LevelLight, &Visibility)>, Local<usize>, Option<Res<crate::player::Slide>>),
 ) {
     // the lit lights the rats shun (`DisRatLightComponent`): where, and how far
     let shunned: Vec<(Vec3, f32)> = level
@@ -1212,7 +1212,16 @@ fn swarm_brain(
         *shunned_seen = shunned.len();
         info!("rats: {} lit lights shunned", shunned.len());
     }
-    // the limbs a body is eaten by (`SLInfo_Default`'s break bones)
+    // Corvo sliding drives them off (Corvo's `m_bSlideRepulsesRats`, `m_fSlideRatRepulseRadius`
+    // 250 uu: kept out of it as a repulsor's; before, he slid through them)
+    let mut shunned = shunned;
+    if slide.as_ref().is_some_and(|s| s.0.is_some()) {
+        if let Ok((pt, _)) = player.single() {
+            if data.pawn("m_bSlideRepulsesRats", 1.0) > 0.0 {
+                shunned.push((pt.translation, data.pawn("m_fSlideRatRepulseRadius", 250.0) * 0.01));
+            }
+        }
+    }    // the limbs a body is eaten by (`SLInfo_Default`'s break bones)
     let limbs: Vec<String> = level.as_ref().and_then(|l| l.scene.severed_limbs.as_ref()).map(|s| s.limbs.iter().map(|l| l.bone.clone()).collect()).unwrap_or_default();
     let dt = time.delta_secs() * tc.world_scale().max(0.0);
     let Ok(ctx) = rapier.single() else { return };

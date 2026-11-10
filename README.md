@@ -3985,7 +3985,8 @@ against the install's own data where it carries them, then implemented independe
   `_SlideOutSprint`, `_SlideOutSneak`; empty-handed, `Empty_Slide*`). Sliding into someone does
   them no harm (`m_SlideDamageInfo`: 0 to characters) but has them stumble, their strong
   reaction by the side he came from (as roshan's r614/blink research read the slide's), once a
-  slide.
+  slide. Rats keep out of his way while he slides (`m_bSlideRepulsesRats`, within
+  `m_fSlideRatRepulseRadius`, 2.5 m, as a rat repulsor's ring); before, he slid through them.
 
 ## Parity audit status
 
