@@ -681,6 +681,7 @@ fn find_focus(
         Res<PlayerStats>,
     ),
     (bounds, kids, plants, vm): (Query<(&bevy::camera::primitives::Aabb, &GlobalTransform)>, Query<&Children>, Query<(Entity, &crate::pickpocket::PutPocket, &Transform)>, Option<Res<crate::kismet::Vm>>),
+    possession: Res<crate::possession::Possession>,
 ) {
     focus.0 = false;
     focus.1 = None;
@@ -706,9 +707,19 @@ fn find_focus(
         let d = to.length();
         ctx.as_ref().and_then(|c| c.cast_ray(eye, to / d.max(1e-3), (d - 0.35).max(0.0), true, world)).is_some()
     };
+    // possessing someone: only the doors and the like, as one whose possessable tweak lets it
+    // (`m_bCanUseUsablesWhilePossessed`: a person, `Twk_Possessable_BaseNPC`; no animal): nothing
+    // taken, no body lifted. Before, a rat opened doors and took the coins it looked at
+    let possessed = possession.host.is_some();
+    if possessed && !possession.body.map_or(true, |b| b.usables) {
+        return;
+    }
     // (score, what, what can be done, its name)
     let mut best: Option<(f32, Entity, String, String)> = None;
     for (e, p, t, pocket) in &pickups {
+        if possessed {
+            break;
+        }
         let to = t.translation - eye;
         let d = to.length();
         if d > 2.4 + 0.5 {
@@ -760,6 +771,9 @@ fn find_focus(
     }
     // a pocket to plant something in (as a pocket to pick: from behind, unseen)
     for (e, p, t) in &plants {
+        if possessed {
+            break;
+        }
         let to = t.translation - eye;
         let d = to.length();
         let c = to.normalize_or_zero().dot(fwd);
@@ -832,6 +846,9 @@ fn find_focus(
     }
     // bodies (the unconscious and the dead) can be picked up
     for (e, npc, t, anim) in &bodies {
+        if possessed {
+            break;
+        }
         if !npc.is_down() || !anim.is_some_and(crate::carry::can_carry) {
             continue;
         }

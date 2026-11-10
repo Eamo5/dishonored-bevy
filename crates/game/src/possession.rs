@@ -134,6 +134,9 @@ pub struct HostBody {
     pub swim: bool,
     pub fish: bool,
     pub rooted: bool,
+    /// it may use doors and the like (its `m_bCanUseUsablesWhilePossessed`: none of the animals)
+    #[serde(default)]
+    pub usables: bool,
 }
 
 impl HostBody {
@@ -153,6 +156,7 @@ impl HostBody {
             swim: swim || host.fish,
             fish: host.fish,
             rooted: host.rooted,
+            usables: p.is_some_and(|p| p.usables),
         }
     }
 
@@ -490,7 +494,7 @@ mod charm_tests {
     fn restoring_rat_possession_remaps_host_and_restores_creature_body() {
         let mut old = World::new();
         let host = old.spawn_empty().id();
-        let body = HostBody { half: 0.01, radius: 0.09, eye: 0.05, ground: 3.0, water: 3.0, swim: true, fish: false, rooted: false };
+        let body = HostBody { half: 0.01, radius: 0.09, eye: 0.05, ground: 3.0, water: 3.0, swim: true, fish: false, rooted: false, usables: false };
         let pos = Possession { host: Some(host), left: 23.5, level: 1, warned: true, body: Some(body), exit: Some(Vec3::X), ..default() };
         let mut overrides = PossessOverrides::default();
         overrides.0.insert(7, PossessOverride { disallow: true, secs: [4.0, 8.0], level: 2, exit: Some(Vec3::Z) });

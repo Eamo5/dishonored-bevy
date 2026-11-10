@@ -5299,6 +5299,7 @@ impl<'a> Cooker<'a> {
             swim: c.bool("m_bCanSwimWhilePossessed").unwrap_or(false),
             duration,
             level,
+            usables: matches!(self.tweak_prop(tweak, "m_bCanUseUsablesWhilePossessed", 0, 0), Some((_, Value::Bool(true)))),
         }
     }
 

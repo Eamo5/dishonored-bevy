@@ -3386,6 +3386,10 @@ against the install's own data where it carries them, then implemented independe
   `PossesTarget_Human_01` at the chest, a rat's `PossesTarget_Rats_01`). Let go on a host he goes
   in (`_OutUU`); on none the aim ends. `[F] Cancel Possess` (`m_InteractionTexts[24]`) gives it
   up with `m_pCancelSoundEvent` and `_Cancel`, and the power waits `m_fCancelCooldown` (1 s).
+  Inside someone, Corvo may use only doors and the like, as the host's possessable tweak allows
+  (`m_bCanUseUsablesWhilePossessed`: a person's `Twk_Possessable_BaseNPC`, no animal's): nothing is
+  picked up or planted, no body lifted, and a rat or hound uses nothing at all. Before, a possessed
+  rat could open doors and take what it looked at.
   The aim settled on someone he may not take (the scripts forbid it: Slackjaw, the bridge's
   guards; or a story character they don't allow), the possessable's
   `m_DisallowPossessionMessage` stays up while the aim does ("This target cannot be possessed right

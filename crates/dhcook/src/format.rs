@@ -2243,6 +2243,10 @@ pub struct Possessable {
     pub duration: [f32; 2],
     /// the Possession level needed
     pub level: u8,
+    /// whether its possessor may use doors and the like (`m_bCanUseUsablesWhilePossessed`: a
+    /// person, not an animal)
+    #[serde(default)]
+    pub usables: bool,
 }
 
 /// An AI voice: what it says on each dialog hook (barks), from its `DisDialogVoiceData`
