@@ -7217,7 +7217,7 @@ fn world_events(
                     }
                 }
             }
-            Interaction::Distracted { distractor, at, spawner, start } => {
+            Interaction::Distracted { distractor, at, spawner, out } => {
                 let a = vm
                     .g
                     .actors
@@ -7228,7 +7228,6 @@ fn world_events(
                     .map(|(i, _)| i as u32);
                 if let Some(a) = a {
                     let pawn = vm.spawner_actor.get(spawner).map(|x| Val::Actor(*x));
-                    let out = if *start { "Distracted Start" } else { "Distracted End" };
                     for ev in vm.events_of.get(&a).cloned().unwrap_or_default() {
                         if vm.g.ops[ev as usize].class != "DisSeqEvent_Distracted" {
                             continue;

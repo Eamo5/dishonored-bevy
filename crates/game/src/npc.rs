@@ -1935,6 +1935,15 @@ fn scene_head_look(npcs: Query<(&Transform, &Npc, &NpcRig, &SceneLook)>, mut joi
 #[derive(Component)]
 pub struct ForceLook;
 
+/// A distractor holding a passer-by's eye (`m_fChanceToLook`): the spot looked at, the seconds
+/// left (its `m_DistractionTime`; none set, while it is within `reach`).
+#[derive(Component)]
+pub struct LookAtSpot {
+    pub at: Vec3,
+    pub left: f32,
+    pub reach: f32,
+}
+
 #[derive(Component, Default)]
 pub struct HeadTrack {
     yaw: f32,
@@ -2134,14 +2143,14 @@ fn head_track(
     mut commands: Commands,
     time: Res<Time>,
     player: Query<&Transform, With<crate::player::Player>>,
-    npcs: Query<(Entity, &Transform, &Npc, &NpcRig, Option<&mut HeadTrack>, (Has<crate::audio::Speaking>, Has<ForceLook>, Has<ScriptedAnim>, Option<&NpcAnim>), Option<&crate::anim::Animator>), (Without<SceneLook>, Without<crate::player::Player>)>,
+    npcs: Query<(Entity, &Transform, &Npc, &NpcRig, Option<&mut HeadTrack>, (Has<crate::audio::Speaking>, Has<ForceLook>, Has<ScriptedAnim>, Option<&NpcAnim>), Option<&crate::anim::Animator>, Option<&mut LookAtSpot>), (Without<SceneLook>, Without<crate::player::Player>)>,
     mut joints: Query<&mut Transform, (Without<Npc>, Without<crate::player::Player>)>,
 ) {
     let Ok(pt) = player.single() else { return };
     let dt = time.delta_secs();
     let eye = pt.translation + Vec3::Y * 0.6;
     let mut npcs = npcs;
-    for (e, t, npc, rig, track, (speaking, forced, scripted, st), anim) in &mut npcs {
+    for (e, t, npc, rig, track, (speaking, forced, scripted, st), anim, spot) in &mut npcs {
         let Some(mut track) = track else {
             commands.entity(e).try_insert(HeadTrack::default());
             continue;
@@ -2152,7 +2161,21 @@ fn head_track(
             continue;
         }
         let head = t.translation + Vec3::Y * 0.75;
-        let to = eye - head;
+        // (a distractor holding its eye as it passes: that spot, for its time or while near)
+        let spot = match spot {
+            Some(mut s) => {
+                s.left -= dt;
+                let gone = if s.left > -900.0 { s.left <= 0.0 } else { (s.at - head).with_y(0.0).length() > s.reach };
+                if gone || npc.is_down() || npc.mode == Mode::Combat {
+                    commands.entity(e).try_remove::<LookAtSpot>();
+                    None
+                } else {
+                    Some(s.at)
+                }
+            }
+            None => None,
+        };
+        let to = spot.unwrap_or(eye) - head;
         let flat = to.with_y(0.0).length();
         let yaw = ((-to.x).atan2(-to.z) - npc.yaw + PI).rem_euclid(TAU) - PI;
         let near = flat < 6.0;
@@ -2194,7 +2217,7 @@ fn head_track(
             && npc.mode != Mode::Combat
             && flat > 0.3
             && yaw.abs() < LOOK_YAW
-            && ((npc.attn_level == 1 && (npc.sees_player || npc.last_seen.is_some())) || (speaking && near) || forced || npc.warn.is_some() || gazing);
+            && (spot.is_some() || (npc.attn_level == 1 && (npc.sees_player || npc.last_seen.is_some())) || (speaking && near) || forced || npc.warn.is_some() || gazing);
         // nothing holding its eye, a patrolling or searching character looks about (its pattern:
         // a patrol's, or a search's with its sword drawn or not), near enough to be seen doing it
         let pattern = match npc.mode {

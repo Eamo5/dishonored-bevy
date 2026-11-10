@@ -32,6 +32,10 @@ impl Plugin for DistractionPlugin {
     }
 }
 
+/// How far above a distractor's place a passer-by's look goes (m: its head's height over the
+/// floor the distractor stands on, our reading).
+const LOOK_HEIGHT: f32 = 1.6;
+
 /// Each distractor's wait before it draws anyone again, and the passers-by already given
 /// their chance at one (until they leave its range).
 #[derive(Resource, Default)]
@@ -115,7 +119,7 @@ fn distract(
                 home_was = was.home_was;
                 commands.entity(e).try_remove::<ScriptedAnim>();
                 if was.walking.is_none() {
-                    used.write(Interaction::Distracted { distractor: scene.distractors[was.d].name.clone(), at: Vec3::from(scene.distractors[was.d].position), spawner, start: false });
+                    used.write(Interaction::Distracted { distractor: scene.distractors[was.d].name.clone(), at: Vec3::from(scene.distractors[was.d].position), spawner, out: "Distracted End" });
                 }
             }
             st.cool[di] = d.cooldown.max(5.0);
@@ -152,7 +156,7 @@ fn distract(
                 // (End: the scene's end or the distracted state's exit, once there:
                 // 0x00b844f0 / 0x00b84810)
                 if dz.walking.is_none() {
-                    used.write(Interaction::Distracted { distractor: d.name.clone(), at: Vec3::from(d.position), spawner: npc.spawner, start: false });
+                    used.write(Interaction::Distracted { distractor: d.name.clone(), at: Vec3::from(d.position), spawner: npc.spawner, out: "Distracted End" });
                 }
                 continue;
             }
@@ -167,7 +171,7 @@ fn distract(
                 dz.from = tf.translation;
                 commands.entity(e).try_insert(ScriptedAnim);
                 // (Start: on arriving, 0x00b84d60 -> 0x00b84750 / 0x00b84670)
-                used.write(Interaction::Distracted { distractor: d.name.clone(), at: Vec3::from(d.position), spawner: npc.spawner, start: true });
+                used.write(Interaction::Distracted { distractor: d.name.clone(), at: Vec3::from(d.position), spawner: npc.spawner, out: "Distracted Start" });
                 if std::env::var("DH_DISTRACT_LOG").is_ok() {
                     info!("distraction: {} at {} arrives at {:.2} after {w:.1} s", npc.name, d.name, tf.translation);
                 }
@@ -257,20 +261,38 @@ fn distract(
                 continue;
             }
             st.near.insert((e, di));
+            if std::env::var("DH_DISTRACT_LOG").is_ok() {
+                info!("distraction: {} ({:?}, route {:?}) comes within reach of {} (cooling {:.0} s)", npc.name, npc.alert, route, d.name, st.cool[di].max(0.0));
+            }
             if !d.routes.is_empty() && !route.is_some_and(|r| d.routes.iter().any(|x| x == r)) {
                 continue;
             }
-            let chance = if npc.alert == Alert::Unaware { d.chance } else { d.chance_wary };
-            if st.cool[di] > 0.0 || rand::random::<f32>() >= chance {
+            let calm = npc.alert == Alert::Unaware;
+            let (chance, look) = if calm { (d.chance, d.look) } else { (d.chance_wary, d.look_wary) };
+            // (DH_DISTRACT_LOOK, tests: every passer-by looks rather than stops)
+            let (chance, look) = if std::env::var_os("DH_DISTRACT_LOOK").is_some() { (0.0, 1.0) } else { (chance, look) };
+            if st.cool[di] > 0.0 {
                 continue;
             }
             // only those whose kind has the scene's animations (the guards' scenes aren't the
             // weepers')
-            let Some(m) = d.matinee.and_then(|i| matinees.get(i as usize)) else { continue };
-            let fits = pawn_group(m).is_some_and(|g| {
-                m.groups[g].tracks.iter().any(|t| matches!(t, KTrack::Anim(k) if !k.is_empty() && k.iter().all(|k| animator.lib.find(&k.1).is_some())))
+            let fits = d.matinee.and_then(|i| matinees.get(i as usize)).is_some_and(|m| {
+                pawn_group(m).is_some_and(|g| m.groups[g].tracks.iter().any(|t| matches!(t, KTrack::Anim(k) if !k.is_empty() && k.iter().all(|k| animator.lib.find(&k.1).is_some()))))
             });
-            if !fits {
+            if !fits || rand::random::<f32>() >= chance {
+                // else it may look at it as it goes by (`m_fChanceToLook`: the prison's guards
+                // glancing into the cells, Boyle's guests at the art; for its
+                // `m_DistractionTime`, else while near): the scripts hear "Distracted Looked At
+                // start"; before, none looked
+                if look > 0.0 && rand::random::<f32>() < look {
+                    st.cool[di] = d.cooldown.max(5.0);
+                    let left = if d.time[1] > 0.0 { d.time[0] + rand::random::<f32>() * (d.time[1] - d.time[0]) } else { -1000.0 };
+                    commands.entity(e).try_insert(crate::npc::LookAtSpot { at: at + Vec3::Y * LOOK_HEIGHT, left, reach: reach + 1.5 });
+                    used.write(Interaction::Distracted { distractor: d.name.clone(), at, spawner: npc.spawner, out: "Distracted Looked At start" });
+                    if std::env::var("DH_DISTRACT_LOG").is_ok() {
+                        info!("distraction: {} looks at {} ({:.1} m) for {left:.1} s", npc.name, d.name, flat);
+                    }
+                }
                 continue;
             }
             st.cool[di] = d.cooldown.max(5.0);

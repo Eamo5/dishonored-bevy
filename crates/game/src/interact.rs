@@ -412,8 +412,9 @@ pub enum Interaction {
     UsableLock { actor: u32, locked: bool },
     /// a whale oil receptacle (its actor's name, where) got a tank or lost it
     Receptacle { actor: String, at: Vec3, plugged: bool },
-    /// a character (its spawner) stopped at a distractor (its name, where), or went on
-    Distracted { distractor: String, at: Vec3, spawner: u32, start: bool },
+    /// a character (its spawner) stopped at a distractor (its name, where), went on, or looked at it:
+    /// the scripts' `DisSeqEvent_Distracted` output (`Distracted Start` / `End` / `Looked At start`)
+    Distracted { distractor: String, at: Vec3, spawner: u32, out: &'static str },
     /// a spawner's body: picked up (0), dropped (1), discovered (2)
     Corpse { spawner: u32, what: u32 },
     /// a door's keyhole looked through (else left)

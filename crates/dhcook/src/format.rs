@@ -3157,6 +3157,12 @@ pub struct Distractor {
     /// without a scene: the animation (prefix + `In`, `Loop`, `Out`) and how long it loops
     pub anim: String,
     pub time: [f32; 2],
+    /// the chance a calm / a wary passer-by looks at it instead, for `time`
+    /// (`m_fChanceToLook`)
+    #[serde(default)]
+    pub look: f32,
+    #[serde(default)]
+    pub look_wary: f32,
 }
 
 /// A place rats keep away from (`DisRatRepulsor`): within its radius no swarm goes, and (with

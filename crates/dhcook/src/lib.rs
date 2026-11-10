@@ -5174,10 +5174,11 @@ impl<'a> Cooker<'a> {
         if cc.bool("m_bDistractionEnabled") == Some(false) {
             return Ok(());
         }
-        let chance = |name: &str| match cc.get(name) {
-            Some(Value::Struct(_, p)) => Props(p.clone()).float("m_fChanceToAnimate").unwrap_or(0.0),
+        let chance_of = |name: &str, field: &str| match cc.get(name) {
+            Some(Value::Struct(_, p)) => Props(p.clone()).float(field).unwrap_or(0.0),
             _ => 0.0,
         };
+        let chance = |name: &str| chance_of(name, "m_fChanceToAnimate");
         let mut d = Distractor {
             name: actor.name().to_string(),
             position: ue_point(ch.vector("Location").unwrap_or([0.0; 3])),
@@ -5187,6 +5188,8 @@ impl<'a> Cooker<'a> {
             cooldown: cc.float("m_fCooldownTime").unwrap_or(45.0),
             chance: chance("m_SuspicionLvl1_Chances"),
             chance_wary: chance("m_SuspicionLvl234_Chances"),
+            look: chance_of("m_SuspicionLvl1_Chances", "m_fChanceToLook"),
+            look_wary: chance_of("m_SuspicionLvl234_Chances", "m_fChanceToLook"),
             ..Default::default()
         };
         // the routes it draws from
@@ -5223,6 +5226,18 @@ impl<'a> Cooker<'a> {
             if let Some(dist) = t.object("Distribution").filter(|o| *o != 0).and_then(|o| self.assets.resolve(&comp.pkg, o)) {
                 let dc = self.chain(&dist);
                 d.time = [dc.float("Min").unwrap_or(0.0), dc.float("Max").unwrap_or(0.0)];
+            } else if let Some((tpkg, Value::Array { count, offset, .. })) = cc.get_pkg("m_DistractionTime").and_then(|(pkg, v)| match v {
+                Value::Struct(_, s) => Props(s.clone()).get("LookupTable").cloned().map(|lt| (pkg.clone(), lt)),
+                _ => None,
+            }) {
+                // (its distribution baked into the lookup table, the object stripped: the
+                // table's head is the range of its values, min and max)
+                if count >= 2 {
+                    let mut r = Reader::at(&tpkg.data, offset);
+                    if let (Ok(lo), Ok(hi)) = (r.f32(), r.f32()) {
+                        d.time = [lo.min(hi), lo.max(hi)];
+                    }
+                }
             }
         }
         let index = self.scene.distractors.len();
