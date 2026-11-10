@@ -471,6 +471,47 @@ fn run_script(
             });
             script.timer = secs + 1.0;
         }
+        "hoptask" => {
+            // (tests) hoptask [N]: Corvo put down 0.8 m short of the N-th objective marker (on his
+            // way to it), then he takes or uses what is there (as gototask, without the walk)
+            let pick = f(1) as usize;
+            let here = t.translation;
+            commands.queue(move |w: &mut World| {
+                let npcs: Vec<(u32, Vec3)> = w.query::<(&crate::npc::FromSpawner, &Transform, &crate::npc::Npc)>().iter(w).filter(|(_, _, n)| !n.is_down()).map(|(f, t, _)| (f.0, t.translation)).collect();
+                let items: Vec<(u32, Vec3)> = w.query::<(&crate::interact::Pickup, &Transform)>().iter(w).map(|(p, t)| (p.index, t.translation)).collect();
+                let pts = w
+                    .get_resource::<crate::kismet::Vm>()
+                    .map(|vm| crate::markers::task_targets(vm, |s| npcs.iter().find(|(f, _)| *f == s).map(|(_, p)| *p), |i| items.iter().find(|(k, _)| *k == i).map(|(_, p)| *p)))
+                    .unwrap_or_default();
+                match pts.get(pick).map(|m| (m.at, m.pickup, m.actor)) {
+                    Some((p, pickup, actor)) => {
+                        let back = (here - p).with_y(0.0).normalize_or(Vec3::X);
+                        // (onto the walkable floor nearest that, where there is one)
+                        let half = crate::player::STAND_HALF + crate::player::RADIUS;
+                        let want = p + back * 0.8;
+                        let to = w.get_resource::<crate::navmesh::NavGrid>().and_then(|g| g.snap(want - Vec3::Y * 0.5, 3.0)).map(|f| f + Vec3::Y * (half + 0.05)).unwrap_or(want + Vec3::Y * 0.6);
+                        info!("script: hop to task marker {pick} at {p:.2} (to {to:.2})");
+                        if let Some((mut pt, mut pl)) = w.query::<(&mut Transform, &mut Player)>().iter_mut(w).next() {
+                            pt.translation = to;
+                            pl.velocity = Vec3::ZERO;
+                            pl.noclip = false;
+                        }
+                        let mut g = w.resource_mut::<Goto>();
+                        g.goal = Some(p - Vec3::Y * 0.5);
+                        g.left = 6.0;
+                        g.path.clear();
+                        g.take = true;
+                        g.take_pickup = pickup;
+                        g.take_actor = Some(actor);
+                    }
+                    None => {
+                        info!("script: no task marker {pick} (of {})", pts.len());
+                        w.resource_mut::<Script>().timer = 0.0;
+                    }
+                }
+            });
+            script.timer = 7.0;
+        }
         "tp" | "fly" => {
             t.translation = Vec3::new(f(1), f(2), f(3));
             p.yaw = f(4);
