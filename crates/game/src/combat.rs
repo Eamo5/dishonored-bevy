@@ -102,6 +102,15 @@ const CAM_SHAKE_PARRIED: f32 = 175.0;
 /// How far above and below the view a blow can be blocked (`DisTweaks_MeleeBlockPlayer`:
 /// `m_fBlockAngle_Vertical_Up` 30, `_Down` 50 degrees), in radians.
 const BLOCK_VERTICAL: (f32, f32) = (0.5235988, 0.87266463);
+/// The sword's reach (m) at this speed along Corvo's facing (m/s), as its context's range test
+/// has it (0x00C0A060 with the speed factor 0x00AB2050).
+pub fn sword_reach(data: &crate::gamedata::Data, ahead: f32) -> f32 {
+    let range = data.pawn("melee.m_fMaxContextRange", 210.0);
+    let percent = data.pawn("melee.m_fRayScalePercent", 0.5);
+    let f = 1.0 + ((ahead * 100.0 - data.pawn("combat.m_fMinSpeedRayScale", 400.0)) * data.pawn("combat.m_fRaySpeedScale", 0.005)).clamp(0.0, data.pawn("combat.m_fRaySpeedScale_Max", 1.5));
+    range * ((f - 1.0) * percent + 1.0) * 0.01
+}
+
 /// Adrenaline for a won parry (`m_fAdrenalineAddedParryWin`).
 const PARRY_ADRENALINE: f32 = 20.0;
 const CAM_SHAKE_BLOCK_SCALE: f32 = 6.0;
@@ -930,11 +939,17 @@ fn sword_input(
         sword.swing += dt * attrs.melee_rate;
         if !sword.hit_done && sword.swing > PLAYER_HIT {
             sword.hit_done = true;
-            rats.write(crate::swarm::KillRats { at: eye + fwd * 1.5, radius: 0.9, by_player: true, source: eye });
-            // the blade's reach: 210 uu, growing with his forward speed to 283.5 at a sprint (as
-            // roshan's r614/blink research measured), from the eye to their middle
+            // (the rats in its cut, each missed at the sword's `m_fChanceToMissRats`, 0.3; before,
+            // none escaped it)
+            rats.write(crate::swarm::KillRats { at: eye + fwd * 1.5, radius: 0.9, by_player: true, source: eye, miss: data.pawn("melee.m_fChanceToMissRats", 0.3) });
+            // the blade's reach (0x00C0A060, as roshan's r614/blink research decoded it): its
+            // `m_fMaxContextRange` (210 uu), grown with his speed along his facing by
+            // `m_fRayScalePercent` (0.5) of the speed factor `1 + clamp((v - m_fMinSpeedRayScale) x
+            // m_fRaySpeedScale, 0, m_fRaySpeedScale_Max)` (400 uu/s, 0.005, 1.5): 283.5 uu sprinting
+            // at 540; from the eye to their middle. (Before, it grew evenly with the speed's share of
+            // a sprint, too far at a run)
             let ahead = p.velocity.with_y(0.0).dot(fwd.with_y(0.0).normalize_or_zero()).max(0.0);
-            let reach = 2.1 * (1.0 + 0.35 * (ahead / attrs.sprint.max(0.1)).clamp(0.0, 1.0));
+            let reach = sword_reach(&data, ahead);
             let reach = (reach * reach + 0.25).sqrt();
             // (the blade's sweep meets everyone in its reach, each once a swing: the nearest takes
             // the blow as chosen, the others its cut, `m_AlreadyHitActors`, as roshan's
@@ -1180,6 +1195,23 @@ mod finisher_tests {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
+mod reach_tests {
+    use super::sword_reach;
+
+    #[test]
+    fn the_blade_reaches_further_only_past_a_walk() {
+        let data = crate::gamedata::Data::default();
+        // standing or walking: its 210 uu
+        assert!((sword_reach(&data, 0.0) - 2.1).abs() < 1e-4);
+        assert!((sword_reach(&data, 4.0) - 2.1).abs() < 1e-4);
+        // sprinting at 540 uu/s: the factor 1.7, half of its growth, 283.5 uu
+        assert!((sword_reach(&data, 5.4) - 2.835).abs() < 1e-3);
+        // as fast as it goes: the factor's most, 1.5 over
+        assert!((sword_reach(&data, 20.0) - 2.1 * 1.75).abs() < 1e-3);
+    }
+}
+
 #[cfg(test)]
 mod side_tests {
     use super::*;

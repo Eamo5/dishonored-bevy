@@ -1022,8 +1022,11 @@ fn arms(game: &Package, startup: &Package, d: &mut GameData) {
     // Corvo's sword's)
     let corvo_melee = "Twk_Inv_PlayerSpecific.Twk_Inv_SwordCorvo.DisTweaks_InventoryItem_PlayerSpecific_1.DisTweaks_MeleeAttackPlayer_1";
     for p in [game.find_export("Default__DisTweaks_MeleeAttackPlayer").and_then(|i| props(game, i)), startup.find_export(corvo_melee).and_then(|i| props(startup, i))].iter().flatten() {
-        if let Some(v) = p.float("m_fChanceOfSyncedAttack") {
-            d.pawn.insert("melee.m_fChanceOfSyncedAttack".into(), v);
+        // (and its reach, its growth with speed, the rats its cut misses)
+        for n in ["m_fChanceOfSyncedAttack", "m_fMaxContextRange", "m_fRayScalePercent", "m_fChanceToMissRats"] {
+            if let Some(v) = p.float(n) {
+                d.pawn.insert(format!("melee.{n}"), v);
+            }
         }
     }
     // the pistol's and crossbow's aim: their dispersion by difficulty
@@ -1919,7 +1922,7 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
         .collect();
     // (and his view's flinch as a blow lands: `m_fMinHitReact_Camera` / `_Max` by its damage between
     // `m_HitReact_Min_Damage` and `_High_Damage`, `m_fHitReactRandomness` about it)
-    for n in ["m_fVulnerableTime_BigHit", "m_fVulnerableTime_Knockdown", "m_fVulnerableTime_BlendSpeed", "m_fMinHitReact_Camera", "m_fMaxHitReact_Camera", "m_fHitReactRandomness", "m_HitReact_Min_Damage", "m_HitReact_High_Damage"] {
+    for n in ["m_fVulnerableTime_BigHit", "m_fVulnerableTime_Knockdown", "m_fVulnerableTime_BlendSpeed", "m_fMinHitReact_Camera", "m_fMaxHitReact_Camera", "m_fHitReactRandomness", "m_HitReact_Min_Damage", "m_HitReact_High_Damage", "m_fRaySpeedScale", "m_fRaySpeedScale_Max", "m_fMinSpeedRayScale"] {
         if let Some(v) = combat.iter().find_map(|p| p.float(n).or_else(|| p.int(n).map(|i| i as f32))) {
             d.pawn.insert(format!("combat.{n}"), v);
         }

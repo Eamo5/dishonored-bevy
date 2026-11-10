@@ -3723,6 +3723,12 @@ against the install's own data where it carries them, then implemented independe
 - **The blade's sweep.** Corvo's swing meets everyone in its reach, each once
   (`m_AlreadyHitActors`): the nearest takes the blow as chosen (an assassination, a finisher,
   the blades locking, a parry or the cut), the others its cut, unless they parry it.
+  Its reach is the sword's `m_fMaxContextRange` (210 uu) grown by `m_fRayScalePercent` (0.5) of the
+  speed factor `1 + clamp((v - m_fMinSpeedRayScale) x m_fRaySpeedScale, 0, m_fRaySpeedScale_Max)`
+  (his combat tweak's 400 uu/s, 0.005, 1.5) along his facing, as roshan's r614/blink research
+  decoded the range test (0x00C0A060, 0x00AB2050): 283.5 uu sprinting at 540; before, it grew
+  evenly with any speed, reaching 2.7 m at a run. Each rat in the cut is missed at the sword's
+  `m_fChanceToMissRats` (0.3); before, none escaped it.
 - **Open to a finisher.** A fighter is open while a clip it plays says so
   (`DisNotify_VulnerableRange`, now cooked: its window, and `m_fExtraTime` more where
   `m_bUseExtraTime`). Killable (`eDisVulnerabilityType_Killable`): through its hit reactions

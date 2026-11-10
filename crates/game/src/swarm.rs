@@ -217,6 +217,8 @@ pub struct KillRats {
     pub by_player: bool,
     /// Blade origin or blast centre, for testing cover before killing a rat.
     pub source: Vec3,
+    /// the chance each rat in it is missed (a sword's `m_fChanceToMissRats`)
+    pub miss: f32,
 }
 
 /// A level swarm's behaviour, from its tweak (distances in metres).
@@ -831,6 +833,9 @@ fn kill_rats(mut commands: Commands, mut kills: MessageReader<KillRats>, mut swa
                         QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP))).is_some()) {
                         return true;
                     }
+                    if k.miss > 0.0 && rand::random::<f32>() < k.miss {
+                        return true;
+                    }
                     rat_dies(&mut commands, r, possessed);
                     if k.by_player {
                         stats.gain_adrenaline(attrs.adrenaline_rat);
@@ -1048,11 +1053,11 @@ mod kill_tests {
         app.world_mut().spawn(Swarm { wild: None, spawner: None, left: 30.0, level: 1, target: None, eating: None, delay: 0.0, bite_t: 0.0, rats, scattering: false });
         // The same rat is inside two simultaneous blasts: only the first kills it.
         for _ in 0..2 {
-            app.world_mut().write_message(KillRats { at: Vec3::ZERO, radius: 1.0, by_player: true, source: Vec3::Y });
+            app.world_mut().write_message(KillRats { at: Vec3::ZERO, radius: 1.0, by_player: true, source: Vec3::Y, miss: 0.0 });
         }
         app.update();
         assert_eq!(app.world().resource::<PlayerStats>().adrenaline, 10.0);
-        app.world_mut().write_message(KillRats { at: Vec3::X * 10.0, radius: 1.0, by_player: false, source: Vec3::Y });
+        app.world_mut().write_message(KillRats { at: Vec3::X * 10.0, radius: 1.0, by_player: false, source: Vec3::Y, miss: 0.0 });
         app.update();
         assert_eq!(app.world().resource::<PlayerStats>().adrenaline, 10.0);
         let mut q = app.world_mut().query::<&Rat>();
@@ -1071,7 +1076,7 @@ mod kill_tests {
         let cover = app.world_mut().spawn((Collider::cuboid(0.1, 2.0, 2.0), Transform::from_xyz(1.0, 0.0, 0.0), CollisionGroups::new(GROUP_PROP, Group::ALL))).id();
         app.update();
         let strike = |app: &mut App| {
-            app.world_mut().write_message(KillRats { at: Vec3::ZERO, radius: 3.0, by_player: true, source: Vec3::Y });
+            app.world_mut().write_message(KillRats { at: Vec3::ZERO, radius: 3.0, by_player: true, source: Vec3::Y, miss: 0.0 });
             app.update();
         };
         strike(&mut app);

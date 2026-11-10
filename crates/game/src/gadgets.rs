@@ -914,7 +914,7 @@ fn fly_grenades(
                     fx.write(SpawnEffect { system: Some(sys), secs: look.linger + 2.0, ..SpawnEffect::at("", at) });
                 }
                 if look.rat_kill > 0.0 {
-                    rats.write(crate::swarm::KillRats { at, radius: look.rat_kill, by_player: !matches!(g.kind, HitKind::EnemyExplosion | HitKind::ByOthers), source: at });
+                    rats.write(crate::swarm::KillRats { at, radius: look.rat_kill, by_player: !matches!(g.kind, HitKind::EnemyExplosion | HitKind::ByOthers), source: at, miss: 0.0 });
                 }
                 let loud = data.0.noise_loudness.get(&look.loudness).copied().unwrap_or(15.0);
                 noise.write(Noise { corvo: !matches!(g.kind, HitKind::EnemyExplosion | HitKind::ByOthers), pos: at, radius: loud, kind: NoiseKind::Threatening });
@@ -1119,7 +1119,7 @@ fn explode(
             let sound = if water.is_some() { "Snd_Grenade_Expl_Underwater" } else if b.kind == HitKind::ExplosiveBolt { "Snd_AI_TBoy_Arrow_Fire_Expl" } else { "Snd_Grenade_Explosion" };
             sfx.write(PostEvent::named(sound, Some(b.at)));
         }
-        rats.write(crate::swarm::KillRats { at: b.at, radius: b.full.max(2.0), by_player: !matches!(b.kind, HitKind::EnemyExplosion | HitKind::ByOthers), source: b.at });
+        rats.write(crate::swarm::KillRats { at: b.at, radius: b.full.max(2.0), by_player: !matches!(b.kind, HitKind::EnemyExplosion | HitKind::ByOthers), source: b.at, miss: 0.0 });
         if !b.silent {
             crate::rumble::play_near("contact.Explosion.DisContactType.radius", b.at);
         }
@@ -1357,7 +1357,7 @@ fn choke_clouds(
         }
         sfx.write(PostEvent::named("Snd_DLC06_ChokeDust", Some(p.at)));
         fx.write(SpawnEffect { secs: p.secs + 2.0, ..SpawnEffect::at("chokedust", p.at) });
-        rats.write(crate::swarm::KillRats { at: p.at, radius: data.pawn("chokedust.explosion.m_fRatKillRadius", 200.0) * 0.01, by_player: true, source: p.at });
+        rats.write(crate::swarm::KillRats { at: p.at, radius: data.pawn("chokedust.explosion.m_fRatKillRadius", 200.0) * 0.01, by_player: true, source: p.at, miss: 0.0 });
         noise.write(Noise { corvo: true, pos: p.at, radius: 10.0, kind: NoiseKind::Threatening });
         commands.spawn((ChokeCloud { radius: p.radius, left: p.secs, had: Vec::new() }, Transform::from_translation(p.at), DespawnOnExit(GameState::InGame)));
     }
