@@ -279,6 +279,8 @@ fn clouds(
                 continue;
             }
             hits.write(NpcHit { npc: oe, damage: pl.per_tick, kind: HitKind::ByOthers, from: t.translation });
+            // (marked struck by the plague: dying of it, its own death, `DisNPCAnim_DeathPlague`)
+            commands.entity(oe).try_insert(crate::npc::PlagueStruck(time.elapsed_secs()));
             // it gets out of the cloud (`DisBehaviorEscapePlague`'s `GetOuttaHere`): straight
             // away from the mouth, a metre past its reach
             let away = (ot.translation - mouth).with_y(0.0).normalize_or(-fwd);

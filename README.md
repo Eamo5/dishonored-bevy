@@ -963,7 +963,9 @@ fields no longer show their stand-in "WW" behind the title.
   for 2-3 s to everyone within 3.5 m before the weeper with a clear line, other carriers
   spared, as roshan's r614/blink research decoded it. Anyone else it reaches gets out of it (`DisBehaviorEscapePlague`'s `GetOuttaHere`): at a
   run, straight away from the weeper's mouth to a metre past the cloud's reach, for 2 s after it
-  last caught them (our reading), outranking a fight. Corvo struck sees `ps_camera_weeperspit`
+  last caught them (our reading), outranking a fight. One the cloud kills dies of the plague, its own
+  death (`DisNPCAnim_DeathPlague`: `Generic_Death_Plague`, going limp where it says); before, it fell
+  as from a blow. Corvo struck sees `ps_camera_weeperspit`
   and hears `Imp_Insect_on_Body`; his plague charms lessen the damage and turn it to mana.
   Flies (`WeeperFlies` at `spine_3_jnt`) hang about a weeper, buzzing within 18 m, until a second
   after it dies. The characters' clips start their own effects too (`AnimNotify_PlayParticleEffect`,

@@ -1938,6 +1938,11 @@ fn scene_head_look(npcs: Query<(&Transform, &Npc, &NpcRig, &SceneLook)>, mut joi
 #[derive(Component)]
 pub struct ForceLook;
 
+/// Struck by a plague carrier's cloud (when, the clock's seconds): one it kills dies of the
+/// plague (`DisNPCAnim_DeathPlague`: `Generic_Death_Plague`).
+#[derive(Component)]
+pub struct PlagueStruck(pub f32);
+
 /// A distractor holding a passer-by's eye (`m_fChanceToLook`): the spot looked at, the seconds
 /// left (its `m_DistractionTime`; none set, while it is within `reach`).
 #[derive(Component)]
@@ -7015,6 +7020,8 @@ pub struct NpcClips {
     /// (`DisNPCAnim_Immolate`)
     electrified: Option<ClipId>,
     immolate: Option<ClipId>,
+    /// dying of the plague (`DisNPCAnim_DeathPlague`)
+    death_plague: Option<ClipId>,
     /// lying poses (last frames) to settle into after a reaction that ends mid-fall
     lie_back: Option<ClipId>,
     lie_front: Option<ClipId>,
@@ -7231,6 +7238,7 @@ impl NpcClips {
             death_fast: ["Front", "FrontLeft", "FrontRight", "Left", "Right", "Back"].map(|d| lib.find(&format!("Generic_DeathFast_{d}"))),
             electrified: lib.find("Generic_Electrified"),
             immolate: lib.find("Generic_Immolation"),
+            death_plague: lib.find("Generic_Death_Plague"),
             dodge_in: ["Left", "Right"].map(|s| lib.all(&[&format!("Sword_Dodge{s}In")])),
             dodge_out: ["Left", "Right"].map(|s| lib.find(&format!("Sword_Dodge{s}Out"))),
             // (its riposte as its definition chains it: the small one, the big twice)
@@ -7868,7 +7876,7 @@ fn npc_select_anim(
             Option<&AssassinClip>,
             Option<&mut FinisherClip>,
             Option<&crate::carry::Falling>,
-            (Has<crate::ragdoll::Ragdoll>, Has<crate::ragdoll::GoLimp>, Has<crate::musicbox::TunePlaying>, Option<&Electrocuted>, Option<&Immolated>, Option<&mut HeadTrack>),
+            (Has<crate::ragdoll::Ragdoll>, Has<crate::ragdoll::GoLimp>, Has<crate::musicbox::TunePlaying>, Option<&Electrocuted>, Option<&Immolated>, Option<&mut HeadTrack>, Option<&PlagueStruck>),
         ),
         Without<ScriptedAnim>,
     >,
@@ -7877,7 +7885,7 @@ fn npc_select_anim(
 ) {
     let ppos = player.single().map(|t| t.translation).unwrap_or(Vec3::ZERO);
     let swarmed: std::collections::HashSet<Entity> = swarmed.read().map(|s| s.0).collect();
-    for (e, mut npc, mut st, mut anim, t, children, dropped, assassin, finisher, falling, (limp, going_limp, tune, electrocuted, immolated, mut track)) in &mut npcs {
+    for (e, mut npc, mut st, mut anim, t, children, dropped, assassin, finisher, falling, (limp, going_limp, tune, electrocuted, immolated, mut track, plague_struck)) in &mut npcs {
         let scale = tc.npc_scale(npc.out_of_bend).max(0.0);
         let dt = time.delta_secs() * scale;
         anim.time_scale = scale;
@@ -7944,7 +7952,10 @@ fn npc_select_anim(
         // (its own death, and no going limp: a wall of light's dead, struck standing; one burning)
         // (burning now: one restored charred has burnt out)
         let immolated = immolated.is_some_and(|i| i.t < 30.0);
-        let own_death = electrocuted.filter(|el| el.standing).and(clips.electrified).or(clips.immolate.filter(|_| immolated));
+        // (dead of the plague: struck by a cloud within the last second, DisNPCAnim_DeathPlague's
+        // Generic_Death_Plague, going limp where it says; before, a blow's fall)
+        let plague_dead = npc.mode == Mode::Dead && plague_struck.is_some_and(|p| time.elapsed_secs() - p.0 < 1.0);
+        let own_death = electrocuted.filter(|el| el.standing).and(clips.electrified).or(clips.immolate.filter(|_| immolated)).or(clips.death_plague.filter(|_| plague_dead));
         // a weak hit's flinch, laid over whatever it does (its clip played through once)
         npc.weak_hits = clips.weak_hit.iter().all(Option::is_some);
         npc.dodges = clips.dodge_in.iter().all(|v| !v.is_empty());
@@ -8331,7 +8342,7 @@ fn npc_select_anim(
             // its clip goes limp where it says (`DishonoredNotify_Ragdoll`), else at its end
             // (one placed dead keeps its pose, against its wall or in its chair, till it is moved)
             // (a burning one's own death goes limp at its mark too)
-            if st.ragdoll && !far && (own_death.is_none() || immolated) && !npc.corpse {
+            if st.ragdoll && !far && (own_death.is_none() || immolated || plague_dead) && !npc.corpse {
                 let due = anim.finished() || anim.current().and_then(|p| st.marks.get(&p.clip).and_then(|m| m.ragdoll).map(|r| p.t >= r)).unwrap_or(true);
                 if due {
                     commands.entity(e).try_insert(crate::ragdoll::GoLimp::soon());
