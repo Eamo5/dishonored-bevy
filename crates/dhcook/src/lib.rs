@@ -3519,6 +3519,7 @@ impl<'a> Cooker<'a> {
             stats,
             attachments,
             out_of_bend: ch.bool("m_bAlwaysOutOfBendTime").unwrap_or(false),
+            dramatic: ch.bool("m_bIsDramaticAssassinationTarget").unwrap_or(false),
             ragdoll,
             lineage,
             variants: Vec::new(),
@@ -6753,6 +6754,7 @@ impl<'a> Cooker<'a> {
         self.scene.npc_types.push(NpcType {
             attachments: Vec::new(),
             out_of_bend: false,
+            dramatic: false,
             ragdoll: None,
             lineage: Vec::new(),
             variants: Vec::new(),
@@ -8656,6 +8658,7 @@ impl<'a> Cooker<'a> {
                             self.scene.npc_types.push(NpcType {
                             attachments: Vec::new(),
                             out_of_bend: false,
+                            dramatic: false,
                             ragdoll: None,
                             lineage: Vec::new(),
                             variants: Vec::new(),
@@ -8758,6 +8761,7 @@ impl<'a> Cooker<'a> {
                             self.scene.npc_types.push(NpcType {
                                 attachments: Vec::new(),
                                 out_of_bend: false,
+                                dramatic: false,
                                 ragdoll: None,
                                 lineage: Vec::new(),
                                 variants: Vec::new(),

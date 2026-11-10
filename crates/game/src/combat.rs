@@ -27,11 +27,59 @@ impl Plugin for CombatPlugin {
                 Update,
                 (sword_input, assassinating, drop_hold, chokehold, receive_hits, vulnerable_post, versus, animate_view_model, special_moves).chain().after(crate::gadgets::grenade_focus).run_if(in_state(GameState::InGame)),
             )
-            .add_systems(Update, slide_into.run_if(in_state(GameState::InGame)));
+            .add_systems(Update, slide_into.run_if(in_state(GameState::InGame)))
+            .add_systems(Update, dramatic_deaths.after(crate::npc::npc_hits).run_if(in_state(GameState::InGame)));
     }
 }
 
 pub const VIEW_LAYER: usize = 1;
+
+/// A dramatic target's death (its pawn's `m_bIsDramaticAssassinationTarget`: High Overseer
+/// Campbell, Teague Martin at the lighthouse, the trials' marks) slows the world and
+/// Corvo for a moment (`DisTweaks_PlayerPawn_Combat.m_DramaAssassinationParams`: both to 0.1 for 2 s,
+/// in and out over 0.1 s each, real time), once, when the killing blow's damage type is a dramatic
+/// one (`DishonoredDamageType.m_bDramaticSlowmo`: the blade's, a shot's or a bolt's, Wind Blast's, a
+/// bite's; not an assassination's or a blast's, our reading of the flag). Before, they died at speed.
+fn dramatic_deaths(
+    mut hits: MessageReader<NpcHit>,
+    npcs: Query<&Npc>,
+    real: Res<Time<bevy::time::Real>>,
+    data: Res<crate::gamedata::Data>,
+    mut tc: ResMut<crate::gameplay::TimeControl>,
+    mut st: Local<(Option<f32>, Vec<Entity>)>,
+) {
+    for h in hits.read() {
+        let dramatic_kind = matches!(h.kind, HitKind::Sword | HitKind::ShortFatality | HitKind::Bullet | HitKind::ExplosiveBullet | HitKind::Bolt | HitKind::StickyGrenade | HitKind::Windblast | HitKind::Rats);
+        if dramatic_kind && npcs.get(h.npc).is_ok_and(|n| n.dramatic && n.mode == crate::npc::Mode::Dead) && !st.1.contains(&h.npc) {
+            st.1.push(h.npc);
+            st.0 = Some(0.0);
+            info!("drama: {} dies in slow motion", npcs.get(h.npc).map(|n| n.name.as_str()).unwrap_or(""));
+        }
+    }
+    let Some(t) = st.0.as_mut() else { return };
+    *t += real.delta_secs().min(0.1);
+    let v = |k: &str, d: f32| data.pawn(&format!("drama.{k}"), d);
+    let (warm, dur, cool) = (v("m_fWarmupTime", 0.1).max(0.001), v("m_fDuration", 2.0), v("m_fCooldownTime", 0.1).max(0.001));
+    let k = drama_weight(*t, warm, dur, cool);
+    let (world, own) = (v("m_fWorldDilation", 0.1), v("m_fPlayerDilation", 0.1));
+    tc.drama = [1.0 + (world - 1.0) * k, 1.0 + (own - 1.0) * k];
+    if *t > dur + cool {
+        st.0 = None;
+        tc.drama = [1.0, 1.0];
+    }
+}
+
+/// How far into its slowing a dramatic death is (0 none .. 1 all) `t` s after it: in over `warm`,
+/// held to `dur`, out over `cool`.
+fn drama_weight(t: f32, warm: f32, dur: f32, cool: f32) -> f32 {
+    if t < warm {
+        t / warm
+    } else if t < dur {
+        1.0
+    } else {
+        (1.0 - (t - dur) / cool).clamp(0.0, 1.0)
+    }
+}
 
 /// Corvo sliding into someone (`StatePlayerMasterSlide`'s impact, `m_SlideDamageInfo`: no harm to
 /// characters): it stumbles, its strong reaction (as roshan's r614/blink research read the
@@ -1209,6 +1257,20 @@ mod reach_tests {
         assert!((sword_reach(&data, 5.4) - 2.835).abs() < 1e-3);
         // as fast as it goes: the factor's most, 1.5 over
         assert!((sword_reach(&data, 20.0) - 2.1 * 1.75).abs() < 1e-3);
+    }
+}
+
+#[cfg(test)]
+mod drama_tests {
+    use super::drama_weight;
+
+    #[test]
+    fn a_dramatic_death_slows_in_holds_and_ends() {
+        assert_eq!(drama_weight(0.0, 0.1, 2.0, 0.1), 0.0);
+        assert!((drama_weight(0.05, 0.1, 2.0, 0.1) - 0.5).abs() < 1e-5);
+        assert_eq!(drama_weight(1.0, 0.1, 2.0, 0.1), 1.0);
+        assert!((drama_weight(2.05, 0.1, 2.0, 0.1) - 0.5).abs() < 1e-5);
+        assert_eq!(drama_weight(2.2, 0.1, 2.0, 0.1), 0.0);
     }
 }
 

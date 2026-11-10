@@ -1935,7 +1935,19 @@ pub fn cook(cooked: &Path, root: &Path) -> Result<GameData> {
             }
         }
     }
-    // the mask's optics: the zoomed field of view (`Twk_EmptyHands_NPC`'s player-specific
+    // a dramatic target's death in slow motion (`m_DramaAssassinationParams`: the world's and his
+    // dilation, how long, its warm-up and cool-down) as `drama.<field>`
+    // (the class's, none of his tweaks setting them)
+    for p in combat_default.iter().chain(combat.iter().rev()) {
+        if let Some(Value::Struct(_, cfg)) = p.get("m_DramaAssassinationParams") {
+            let cfg = Props(cfg.clone());
+            for n in ["m_fWorldDilation", "m_fPlayerDilation", "m_fDuration", "m_fWarmupTime", "m_fCooldownTime"] {
+                if let Some(v) = cfg.float(n) {
+                    d.pawn.insert(format!("drama.{n}"), v);
+                }
+            }
+        }
+    }    // the mask's optics: the zoomed field of view (`Twk_EmptyHands_NPC`'s player-specific
     // `m_fZoomFOV`, the first lens's) as `zoom.m_fZoomFOV`
     if let Some(p) = startup.find_export("Twk_EmptyHands_NPC.Twk_EmptyHands_NPC.DisTweaks_ItemEmpty_PlayerSpecific_0").and_then(|i| props(&startup, i)) {
         // (and how fast the view blends to it: `m_fZoomBlendSpeed`)

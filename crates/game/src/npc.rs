@@ -540,6 +540,8 @@ pub struct Npc {
     pub ash_on_death: bool,
     /// bent time passes it by (its pawn's `m_bAlwaysOutOfBendTime`: the trials' Daud)
     pub out_of_bend: bool,
+    /// its death slows the world (its pawn's `m_bIsDramaticAssassinationTarget`)
+    pub dramatic: bool,
 }
 
 /// `EDisAIBrainFlags`: don't attack at all, no melee, no ranged attacks, (panicking: never
@@ -2907,6 +2909,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         brain_flags: 0,
         ash_on_death: false,
         out_of_bend: ty.is_some_and(|t| t.out_of_bend),
+        dramatic: ty.is_some_and(|t| t.dramatic),
     };
 
     // skeleton joints
@@ -3335,7 +3338,7 @@ pub fn blade_blood(fx: &mut MessageWriter<crate::particles::SpawnEffect>, vm: Op
 }
 
 /// Apply damage / takedowns from the player.
-fn npc_hits(
+pub(crate) fn npc_hits(
     mut hits: MessageReader<NpcHit>,
     mut staggers: MessageReader<NpcStagger>,
     mut noise: MessageWriter<Noise>,

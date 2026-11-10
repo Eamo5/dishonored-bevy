@@ -831,6 +831,8 @@ pub struct TimeControl {
     /// decoded Blink's release and end)
     pub blink_layer: f32,
     pub blink_rate: f32,
+    /// a dramatic target's death: the world's and Corvo's own dilation (1: none)
+    pub drama: [f32; 2],
 }
 
 /// How far Blink's layer would slow the world (`0.05`: the release asks 0.01 of the helper,
@@ -843,7 +845,7 @@ pub const PROJECTILE_WAKE: f32 = 0.25;
 
 impl Default for TimeControl {
     fn default() -> Self {
-        Self { bend_remaining: 0.0, world_dilation: 0.0, wheel: 1.0, scripted: None, finisher: 1.0, aim_freeze: 1.0, player_dilation: 1.0, bend_lag: 0.0, bend_on: false, ramp_in: 0.15, ramp_out: 0.25, blink_layer: 1.0, blink_rate: 0.0 }
+        Self { bend_remaining: 0.0, world_dilation: 0.0, wheel: 1.0, scripted: None, finisher: 1.0, aim_freeze: 1.0, player_dilation: 1.0, bend_lag: 0.0, bend_on: false, ramp_in: 0.15, ramp_out: 0.25, blink_layer: 1.0, blink_rate: 0.0, drama: [1.0, 1.0] }
     }
 }
 
@@ -871,7 +873,7 @@ impl TimeControl {
         // the product of every layer's, 0x009FCBC0, decoded for this rewrite)
         let bent = 1.0 + (self.world_dilation - 1.0) * self.bend_ramp();
         let scripted = self.scripted.map(|s| s.0).unwrap_or(1.0);
-        bent * scripted * self.finisher * self.aim_freeze * self.blink_layer * self.wheel
+        bent * scripted * self.finisher * self.aim_freeze * self.blink_layer * self.wheel * self.drama[0]
     }
     /// Corvo's pace through his bent time (`m_PlayerDilation`, as it comes in).
     pub fn player_rate(&self) -> f32 {
@@ -890,7 +892,7 @@ impl TimeControl {
         }
     }
     pub fn own_scale(&self) -> f32 {
-        self.finisher.min(1.0) * self.wheel * self.player_rate()
+        self.finisher.min(1.0) * self.wheel * self.player_rate() * self.drama[1]
     }
     /// A character's time scale: the world's, or its own if bent time passes it by.
     pub fn npc_scale(&self, out_of_bend: bool) -> f32 {

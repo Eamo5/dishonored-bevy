@@ -1877,6 +1877,12 @@ fields no longer show their stand-in "WW" behind the title.
   out): the dramatic deaths' always, the finishers' (`..AdrenalineBendTime..`) for a Blood
   Thirst kill or a slow-motion finisher as the `Kill Cam Mode` option has it: Off never, Normal
   one time in ten (`m_fChanceSlomoFinisherWillBeNormalSpeed` 0.9), Frequent always.
+  A mission target killed otherwise (`m_bIsDramaticAssassinationTarget`: High Overseer Campbell,
+  Teague Martin at the lighthouse, the trials' marks) dies in slow motion, the world and Corvo at
+  0.1 for 2 s of real time, in and out over 0.1 s (`DisTweaks_PlayerPawn_Combat.m_DramaAssassinationParams`),
+  once, when the killing blow's damage type is a dramatic one (`m_bDramaticSlowmo`: the blade's, a
+  shot's or a bolt's, Wind Blast's, a bite's; an assassination plays its own dramatic death, a
+  blast none; our reading of the flag). Before, they died at speed.
   *Short fatalities*: a killing blow that isn't a finisher, on someone facing Corvo whose armour
   doesn't take it, is played out with its victim (the sword's `DisTweaks_MeleeAttackPlayer`:
   `m_ForehandKill_Synced` / `m_BackhandKill_Synced` at `m_fChanceOfSyncedAttack`, 1). His

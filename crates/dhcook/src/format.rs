@@ -1312,6 +1312,10 @@ pub struct NpcType {
     /// Daud, whose duel stops the world)
     #[serde(default)]
     pub out_of_bend: bool,
+    /// a target whose death slows the world (`DisTweaks_NPCPawn.m_bIsDramaticAssassinationTarget`:
+    /// Campbell, Martin, the trials' marks)
+    #[serde(default)]
+    pub dramatic: bool,
     /// its ragdoll (`m_pPhysicsAsset`), in `Scene::ragdolls`
     #[serde(default)]
     pub ragdoll: Option<u32>,
