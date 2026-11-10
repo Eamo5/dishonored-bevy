@@ -1787,7 +1787,9 @@ fields no longer show their stand-in "WW" behind the title.
   unconscious who land in water drown. The bodies meet the world and loose props, not Corvo or
   the living. Pre-placed corpses drape over what is under them. One knocked off its feet that falls
   further than its `m_FallingDeathHeight` (the characters' 750 uu: Wind Blast off a roof, a blast off a
-  walkway) dies of the fall where it lands, Corvo's kill; before, every one got up again.
+  walkway) dies of the fall where it lands, Corvo's kill; before, every one got up again. An
+  unconscious body that falls further than `m_fSafeFallDistAfterCorpseDrop` (300 uu: dropped or thrown off
+  a balcony, our reading of it for any unconscious fall) dies of it too; before, it slept on.
   `DH_RAGDOLL_LOG`; script `launch VY [NAME]` flings a character up at VY m/s.
 - **Feet on the ground** (`feet.rs`): characters within 30 m standing or walking on stairs and
   slopes put each foot on what is under it (a ray down from the foot, from

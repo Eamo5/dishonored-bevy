@@ -64,6 +64,9 @@ impl GoLimp {
 /// The fall a character knocked off its feet dies of (m: the default character's
 /// `m_FallingDeathHeight`, 750 uu).
 const FALLING_DEATH_HEIGHT: f32 = 7.5;
+/// The fall an unconscious body survives (m: the characters' `m_fSafeFallDistAfterCorpseDrop`,
+/// 300 uu).
+const SAFE_BODY_FALL: f32 = 3.0;
 
 #[derive(Component, Default)]
 pub struct Ragdoll {
@@ -603,16 +606,26 @@ fn pose_ragdolls(
                 rd.t += dt;
                 rd.still = if fastest < 0.35 { rd.still + dt } else { 0.0 };
             }
-            // the unconscious drown
+            if let Some(h) = hips.filter(|h| h.is_finite()) {
+                rd.top = Some(rd.top.map_or(h.y, |t| t.max(h.y)));
+            }
+            // the unconscious fallen further than a body falls safely die of it (the characters'
+            // `m_fSafeFallDistAfterCorpseDrop`, 300 uu: one dropped or thrown off a balcony, our
+            // reading of it for any unconscious fall; before, they slept on)
+            if npc.mode == Mode::Unconscious && rd.still > 0.3 && hips.zip(rd.top).is_some_and(|(h, top)| top - h.y > SAFE_BODY_FALL) {
+                npc.set_mode(Mode::Dead);
+                stats.killed(&npc.pawn, npc.civilian());
+                stats.knockouts = stats.knockouts.saturating_sub(1);
+                if log() {
+                    info!("ragdoll: {} dies of its fall", npc.name);
+                }
+            }            // the unconscious drown
             if let (Some(h), Some(w)) = (hips, waters.as_ref()) {
                 if npc.mode == Mode::Unconscious && w.at(h).is_some() {
                     npc.set_mode(Mode::Dead);
                     stats.killed(&npc.pawn, npc.civilian());
                     stats.knockouts = stats.knockouts.saturating_sub(1);
                 }
-            }
-            if let Some(h) = hips.filter(|h| h.is_finite()) {
-                rd.top = Some(rd.top.map_or(h.y, |t| t.max(h.y)));
             }
             // (knocked off a height: dead of the fall past its `m_FallingDeathHeight`, the
             // characters' 750 uu; before, they got up from any fall)

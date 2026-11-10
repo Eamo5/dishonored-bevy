@@ -1375,17 +1375,18 @@ fn run_script(
             });
         }
         "launch" => {
-            // (tests) launch VY [NAME]: the nearest standing character (whose name holds NAME)
+            // (tests) launch VY [NAME]: the nearest living character (whose name holds NAME)
             // knocked off its feet, flung up at VY m/s (a fall from its height)
             let vy = f(1);
             let named = cmd.get(2).cloned().unwrap_or_default();
             let at = t.translation;
             commands.queue(move |w: &mut World| {
                 let mut q = w.query::<(Entity, &mut Npc, &Transform)>();
-                if let Some((e, mut n, _)) = q.iter_mut(w).filter(|(_, n, _)| !n.is_down() && (n.name.contains(&named) || n.pawn.contains(&named))).min_by(|a, b| a.2.translation.distance(at).total_cmp(&b.2.translation.distance(at))) {
+                if let Some((e, mut n, _)) = q.iter_mut(w).filter(|(_, n, _)| n.mode != crate::npc::Mode::Dead && (n.name.contains(&named) || n.pawn.contains(&named))).min_by(|a, b| a.2.translation.distance(at).total_cmp(&b.2.translation.distance(at))) {
                     info!("script: {} launched at {vy} m/s", n.name);
-                    n.floored = true;
-                    w.entity_mut(e).insert(crate::ragdoll::GoLimp::now(Vec3::Y * vy, None));
+                    n.floored = !n.is_down();
+                    // (a body lying still: stirred again)
+                    w.entity_mut(e).remove::<crate::ragdoll::Ragdoll>().insert(crate::ragdoll::GoLimp::now(Vec3::Y * vy, None));
                 }
             });
         }        "tentacle" => {
