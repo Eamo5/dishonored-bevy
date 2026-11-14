@@ -811,6 +811,9 @@ pub enum KDialogStep {
     /// the next line's voice radius (m, `m_fVoiceRadius`) and whether its subtitle is a main
     /// one (`m_bMainSubtitle`), when not the class's 30 m and main
     Reach(f32, bool),
+    /// the end of a way that goes on as another conversation of the tree
+    /// (`DisConv_ConversationRef`: that conversation's object path)
+    Goto(String),
 }
 
 /// What a branch within a conversation goes by.

@@ -810,6 +810,30 @@ pub fn cook(levels: &[Arc<Package>], refs: &HashMap<ActorKey, KActor>) -> Kismet
     ex.out
 }
 
+/// Every dialogue tree of the levels as the cook takes them (in its order, each once), with the
+/// package each is in: for patching a cooked map's conversations without cooking it again.
+pub fn dialog_trees_of(levels: &[Arc<Package>]) -> Vec<(String, crate::format::KDialogTree)> {
+    let voices = voice_events(levels);
+    let mut out = Vec::new();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    for pkg in levels {
+        for i in 1..=pkg.exports.len() as i32 {
+            if !pkg.class_name(i).starts_with("DisDialogTree") {
+                continue;
+            }
+            let path = pkg.obj_path(i);
+            let own = if path.starts_with("TheWorld.") { pkg.name.clone() } else { String::new() };
+            if !seen.insert((own, path)) {
+                continue;
+            }
+            if let Some(t) = dialog_tree(pkg, i, &voices) {
+                out.push((pkg.name.clone(), t));
+            }
+        }
+    }
+    out
+}
+
 /// A dialogue tree: its conversations and the graph from its hooks to them.
 fn dialog_tree(pkg: &Package, t: i32, voices: &HashMap<[u32; 4], Vec<String>>) -> Option<crate::format::KDialogTree> {
     use crate::format::{KConversation, KDialogNode, KDialogNodeKind, KDialogTree};
@@ -901,7 +925,9 @@ fn dialog_tree(pkg: &Package, t: i32, voices: &HashMap<[u32; 4], Vec<String>>) -
                 // lines said outside a conversation (barks, one-liners): a conversation of their own
                 "DisConv_Blurb" | "DisConv_NonWord" => {
                     let ci = tree.conversations.len() as u32;
-                    tree.conversations.push(KConversation { steps: steps_from(pkg, Some(n), voices), path: pkg.obj_path(n), ..Default::default() });
+                    let (mut steps, to) = steps_from(pkg, Some(n), voices);
+                    steps.extend(to.map(crate::format::KDialogStep::Goto));
+                    tree.conversations.push(KConversation { steps, path: pkg.obj_path(n), ..Default::default() });
                     KDialogNodeKind::Conversation(ci)
                 }
                 "DisConv_CheckStoryFlag" => KDialogNodeKind::StoryFlag(guid(&p, "m_StoryFlag")),
@@ -949,6 +975,26 @@ fn dialog_tree(pkg: &Package, t: i32, voices: &HashMap<[u32; 4], Vec<String>>) -
                 .collect()
         };
         tree.nodes.push(KDialogNode { kind, outs });
+    }
+    // (and the conversations others go on as that the tree doesn't list)
+    let mut k = 0;
+    while k < tree.conversations.len() && tree.conversations.len() < 400 {
+        let targets: Vec<String> = tree.conversations[k]
+            .steps
+            .iter()
+            .filter_map(|s| if let crate::format::KDialogStep::Goto(p) = s { Some(p.clone()) } else { None })
+            .filter(|p| !tree.conversations.iter().any(|c| c.path == *p))
+            .collect();
+        for path in targets {
+            if tree.conversations.iter().any(|c| c.path == path) {
+                continue;
+            }
+            let Some(c) = (1..=pkg.exports.len() as i32).find(|&i| pkg.class_name(i) == "DisConversation" && pkg.obj_path(i) == path) else { continue };
+            if let Some(cp) = read_props(pkg, c) {
+                tree.conversations.push(conversation(pkg, c, &cp, voices));
+            }
+        }
+        k += 1;
     }
     Some(tree)
 }
@@ -1487,17 +1533,20 @@ pub(crate) fn blurb_texts(levels: &[Arc<Package>]) -> HashMap<[u32; 4], String> 
 fn conversation(pkg: &Package, conv: i32, cp: &Props, voices: &HashMap<[u32; 4], Vec<String>>) -> crate::format::KConversation {
     use crate::format::KDialogStep;
     let links: Vec<Option<i32>> = struct_array(pkg, cp, "m_OutputLinks").iter().map(|l| l.object("m_pLink").filter(|o| *o > 0)).collect();
-    let mut steps = steps_from(pkg, links.first().copied().flatten(), voices);
+    let (mut steps, mut on) = steps_from(pkg, links.first().copied().flatten(), voices);
     let mut tail = |k: usize| {
         let link = links.get(k).copied().flatten()?;
-        steps.push(KDialogStep::End);
+        steps.push(on.take().map_or(KDialogStep::End, KDialogStep::Goto));
         let at = steps.len() as u32;
-        walk_steps(pkg, Some(link), voices, &mut steps, &mut HashSet::new());
-        steps.push(KDialogStep::End);
+        let to = walk_steps(pkg, Some(link), voices, &mut steps, &mut HashSet::new());
+        steps.push(to.map_or(KDialogStep::End, KDialogStep::Goto));
         Some(at)
     };
     let interrupted = tail(1);
     let walked_away = tail(2);
+    if let Some(to) = on {
+        steps.push(KDialogStep::Goto(to));
+    }
     let flag = |k: &str, d: bool| cp.bool(k).unwrap_or(d);
     crate::format::KConversation {
         label: str_of(cp, "m_Label"),
@@ -1566,21 +1615,31 @@ fn reach_of(p: &Props) -> (f32, bool) {
     (p.float("m_fVoiceRadius").unwrap_or(3000.0) / 100.0, !matches!(p.get("m_bMainSubtitle"), Some(Value::Bool(false))))
 }
 
-fn steps_from(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<String>>) -> Vec<crate::format::KDialogStep> {
+/// (and the conversation the chain goes on as, if it does)
+fn steps_from(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<String>>) -> (Vec<crate::format::KDialogStep>, Option<String>) {
     let mut steps = Vec::new();
-    walk_steps(pkg, start, voices, &mut steps, &mut HashSet::new());
-    steps
+    let to = walk_steps(pkg, start, voices, &mut steps, &mut HashSet::new());
+    (steps, to)
 }
 
-fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<String>>, steps: &mut Vec<crate::format::KDialogStep>, seen: &mut HashSet<i32>) {
+/// Walk a chain into `steps`; the conversation it goes on as when it ends at a reference to one
+/// (`DisConv_ConversationRef`: the step ending it is then a `Goto` there, not an `End`).
+fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<String>>, steps: &mut Vec<crate::format::KDialogStep>, seen: &mut HashSet<i32>) -> Option<String> {
     use crate::format::KDialogStep;
     let mut node = start;
     while let Some(n) = node {
+        let cls = pkg.class_name(n);
+        // (a reference ends the chain, however many ways come to it: the conversation it names
+        // goes on from here; Daud's briefing in The Brigmore Witches goes on to its scene, the
+        // scene to Thomas's word and that to the choice to leave)
+        if cls == "DisConv_ConversationRef" {
+            let p = read_props(pkg, n)?;
+            return next_node(pkg, &p).filter(|c| pkg.class_name(*c) == "DisConversation").map(|c| pkg.obj_path(c));
+        }
         if !seen.insert(n) || steps.len() > 200 {
             break;
         }
         let Some(p) = read_props(pkg, n) else { break };
-        let cls = pkg.class_name(n);
         let guid = |p: &Props, k: &str| match p.get(k) {
             Some(Value::Guid(g)) => Some(format!("{:08x}{:08x}{:08x}{:08x}", g[0], g[1], g[2], g[3])),
             _ => None,
@@ -1617,7 +1676,7 @@ fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<
             "DisConv_Soiree" => {
                 let outs: Vec<Option<i32>> = struct_array(pkg, &p, "m_OutputLinks").iter().map(|l| l.object("m_pLink").filter(|o| *o > 0)).collect();
                 if matches!(p.get("m_UsePreviewBlurbsOnly"), Some(Value::Bool(true))) {
-                    walk_steps(pkg, outs.get(1).copied().flatten(), voices, steps, seen);
+                    let _ = walk_steps(pkg, outs.get(1).copied().flatten(), voices, steps, seen);
                 } else if let Some(g) = guid(&p, "m_SoireeGUID") {
                     steps.push(KDialogStep::Matinee(g));
                 }
@@ -1643,12 +1702,12 @@ fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<
                 let mut options = Vec::new();
                 for (k, text) in texts.into_iter().enumerate() {
                     let begin = steps.len() as u32;
-                    walk_steps(pkg, links.get(k).copied().flatten(), voices, steps, seen);
-                    steps.push(KDialogStep::End);
+                    let to = walk_steps(pkg, links.get(k).copied().flatten(), voices, steps, seen);
+                    steps.push(to.map_or(KDialogStep::End, KDialogStep::Goto));
                     options.push((text, begin));
                 }
                 steps[at] = KDialogStep::Choice(options);
-                return;
+                return None;
             }
             // a branch: each output's way (outputs leading the same way share theirs)
             "DisConv_RandomBranch"
@@ -1681,11 +1740,11 @@ fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<
                         continue;
                     }
                     begins[k] = Some(steps.len() as u32);
-                    walk_steps(pkg, Some(link), voices, steps, &mut seen.clone());
-                    steps.push(KDialogStep::End);
+                    let to = walk_steps(pkg, Some(link), voices, steps, &mut seen.clone());
+                    steps.push(to.map_or(KDialogStep::End, KDialogStep::Goto));
                 }
                 steps[at] = KDialogStep::Branch(kind, begins);
-                return;
+                return None;
             }
             // the chaos level's branches (outputs leading the same way share theirs)
             "DisConv_CompareDarknessLevel" => {
@@ -1701,14 +1760,15 @@ fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<
                     }
                     begins[k] = Some(steps.len() as u32);
                     // (each its own walk: branches that meet again each say what follows)
-                    walk_steps(pkg, Some(link), voices, steps, &mut seen.clone());
-                    steps.push(KDialogStep::End);
+                    let to = walk_steps(pkg, Some(link), voices, steps, &mut seen.clone());
+                    steps.push(to.map_or(KDialogStep::End, KDialogStep::Goto));
                 }
                 steps[at] = KDialogStep::Darkness(p.int("m_LevelToCompare").unwrap_or(0), begins);
-                return;
+                return None;
             }
             _ => {}
         }
         node = if cls == "DisConversation" { None } else { next_node(pkg, &p) };
     }
+    None
 }

@@ -614,6 +614,33 @@ mod conversation_tests {
         assert_eq!(reach, [(45.0, false), (30.0, true)]);
     }
 
+    /// A way ending at a reference to another conversation goes on as that one, its lines and
+    /// its own ways; one broken off doesn't.
+    #[test]
+    fn a_conversation_goes_on_as_the_one_it_names() {
+        let mut vm = speaker(None);
+        let tree = &mut Arc::get_mut(&mut vm.g).unwrap().dialog_trees[0];
+        tree.conversations[0].steps = vec![S::Line("one".into(), 0), S::Goto("Next".into()), S::Line("interrupted".into(), 0), S::Goto("Next".into())];
+        tree.conversations[0].interrupted = Some(2);
+        tree.conversations.push(KConversation { label: "Next".into(), path: "Next".into(), steps: vec![S::Line("next".into(), 0), S::End], ..Default::default() });
+        vm.start_conversation(0, 0, 0);
+        for _ in 0..4 {
+            vm.tick_conversations(60.0);
+        }
+        assert_eq!(said(&mut vm), ["one", "next"]);
+        assert!(vm.fired_convs.contains("Next"));
+        assert!(vm.convs.is_empty());
+        // (broken off: its "Interrupted" way says its line and ends there)
+        vm.start_conversation(0, 0, 0);
+        vm.tick_conversations(0.1);
+        vm.speaker_busy.insert(0, Busy::Down);
+        for _ in 0..4 {
+            vm.tick_conversations(60.0);
+        }
+        assert_eq!(said(&mut vm), ["one"]);
+        assert!(vm.convs.is_empty());
+    }
+
     #[test]
     fn a_soiree_holds_a_blocking_conversation_and_is_skipped_in_another() {
         for blocking in [true, false] {
@@ -5266,6 +5293,29 @@ impl Vm {
                     dhcook::format::KDialogStep::End => {
                         c.3 = steps.len();
                         continue;
+                    }
+                    // (it goes on as another conversation of the tree, `DisConv_ConversationRef`,
+                    // with that one's own ways: Daud's briefing in The Brigmore Witches goes on to
+                    // its scene, Thomas's word after and the choice to leave; before, each ended
+                    // where it named the next. One broken off, or the next played once already,
+                    // ends)
+                    dhcook::format::KDialogStep::Goto(path) => {
+                        let next = g.dialog_trees.get(c.1).and_then(|t| t.conversations.iter().position(|x| x.path == *path)).filter(|&i| {
+                            let n = &g.dialog_trees[c.1].conversations[i];
+                            !ending && !(n.once && self.fired_convs.contains(&n.path))
+                        });
+                        let Some(next) = next else {
+                            c.3 = steps.len();
+                            continue;
+                        };
+                        if self.trace {
+                            info!("kismet: conversation {} goes on as {}", cv.label, g.dialog_trees[c.1].conversations[next].label);
+                        }
+                        self.fired_convs.insert(path.clone());
+                        self.walked_away.remove(&c.0);
+                        c.2 = next;
+                        c.3 = 0;
+                        break;
                     }
                     dhcook::format::KDialogStep::Branch(kind, begins) => {
                         let k = self.pick_branch(kind, c.0, (c.1, c.2, c.3), true).map(|(k, key, st)| {

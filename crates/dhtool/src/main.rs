@@ -1116,6 +1116,97 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Some("patch-dialogs") => {
+            // dhtool patch-dialogs <dir> [map...]: a cooked map's conversations brought up to the
+            // cook's, from the level packages found under <dir> (`<name>.upk`, or a TFC
+            // Installer's `<name>.upkBackup`, the first found by sorted path): each
+            // conversation whose steps are the cooked ones but for the ways that now go on as
+            // another (`Goto` where an `End` was) takes them, and conversations they go on as
+            // that weren't cooked are added. Nothing else of the map changes.
+            let dir = PathBuf::from(&args[2]);
+            let mut found: std::collections::HashMap<String, PathBuf> = Default::default();
+            let mut stack = vec![dir.clone()];
+            let mut files = Vec::new();
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d)?.flatten() {
+                    let p = e.path();
+                    if p.is_dir() { stack.push(p); } else { files.push(p); }
+                }
+            }
+            files.sort();
+            for p in files {
+                let name = p.file_name().unwrap().to_string_lossy().to_string();
+                let stem = name.strip_suffix(".upkBackup").or_else(|| name.strip_suffix(".upk"));
+                if let Some(s) = stem { found.entry(s.to_ascii_lowercase()).or_insert(p); }
+            }
+            let root = PathBuf::from("cache").join("maps");
+            let maps: Vec<String> = if args.len() > 3 {
+                args[3..].iter().map(|m| m.to_ascii_lowercase()).collect()
+            } else {
+                let mut v: Vec<String> = std::fs::read_dir(&root)?.flatten().filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".json")).map(str::to_string)).collect();
+                v.sort();
+                v
+            };
+            for m in maps {
+                let path = root.join(format!("{m}.json"));
+                let mut scene: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+                let names: Vec<String> = scene["packages"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                let mut levels = Vec::new();
+                let mut missing = Vec::new();
+                for n in &names {
+                    let pkg = found.get(&n.to_ascii_lowercase()).and_then(|p| std::fs::read(p).ok().and_then(|b| upk::Package::from_bytes(n.clone(), p.clone(), b).ok()));
+                    match pkg {
+                        Some(p) => levels.push(std::sync::Arc::new(p)),
+                        None => missing.push(n.clone()),
+                    }
+                }
+                let fresh = dhcook::kismet::dialog_trees_of(&levels);
+                let Some(trees) = scene["kismet"]["dialog_trees"].as_array_mut() else { println!("{m}: no dialogue trees"); continue };
+                let (mut at, mut matched, mut patched, mut added, mut differ) = (0usize, 0, 0, 0, 0);
+                for (_, t) in &fresh {
+                    let conv_paths: Vec<&str> = t.conversations.iter().map(|c| c.path.as_str()).collect();
+                    // (the next cooked tree of that path whose conversations begin as these)
+                    let Some(k) = (at..trees.len()).find(|&k| {
+                        trees[k]["path"].as_str() == Some(t.path.as_str())
+                            && trees[k]["conversations"].as_array().is_some_and(|cs| cs.len() <= conv_paths.len() && cs.iter().zip(&conv_paths).all(|(c, p)| c["path"].as_str() == Some(*p)))
+                    }) else { continue };
+                    at = k + 1;
+                    matched += 1;
+                    let convs = trees[k]["conversations"].as_array_mut().unwrap();
+                    let had = convs.len();
+                    let mut ok = true;
+                    for (j, c) in t.conversations.iter().enumerate().take(had) {
+                        let new = serde_json::to_value(&c.steps)?;
+                        let (Some(old), Some(newa)) = (convs[j]["steps"].as_array(), new.as_array()) else { continue };
+                        let end = serde_json::json!("End");
+                        // (step for step, or with a last step going on where the cook had none)
+                        let tail_goto = newa.len() == old.len() + 1 && newa.last().is_some_and(|n| n.get("Goto").is_some());
+                        let same = (old.len() == newa.len() || tail_goto) && old.iter().zip(newa).all(|(o, n)| o == n || (*o == end && n.get("Goto").is_some()));
+                        if !same {
+                            differ += 1;
+                            ok = false;
+                            continue;
+                        }
+                        if old != newa {
+                            convs[j]["steps"] = new;
+                            patched += 1;
+                        }
+                    }
+                    if ok {
+                        for c in &t.conversations[had..] {
+                            convs.push(serde_json::to_value(c)?);
+                            added += 1;
+                        }
+                    }
+                }
+                println!("{m}: {} of {} trees matched, {patched} conversations go on, {added} added, {differ} differ; packages missing {missing:?}", matched, fresh.len());
+                if patched + added > 0 {
+                    let tmp = path.with_extension("json.tmp");
+                    std::fs::write(&tmp, serde_json::to_vec(&scene)?)?;
+                    std::fs::rename(&tmp, &path)?;
+                }
+            }
+        }
         Some("kismetstats") => {
             // dhtool kismetstats: sequence op / variable classes over every map's levels
             init_classes();

@@ -36,6 +36,9 @@ cargo run --release -p dhtool -- cook-all         # the missions (and the movies
 cargo run --release -p dhtool -- cook-audio       # Wwise banks
 cargo run --release -p dhtool -- cook-ui          # fonts, interface art
 cargo run --release -p dhtool -- cook-gamedata    # powers, charms, stores, texts, campaign scripts
+# (maps cooked before a change to the conversations: their conversations alone brought up to the
+#  cook's from the level packages under DIR, `<name>.upk` or TFC Installer's `.upkBackup`)
+cargo run --release -p dhtool -- patch-dialogs DIR [map...]
 
 # 2. Play
 cargo run --release -p dishonored                      # main menu (New Game starts at Dunwall Tower)
@@ -2608,6 +2611,16 @@ fields no longer show their stand-in "WW" behind the title.
   (`DisConv_PlayerChoice`, 63 across the game: leaving the Hound Pits with Samuel, Piero's
   workshop, Slackjaw and Granny Rags, the Boyle sisters, the mask at the end) are offered like
   the scripts' choices, each option going on down its own branch (cooked flat, with jumps).
+  A way within a conversation that ends at a reference to another (`DisConv_ConversationRef`,
+  its first output naming a `DisConversation` of the tree) goes on as that conversation, with
+  its own ways and holds (one broken off, or the next played once already, ends there; one the
+  tree doesn't list is cooked too). Before, the cook took the reference for the end: in The
+  Brigmore Witches' opening Daud's talk with Thomas stopped at "CompleteBriefingTask", so the
+  briefing's scene ("I found Lizzy Stride...") and Thomas's word after never played, and "Is it
+  time to go, sir?" never led to the choice to leave for Coldridge, so the mission could not be
+  left. 97 conversations in 25 maps go on so (the Hound Pits' 23, Daud's estate and streets
+  24). Maps cooked before are brought up to it by `dhtool patch-dialogs` from the level
+  packages, each conversation only where its cooked steps are the new ones but for its ends.
   Within a conversation its own branch nodes pick the way as it reaches them: by a story flag
   (`DisConv_CheckStoryFlag`), a conversation had (`DisConv_ConversationFired`,
   `DisConv_HadConversation`), at random or in turn (below); they used to take their first way
@@ -4616,7 +4629,7 @@ Known outstanding gameplay gaps from source and original-data inspection:
 | --- | --- |
 | `crates/upk` | UE3 package reader: LZO/zlib chunks, name/import/export tables, tagged properties, static/skeletal meshes, textures (incl. `.tfc` bulk data) |
 | `crates/dhcook` | Cooker: levels and their streaming sublevels, materials and shaders, lightmaps, light volumes, NPC archetypes and factions, Kismet/Matinee, security devices, Wwise audio, Scaleform UI, game data |
-| `crates/dhtool` | CLI for cooking and inspecting packages (`cook`, `cook-all`, `cook-ui`, `cook-audio`, `cook-gamedata`, `list`, `props`, `findprop`, `swfdump`, `mat`, `graph`, ...) |
+| `crates/dhtool` | CLI for cooking and inspecting packages (`cook`, `cook-all`, `cook-ui`, `cook-audio`, `cook-gamedata`, `patch-dialogs`, `list`, `props`, `findprop`, `swfdump`, `mat`, `graph`, ...) |
 | `crates/game` | The Bevy game |
 
 ### Cache format (`./cache`)
