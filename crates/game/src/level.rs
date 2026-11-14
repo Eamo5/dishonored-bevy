@@ -1956,7 +1956,33 @@ fn spawn_level(
     );
     commands.insert_resource(crate::fxlight::LitSurfaces(lit_surfaces));
     commands.insert_resource(crate::fxlight::RuntimeLights(dyn_lights.iter().map(|(li, p, pos, r, params)| (*li as u32, *p, *pos, *r, *params)).collect()));
+    let mut scene = scene;
+    scene.kill_y = fall_out_height(&scene);
     commands.insert_resource(LevelInfo { scene });
+}
+
+/// Where a thing has fallen out of the world: the level's `KillZ` (the class's when unset), or
+/// 50 m under the lowest of the level's solid surfaces if that comes first. (Below them there is
+/// nothing to land on; with the class's 2.6 km a fall through a gap in our collision took over a
+/// minute to end.)
+fn fall_out_height(scene: &Scene) -> f32 {
+    let kill = if scene.kill_y == -100.0 { dhcook::KILL_Z_DEFAULT } else { scene.kill_y };
+    let floor = scene
+        .instances
+        .iter()
+        .filter(|i| i.collide)
+        .filter_map(|i| {
+            let m = scene.meshes.get(i.mesh as usize)?;
+            let xf = Mat4::from_cols_array(&i.transform);
+            (0..8)
+                .map(|k| xf.transform_point3(Vec3::new(if k & 1 == 0 { m.min[0] } else { m.max[0] }, if k & 2 == 0 { m.min[1] } else { m.max[1] }, if k & 4 == 0 { m.min[2] } else { m.max[2] })).y)
+                .reduce(f32::min)
+        })
+        .reduce(f32::min);
+    match floor {
+        Some(f) if f.is_finite() => kill.max(f - 50.0),
+        _ => kill,
+    }
 }
 
 fn insert_mesh(e: &mut EntityCommands, mesh: Handle<Mesh>, mat: MatHandle, cast_shadow: bool, tag: u32) {

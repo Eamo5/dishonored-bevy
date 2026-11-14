@@ -3403,6 +3403,8 @@ against the install's own data where it carries them, then implemented independe
   leaves it unset (most do) has the class's, -262143 uu, about 2.6 km down. Before, such a map
   took 100 m, and the Flooded District's opening, which puts Corvo 408 m down in the Outsider's
   void to walk to him, sent him straight back to its start, so the mission could not begin.
+  (Should he fall through a gap in our collision, he is out of the world 50 m below the level's
+  lowest solid surface if that comes first, rather than falling for a minute.)
   Leaving the ground in a jump plays the arms' take-off (`Sword_Ready_JumpIn`), then the leap;
   empty-handed, `Empty_Sneak_Jump` and its landing `Empty_Sneak_JumpLandSmall` (the empty set's
   only jump).
