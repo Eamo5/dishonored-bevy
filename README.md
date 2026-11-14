@@ -2438,7 +2438,13 @@ fields no longer show their stand-in "WW" behind the title.
   locker is locked"). Things lying about give their own prompt (their interactable's
   `m_InteractText`: "[F] Pick up", food's "[F] Eat"); on a body or in a pocket, the HUD's
   "[F] Loot" (`m_InteractionTexts[30]`). What the scripts make usable says the HUD's "[F] Use"
-  (`m_InteractionTexts[27]`); a whale oil tank "Whale Oil Tank" over "[F] Carry", a
+  (`m_InteractionTexts[27]`), with the crosshair on its mesh and nothing before it (before, the
+  line of sight ran to its origin, which for a cabinet lies within it: the Rothwild
+  slaughterhouse's time clock, Daud's way in by the main door, could never be used); one whose
+  scripts answer its use without an item ("Used But Missing Abstract Item") wants the item whose
+  pickup sets the story flag they ask after (the clock wants the Time Card: without it, its task
+  to find one; with it, the slaughterhouse; our reading of the scripts, its usable tweak, which
+  names the item, being uncooked for an object with nothing to animate); a whale oil tank "Whale Oil Tank" over "[F] Carry", a
   receptacle rewired by hand "Circuitry" over "[F] Rewire" (`SecuritySystems_twk`). Usable
   objects show their name over the prompt (`m_Name`: "Security Door Panel"); a security
   device's circuitry adds its own line under it, "Rewire Tools Remaining: 2" (its

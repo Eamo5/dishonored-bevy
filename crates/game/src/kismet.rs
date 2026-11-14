@@ -6383,6 +6383,17 @@ fn setup(
     ));
     // usable objects that are neither doors nor pickups get a prompt
     let mut n = 0;
+    // (the world bounds of an actor's first mesh)
+    let mesh_bounds = |a: &dhcook::format::KActor| -> Option<crate::interact::UsableBounds> {
+        let inst = level.scene.instances.get(*a.instances.first()? as usize)?;
+        let m = level.scene.meshes.get(inst.mesh as usize)?;
+        let xf = Mat4::from_cols_array(&inst.transform);
+        let (lo, hi) = (Vec3::from(m.min), Vec3::from(m.max));
+        let corners = (0..8).map(|k| xf.transform_point3(Vec3::new(if k & 1 == 0 { lo.x } else { hi.x }, if k & 2 == 0 { lo.y } else { hi.y }, if k & 4 == 0 { lo.z } else { hi.z })));
+        let (wlo, whi) = corners.fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(l, h), p| (l.min(p), h.max(p)));
+        // (not a level's whole wall or floor)
+        ((whi - wlo).max_element() < 4.0).then_some(crate::interact::UsableBounds(wlo, whi))
+    };
     for (i, a) in g.actors.iter().enumerate() {
         let used = vm_events(&g, i as u32).any(|c| c == "DisSeqEvent_Used" || c == "SeqEvent_Used");
         // (characters carry their own prompt: `talk_prompts`)
@@ -6393,26 +6404,81 @@ fn setup(
         // (one used with something carried: its own words, "Heretic's Brand", and what it asks)
         if let Some(t) = a.item_trigger.as_ref() {
             let label = t.text.trim().trim_start_matches("`GBA_Use`").trim();
-            commands.spawn((
+            let mut ec = commands.spawn((
                 Usable { actor: i as u32, label: if label.is_empty() { "Use".into() } else { label.to_string() }, name: t.name.clone() },
                 crate::interact::NeedsItem { item: t.item.clone(), quantity: t.quantity, remove: t.remove },
                 Transform::from_translation(Vec3::from(a.position)),
                 DespawnOnExit(GameState::InGame),
             ));
+            if let Some(b) = mesh_bounds(a) {
+                ec.insert(b);
+            }
             n += 1;
             continue;
         }
         // (the HUD's own word for it: `m_InteractionTexts[27]`, "Use")
-        commands.spawn((
+        let mut ec = commands.spawn((
             Usable { actor: i as u32, label: "Use".into(), name: String::new() },
             Transform::from_translation(Vec3::from(a.position) + Vec3::Y * 0.2),
             DespawnOnExit(GameState::InGame),
         ));
+        if let Some(b) = mesh_bounds(a) {
+            ec.insert(b);
+        }
+        if let Some(r) = required_item(&g, &level.scene, i as u32) {
+            info!("level scripts: {} wants {} carried", a.name, r.item);
+            ec.insert(r);
+        }
         n += 1;
     }
     if n > 0 {
         info!("{n} scripted usable objects");
     }
+}
+
+/// The abstract item a scripted usable wants carried, as its scripts tell it: what they do
+/// when it is used without it ("Used But Missing Abstract Item") asks after a story flag that
+/// taking a pickup sets (the slaughterhouse's time clock: the Time Card's flag). Its usable tweak
+/// (`m_pUsableObjTweaks`) isn't cooked for one with nothing to animate.
+fn required_item(g: &Graph, scene: &dhcook::format::Scene, actor: u32) -> Option<crate::interact::RequiresItem> {
+    let (ev, missing_out) = g.ops.iter().enumerate().find_map(|(i, o)| {
+        let ours = o.class == "DisSeqEvent_Used" && matches!(o.props.get("Originator"), Some(KVal::Actor(a)) if *a == actor);
+        let k = o.outputs.iter().position(|x| x.desc == "Used But Missing Abstract Item" && !x.links.is_empty())?;
+        ours.then_some((i, k))
+    })?;
+    // the story flags it asks after
+    let mut flags = HashSet::new();
+    let mut seen = HashSet::new();
+    let mut queue: VecDeque<(u32, u32)> = g.ops[ev].outputs[missing_out].links.iter().map(|l| (l.0, 0)).collect();
+    while let Some((i, depth)) = queue.pop_front() {
+        if depth > 6 || !seen.insert(i) {
+            continue;
+        }
+        let Some(o) = g.ops.get(i as usize) else { continue };
+        if o.class == "DisSeqCond_CheckStoryFlag" {
+            if let Some(KVal::Str(f)) = o.props.get("m_StoryFlag") {
+                flags.insert(f.clone());
+            }
+        }
+        queue.extend(o.outputs.iter().flat_map(|x| x.links.iter().map(move |l| (l.0, depth + 1))));
+    }
+    // the pickup whose taking sets one
+    for (i, o) in g.ops.iter().enumerate() {
+        if o.class != "DisSeqAct_SetStoryFlag" || !matches!(o.props.get("m_StoryFlag"), Some(KVal::Str(f)) if flags.contains(f)) {
+            continue;
+        }
+        for src in &g.ops {
+            if src.class != "DisSeqEvent_PickupPickedUp" || !src.outputs.iter().any(|x| x.links.iter().any(|l| l.0 == i as u32 && l.1 == 0)) {
+                continue;
+            }
+            let Some(KVal::Actor(a)) = src.props.get("Originator") else { continue };
+            let item = g.actors.get(*a as usize).and_then(|a| a.pickup).and_then(|p| scene.pickups.get(p as usize)).map(|p| p.item.clone()).filter(|s| !s.is_empty());
+            if let Some(item) = item {
+                return Some(crate::interact::RequiresItem { item, missing_out });
+            }
+        }
+    }
+    None
 }
 
 /// What leads to another map (a level's exits, mostly `DishonoredUsableObject` doors): its

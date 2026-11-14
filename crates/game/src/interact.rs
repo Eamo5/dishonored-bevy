@@ -387,6 +387,20 @@ pub struct Usable {
     pub name: String,
 }
 
+/// A scripted usable's mesh in the world (its bounds, level space): it is used with the
+/// crosshair on it, its own body no wall in the way (the slaughterhouse's time clock, whose
+/// origin lies within its cabinet, could never be used).
+#[derive(Component)]
+pub struct UsableBounds(pub Vec3, pub Vec3);
+
+/// A scripted usable that wants an abstract item carried (its usable tweak's), and its
+/// `DisSeqEvent_Used` output when used without it ("Used But Missing Abstract Item").
+#[derive(Component)]
+pub struct RequiresItem {
+    pub item: String,
+    pub missing_out: usize,
+}
+
 /// The player used something (reported to the level scripts).
 #[derive(Message, Clone, Debug)]
 pub enum Interaction {
@@ -669,7 +683,7 @@ fn find_focus(
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
     pickups: Query<(Entity, &Pickup, &Transform, Option<&crate::pickpocket::Pocket>)>,
     doors: Query<(Entity, &Door, &GlobalTransform, &LevelInstance)>,
-    usables: Query<(Entity, &Usable, &Transform, Option<&NeedsItem>)>,
+    usables: Query<(Entity, &Usable, &Transform, Option<&NeedsItem>, Option<&UsableBounds>)>,
     player: Query<&Player>,
     rapier: bevy_rapier3d::prelude::ReadRapierContext,
     level: Option<Res<LevelInfo>>,
@@ -823,7 +837,7 @@ fn find_focus(
             best = Some((score, e, text, say("name", "")));
         }
     }
-    for (e, u, t, need) in &usables {
+    for (e, u, t, need, bounds) in &usables {
         // (one used with something carried: only while on, and with it in hand)
         if let Some(n) = need {
             if !vm.as_ref().is_some_and(|v| v.item_on(u.actor)) || !n.carried(&stats) {
@@ -832,14 +846,20 @@ fn find_focus(
         }
         let to = t.translation - eye;
         let d = to.length();
-        if d > 2.4 {
-            continue;
-        }
-        let c = to.normalize_or_zero().dot(fwd);
-        if c < 0.75 || blocked(to) {
-            continue;
-        }
-        let score = d * (2.0 - c) + 0.1;
+        // (one with a mesh: the crosshair on it, nothing before it; else its place ahead)
+        let on_mesh = bounds.and_then(|b| ray_box(eye, fwd, b.0 - Vec3::splat(0.05), b.1 + Vec3::splat(0.05))).filter(|hit| *hit <= 2.4 && !blocked(fwd * hit.max(0.36)));
+        let score = if let Some(hit) = on_mesh {
+            hit + 0.1
+        } else {
+            if d > 2.4 {
+                continue;
+            }
+            let c = to.normalize_or_zero().dot(fwd);
+            if c < 0.75 || blocked(to) {
+                continue;
+            }
+            d * (2.0 - c) + 0.1
+        };
         if best.as_ref().map(|b| score < b.0).unwrap_or(true) {
             best = Some((score, e, format!("{} {}", crate::bindings::hint(crate::bindings::Act::Use), u.label), u.name.clone()));
         }
@@ -887,7 +907,7 @@ pub fn use_focus(
     mut noise: MessageWriter<Noise>,
     mut used: MessageWriter<Interaction>,
     mut pickups: Query<(&mut Pickup, Option<&Song>, Option<&ScriptActor>)>,
-    usables: Query<(&Usable, Option<&NeedsItem>)>,
+    usables: Query<(&Usable, Option<&NeedsItem>, Option<&RequiresItem>)>,
     mut doors: Query<(&mut Door, &GlobalTransform, &LevelInstance)>,
     player: Query<&Transform, With<Player>>,
     (level, mut timed, data, mut ambients, mut read, attrs): (Option<Res<LevelInfo>>, ResMut<crate::audio::TimedSounds>, Res<crate::gamedata::Data>, ResMut<crate::audio::Ambients>, MessageWriter<crate::journal::ReadNote>, Res<crate::gamedata::Attrs>),
@@ -1144,7 +1164,12 @@ pub fn use_focus(
         used.write(Interaction::Pickup(p.index, script_actor.map(|a| a.0)));
         return;
     }
-    if let Ok((u, need)) = usables.get(e) {
+    if let Ok((u, need, req)) = usables.get(e) {
+        // (used without the item it wants: its "Used But Missing Abstract Item")
+        if let Some(r) = req.filter(|r| stats.items.get(&r.item).copied().unwrap_or(0) == 0 && !stats.notes.contains(&r.item)) {
+            used.write(Interaction::UsableOut { actor: u.actor, out: r.missing_out });
+            return;
+        }
         // (what it was used with given up, if it takes it: `m_bRemoveFromInventory`)
         if let Some(n) = need {
             n.give_up(&mut stats);
