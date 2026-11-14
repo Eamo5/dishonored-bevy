@@ -376,8 +376,16 @@ fn apply_ai_fx(
                                 .routes
                                 .iter()
                                 .enumerate()
-                                .find_map(|(ri, r)| r.point_names.iter().position(|p| *p == s.name).map(|i| (ri, i)))
-                                .or_else(|| level.scene.routes.iter().enumerate().find(|(_, r)| r.name == s.name).map(|(ri, r)| (ri, nearest(&r.points, at))))
+                                // (of those of its name, the nearest: the sublevels repeat each
+                                // other's route and point names)
+                                .flat_map(|(ri, r)| r.point_names.iter().enumerate().filter(|(_, p)| **p == s.name).map(move |(i, _)| (ri, i)))
+                                .min_by(|a, b| {
+                                    let d = |x: &(usize, usize)| level.scene.routes[x.0].points.get(x.1).map_or(f32::MAX, |p| Vec3::from(*p).distance(at));
+                                    d(a).total_cmp(&d(b))
+                                })
+                                .or_else(|| {
+                                    level.scene.routes.iter().enumerate().filter(|(_, r)| r.name == s.name).min_by(|a, b| Vec3::from(a.1.at).distance(at).total_cmp(&Vec3::from(b.1.at).distance(at))).map(|(ri, r)| (ri, nearest(&r.points, at)))
+                                })
                                 .or_else(|| level.scene.routes.iter().enumerate().find_map(|(ri, r)| r.points.iter().position(|p| Vec3::from(*p).distance(at) < 0.5).map(|i| (ri, i))));
                             Some(match on_route {
                                 Some((ri, i)) => crate::patrol::First::OnRoute(ri, i),

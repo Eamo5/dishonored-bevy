@@ -8041,7 +8041,11 @@ pub fn apply_effects(
                     }
                 }
                 // a route switched on or off (`DishonoredRoute.OnToggle`: `m_bIsActive`)
-                if let Some(ri) = level.as_ref().and_then(|l| l.scene.routes.iter().position(|r| r.name == a.name)) {
+                // (of those of its name, the nearest: the sublevels repeat each other's names)
+                let at = Vec3::from(a.position);
+                if let Some(ri) = level.as_ref().and_then(|l| {
+                    l.scene.routes.iter().enumerate().filter(|(_, r)| r.name == a.name).min_by(|x, y| Vec3::from(x.1.at).distance(at).total_cmp(&Vec3::from(y.1.at).distance(at))).map(|(ri, _)| ri)
+                }) {
                     patrols.toggle(ri, on);
                     continue;
                 }

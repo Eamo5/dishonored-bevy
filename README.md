@@ -2456,6 +2456,10 @@ fields no longer show their stand-in "WW" behind the title.
   device's circuitry adds its own line under it, "Rewire Tools Remaining: 2" (its
   `m_FocusMessage`, the tools Corvo carries), and once its panel's box is open the circuitry
   inside takes the focus, not the box.
+- **Routes by name, the nearest**: the sublevels repeat each other's route and patrol point names
+  (Boyle's estate, the Distillery District, Tower Return, Kingsparrow, the Hound Pits); a route the
+  scripts switch, or a patrol started from a point they name, is the nearest of that name. Before,
+  the first of the name in the map was taken, wherever it was.
 - **Patrols** (`patrol.rs`), as the original walks them (`DisBehaviorPatrol`, `DisPatrolManager`,
   `DishonoredRoute`, decoded for this rewrite from the user's own Dishonored.exe, after roshan's
   r614/blink research on the routes' adoption):
