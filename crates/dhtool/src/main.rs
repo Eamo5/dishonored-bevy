@@ -1116,6 +1116,37 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Some("patch-post") => {
+            // dhtool patch-post <dir> [map...]: a cooked map's level grade (`post`) taken again
+            // from its persistent level's `WorldInfo.m_ArkDefaultPpSettings` found under <dir>
+            // (as patch-dialogs finds packages), by the cook's rules now
+            init_classes();
+            let found = package_index(&PathBuf::from(&args[2]))?;
+            let root = PathBuf::from("cache").join("maps");
+            for m in cooked_maps(&root, &args[3..])? {
+                let path = root.join(format!("{m}.json"));
+                let mut scene: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+                let Some(first) = scene["packages"].get(0).and_then(|v| v.as_str()).map(str::to_string) else { continue };
+                let Some(p) = found.get(&first.to_ascii_lowercase()) else { println!("{m}: {first} not found"); continue };
+                let pkg = upk::Package::from_bytes(first.clone(), p.clone(), std::fs::read(p)?)?;
+                let Some(wi) = pkg.exports_of_class("WorldInfo").next() else { println!("{m}: no WorldInfo"); continue };
+                let od = upk::read_object(&pkg, wi)?;
+                let Some(upk::Value::Struct(_, pp)) = od.props.get("m_ArkDefaultPpSettings") else { println!("{m}: no settings of its own"); continue };
+                let new = serde_json::to_value(dhcook::post_process(&upk::Props(pp.clone())))?;
+                let old = scene["post"].clone();
+                let changed: Vec<String> = new
+                    .as_object()
+                    .map(|o| o.iter().filter(|(k, v)| *k != "flags_read" && old.get(k.as_str()) != Some(v)).map(|(k, v)| format!("{k} {} -> {v}", old.get(k.as_str()).cloned().unwrap_or_default())).collect())
+                    .unwrap_or_default();
+                println!("{m}: {}", if changed.is_empty() { "as cooked".to_string() } else { changed.join(", ") });
+                if old != new {
+                    scene["post"] = new;
+                    let tmp = path.with_extension("json.tmp");
+                    std::fs::write(&tmp, serde_json::to_vec(&scene)?)?;
+                    std::fs::rename(&tmp, &path)?;
+                }
+            }
+        }
         Some("patch-dialogs") => {
             // dhtool patch-dialogs <dir> [map...]: a cooked map's conversations brought up to the
             // cook's, from the level packages found under <dir> (`<name>.upk`, or a TFC
@@ -1123,31 +1154,9 @@ fn main() -> Result<()> {
             // conversation whose steps are the cooked ones but for the ways that now go on as
             // another (`Goto` where an `End` was) takes them, and conversations they go on as
             // that weren't cooked are added. Nothing else of the map changes.
-            let dir = PathBuf::from(&args[2]);
-            let mut found: std::collections::HashMap<String, PathBuf> = Default::default();
-            let mut stack = vec![dir.clone()];
-            let mut files = Vec::new();
-            while let Some(d) = stack.pop() {
-                for e in std::fs::read_dir(&d)?.flatten() {
-                    let p = e.path();
-                    if p.is_dir() { stack.push(p); } else { files.push(p); }
-                }
-            }
-            files.sort();
-            for p in files {
-                let name = p.file_name().unwrap().to_string_lossy().to_string();
-                let stem = name.strip_suffix(".upkBackup").or_else(|| name.strip_suffix(".upk"));
-                if let Some(s) = stem { found.entry(s.to_ascii_lowercase()).or_insert(p); }
-            }
+            let found = package_index(&PathBuf::from(&args[2]))?;
             let root = PathBuf::from("cache").join("maps");
-            let maps: Vec<String> = if args.len() > 3 {
-                args[3..].iter().map(|m| m.to_ascii_lowercase()).collect()
-            } else {
-                let mut v: Vec<String> = std::fs::read_dir(&root)?.flatten().filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".json")).map(str::to_string)).collect();
-                v.sort();
-                v
-            };
-            for m in maps {
+            for m in cooked_maps(&root, &args[3..])? {
                 let path = root.join(format!("{m}.json"));
                 let mut scene: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
                 let names: Vec<String> = scene["packages"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
@@ -1507,6 +1516,37 @@ fn decode_rgba(f: upk::texture::PixelFormat, w: u32, h: u32, d: &[u8]) -> Vec<u8
         for (i, c) in d.iter().enumerate().take((w * h) as usize) { out[i*4..i*4+4].copy_from_slice(&[*c, *c, *c, 255]); }
     }
     out
+}
+
+/// The packages under a folder by lower-case name (`<name>.upk`, or TFC Installer's
+/// `<name>.upkBackup`): the first by sorted path, so its first backup set's.
+fn package_index(dir: &std::path::Path) -> Result<std::collections::HashMap<String, PathBuf>> {
+    let mut found: std::collections::HashMap<String, PathBuf> = Default::default();
+    let mut stack = vec![dir.to_path_buf()];
+    let mut files = Vec::new();
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d)?.flatten() {
+            let p = e.path();
+            if p.is_dir() { stack.push(p); } else { files.push(p); }
+        }
+    }
+    files.sort();
+    for p in files {
+        let name = p.file_name().unwrap().to_string_lossy().to_string();
+        let stem = name.strip_suffix(".upkBackup").or_else(|| name.strip_suffix(".upk"));
+        if let Some(s) = stem { found.entry(s.to_ascii_lowercase()).or_insert(p); }
+    }
+    Ok(found)
+}
+
+/// The cooked maps named (lower-case), else all of them.
+fn cooked_maps(root: &std::path::Path, named: &[String]) -> Result<Vec<String>> {
+    if !named.is_empty() {
+        return Ok(named.iter().map(|m| m.to_ascii_lowercase()).collect());
+    }
+    let mut v: Vec<String> = std::fs::read_dir(root)?.flatten().filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".json")).map(str::to_string)).collect();
+    v.sort();
+    Ok(v)
 }
 
 fn init_classes() {

@@ -39,6 +39,7 @@ cargo run --release -p dhtool -- cook-gamedata    # powers, charms, stores, text
 # (maps cooked before a change to the conversations: their conversations alone brought up to the
 #  cook's from the level packages under DIR, `<name>.upk` or TFC Installer's `.upkBackup`)
 cargo run --release -p dhtool -- patch-dialogs DIR [map...]
+cargo run --release -p dhtool -- patch-post DIR [map...]     # the same for the level's grade
 
 # 2. Play
 cargo run --release -p dishonored                      # main menu (New Game starts at Dunwall Tower)
@@ -2326,7 +2327,12 @@ fields no longer show their stand-in "WW" behind the title.
   (`DLC06_Timsh_Estate_P`), whose settings hold 100 % post-desaturation and a far blur from 0 m
   (values its flags must leave off: our reading, the original's estate being in colour and
   sharp), was drawn grey and blurred throughout. Maps cooked before keep their values but drop
-  the post-desaturation and a depth of field focused nowhere.
+  the post-desaturation and a depth of field focused nowhere; `dhtool patch-post DIR` takes a
+  cooked map's grade again from its persistent level's package. The levels' own flags bear the
+  defaults out: Daud's base, the Brigmore Witches' opening, Kingsparrow and the Tower's yard
+  turn the depth of field's override off (`m_bOverrideDOFParameters`) over far blurs (70 % from
+  3.5 m in the opening, all of it past 20 m in the base and the yard), which they drew before;
+  the slaughterhouse's streets leave their contrast unflagged, Kingsparrow its highlights.
 - **The scripts' clock in bent time** (`kismet.rs` `tick_dilated`): the level scripts' delays (`SeqAct_Delay`), timed ops, links' delays and playing matinees go at the world's pace, so Bend Time slows them and its second level stops them, and the wheel and slow motion slow them too; an op marked `m_bAlwaysOutOfBendTime` (a link's delay: the op it leads to) goes on at Corvo's own pace, as roshan's r614/blink research decoded the sequence's tick (0x00700740: the flagged ops' time is the player's, the others' the world's). The Outsider's scripted slowing in Daud's base, whose delays are all marked, plays out at his pace, while a scene's timed steps hold for the stopped world. Before, every script ran in real time through bent time: a scene's characters went on acting it out while the world around them stood still.
 - **Attachments** (`SeqAct_AttachToActor`): emitters ride the character or prop they're attached to; triggers attached to a character move with it.
 - **Level-script AI**: noises (`DisSeqAct_AINoise`, by loudness and context), distractions, suspicion, searches, guarding a place, scripted Whaler teleports, clearing and psychic attention, following someone, scripted shots (`DisSeqAct_AIShoot`: shots, accuracy), level swarms sent somewhere (`DisSeqAct_SetRatSwarmCustomBehavior`); an actor factory's "Spawned" is its spawn point (a PA speaker's announcements play from there); security circuitry panels ("[F] Rewire", with a Rewire Tool) rewire the nearest device of their kind. Brain flags (`DisSeqAct_AISetBrainFlags`, enabled, disabled or toggled: no attacking, no melee, no shooting, civilians who won't panic) hold the Flooded District assassins and others back; `DisSeqEvent_PlayerHeard` fires as a character hears Corvo, `DisSeqEvent_RatPossess` as he goes into a rat and out; `DisSeqAct_BodyShadowKill` marks characters whose bodies turn to ash as they die (Daud's Whalers).
@@ -4629,7 +4635,7 @@ Known outstanding gameplay gaps from source and original-data inspection:
 | --- | --- |
 | `crates/upk` | UE3 package reader: LZO/zlib chunks, name/import/export tables, tagged properties, static/skeletal meshes, textures (incl. `.tfc` bulk data) |
 | `crates/dhcook` | Cooker: levels and their streaming sublevels, materials and shaders, lightmaps, light volumes, NPC archetypes and factions, Kismet/Matinee, security devices, Wwise audio, Scaleform UI, game data |
-| `crates/dhtool` | CLI for cooking and inspecting packages (`cook`, `cook-all`, `cook-ui`, `cook-audio`, `cook-gamedata`, `patch-dialogs`, `list`, `props`, `findprop`, `swfdump`, `mat`, `graph`, ...) |
+| `crates/dhtool` | CLI for cooking and inspecting packages (`cook`, `cook-all`, `cook-ui`, `cook-audio`, `cook-gamedata`, `patch-dialogs`, `patch-post`, `list`, `props`, `findprop`, `swfdump`, `mat`, `graph`, ...) |
 | `crates/game` | The Bevy game |
 
 ### Cache format (`./cache`)

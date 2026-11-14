@@ -9623,7 +9623,7 @@ fn mesh_sockets(mesh: &Obj) -> Vec<SocketDef> {
 }
 
 /// Arkane post-process settings: the level only stores what differs from the defaults.
-fn post_process(pp: &Props) -> PostProcess {
+pub fn post_process(pp: &Props) -> PostProcess {
     let mut out = PostProcess::default();
     let sub = |p: &Props, n: &str| match p.get(n) {
         Some(Value::Struct(_, s)) => Props(s.clone()),
