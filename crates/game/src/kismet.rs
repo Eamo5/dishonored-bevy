@@ -5079,7 +5079,13 @@ impl Vm {
             let busy = self.busy(c.0);
             let changed = self.conv_busy.insert(c.0, busy) != Some(busy);
             if (c.3 < steps.len() || c.4 > 0.0) && !self.conv_ending.contains(&c.0) {
+                // (one playing out its scene isn't broken off by the scene's own doings: the
+                // Brigmore Witches' opening puts its speaking assassin to sleep as Corvo comes in,
+                // and before, its "IntroFinishedLow" never came and the game stood still there)
+                // (its scene playing, or just played out and not yet gone on from)
+                let in_scene = self.conv_soiree.contains_key(&c.0);
                 let reason = match busy.filter(|_| changed) {
+                    Some(Busy::Down) if in_scene => None,
                     Some(Busy::Down) => Some("death"),
                     Some(Busy::Fighting) => Some("behaviour change"),
                     Some(Busy::Noticing) if !cv.blocking || cv.stop_for_notice => Some("behaviour change"),
@@ -5482,8 +5488,9 @@ impl Vm {
                                 .iter()
                                 .enumerate()
                                 .filter_map(|(i, (name, angle, _))| {
-                                    let a = g.actors.iter().find(|a| a.name == *name)?;
-                                    let at = a.spawner.and_then(|s| self.npc_pos.get(&s).copied()).unwrap_or(Vec3::from(a.position));
+                                    // (of its name, the nearest: the sublevels repeat names)
+                                    let place = |a: &dhcook::format::KActor| a.spawner.and_then(|s| self.npc_pos.get(&s).copied()).unwrap_or(Vec3::from(a.position));
+                                    let at = g.actors.iter().filter(|a| a.name == *name).map(place).min_by(|x, y| x.distance(eye).total_cmp(&y.distance(eye)))?;
                                     let off = (at - eye).normalize_or_zero().dot(fwd).clamp(-1.0, 1.0).acos().to_degrees();
                                     (off < *angle).then_some((i, off))
                                 })

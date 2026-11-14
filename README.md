@@ -2611,7 +2611,11 @@ fields no longer show their stand-in "WW" behind the title.
   (`m_bPlayerMustBeNear`, `m_fPlayerNearRadius`, 5 m by the class) doesn't start farther off, and
   once a conversation, unless it holds the player (`m_bIsBlocking_Player`), the player walking
   away takes its "Player Walked Away" way, or breaks it off. One marked
-  `m_bNotWhenPlayerIsInCombat` doesn't start while Corvo fights.
+  `m_bNotWhenPlayerIsInCombat` doesn't start while Corvo fights. A conversation playing its own
+  scene (a matinee step) isn't broken off by its speaker going down in it: The Brigmore Witches'
+  opening ("IntroLow") puts its speaking assassin to sleep as Corvo walks in, and before, the
+  conversation broke off there, its "IntroFinishedLow" never came, and the fight with Corvo never
+  began.
   The approach hooks (`DisConv_Hook_Distance`: `DDH_PLAYER_APPROACHES` and its `_RADIAL` form,
   which used to go unheard) fire their close, medium or far way as the player comes within
   its distance of the speaker (2, 5 and 10 m by the class; the Hound Pits' 4 m), once until
@@ -2621,7 +2625,8 @@ fields no longer show their stand-in "WW" behind the title.
   the Flooded District's gate) once the player, within the hook's `m_fLookAtRadius` of a
   speaker across the ground, has kept one of its `m_LookAtTargets` within its angle of the view
   (the nearest the view's line counting) for its time, as roshan's r614/blink research decoded
-  them.
+  them. A target named by more than one actor (the sublevels repeat names) is the one of that
+  name nearest the eye; before, the first in the map was taken, wherever it stood.
   The trees' story-flag and conversation-had nodes give their negative output first (a flag
   unset, a conversation not yet had). A one-shot dialogue actor's lines are said by the
   character its speaker is attached to (`m_MeSpeaker.m_pAttachedActor`, a spawner: Havelock,
