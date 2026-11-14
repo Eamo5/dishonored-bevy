@@ -3385,6 +3385,10 @@ against the install's own data where it carries them, then implemented independe
   800 uu/s `JumpZ` rises 1.07 m and lands after 0.533 s. A fall hurts from
   `MaxSpeedBeforeFallingDamage` (22.5 m/s) and kills at `MaxSpeedBeforeFallingDeath` (29 m/s), in
   proportion between (Agility raises both). Agility's power jump uses the original numbers unscaled.
+  Below the persistent level's `WorldInfo.KillZ` a thing has fallen out of the world; a map that
+  leaves it unset (most do) has the class's, -262143 uu, about 2.6 km down. Before, such a map
+  took 100 m, and the Flooded District's opening, which puts Corvo 408 m down in the Outsider's
+  void to walk to him, sent him straight back to its start, so the mission could not begin.
   Leaving the ground in a jump plays the arms' take-off (`Sword_Ready_JumpIn`), then the leap;
   empty-handed, `Empty_Sneak_Jump` and its landing `Empty_Sneak_JumpLandSmall` (the empty set's
   only jump).

@@ -36,6 +36,10 @@ use xform::*;
 
 pub const DEFAULT_GAME_DIR: &str = r"S:\Games\SteamLibrary\steamapps\common\Dishonored";
 
+/// `WorldInfo.KillZ`'s class default, -262143 uu (UE3's half world), in metres: the fall-out
+/// height of a map whose levels leave it unset.
+pub const KILL_Z_DEFAULT: f32 = -2621.43;
+
 /// Daud's story packs: the maps' prefix, the pack's folder, his player package, his pawn
 /// tweak, his first-person arms, the pack's whole-game package, its default faction, its
 /// attributes' class and its interface strings (`DLCnn_Twk_UI.int`, the HUD section).
@@ -405,7 +409,7 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
         assets,
         root: root.to_path_buf(),
         opts,
-        scene: Scene { version: SCENE_VERSION, name: map.to_string(), kill_y: -100.0, ..Default::default() },
+        scene: Scene { version: SCENE_VERSION, name: map.to_string(), kill_y: f32::MAX, ..Default::default() },
         mesh_ids: HashMap::new(),
         mat_ids: HashMap::new(),
         tex_ids: HashMap::new(),
@@ -688,6 +692,10 @@ pub fn cook_map(assets: &Assets, map: &str, root: &Path, opts: CookOptions, prog
         log::info!("{map}: {} facial animations, {} faces", c.facefx.anims.len(), c.facefx.actors.len());
     }
     progress(0.98, "Writing scene");
+    // (no level set its `KillZ`: the class's)
+    if c.scene.kill_y == f32::MAX {
+        c.scene.kill_y = KILL_Z_DEFAULT;
+    }
     let path = scene_path(root, map);
     let json = serde_json::to_vec(&c.scene)?;
     write_atomic(&path, &json)?;

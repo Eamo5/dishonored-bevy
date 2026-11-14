@@ -6456,7 +6456,7 @@ pub(crate) fn npc_move(
     let engage_turn = data.pawn("engage.m_fRotationSpeed", 600.0).to_radians();
     let (dt_world, dt_own) = (time.delta_secs().min(0.05) * tc.world_scale(), time.delta_secs().min(0.05) * tc.own_scale());
     // (fallen out of the world: below the level's kill height, `WorldInfo.KillZ`)
-    let kill_y = level.as_ref().map(|l| l.scene.kill_y).unwrap_or(-200.0);
+    let kill_y = level.as_ref().map(|l| l.kill_height()).unwrap_or(dhcook::KILL_Z_DEFAULT);
     let ppos = player.single().map(|t| t.translation).ok();
     let ctx = rapier.single().ok();
     let ground_filter = QueryFilter::default().groups(CollisionGroups::new(Group::ALL, crate::level::GROUP_WORLD));

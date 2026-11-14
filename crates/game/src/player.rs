@@ -1118,7 +1118,7 @@ fn player_move(
     }
 
     // fell out of the world
-    let kill_y = level.as_ref().map(|l| l.scene.kill_y).unwrap_or(-100.0);
+    let kill_y = level.as_ref().map(|l| l.kill_height()).unwrap_or(dhcook::KILL_Z_DEFAULT);
     if t.translation.y < kill_y {
         warn!("player fell below kill height, respawning");
         t.translation = p.spawn;

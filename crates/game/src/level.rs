@@ -41,6 +41,20 @@ pub struct LevelInfo {
     pub scene: Scene,
 }
 
+impl LevelInfo {
+    /// The height below which a thing has fallen out of the world (m): the persistent level's
+    /// `WorldInfo.KillZ`, else the class's, -262143 uu. (Caches cooked before the cook took the
+    /// class's hold -100 m for a map that leaves it unset, as most do: the Flooded District's
+    /// opening put Corvo 408 m down in the Outsider's void and he was sent back to its start.)
+    pub fn kill_height(&self) -> f32 {
+        if self.scene.kill_y == -100.0 {
+            dhcook::KILL_Z_DEFAULT
+        } else {
+            self.scene.kill_y
+        }
+    }
+}
+
 /// Pre-placed corpses (plague victims, previous fights) rather than live characters.
 /// A type of the dead, by its name or one it derives from (`DLC06_PwnBody_Eaten` from
 /// `PwnDead_Base`: the Knife of Dunwall's slaughterhouse's half-eaten bodies, which stood in their

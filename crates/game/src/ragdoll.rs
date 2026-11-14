@@ -572,7 +572,7 @@ fn pose_ragdolls(
 ) {
     let running = cfg.iter().next().is_none_or(|c| c.physics_pipeline_active) && tc.world_scale() > 0.0;
     let dt = time.delta_secs().min(0.05) * tc.world_scale().clamp(0.0, 1.0);
-    let kill_y = level.as_ref().map(|l| l.scene.kill_y).unwrap_or(-200.0);
+    let kill_y = level.as_ref().map(|l| l.kill_height()).unwrap_or(dhcook::KILL_Z_DEFAULT);
     let mut world: Vec<Option<Transform>> = Vec::new();
     for (e, mut npc, mut t, rig, children, mut rd, anim) in &mut npcs {
         // the body bones' world poses
