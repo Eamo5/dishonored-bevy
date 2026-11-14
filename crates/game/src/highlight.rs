@@ -64,7 +64,7 @@ fn highlight(
     level: Option<Res<LevelInfo>>,
     (mut look, mut mats): (ResMut<HighlightLook>, ResMut<Assets<HighlightMaterial>>),
     (vm, extra): (Option<Res<crate::kismet::Vm>>, Res<ExtraHighlight>),
-    (pickups, usables, instances): (Query<&Pickup>, Query<&Usable>, Query<(Entity, &LevelInstance)>),
+    (pickups, usables, instances, doors): (Query<&Pickup>, Query<&Usable>, Query<(Entity, &LevelInstance)>, Query<(), With<crate::interact::Door>>),
     meshes: Query<(&Mesh3d, Option<&bevy::mesh::skinning::SkinnedMesh>), Without<HighlightPart>>,
     children: Query<&Children>,
     parts: Query<Entity, With<HighlightPart>>,
@@ -91,8 +91,13 @@ fn highlight(
             }
         }
     };
-    // (the thing in focus: as `PSI_HUD_bShowHighlight` has it; the scripts' always)
-    if let Some(f) = focus.1.filter(|_| focus.0 && settings.focus_highlight) {
+    // (the thing in focus: as `PSI_HUD_bShowHighlight` has it; the scripts' always. Not a door:
+    // the rim is drawn only for an interactable whose interactable tweak names a highlight
+    // material, `m_HighLightMaterial`, none by the class default, as roshan's r614/blink research
+    // read it; the pickups', keys' and usable objects' do. The doors' isn't cooked: our reading is
+    // that they name none, as the original rims no door. Before, a door was rimmed too, and one
+    // swung open and seen edge on turned a solid glaring yellow)
+    if let Some(f) = focus.1.filter(|f| focus.0 && settings.focus_highlight && !doors.contains(*f)) {
         if let Ok(p) = pickups.get(f) {
             want.extend(p.entities.iter().copied());
         } else if let Ok(u) = usables.get(f) {

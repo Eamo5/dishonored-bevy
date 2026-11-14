@@ -2825,8 +2825,8 @@ fields no longer show their stand-in "WW" behind the title.
   original `Empty_Beg_Kneeling_*` clips), and the scripts put things in pockets for Corvo to
   steal (`DisSeqAct_SpawnStealable`: the Flooded District's elixir pouches, Granny Rags' sewer
   key).
-- **The golden rim**: what Corvo can use, in reach and looked at (a pickup, a door, a lever,
-  a valve), is drawn over with the interactables' highlight material. A pickup is in focus with
+- **The golden rim**: what Corvo can use, in reach and looked at (a pickup, a lever, a valve),
+  is drawn over with the interactables' highlight material. A pickup is in focus with
   the crosshair on it (its meshes' bounds, a few centimetres more for the small ones) within
   reach, and not behind a wall, as the original traces the crosshair against the item (U-112 in
   roshan's r614/blink research); before, anything within 35 degrees of the view was, so the bread
@@ -2835,7 +2835,12 @@ fields no longer show their stand-in "WW" behind the title.
   instance's colour, power and visibility; its shader map has no vertex shader to pair the
   original pixel shader with, so `highlight.wgsl` does its math), as the original's highlight
   meshes are; the level scripts highlight things of their own
-  (`DisSeqAct_Highlight`).
+  (`DisSeqAct_Highlight`). Doors aren't rimmed: an interactable is drawn so only when its
+  interactable tweak names a highlight material (`m_HighLightMaterial`, none by
+  `DisTweaks_InteractableInterface`'s default, as roshan's r614/blink research read it; the
+  pickups', keys' and usable objects' do), and the doors' isn't cooked, so this is our reading.
+  Before, a focused door was rimmed, and one swung open and seen edge on turned a solid, glaring
+  yellow (the Hound Pits' and the Lighthouse's metal doors).
 - **The Hound Pits remember**: what Corvo takes there stays taken on his later visits (the
   hub's level state, `DisSeqAct_SaveLevelState`): its pickups by actor and place across the
   hub's map variants, kept in the campaign and in saves.
