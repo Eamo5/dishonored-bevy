@@ -1604,7 +1604,11 @@ fields no longer show their stand-in "WW" behind the title.
   are none (`m_bConstantSpeedAtSurface`). Before, he glided at one speed in time with nothing.
   (A scripted run no longer saves the settings, `DH_SAVE_SETTINGS` to keep them: a test of the
   options menu had left Forward bound to the down arrow for the runs after it.)
-- **Carrying bodies**: the unconscious and the dead ([F] Pick up), carried over the shoulder
+- **Carrying bodies**: the unconscious and the dead (Hold [F] Carry: [Use] held 0.3 s on the body,
+  the use state's hold for an interactable's alternative use, `DisTweaks_PlayerInput`'s
+  `m_fAltInteractActivateTime`, as roshan's r614/blink research decoded it; before, a tap lifted
+  it, though the line said to hold, and a tap meant for its pocket could lift it instead; one held
+  on from a drop lifts nothing), carried over the shoulder
   with the original carry clips (`Ply_Empty_CarryCorpse_as`; the body plays the matching
   `Corpses_CarryCorpse_*_Slave` clips in step, drawn with the view model), slower
   (`GroundSpeedCarryingCorpse`) and without sprinting or the sword; [F] or attacking puts the

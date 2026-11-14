@@ -1,4 +1,4 @@
-//! Carrying bodies: Corvo picks up the unconscious and the dead ([F]), carries them over his
+//! Carrying bodies: Corvo picks up the unconscious and the dead ([F] held), carries them over his
 //! shoulder (`Ply_Empty_CarryCorpse_as`, the body playing the matching `Corpses_CarryCorpse_*
 //! _Slave` clips in step), and drops them where he stands ([F], or attack: the original's
 //! carry has no throw, as roshan's r614/blink research found it). A won chokehold's body is
@@ -127,6 +127,9 @@ pub(crate) fn lay_down(anim: &mut Animator) {
     }
 }
 
+/// How long [Use] is held on a body to lift it (s: `m_fAltInteractActivateTime`).
+const ALT_INTERACT_HOLD: f32 = 0.3;
+
 /// Bodies whose animations include being carried.
 pub fn can_carry(anim: &Animator) -> bool {
     anim.lib.find("Corpses_CarryCorpse_Idle_Slave").is_some()
@@ -162,7 +165,7 @@ fn carry_input(
     visuals: Query<(&Transform, &Children), With<NpcVisual>>,
     parts: Query<(&SkinnedMesh, &MeshTag), With<Mesh3d>>,
     mut vis: Query<&mut Visibility>,
-    (mut used, mut releases): (MessageWriter<Interaction>, Local<(String, std::collections::HashMap<crate::anim::ClipId, f32>)>),
+    (mut used, mut releases, mut held): (MessageWriter<Interaction>, Local<(String, std::collections::HashMap<crate::anim::ClipId, f32>)>, Local<(Option<Entity>, f32)>),
     (arms, mut anims, npc_anims, rigs, joints): (Query<&Animator, With<ArmsRoot>>, Query<&mut Animator, Without<ArmsRoot>>, Query<&crate::npc::NpcAnim>, Query<&crate::npc::NpcRig>, Query<&GlobalTransform>),
 ) {
     if paused.0 { return; }
@@ -200,7 +203,21 @@ fn carry_input(
                 choked
             } else if pulled.is_some() {
                 pulled
-            } else { focus.1.filter(|_| bind.just_pressed(crate::bindings::Act::Use)) };
+            } else {
+                // (a body is lifted by holding [Use] on it, as its crosshair line says,
+                // `DUI_Crosshair_Carry` "Hold [Use] Carry": the use state runs the interactable's
+                // AltInteract for a hold of `DisTweaks_PlayerInput.m_fAltInteractActivateTime`,
+                // 0.3 s, as roshan's r614/blink research decoded it; a tap is its Interact)
+                // (counted from a press on it: one held on from a drop lifts nothing)
+                if bind.just_pressed(crate::bindings::Act::Use) {
+                    *held = (focus.1, 0.0);
+                } else if bind.pressed(crate::bindings::Act::Use) && held.0.is_some() && held.0 == focus.1 {
+                    held.1 += dt;
+                } else {
+                    *held = (None, 0.0);
+                }
+                held.0.filter(|_| held.1 >= ALT_INTERACT_HOLD).inspect(|_| *held = (None, 0.0))
+            };
             let Some(e) = target else { return };
             let Ok((_, npc, from, children)) = npcs.get(e) else { return };
             if !npc.is_down() || p.locked || stats.dead {
