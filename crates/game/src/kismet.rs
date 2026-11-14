@@ -354,6 +354,30 @@ mod flow_tests {
         assert!(vm.queue.iter().any(|q| q.0 == 1), "let go, it plays out");
     }
 
+    /// Giving his things back goes on past "Out (Instant)": "Finished (After Unequip)" with a
+    /// backup, "No Backup Found" without.
+    #[test]
+    fn restoring_the_inventory_finishes() {
+        let restore = || KOp {
+            class: "DisSeqAct_RestoreInventoryFromBackup".into(),
+            inputs: vec![KInput { desc: "In".into(), ..Default::default() }],
+            outputs: ["Out (Instant)", "Finished (After Unequip)", "No Backup Found"].iter().enumerate().map(|(k, d)| KOutput { desc: d.to_string(), links: vec![(1 + k as u32, 0, 0.0)], linked: None }).collect(),
+            ..Default::default()
+        };
+        let mut g = Graph::default();
+        g.ops.push(restore());
+        for _ in 0..3 {
+            g.ops.push(KOp { class: "SeqAct_Log".into(), inputs: vec![KInput { desc: "In".into(), ..Default::default() }], ..Default::default() });
+        }
+        let mut vm = Vm::new(Arc::new(g), &[]);
+        vm.has_stash = true;
+        vm.exec(0, 0);
+        assert_eq!(vm.queue.drain(..).map(|q| q.0).collect::<Vec<_>>(), [1, 2]);
+        assert!(!vm.has_stash);
+        vm.exec(0, 0);
+        assert_eq!(vm.queue.drain(..).map(|q| q.0).collect::<Vec<_>>(), [1, 3]);
+    }
+
     /// An empty object list gives no object: a loop taking entries at random until none is left
     /// ends.
     #[test]
@@ -1169,6 +1193,8 @@ pub struct Vm {
     /// Corvo's things put away (`DisSeqAct_BackupAndClearInventory`: true, and whether his
     /// upgrades too) and given back (`DisSeqAct_RestoreInventoryFromBackup`: false)
     pub inventory_ops: Vec<(bool, bool)>,
+    /// whether his things are put away now (kept in step with his stash each frame)
+    pub has_stash: bool,
     /// the journal closes seen, and Corvo's mana last frame (for their events)
     journal_viewed: u32,
     mana_was: Option<f32>,
@@ -1514,6 +1540,7 @@ impl Vm {
             awareness_shown: HashSet::new(),
             open_journal: None,
             inventory_ops: Vec::new(),
+            has_stash: false,
             journal_viewed: 0,
             mana_was: None,
             task_events: HashSet::new(),
@@ -3119,6 +3146,7 @@ impl Vm {
             "DisSeqAct_BackupAndClearInventory" => {
                 // Corvo's things put away (the dream: all but his coins)
                 self.inventory_ops.push((true, self.pb(op, "m_bAlsoApplyToUpgrades").unwrap_or(false)));
+                self.has_stash = true;
                 // Out, then "Finished (After Unequip)" once his hands are empty (the Hound Pits'
                 // trip to the Flooded District goes on from it: found by roshan's r614/blink
                 // research)
@@ -3126,8 +3154,17 @@ impl Vm {
                 self.fire(op, 1);
             }
             "DisSeqAct_RestoreInventoryFromBackup" => {
+                // "Out (Instant)", then "Finished (After Unequip)" with his things given back, or
+                // "No Backup Found" (before, only the first: Daud's gear in The Brigmore Witches'
+                // opening, Corvo's in the Flooded District's refinery and the Outsider's dream's end
+                // went no further)
+                let had = self.has_stash;
                 self.inventory_ops.push((false, false));
+                self.has_stash = false;
                 self.fire(op, 0);
+                if let Some(i) = self.output_index(op, if had { "Finished (After Unequip)" } else { "No Backup Found" }) {
+                    self.fire(op, i);
+                }
             }
             "SeqAct_ToggleHUD" => {
                 // show (0) / hide (1) / toggle (2) the whole HUD

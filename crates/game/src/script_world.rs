@@ -938,6 +938,9 @@ fn script_time(
     for (put_away, upgrades) in std::mem::take(&mut vm.inventory_ops) {
         stats.stash(put_away, upgrades, &data, settings.difficulty);
     }
+    if vm.has_stash != stats.stash.is_some() {
+        vm.has_stash = stats.stash.is_some();
+    }
     let capacities = data.ammo_capacities(&stats, settings.difficulty);
     for (how, list) in std::mem::take(&mut vm.ammo_mods) {
         for (ty, n) in list {

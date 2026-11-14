@@ -2827,7 +2827,10 @@ fields no longer show their stand-in "WW" behind the title.
   the jaw with their loudness (envelopes cooked by `cook-audio` into `audio/envelopes.bin`).
 - **The Outsider's dream's tutorial steps**: the scripts put Corvo's things away
   (`DisSeqAct_BackupAndClearInventory`: all but his coins, with his upgrades) and give them
-  back, open the journal on its powers page after the rune (`DisSeqAct_OpenJournal`) and go on
+  back (`DisSeqAct_RestoreInventoryFromBackup`: "Out (Instant)", then "Finished (After Unequip)",
+  or "No Backup Found" when nothing was put away; before, only the first came, and what the
+  scripts do once the gear is back never happened: the Flooded District's refinery, the
+  Brigmore Witches' opening, where Daud's gear left him in a cinematic for good), open the journal on its powers page after the rune (`DisSeqAct_OpenJournal`) and go on
   once it has been seen and closed (`DisSeqEvent_JournalViewed`), wait on his mana
   (`DisSeqEvent_PlayerManaThreshold`) and hide the whole HUD (`SeqAct_ToggleHUD`). A power used
   (and one put in hand: `DisSeqEvent_PowerEquipped`) sets off `DisSeqEvent_PowerUsed`'s output for that power at its level ("Blink 1",
