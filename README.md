@@ -2560,7 +2560,11 @@ fields no longer show their stand-in "WW" behind the title.
 - **Dialogue**: the original dialogue trees (the one-shot dialogue actors' and each
   character's, through its voice): Kismet inputs, the player approaching, lingering or
   talking to a character (their name over the HUD's "[F] Talk", `m_InteractionTexts[29]`) enter through the trees' hooks, whose
-  story-flag, conversation-already-had, time-limit and branch nodes pick what is said; lines
+  story-flag, conversation-already-had, time-limit and branch nodes pick what is said (a
+  character talked to answers from the one-shot it speaks for, `m_MeSpeaker`, when that has
+  something to say, else from its own voice's tree: before, one with a voice never spoke its
+  one-shot's words, and Samuel at the Hound Pits' dock gossiped instead of offering to set out,
+  so no mission could be left from the hub); lines
   are voiced from the speaker and subtitled, and conversations set
   their story flags and raise their Kismet outputs. Each sublevel's dialogue actors have their
   own trees: the sublevels' `PersistentLevel`s repeat each other's names

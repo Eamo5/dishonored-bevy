@@ -2089,28 +2089,46 @@ impl Vm {
 
     /// Whether the character `actor` answers being talked to (its tree's "player used" hook).
     pub fn talkable(&self, actor: u32) -> bool {
-        let actor = self.pawn_oneshot.get(&actor).copied().filter(|o| self.speaker_tree.contains_key(o) && !self.speaker_tree.contains_key(&actor)).unwrap_or(actor);
-        let Some(t) = self.speaker_tree.get(&actor).and_then(|t| self.g.dialog_trees.get(*t)) else { return false };
-        !self.convs.iter().any(|c| c.0 == actor)
-            && t.nodes.iter().any(|n| matches!(&n.kind, dhcook::format::KDialogNodeKind::Hook { hook, .. } if hook == "DDH_PLAYER_USED") && n.outs.iter().any(|o| *o >= 0))
+        self.talkers(actor).into_iter().any(|actor| {
+            let Some(t) = self.speaker_tree.get(&actor).and_then(|t| self.g.dialog_trees.get(*t)) else { return false };
+            !self.convs.iter().any(|c| c.0 == actor)
+                && t.nodes.iter().any(|n| matches!(&n.kind, dhcook::format::KDialogNodeKind::Hook { hook, .. } if hook == "DDH_PLAYER_USED") && n.outs.iter().any(|o| *o >= 0))
+        })
     }
 
-    /// The player talks to `actor`: its tree's "player used" hook picks what it says.
+    /// Whose trees answer a character talked to: the one-shot dialogue it speaks for
+    /// (`m_MeSpeaker`: the level's own words for the moment, Samuel's "Ready to go?" at the Hound
+    /// Pits' dock), then its own (its voice's: what it says any time).
+    fn talkers(&self, actor: u32) -> Vec<u32> {
+        let mut out = Vec::new();
+        if let Some(o) = self.pawn_oneshot.get(&actor).copied().filter(|o| self.speaker_tree.contains_key(o)) {
+            out.push(o);
+        }
+        if self.speaker_tree.contains_key(&actor) {
+            out.push(actor);
+        }
+        out
+    }
+
+    /// The player talks to `actor`: the "player used" hook of the first of its trees with
+    /// something to say picks it (before, a character with a voice of its own never spoke its
+    /// one-shot's words: Samuel gossiped at the dock and never offered to set out).
     pub fn talk(&mut self, actor: u32) -> bool {
-        let actor = self.pawn_oneshot.get(&actor).copied().filter(|o| self.speaker_tree.contains_key(o) && !self.speaker_tree.contains_key(&actor)).unwrap_or(actor);
-        let Some(tree) = self.speaker_tree.get(&actor).copied() else { return false };
         let g = self.g.clone();
-        let Some(t) = g.dialog_trees.get(tree) else { return false };
-        self.walk_speaker = Some(actor);
-        for (ni, n) in t.nodes.iter().enumerate() {
-            if matches!(&n.kind, dhcook::format::KDialogNodeKind::Hook { hook, .. } if hook == "DDH_PLAYER_USED") {
-                if let Some(c) = self.walk_tree(tree, ni as i32, 0) {
-                    self.start_conversation(actor, tree, c);
-                    return true;
-                }
-                if self.trace {
-                    let path: Vec<String> = self.trace_walk(tree, ni as i32, 0);
-                    info!("kismet: talk to {} ({}): nothing to say along {:?}", actor, t.path, path);
+        for actor in self.talkers(actor) {
+            let Some(tree) = self.speaker_tree.get(&actor).copied() else { continue };
+            let Some(t) = g.dialog_trees.get(tree) else { continue };
+            self.walk_speaker = Some(actor);
+            for (ni, n) in t.nodes.iter().enumerate() {
+                if matches!(&n.kind, dhcook::format::KDialogNodeKind::Hook { hook, .. } if hook == "DDH_PLAYER_USED") {
+                    if let Some(c) = self.walk_tree(tree, ni as i32, 0) {
+                        self.start_conversation(actor, tree, c);
+                        return true;
+                    }
+                    if self.trace {
+                        let path: Vec<String> = self.trace_walk(tree, ni as i32, 0);
+                        info!("kismet: talk to {} ({}): nothing to say along {:?}", actor, t.path, path);
+                    }
                 }
             }
         }
