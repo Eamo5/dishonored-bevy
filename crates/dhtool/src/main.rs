@@ -1185,6 +1185,17 @@ fn main() -> Result<()> {
                     }) else { continue };
                     at = k + 1;
                     matched += 1;
+                    // (forced: its graph's nodes too, the same graph cooked by the cook's rules now)
+                    if force {
+                        let nodes = serde_json::to_value(&t.nodes)?;
+                        if trees[k]["nodes"].as_array().map(|a| a.len()) == nodes.as_array().map(|a| a.len()) && trees[k]["nodes"] != nodes {
+                            let old: Vec<dhcook::format::KDialogNode> = serde_json::from_value(trees[k]["nodes"].clone()).unwrap_or_default();
+                            if serde_json::to_value(&old)? != nodes {
+                                trees[k]["nodes"] = nodes;
+                                patched += 1;
+                            }
+                        }
+                    }
                     let convs = trees[k]["conversations"].as_array_mut().unwrap();
                     let had = convs.len();
                     let mut ok = true;

@@ -663,6 +663,27 @@ mod conversation_tests {
         assert!(vm.convs.is_empty());
     }
 
+    /// A label passed is remembered: a conversation checking it goes the other way the next time.
+    #[test]
+    fn a_label_passed_is_remembered() {
+        let mut vm = speaker(None);
+        let seen = KBranch::Seen { player: false, conv: "Talk".into(), label: "told".into() };
+        let cv = &mut Arc::get_mut(&mut vm.g).unwrap().dialog_trees[0].conversations[0];
+        cv.path = "Talk".into();
+        cv.steps = vec![S::Branch(seen, vec![Some(1), Some(4)]), S::Label("told".into()), S::Line("story".into(), 0), S::End, S::Line("as I said".into(), 0), S::End];
+        vm.start_conversation(0, 0, 0);
+        for _ in 0..3 {
+            vm.tick_conversations(60.0);
+        }
+        vm.start_conversation(0, 0, 0);
+        for _ in 0..3 {
+            vm.tick_conversations(60.0);
+        }
+        assert_eq!(said(&mut vm), ["story", "as I said"]);
+        // (and the player's own memory of it, for another speaker's check)
+        assert!(vm.condition(&KBranch::Seen { player: true, conv: "Talk".into(), label: "told".into() }, Some(7)) == Some(1));
+    }
+
     /// A conversation holds the player's view on its speaker until it lets go or ends.
     #[test]
     fn a_conversation_holds_the_view_on_its_speaker() {
@@ -980,6 +1001,9 @@ pub struct VmSave {
     /// conversations already played (for those that play once)
     #[serde(default)]
     fired_convs: Vec<String>,
+    /// the conversations' labels passed (`Vm::labels`)
+    #[serde(default)]
+    labels: Vec<(u32, String, String)>,
     /// streamed sublevels not loaded
     #[serde(default)]
     inert: Option<Vec<(u32, u32, String)>>,
@@ -1171,6 +1195,14 @@ pub struct Vm {
     walked_away: HashSet<u32>,
     /// the player's view held by a conversation (`DisConv_PlayerLookAtSpeaker`, `_Actor`)
     pub conv_look: Option<ConvLook>,
+    /// the conversations' labels passed, by who remembers them (a dialogue actor, the player
+    /// `u32::MAX`), the conversation and the label (`DisConv_SeenDialogLabel`)
+    labels: HashSet<(u32, String, String)>,
+    /// the kinds of thing Corvo holds (`DisConv_HasInventoryItemEquipped`: class names)
+    pub equipped: Vec<String>,
+    /// the speaking characters' pawn tweaks, their own first then those they derive from
+    /// (`DisConv_SpeakerHasTweaks`)
+    pub speaker_tweaks: HashMap<u32, Vec<String>>,
     /// speakers and the tree they answer with (for the player approaching / loitering),
     /// their positions, and their approach and loiter hooks' watch (by speaker and node)
     speaker_tree: HashMap<u32, usize>,
@@ -1566,6 +1598,9 @@ impl Vm {
             conv_soiree: HashMap::new(),
             walked_away: HashSet::new(),
             conv_look: None,
+            labels: HashSet::new(),
+            equipped: Vec::new(),
+            speaker_tweaks: HashMap::new(),
             // one-shot dialogue actors answer from where they stand
             speaker_tree: g.dialogs.iter().map(|d| (d.actor, d.tree as usize)).collect(),
             speaker_pos: g.dialogs.iter().filter_map(|d| g.actors.get(d.actor as usize).map(|a| (d.actor, Vec3::from(a.position)))).collect(),
@@ -5352,6 +5387,12 @@ impl Vm {
                             info!("kismet: conversation {}: the player looks at {:?}", cv.label, who.map(|a| g.actors.get(a as usize).map(|x| x.name.clone())).unwrap_or_else(|| at.map(|p| format!("{p:?}"))));
                         }
                     }
+                    // (a label passed: remembered by the speaker and by the player)
+                    dhcook::format::KDialogStep::Label(l) => {
+                        for who in [c.0, u32::MAX] {
+                            self.labels.insert((who, cv.path.clone(), l.clone()));
+                        }
+                    }
                     dhcook::format::KDialogStep::StopLook => {
                         if self.conv_look.as_ref().is_some_and(|l| l.owner == c.0) {
                             self.conv_look = None;
@@ -5510,6 +5551,26 @@ impl Vm {
                 groups.iter().position(|g| !who.is_empty() && *g == who).unwrap_or(groups.len())
             }
             KBranch::Possessed { initiator } => (if *initiator { self.player_group.is_some() } else { speaker.is_some_and(|a| self.speakers_of(a).iter().any(|p| self.speaker_possessed.contains(p))) }) as usize,
+            KBranch::Seen { player, conv, label } => {
+                let who = if *player { Some(u32::MAX) } else { speaker };
+                who.is_some_and(|w| self.labels.contains(&(w, conv.clone(), label.clone()))) as usize
+            }
+            KBranch::Equipped(class) => self.equipped.iter().any(|c| c.eq_ignore_ascii_case(class)) as usize,
+            KBranch::Tweaks { initiator, tweaks } => {
+                // (the one who set it off: Corvo, the player's tweak, unless he possesses
+                // something; the speaker: its character's)
+                let own: Vec<String> = if *initiator {
+                    if self.player_group.is_some() {
+                        Vec::new()
+                    } else {
+                        vec!["Twk_Pawn_DefaultPlayer".to_string()]
+                    }
+                } else {
+                    speaker.and_then(|a| self.speakers_of(a).iter().find_map(|p| self.speaker_tweaks.get(p).cloned())).unwrap_or_default()
+                };
+                tweaks.iter().position(|(t, exact)| if *exact { own.first() == Some(t) } else { own.contains(t) }).unwrap_or(tweaks.len())
+            }
+            KBranch::Available => speaker.is_some_and(|a| self.busy(a) != Some(Busy::Down) && !self.speaker_at(a).is_empty()) as usize,
         })
     }
 
@@ -5803,6 +5864,7 @@ impl Vm {
             events_of: self.events_of.clone(),
             touching: self.touching.iter().copied().collect(),
             fired_convs: self.fired_convs.iter().cloned().collect(),
+            labels: self.labels.iter().cloned().collect(),
             inert: Some(self.inert.clone()),
             task_targets: self.task_targets.clone(),
             scripted_locked: Some(self.scripted_locked.iter().copied().collect()),
@@ -5863,6 +5925,7 @@ impl Vm {
         self.events_of = s.events_of;
         self.touching = s.touching.into_iter().collect();
         self.fired_convs = s.fired_convs.into_iter().collect();
+        self.labels = s.labels.into_iter().collect();
         if let Some((sw, wheel, _)) = s.switches {
             self.switches = sw;
             self.wheel_off = wheel;
@@ -7080,10 +7143,27 @@ fn world_events(
     player: Query<(&Transform, &Player)>,
     npcs: Query<(Entity, &Npc, &FromSpawner, &Transform), Without<Player>>,
     (cam, rapier): (Query<&GlobalTransform, With<crate::player::PlayerCamera>>, bevy_rapier3d::prelude::ReadRapierContext),
-    (journal, stats, bites, hosts): (Res<crate::journal::Journal>, Res<crate::gameplay::PlayerStats>, Res<crate::swarm::RatBites>, Query<&crate::possession::Host, Without<Npc>>),
+    (journal, stats, bites, hosts, level, powers): (Res<crate::journal::Journal>, Res<crate::gameplay::PlayerStats>, Res<crate::swarm::RatBites>, Query<&crate::possession::Host, Without<Npc>>, Option<Res<crate::level::LevelInfo>>, Option<Res<crate::powers::Powers>>),
     assassin_marks: Query<(Has<crate::npc::AssassinClip>, Has<crate::npc::DropKilled>)>,
 ) {
     let vm = &mut *vm;
+    // what Corvo holds, by the original's classes (`DisConv_HasInventoryItemEquipped`): the
+    // sword drawn, and the left hand's weapon
+    {
+        use crate::powers::Power;
+        vm.equipped.clear();
+        if !stats.sheathed && !stats.unarmed {
+            vm.equipped.push("DishonoredWepSword".into());
+        }
+        let left = match powers.as_ref().map(|p| p.selected) {
+            Some(Power::Pistol | Power::ExplosiveBullet) => Some("DishonoredWepPistol"),
+            Some(Power::Crossbow | Power::SleepDart | Power::IncendiaryBolt | Power::ExplosiveBolt) => Some("DishonoredWepCrossbow"),
+            Some(Power::Grenade | Power::StickyGrenade) => Some("DishonoredWepGrenade"),
+            Some(Power::SpringRazor) => Some("DishonoredWepSpringRazor"),
+            _ => None,
+        };
+        vm.equipped.extend(left.map(String::from));
+    }
     vm.in_combat = npcs.iter().any(|(_, n, _, _)| !n.is_down() && n.hostile() && n.mode == Mode::Combat);
     vm.readings.0 = stats.health;
     vm.readings.1 = stats.mana;
@@ -7260,6 +7340,12 @@ fn world_events(
         if let Some((ne, n, _, t)) = npcs.iter().find(|(_, n, f, _)| f.0 == s && !n.is_down()) {
             vm.speaker_pos.insert(a, t.translation);
             vm.speaker_group.insert(a, n.story_group.rsplit('.').next().unwrap_or("").to_string());
+            if !vm.speaker_tweaks.contains_key(&a) {
+                // (its tweak and those it derives from, then its pawn's archetype)
+                let mut tw = n.npc_type.and_then(|i| level.as_ref()?.scene.npc_types.get(i as usize)).map(|ty| ty.lineage.clone()).unwrap_or_default();
+                tw.push(n.pawn.rsplit('.').next().unwrap_or("").to_string());
+                vm.speaker_tweaks.insert(a, tw);
+            }
             if possession.host == Some(ne) {
                 vm.speaker_possessed.insert(a);
             } else {

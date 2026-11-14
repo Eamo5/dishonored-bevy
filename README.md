@@ -2638,6 +2638,18 @@ fields no longer show their stand-in "WW" behind the title.
   till the head fills `m_fZoomPercentOnScreen` of the screen's height (our reading of the field:
   a head taken as 0.3 m across, a thing as 1 m; a distant speaker is drawn closer, a near one
   not). The cook passed these nodes by, and the view was free throughout.
+  The labels conversations pass (a node's `m_Label`) are remembered by their speaker and by the
+  player, kept in saves, and `DisConv_SeenDialogLabel` asks them (1 when remembered, as roshan's
+  r614/blink research decoded it): Lady Boyle's guests take up their talk where Corvo broke it
+  off ("Business Sucks", "Idle With Jack", the billiard room's), and once told a clue a guest
+  doesn't tell it again. `DisConv_HasInventoryItemEquipped` asks what Corvo holds (the sword
+  drawn, the left hand's pistol, crossbow, grenade or spring razor, by the original's classes),
+  `DisConv_SpeakerHasTweaks` the speaker's pawn tweak and those it derives from (the one who set
+  it off: Corvo's `Twk_Pawn_DefaultPlayer`, unless he possesses something; the first matching
+  entry's way, else the last, as the research decoded the group branches) and
+  `DisConv_IsSpeakerAvailable` whether the speaker is there and up. Before, each took its first
+  way: no label was ever seen, so the guests started over each time, and the guards always
+  spoke as to an unarmed man.
   Within a conversation its own branch nodes pick the way as it reaches them: by a story flag
   (`DisConv_CheckStoryFlag`), a conversation had (`DisConv_ConversationFired`,
   `DisConv_HadConversation`), at random or in turn (below); they used to take their first way

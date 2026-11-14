@@ -946,7 +946,11 @@ fn dialog_tree(pkg: &Package, t: i32, voices: &HashMap<[u32; 4], Vec<String>>) -
                 | "DisConv_HasObjective"
                 | "DisConv_CheckSpeakerSuspicionLevel"
                 | "DisConv_SpeakerInStoryGroup"
-                | "DisConv_IsPossessed" => match branch_of(pkg, &cls, &p) {
+                | "DisConv_IsPossessed"
+                | "DisConv_SeenDialogLabel"
+                | "DisConv_HasInventoryItemEquipped"
+                | "DisConv_SpeakerHasTweaks"
+                | "DisConv_IsSpeakerAvailable" => match branch_of(pkg, &cls, &p) {
                     Some(b) => KDialogNodeKind::Branch(b),
                     None => KDialogNodeKind::Pass,
                 },
@@ -1602,6 +1606,22 @@ fn branch_of(pkg: &Package, cls: &str, p: &Props) -> Option<crate::format::KBran
         "DisConv_CheckTaskState" => KBranch::TaskState(pkg.obj_path(p.object("m_pTask").filter(|o| *o != 0)?)),
         "DisConv_IsObjectiveComplete" => KBranch::ObjectiveDone(pkg.obj_path(p.object("m_pObjective").filter(|o| *o != 0)?)),
         "DisConv_HasObjective" => KBranch::HasObjective(pkg.obj_path(p.object("m_pObjective").filter(|o| *o != 0)?)),
+        // (the speaker slots: 0 the tree's own, 1 the one who set it off, 2 the player)
+        // (none to check: not seen, as the original's)
+        "DisConv_SeenDialogLabel" => KBranch::Seen {
+            player: matches!(p.int("m_iSpeaker"), Some(1) | Some(2)),
+            conv: p.object("m_pConversation").filter(|o| *o > 0).map(|o| pkg.obj_path(o)).unwrap_or_default(),
+            label: p.name("m_LabelToCheck").filter(|n| *n != "None").map(|n| n.to_string()).unwrap_or_default(),
+        },
+        "DisConv_HasInventoryItemEquipped" => KBranch::Equipped(p.object("m_pItemClass").filter(|o| *o != 0).map(|o| pkg.obj_name(o).to_string()).unwrap_or_default()),
+        "DisConv_SpeakerHasTweaks" => KBranch::Tweaks {
+            initiator: matches!(p.int("m_iSpeaker"), Some(1) | Some(2)),
+            tweaks: struct_array(pkg, p, "m_Branches")
+                .iter()
+                .map(|b| (b.object("m_pTweaks").filter(|o| *o != 0).map(|o| pkg.obj_name(o).to_string()).unwrap_or_default(), b.bool("m_bExactMatch").unwrap_or(false)))
+                .collect(),
+        },
+        "DisConv_IsSpeakerAvailable" => KBranch::Available,
         _ => return None,
     })
 }
@@ -1644,6 +1664,10 @@ fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<
             Some(Value::Guid(g)) => Some(format!("{:08x}{:08x}{:08x}{:08x}", g[0], g[1], g[2], g[3])),
             _ => None,
         };
+        // (a node's label, passed: remembered by the speakers, `DisConv_SeenDialogLabel`)
+        if let Some(l) = p.name("m_Label").filter(|l| *l != "None" && !l.is_empty() && cls != "DisConversation") {
+            steps.push(KDialogStep::Label(l.to_string()));
+        }
         match cls.as_str() {
             // (a line without words still says its voice, unsubtitled: a grunt)
             "DisConv_Blurb" | "DisConv_NonWord" => {
@@ -1750,7 +1774,11 @@ fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<
             | "DisConv_HasObjective"
             | "DisConv_CheckSpeakerSuspicionLevel"
             | "DisConv_SpeakerInStoryGroup"
-            | "DisConv_IsPossessed" => {
+            | "DisConv_IsPossessed"
+            | "DisConv_SeenDialogLabel"
+            | "DisConv_HasInventoryItemEquipped"
+            | "DisConv_SpeakerHasTweaks"
+            | "DisConv_IsSpeakerAvailable" => {
                 use crate::format::KBranch;
                 let kind = match cls.as_str() {
                     "DisConv_CheckStoryFlag" => Some(KBranch::StoryFlag(guid(&p, "m_StoryFlag").unwrap_or_default())),

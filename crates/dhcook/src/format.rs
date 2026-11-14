@@ -822,6 +822,8 @@ pub enum KDialogStep {
     LookAt { speaker: Option<i32>, at: Option<[f32; 3]>, blend: f32, limits: Option<[f32; 2]>, zoom: Option<f32>, duration: Option<f32> },
     /// the view let go (`DisConv_PlayerStopLookAt`)
     StopLook,
+    /// a node's `m_Label` passed (remembered by the speakers: `KBranch::Seen`)
+    Label(String),
 }
 
 /// What a branch within a conversation goes by.
@@ -859,6 +861,19 @@ pub enum KBranch {
     /// the speaker, or the one who set it off, possessed (`DisConv_IsPossessed`): output 1 so,
     /// 0 not
     Possessed { initiator: bool },
+    /// a label passed in a conversation (`DisConv_SeenDialogLabel`: the conversation's object
+    /// path, `m_LabelToCheck`) remembered by the speaker, or by the player (`player`, his slots):
+    /// output 1 so, 0 not
+    Seen { player: bool, conv: String, label: String },
+    /// Corvo holding a kind of thing (`DisConv_HasInventoryItemEquipped`: its class's name):
+    /// output 1 so, 0 not
+    Equipped(String),
+    /// the speaker's, or the one who set it off's, pawn tweaks (`DisConv_SpeakerHasTweaks`:
+    /// each entry's tweak by name and whether only it, `m_bExactMatch`, not one deriving from
+    /// it): the first match's output, else the last
+    Tweaks { initiator: bool, tweaks: Vec<(String, bool)> },
+    /// the speaker there to speak (`DisConv_IsSpeakerAvailable`): output 1 so, 0 not
+    Available,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
