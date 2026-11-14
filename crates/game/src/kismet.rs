@@ -354,6 +354,38 @@ mod flow_tests {
         assert!(vm.queue.iter().any(|q| q.0 == 1), "let go, it plays out");
     }
 
+    /// A scripts' own usable object they unlock, whose use answers "Used But Locked", starts
+    /// locked; used locked, it answers so and nothing else; unlocked, it is used.
+    #[test]
+    fn scripted_usables_the_scripts_unlock_start_locked() {
+        use dhcook::format::{KActor, KLink, KVar};
+        let mut g = Graph::default();
+        g.actors.push(KActor { name: "DishonoredUsableObject_11".into(), class: "DishonoredUsableObject".into(), ..Default::default() });
+        g.actors.push(KActor { name: "DishonoredUsableObject_12".into(), class: "DishonoredUsableObject".into(), ..Default::default() });
+        let used = |a: u32| KOp {
+            class: "DisSeqEvent_Used".into(),
+            outputs: ["USED", "Used But Locked"].iter().enumerate().map(|(k, d)| KOutput { desc: d.to_string(), links: vec![(2 + k as u32, 0, 0.0)], linked: None }).collect(),
+            props: [("Originator".to_string(), KVal::Actor(a))].into_iter().collect(),
+            ..Default::default()
+        };
+        g.ops.push(used(0));
+        g.ops.push(used(1));
+        for _ in 0..2 {
+            g.ops.push(KOp { class: "SeqAct_Log".into(), inputs: vec![KInput { desc: "In".into(), ..Default::default() }], ..Default::default() });
+        }
+        // (the scripts unlock the first; the second they never touch)
+        g.vars.push(KVar { class: "SeqVar_Object".into(), props: [("ObjValue".to_string(), KVal::Actor(0))].into_iter().collect(), ..Default::default() });
+        g.ops.push(KOp {
+            class: "DisSeqAct_Lock".into(),
+            inputs: vec![KInput { desc: "Lock".into(), ..Default::default() }, KInput { desc: "Unlock".into(), ..Default::default() }],
+            vars: vec![KLink { desc: "Target".into(), vars: vec![0], write: false }],
+            ..Default::default()
+        });
+        g.ops.push(KOp { class: "SeqEvent_RemoteEvent".into(), outputs: vec![KOutput { desc: "Out".into(), links: vec![(4, 1, 0.0)], linked: None }], ..Default::default() });
+        let locked = scripted_locks_at_start(&g);
+        assert_eq!(locked.into_iter().collect::<Vec<_>>(), vec![0]);
+    }
+
     /// Bent time holds the scripts' delays and links' delays at the world's pace, those marked
     /// `m_bAlwaysOutOfBendTime` going on at Corvo's.
     #[test]
@@ -819,6 +851,9 @@ pub struct VmSave {
     /// tasks' marker targets
     #[serde(default)]
     task_targets: HashMap<String, (u32, String)>,
+    /// the scripts' own usable objects locked
+    #[serde(default)]
+    scripted_locked: Option<Vec<u32>>,
     /// and their vanish presets
     #[serde(default)]
     task_vanish: HashMap<String, u8>,
@@ -1118,6 +1153,8 @@ pub struct Vm {
     looking: HashSet<u32>,
     /// usable objects the scripts lock (true) or unlock (`DisSeqAct_Lock`): actor
     pub usable_locks: Vec<(u32, bool)>,
+    /// the scripts' own usable objects (nothing to animate: transition doors) locked now
+    scripted_locked: HashSet<u32>,
     /// material parameters set (`SeqAct_SetMatInstScalarParam`): material instance path,
     /// parameter, value
     pub mat_params: Vec<(String, String, f32)>,
@@ -1451,6 +1488,7 @@ impl Vm {
             at_points: HashSet::new(),
             looking: HashSet::new(),
             usable_locks: Vec::new(),
+            scripted_locked: HashSet::new(),
             mat_params: Vec::new(),
             set_materials: Vec::new(),
             timer_start: HashMap::new(),
@@ -2093,6 +2131,11 @@ impl Vm {
 
     /// A usable's `DisSeqEvent_Used` on its output `out` (its stages, then "Used But Locked",
     /// "Started Holding", "Stopped Holding", 0x00A4EB00): only where the event has it.
+    /// One of the scripts' own usable objects is locked now.
+    pub fn scripted_locked(&self, actor: u32) -> bool {
+        self.scripted_locked.contains(&actor)
+    }
+
     pub fn used_out(&mut self, actor: u32, out: usize) {
         for ev in self.events_of.get(&actor).cloned().unwrap_or_default() {
             let op = &self.g.ops[ev as usize];
@@ -3525,6 +3568,12 @@ impl Vm {
                     if let (Val::Actor(a), DoorCmd::Lock | DoorCmd::Unlock) = (&t, cmd) {
                         if self.g.actors.get(*a as usize).is_some_and(|ka| ka.usable.is_some()) {
                             self.usable_locks.push((*a, matches!(cmd, DoorCmd::Lock)));
+                        } else if self.g.actors.get(*a as usize).is_some_and(|ka| ka.class == "DishonoredUsableObject") {
+                            if matches!(cmd, DoorCmd::Lock) {
+                                self.scripted_locked.insert(*a);
+                            } else {
+                                self.scripted_locked.remove(a);
+                            }
                         }
                     }
                     // (a door that moves tells its scripts: the Prison cell's locks behind
@@ -5496,6 +5545,7 @@ impl Vm {
             fired_convs: self.fired_convs.iter().cloned().collect(),
             inert: Some(self.inert.clone()),
             task_targets: self.task_targets.clone(),
+            scripted_locked: Some(self.scripted_locked.iter().copied().collect()),
             task_vanish: self.task_vanish.clone(),
             switches: Some((self.switches.clone(), self.wheel_off, false)),
             music_box: self.music_box.clone(),
@@ -5541,6 +5591,10 @@ impl Vm {
         self.objectives = s.objectives;
         self.tasks = s.tasks;
         self.task_targets = s.task_targets;
+        // (older saves: as the level starts them)
+        if let Some(l) = s.scripted_locked {
+            self.scripted_locked = l.into_iter().collect();
+        }
         self.task_vanish = s.task_vanish;
         self.travel = s.travel;
         self.convs = s.convs;
@@ -6286,6 +6340,10 @@ fn setup(
     // the story so far (global story flags carry from map to map, as do the objectives given and
     // their tasks' states; the places their markers point to are the new map's scripts' to set)
     vm.flags = campaign.flags.clone();
+    vm.scripted_locked = scripted_locks_at_start(&g);
+    if !vm.scripted_locked.is_empty() {
+        info!("level scripts: {:?} start locked", vm.scripted_locked.iter().map(|a| g.actors[*a as usize].name.as_str()).collect::<Vec<_>>());
+    }
     vm.objectives.clone_from(&campaign.objectives);
     vm.tasks.clone_from(&campaign.tasks);
     if vm.flags.is_empty() {
@@ -6434,6 +6492,43 @@ fn setup(
     if n > 0 {
         info!("{n} scripted usable objects");
     }
+}
+
+/// The scripts' own usable objects that start locked, as their scripts tell it: those the
+/// scripts unlock (`DisSeqAct_Lock`'s Unlock, a story flag set: the Golden Cat's district doors,
+/// Galvani's) whose use answers "Used But Locked". Their usable tweak's `m_bLocked` isn't cooked
+/// for one with nothing to animate; before, they all opened at once.
+fn scripted_locks_at_start(g: &Graph) -> HashSet<u32> {
+    let mut out = HashSet::new();
+    for (i, op) in g.ops.iter().enumerate() {
+        if !matches!(op.class.as_str(), "DisSeqAct_Lock" | "DisSeqAct_Door") {
+            continue;
+        }
+        let Some(unlock) = op.inputs.iter().position(|x| x.desc == "Unlock") else { continue };
+        // (not those only unlocked as their other leaf is, `DisSeqEvent_Lock`: their keys aren't
+        // cooked, and locked they would never open)
+        if !g.ops.iter().any(|o| o.class != "DisSeqEvent_Lock" && o.outputs.iter().any(|x| x.links.iter().any(|l| l.0 == i as u32 && l.1 as usize == unlock))) {
+            continue;
+        }
+        for l in op.vars.iter().filter(|l| l.desc == "Target") {
+            for &v in &l.vars {
+                let Some(KVal::Actor(a)) = g.vars.get(v as usize).and_then(|v| v.props.get("ObjValue")) else { continue };
+                let Some(ka) = g.actors.get(*a as usize) else { continue };
+                if ka.class != "DishonoredUsableObject" || ka.usable.is_some() {
+                    continue;
+                }
+                let answers_locked = g.ops.iter().any(|e| {
+                    e.class == "DisSeqEvent_Used"
+                        && matches!(e.props.get("Originator"), Some(KVal::Actor(o)) if o == a)
+                        && e.outputs.iter().any(|x| x.desc == "Used But Locked" && !x.links.is_empty())
+                });
+                if answers_locked {
+                    out.insert(*a);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The abstract item a scripted usable wants carried, as its scripts tell it: what they do
@@ -7283,6 +7378,10 @@ fn world_events(
                     vm.actor_event(a, &["DisSeqEvent_Used"], OutSel::Desc("Used But Locked"), Some(Val::Player));
                     vm.actor_event(a, &["DisSeqEvent_KeyHoleUsed"], OutSel::Index(0), Some(Val::Player));
                 }
+            }
+            // (one of the scripts' own, locked: "Used But Locked", nothing else)
+            Interaction::Usable(a, _) if vm.scripted_locked.contains(a) => {
+                vm.actor_event(*a, &["DisSeqEvent_Used"], OutSel::Desc("Used But Locked"), Some(Val::Player));
             }
             Interaction::Usable(a, stage) => {
                 // (the stage's own output, as the original fires `m_iActiveStage`: a hatch's

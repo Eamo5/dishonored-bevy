@@ -861,7 +861,9 @@ fn find_focus(
             d * (2.0 - c) + 0.1
         };
         if best.as_ref().map(|b| score < b.0).unwrap_or(true) {
-            best = Some((score, e, format!("{} {}", crate::bindings::hint(crate::bindings::Act::Use), u.label), u.name.clone()));
+            // (one of the scripts' own, locked: the door's word for it)
+            let text = if vm.as_ref().is_some_and(|v| v.scripted_locked(u.actor)) { "Locked".to_string() } else { format!("{} {}", crate::bindings::hint(crate::bindings::Act::Use), u.label) };
+            best = Some((score, e, text, u.name.clone()));
         }
     }
     // bodies (the unconscious and the dead) can be picked up

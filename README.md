@@ -2444,7 +2444,12 @@ fields no longer show their stand-in "WW" behind the title.
   scripts answer its use without an item ("Used But Missing Abstract Item") wants the item whose
   pickup sets the story flag they ask after (the clock wants the Time Card: without it, its task
   to find one; with it, the slaughterhouse; our reading of the scripts, its usable tweak, which
-  names the item, being uncooked for an object with nothing to animate); a whale oil tank "Whale Oil Tank" over "[F] Carry", a
+  names the item, being uncooked for an object with nothing to animate). Likewise one the
+  scripts unlock (`DisSeqAct_Lock`'s Unlock, on a story flag) whose use answers "Used But Locked"
+  starts locked, says "Locked", and used answers so until the scripts let it open (the Golden
+  Cat district's doors in Dunwall's streets, Galvani's, the Tower's; our reading, as their
+  `m_bLocked` isn't cooked); the scripts' locks on them hold and are kept in saves. Before, all
+  of them opened at once, the way ahead before the scripts allowed it; a whale oil tank "Whale Oil Tank" over "[F] Carry", a
   receptacle rewired by hand "Circuitry" over "[F] Rewire" (`SecuritySystems_twk`). Usable
   objects show their name over the prompt (`m_Name`: "Security Door Panel"); a security
   device's circuitry adds its own line under it, "Rewire Tools Remaining: 2" (its
