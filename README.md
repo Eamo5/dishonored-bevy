@@ -2883,6 +2883,11 @@ fields no longer show their stand-in "WW" behind the title.
   shader (`FParticleSubUVVertexFactory`), the particle's colour in its `TEXCOORD1`, so a splash
   shows and wears away over its life as its `AlphaOverLife` rises. Before, every one was clipped
   away. `dhtool particlevf` lists such maps.
+- **A pickup's meshes are its own**: those of its name about it (within 2 m, else the nearest).
+  The sublevels repeat each other's actor names, and a pickup took every mesh of its name: the
+  sleep darts on Corvo's bed at the Hound Pits held another 50 m off, their crosshair box spanned
+  the pub, they took the focus from everything in his room, and his bed could not be used to
+  sleep (the morning after Campbell, so the story stopped there).
 - **Pickups**: notes take their text from their tweak's abstract item (the bread note opens in
   the journal); weapons (`DishonoredInventoryPickup`: the Prison's guard sword, pistols,
   grenades, springrazors, the Flooded District's blades) give what they are; the scripts

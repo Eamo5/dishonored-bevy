@@ -533,9 +533,9 @@ fn setup_interactables(
     }
     let travel_door = |name: &str| level.scene.kismet.actors.iter().enumerate().any(|(i, a)| a.name == name && travel.contains(&(i as u32)));
     commands.insert_resource(TravelActors(travel.clone()));
-    let mut by_actor: HashMap<&str, Vec<Entity>> = HashMap::new();
+    let mut by_actor: HashMap<&str, Vec<(Entity, Vec3)>> = HashMap::new();
     for (e, li, t, col) in &instances {
-        by_actor.entry(li.actor.as_str()).or_default().push(e);
+        by_actor.entry(li.actor.as_str()).or_default().push((e, t.translation));
         if li.class == "DisDoor" {
             let def = level.scene.door(&li.actor, li.index);
             // (one left open: swung there on the first frame)
@@ -572,8 +572,15 @@ fn setup_interactables(
         if p.factory || crate::campaign::pickup_unloaded(&level.scene, &loaded, pi as u32) {
             continue;
         }
-        let entities = by_actor.get(p.name.as_str()).cloned().unwrap_or_default();
         let pos = Vec3::from(p.position);
+        // (its meshes: those of its name about it; sublevels repeat each other's names, and the
+        // Hound Pits' sleep darts on Corvo's bed took a mesh 50 m off with them, so that their
+        // crosshair box held the whole pub and nothing else in his room could be used)
+        let named = by_actor.get(p.name.as_str()).cloned().unwrap_or_default();
+        let mut entities: Vec<Entity> = named.iter().filter(|(_, at)| at.distance(pos) < 2.0).map(|(e, _)| *e).collect();
+        if entities.is_empty() {
+            entities.extend(named.iter().min_by(|a, b| a.1.distance(pos).total_cmp(&b.1.distance(pos))).map(|(e, _)| *e));
+        }
         commands.spawn((make_pickup(&level, &data, pi, entities), Transform::from_translation(pos), DespawnOnExit(GameState::InGame)));
         n += 1;
     }
@@ -764,6 +771,9 @@ fn find_focus(
                     let Some(hit) = ray_box(eye, fwd, lo - Vec3::splat(pad), hi + Vec3::splat(pad)) else { continue };
                     if hit > 2.4 || blocked(fwd * hit.max(0.36)) {
                         continue;
+                    }
+                    if std::env::var_os("DH_FOCUS_LOG").is_some() {
+                        info!("focus: pickup {} ({}) box {lo:.2}..{hi:.2} hit {hit:.2} from {} meshes", p.label, p.index, p.entities.len());
                     }
                     hit - 0.3
                 }
