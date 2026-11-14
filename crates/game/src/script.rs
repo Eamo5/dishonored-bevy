@@ -96,6 +96,8 @@ struct Goto {
     take_pickup: Option<u32>,
     take_actor: Option<u32>,
     use_in: Option<f32>,
+    /// how long [F] is held for it (a body is lifted by a hold)
+    use_hold: f32,
 }
 
 fn script_goto(
@@ -118,7 +120,7 @@ fn script_goto(
         }
         let left = left - time.delta_secs();
         if left <= 0.0 {
-            script.held.push((Input::Key(KeyCode::KeyF), 0.05));
+            script.held.push((Input::Key(KeyCode::KeyF), goto.use_hold.max(0.05)));
             goto.use_in = None;
             goto.face = None;
         } else {
@@ -152,6 +154,14 @@ fn script_goto(
                     npcs.iter().find(|(n, _, f)| !n.is_down() && f.is_some_and(|f| f.0 == s)).map(|(_, nt, _)| nt.translation + Vec3::Y * 0.5)
                 })
                 .filter(|x| x.distance(eye) < 2.5);
+            // (a body: lifted, [Use] held on it)
+            let body = actor
+                .and_then(|a| vm.as_ref()?.g.actors.get(a as usize)?.spawner)
+                .and_then(|s| npcs.iter().find(|(n, _, f)| n.is_down() && f.is_some_and(|f| f.0 == s)))
+                .map(|(_, nt, _)| nt.translation - Vec3::Y * 0.75)
+                .filter(|x| own.is_none() && x.distance(eye) < 2.5);
+            goto.use_hold = if body.is_some() { 0.6 } else { 0.05 };
+            let own = own.or(body);
             if let Some(at) = own.or_else(|| things.iter().map(|(x, _, _)| x.translation).filter(|x| x.distance(goal) < 2.5).min_by(|a, b| a.distance(goal).total_cmp(&b.distance(goal)))) {
                 let to = at - eye;
                 goto.face = Some(((-to.x).atan2(-to.z), (to.y / to.length().max(1e-3)).asin(), 1.0));
@@ -515,8 +525,9 @@ fn run_script(
                         g.take_actor = Some(actor);
                     }
                     None => {
+                        // (none yet: a moment for the scripts to set one, a new map to load)
                         info!("script: no task marker {pick} (of {})", pts.len());
-                        w.resource_mut::<Script>().timer = 0.0;
+                        w.resource_mut::<Script>().timer = 3.0;
                     }
                 }
             });

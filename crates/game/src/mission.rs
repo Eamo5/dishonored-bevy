@@ -228,6 +228,8 @@ fn travel(
     campaign.carry = Some(stats.clone());
     if let Some(vm) = vm.as_ref() {
         campaign.flags = vm.flags().clone();
+        campaign.objectives.clone_from(&vm.objectives);
+        campaign.tasks.clone_from(&vm.tasks);
     }
     let from = level.as_ref().map(|l| l.scene.name.clone()).unwrap_or_default();
     let done = mission_name(&from);

@@ -2811,6 +2811,12 @@ fields no longer show their stand-in "WW" behind the title.
   screens (each mission's rows, story outcomes and illustration), chapter notes, story flags
   and the map change, where the chaos level picks the high or low chaos version of a mission
   and the story flags pick the ending. Save games keep it all.
+  The objectives given and their tasks' states go on from map to map with the story flags (the
+  next map's scripts set where their markers point): a mission's later maps take up its objectives
+  without giving them again (Kaldwin's Bridge's second part has "Abduct Sokolov" only behind a
+  debug console event; the Hound Pits give it before the bridge), and one given again raises no
+  second "New Objective". Before, each map started with none: from the bridge's second part on,
+  the main objective, its tasks and markers were gone.
 
 - **Faces (FaceFX)**: the dialogue data's `FaceFXAnimSet`s and the heads' `FaceFXAsset`s
   are decoded (FaceFX archive 1731: the lines' curves by target — `open`, `W`, `PBM`, `wide`,

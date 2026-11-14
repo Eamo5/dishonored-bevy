@@ -6283,8 +6283,11 @@ fn setup(
     if campaign.travel.is_some() {
         vm.travel = campaign.travel.clone();
     }
-    // the story so far (global story flags carry from map to map)
+    // the story so far (global story flags carry from map to map, as do the objectives given and
+    // their tasks' states; the places their markers point to are the new map's scripts' to set)
     vm.flags = campaign.flags.clone();
+    vm.objectives.clone_from(&campaign.objectives);
+    vm.tasks.clone_from(&campaign.tasks);
     if vm.flags.is_empty() {
         // a map started directly: the game counts as started properly (`Global_RealGameStarted`:
         // the maps' debug loadouts stay off; the start loadout is the campaign's)

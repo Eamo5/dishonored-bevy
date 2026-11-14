@@ -1194,6 +1194,10 @@ pub struct Campaign {
     pub mission: String,
     /// the level scripts' story flags so far
     pub flags: std::collections::HashMap<String, bool>,
+    /// the objectives given so far and their tasks' states (the next map's scripts go on with
+    /// them: Kaldwin's Bridge's second part never gives "Abduct Sokolov" itself)
+    pub objectives: Vec<String>,
+    pub tasks: std::collections::HashMap<String, (crate::kismet::TaskState, bool)>,
     /// the campaign scripts' state carried to the next map, the map change op to resume
     /// there (relative to the campaign's first op), the travel destination and chapter
     pub script_state: Option<(Vec<crate::kismet::Val>, Vec<crate::kismet::OpState>)>,
