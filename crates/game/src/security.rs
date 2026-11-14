@@ -668,7 +668,13 @@ fn setup(
     }
     for (i, s) in scene.security.iter().enumerate() {
         let mut d = Device { def: s.clone(), has_tank: !s.battery.is_empty(), ..Default::default() };
-        let insts = by_inst.get(s.actor.as_str()).cloned().unwrap_or_default();
+        // (its own meshes: those of its name about it, the sublevels repeating each other's names)
+        let named = by_inst.get(s.actor.as_str()).cloned().unwrap_or_default();
+        let at = |x: &(Entity, u32)| scene.instances.get(x.1 as usize).map_or(f32::MAX, |i| Vec3::new(i.transform[12], i.transform[13], i.transform[14]).distance(Vec3::from(s.position)));
+        let mut insts: Vec<(Entity, u32)> = named.iter().filter(|x| at(x) < 3.0).copied().collect();
+        if insts.is_empty() {
+            insts.extend(named.iter().min_by(|a, b| at(a).total_cmp(&at(b))).copied());
+        }
         d.instances = insts.iter().map(|x| x.0).collect();
         // (its meshes' box in the world)
         for inst in insts.iter().filter_map(|x| scene.instances.get(x.1 as usize)) {
