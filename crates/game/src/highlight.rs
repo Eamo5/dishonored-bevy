@@ -63,7 +63,7 @@ fn highlight(
     (focus, settings): (Res<InteractFocus>, Res<crate::settings::Settings>),
     level: Option<Res<LevelInfo>>,
     (mut look, mut mats): (ResMut<HighlightLook>, ResMut<Assets<HighlightMaterial>>),
-    (vm, extra): (Option<Res<crate::kismet::Vm>>, Res<ExtraHighlight>),
+    (vm, extra, travel): (Option<Res<crate::kismet::Vm>>, Res<ExtraHighlight>, Option<Res<crate::interact::TravelActors>>),
     (pickups, usables, instances, doors): (Query<&Pickup>, Query<&Usable>, Query<(Entity, &LevelInstance)>, Query<(), With<crate::interact::Door>>),
     meshes: Query<(&Mesh3d, Option<&bevy::mesh::skinning::SkinnedMesh>), Without<HighlightPart>>,
     children: Query<&Children>,
@@ -101,7 +101,10 @@ fn highlight(
         if let Ok(p) = pickups.get(f) {
             want.extend(p.entities.iter().copied());
         } else if let Ok(u) = usables.get(f) {
-            actor_meshes(u.actor, &mut want);
+            // (nor the scripts' doors out to other maps, which are doors too)
+            if !travel.as_ref().is_some_and(|t| t.0.contains(&u.actor)) {
+                actor_meshes(u.actor, &mut want);
+            }
         } else if meshes.contains(f) {
             want.push(f);
         }

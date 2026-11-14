@@ -2835,7 +2835,8 @@ fields no longer show their stand-in "WW" behind the title.
   instance's colour, power and visibility; its shader map has no vertex shader to pair the
   original pixel shader with, so `highlight.wgsl` does its math), as the original's highlight
   meshes are; the level scripts highlight things of their own
-  (`DisSeqAct_Highlight`). Doors aren't rimmed: an interactable is drawn so only when its
+  (`DisSeqAct_Highlight`). Doors aren't rimmed, nor the scripts' doors out to other maps (Lady
+  Boyle's back door): an interactable is drawn so only when its
   interactable tweak names a highlight material (`m_HighLightMaterial`, none by
   `DisTweaks_InteractableInterface`'s default, as roshan's r614/blink research read it; the
   pickups', keys' and usable objects' do), and the doors' isn't cooked, so this is our reading.
