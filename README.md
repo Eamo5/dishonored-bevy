@@ -617,7 +617,12 @@ are in the settings file, `pad_binding_set` 0-3):
   buttons (`m_PadBindingSet1`..`4`) press what the keyboard's bindings would, Back opens the
   journal and Start the pause menu, the D-pad picks the pad's own shortcuts
   (`Dis_WheelShortcuts_GamepadSelect`), B and X drink the elixirs with the wheel open; the left
-  stick walks him slower below full, the right
+  stick pushed part way walks him, at the original's set speeds rather than in proportion to the
+  push: up to 0.95 of the way `GroundSpeedWalk` (2 m/s), up to 0.45 `GroundSpeedSlowWalk` (1 m/s),
+  sneaking at its share of those (`CrouchedPct`), with no sideways or backwards slowing while he
+  walks and no sprint below 0.8 (the controller's flags, 0x00AAE610, as roshan's r614/blink
+  research decoded them; before, a half push ran him at half his run in any stance, sideways
+  multipliers and all), the right
   turns him as `DisTweaks_PlayerInput` has it (the turn's scale from 230 up to 700 while the
   stick is held full, rising 500 a second; the look up's 150; each times UE3's 100 a second in
   its rotation units), with its own sensitivities and inversion; the left stick's click sprints

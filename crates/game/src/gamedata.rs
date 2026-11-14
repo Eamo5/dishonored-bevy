@@ -260,6 +260,9 @@ pub struct Attrs {
     pub strafe: [f32; 3],
     pub backward: [f32; 2],
     pub speed_blend_down: f32,
+    /// a pad's stick part way: walking and walking slowly (`GroundSpeedWalk`,
+    /// `GroundSpeedSlowWalk`: m/s)
+    pub walk_slow: [f32; 2],
     /// Agility's power jump: holding jump keeps pushing up (m/s²) for a while, to a speed
     pub power_jump_accel: f32,
     pub power_jump_time: f32,
@@ -405,6 +408,7 @@ impl Default for Attrs {
             strafe: [0.7, 0.6, 0.5],
             backward: [0.8, 0.55],
             speed_blend_down: 8.0,
+            walk_slow: [2.0, 1.0],
             sprint: 6.0,
             crouch: 2.75,
             power_jump_accel: 0.0,
@@ -521,6 +525,7 @@ fn derive_attributes(data: Res<Data>, settings: Res<crate::settings::Settings>, 
         strafe: [m("GroundStrafeMultiplierRun", 0.7), m("GroundStrafeMultiplierSprint", 0.6), m("GroundStrafeMultiplierSneak", 0.5)],
         backward: [m("GroundBackwardMultiplierRun", 0.8), m("GroundBackwardMultiplierSprint", 0.55)],
         speed_blend_down: data.pawn("m_fSpeedBlendDownSpeed", 8.0),
+        walk_slow: [m("GroundSpeedWalk", 200.0) * UU, m("GroundSpeedSlowWalk", 100.0) * UU],
         sprint: a("GroundSpeedSprint") * UU,
         crouch: a("GroundSpeedCrouch") * UU,
         // (our falling gravity is the original's: `player::GRAVITY`)

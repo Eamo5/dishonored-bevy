@@ -734,7 +734,11 @@ fn player_move(
     if std::env::var_os("DH_MOVE_LOG").is_some() && (wish != Vec3::ZERO || held) {
         info!("move: wish {wish:.2} held {held} (input off {}) rate {:.2} locked {} grounded {}", cine.input_off, tc.player_rate(), p.locked, p.grounded);
     }
-    let wish = if held { Vec3::ZERO } else if analog { wish.clamp_length_max(1.0) } else { wish.normalize_or_zero() };
+    // (a stick pushed part way walks, not more slowly in proportion: walking up to 0.95 of the
+    // way, slowly up to 0.45, as the controller's flags have it, 0x00AAE610; its direction alone
+    // makes the acceleration)
+    let stick = if analog && !held { pad_walk.length() } else { 0.0 };
+    let wish = if held { Vec3::ZERO } else { wish.normalize_or_zero() };
     let jump_pressed = !held && (bind.just_pressed(crate::bindings::Act::Jump) || std::mem::take(&mut vinput.jump));
     // (held in the air with the world while Daud's Blink is aimed)
     let dt = if wish == Vec3::ZERO && !jump_pressed { dt * tc.aim_freeze.clamp(0.0, 1.0) } else { dt };
@@ -961,15 +965,18 @@ fn player_move(
     }
 
     // (sprinting in any direction, as the original allows)
-    p.sprinting = bind.pressed(crate::bindings::Act::Sprint) && !p.crouched && wish != Vec3::ZERO && !carry.carrying() && host.is_none();
+    // (on a stick, pushed past `m_fStopSprint_Threshold`, 0.8)
+    p.sprinting = bind.pressed(crate::bindings::Act::Sprint) && !p.crouched && wish != Vec3::ZERO && !carry.carrying() && host.is_none() && (!analog || stick > 0.8);
+    // walking (slowly), on a stick part way: no sideways or backwards speeds then
+    let walking = !p.sprinting && stick > 0.0 && stick <= 0.95;
     // sideways or backwards (the original's: within 10 degrees of sideways going forward, 50
     // going back; else within 40 of straight back)
     let (ahead, side) = (wish.dot(fwd), wish.dot(right));
     let mag = wish.length().max(1e-4);
     let off_side = (side.abs() / mag).clamp(0.0, 1.0).acos().to_degrees();
     let off_back = (ahead.abs() / mag).clamp(0.0, 1.0).acos().to_degrees();
-    let strafing = wish != Vec3::ZERO && off_side < if ahead >= 0.0 { 10.0 } else { 50.0 };
-    let backwards = !strafing && ahead < 0.0 && off_back < 40.0;
+    let strafing = !walking && wish != Vec3::ZERO && off_side < if ahead >= 0.0 { 10.0 } else { 50.0 };
+    let backwards = !walking && !strafing && ahead < 0.0 && off_back < 40.0;
     // the original's ground speeds (Agility 2 sprints faster; `GroundSpeedCarryingCorpse`),
     // sideways and backwards at their multipliers; a creature's (`m_fGroundSpeedWhilePossessed`)
     // (bitten by rats: 40 % slower for a second)
@@ -977,6 +984,11 @@ fn player_move(
     let bitten = if stats.slowed > 0.0 { 0.6 } else { 1.0 };
     let speed = bitten * (if let Some(b) = host {
         b.ground
+    } else if walking {
+        // (`WalkingPct`: the walk's over the run's; sneaking, its share of that, `CrouchedPct`)
+        let base = attrs.walk_slow[if stick <= 0.45 { 1 } else { 0 }];
+        let base = if p.crouched { base * attrs.crouch / attrs.walk.max(1e-3) } else { base };
+        if carry.carrying() { base.min(attrs.carry) } else { base }
     } else if carry.carrying() {
         attrs.carry.min(if p.crouched { attrs.crouch } else { attrs.walk })
     } else if p.crouched {
