@@ -1693,6 +1693,35 @@ fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<
                     steps.push(KDialogStep::SetFlag(g));
                 }
             }
+            // the player's view held on a speaker or a thing (the class's 0.4 s blend, its
+            // constraints' 4 % of the screen; an actor by where it stands)
+            "DisConv_PlayerLookAtSpeaker" | "DisConv_PlayerLookAtActor" => {
+                let lc = match p.get("m_LookConstraints") {
+                    Some(Value::Struct(_, s)) => Props(s.clone()),
+                    _ => Props(Vec::new()),
+                };
+                let constrained = p.bool("m_bUseLookConstraints").unwrap_or(false);
+                let at = if cls == "DisConv_PlayerLookAtActor" {
+                    match p.object("m_pLookAtActor").filter(|a| *a > 0).and_then(|a| read_props(pkg, a)).and_then(|a| a.vector("Location")) {
+                        Some(loc) => Some(crate::xform::ue_point(loc)),
+                        None => {
+                            node = next_node(pkg, &p);
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
+                steps.push(KDialogStep::LookAt {
+                    speaker: (cls == "DisConv_PlayerLookAtSpeaker").then(|| p.int("m_iSpeakerToLookAt").unwrap_or(-1)),
+                    at,
+                    blend: p.float("m_fBlendTime").unwrap_or(0.4),
+                    limits: constrained.then(|| [lc.float("m_fMaxYawDelta").unwrap_or(0.0), lc.float("m_fMaxPitchDelta").unwrap_or(0.0)]),
+                    zoom: (constrained && lc.bool("m_bUseZoom").unwrap_or(false)).then(|| lc.float("m_fZoomPercentOnScreen").unwrap_or(4.0)),
+                    duration: (constrained && lc.bool("m_bUseDuration").unwrap_or(false)).then(|| lc.float("m_fDuration").unwrap_or(0.0)),
+                });
+            }
+            "DisConv_PlayerStopLookAt" => steps.push(KDialogStep::StopLook),
             // the player's answer: each option's own way on
             "DisConv_PlayerChoice" => {
                 let texts: Vec<String> = struct_array(pkg, &p, "m_Choices_Static").iter().map(|c| str_of(c, "m_ChoiceText")).collect();

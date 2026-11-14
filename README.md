@@ -2627,6 +2627,17 @@ fields no longer show their stand-in "WW" behind the title.
   left. 97 conversations in 25 maps go on so (the Hound Pits' 23, Daud's estate and streets
   24). Maps cooked before are brought up to it by `dhtool patch-dialogs` from the level
   packages, each conversation only where its cooked steps are the new ones but for its ends.
+  A conversation holds the player's view on its speaker or on a thing
+  (`DisConv_PlayerLookAtSpeaker`, `DisConv_PlayerLookAtActor`, 225 conversations: Samuel,
+  Piero, Sokolov and Callista at the Hound Pits, Granny Rags at her shrine, Slackjaw, Griff, the
+  Boyle sisters, Thomas): the view turns to the speaker's head (`DHR_HEAD`), or to where the
+  thing stands, over its `m_fBlendTime` (the class's 0.4 s), then with `m_bUseLookConstraints`
+  stays within its `m_fMaxYawDelta` / `m_fMaxPitchDelta` of it (Sokolov's 50 and 5 degrees, the
+  choice to wake in the Hound Pits' loft none at all) until `DisConv_PlayerStopLookAt`, its
+  `m_fDuration` or the conversation's end; with `m_bUseZoom` the view narrows, eased in and out,
+  till the head fills `m_fZoomPercentOnScreen` of the screen's height (our reading of the field:
+  a head taken as 0.3 m across, a thing as 1 m; a distant speaker is drawn closer, a near one
+  not). The cook passed these nodes by, and the view was free throughout.
   Within a conversation its own branch nodes pick the way as it reaches them: by a story flag
   (`DisConv_CheckStoryFlag`), a conversation had (`DisConv_ConversationFired`,
   `DisConv_HadConversation`), at random or in turn (below); they used to take their first way

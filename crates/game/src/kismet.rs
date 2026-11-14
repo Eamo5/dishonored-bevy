@@ -147,6 +147,28 @@ enum Toucher {
     Npc { spawner: u32, down: bool },
 }
 
+/// The player's view held by a conversation on one of its speakers or on a thing
+/// (`DisConv_PlayerLookAtSpeaker`, `DisConv_PlayerLookAtActor`): turned to it over `blend`
+/// seconds, then kept within `limits` (yaw, pitch: radians) of it if constrained, zoomed till it
+/// fills `zoom` of the screen; let go by `DisConv_PlayerStopLookAt`, its time (`left`) or the
+/// conversation's end.
+#[derive(Clone, Debug, Default)]
+pub struct ConvLook {
+    /// the conversation's dialogue actor
+    pub owner: u32,
+    /// the speaking actor looked at, else a place
+    pub speaker: Option<u32>,
+    pub point: Option<Vec3>,
+    /// where it is now (the speaker's head)
+    pub at: Option<Vec3>,
+    pub blend: f32,
+    /// seconds since it began
+    pub t: f32,
+    pub limits: Option<(f32, f32)>,
+    pub zoom: Option<f32>,
+    pub left: Option<f32>,
+}
+
 /// World changes requested by the scripts.
 #[derive(Clone, Debug)]
 pub enum Effect {
@@ -641,6 +663,30 @@ mod conversation_tests {
         assert!(vm.convs.is_empty());
     }
 
+    /// A conversation holds the player's view on its speaker until it lets go or ends.
+    #[test]
+    fn a_conversation_holds_the_view_on_its_speaker() {
+        let mut vm = speaker(None);
+        let look = S::LookAt { speaker: Some(0), at: None, blend: 0.4, limits: Some([12.0, 6.0]), zoom: None, duration: None };
+        Arc::get_mut(&mut vm.g).unwrap().dialog_trees[0].conversations[0].steps = vec![look, S::Line("one".into(), 0), S::StopLook, S::Line("two".into(), 0), S::End];
+        vm.start_conversation(0, 0, 0);
+        vm.tick_conversations(0.1);
+        let l = vm.conv_look.clone().expect("held");
+        assert_eq!(l.speaker, Some(0));
+        assert!((l.limits.unwrap().0 - 12f32.to_radians()).abs() < 1e-5);
+        vm.tick_conversations(60.0);
+        assert!(vm.conv_look.is_none(), "let go");
+        // (and with its conversation's end)
+        Arc::get_mut(&mut vm.g).unwrap().dialog_trees[0].conversations[0].steps = vec![S::LookAt { speaker: Some(0), at: None, blend: 0.4, limits: None, zoom: None, duration: None }, S::Line("one".into(), 0), S::End];
+        vm.start_conversation(0, 0, 0);
+        vm.tick_conversations(0.1);
+        assert!(vm.conv_look.is_some());
+        for _ in 0..3 {
+            vm.tick_conversations(60.0);
+        }
+        assert!(vm.conv_look.is_none());
+    }
+
     #[test]
     fn a_soiree_holds_a_blocking_conversation_and_is_skipped_in_another() {
         for blocking in [true, false] {
@@ -1123,6 +1169,8 @@ pub struct Vm {
     /// conversation goes on (`DisConv_Soiree`)
     conv_soiree: HashMap<u32, Vec<u32>>,
     walked_away: HashSet<u32>,
+    /// the player's view held by a conversation (`DisConv_PlayerLookAtSpeaker`, `_Actor`)
+    pub conv_look: Option<ConvLook>,
     /// speakers and the tree they answer with (for the player approaching / loitering),
     /// their positions, and their approach and loiter hooks' watch (by speaker and node)
     speaker_tree: HashMap<u32, usize>,
@@ -1517,6 +1565,7 @@ impl Vm {
             conv_ending: HashSet::new(),
             conv_soiree: HashMap::new(),
             walked_away: HashSet::new(),
+            conv_look: None,
             // one-shot dialogue actors answer from where they stand
             speaker_tree: g.dialogs.iter().map(|d| (d.actor, d.tree as usize)).collect(),
             speaker_pos: g.dialogs.iter().filter_map(|d| g.actors.get(d.actor as usize).map(|a| (d.actor, Vec3::from(a.position)))).collect(),
@@ -5275,6 +5324,39 @@ impl Vm {
                     dhcook::format::KDialogStep::SetFlag(f) => {
                         self.flags.insert(f.clone(), true);
                     }
+                    // the player's view held on a speaker (slot 0 the tree's own, the others a
+                    // one-shot's further speakers, else the dialogue actor's) or a thing
+                    dhcook::format::KDialogStep::LookAt { .. } if ending => {}
+                    dhcook::format::KDialogStep::LookAt { speaker, at, blend, limits, zoom, duration } => {
+                        let who = speaker.map(|s| {
+                            let d = g.dialogs.iter().find(|d| d.actor == c.0);
+                            match s {
+                                0 | -1 => self.voice_of(c.0),
+                                s if s >= 3 => d.and_then(|d| d.others.get(s as usize - 3).copied()).unwrap_or(c.0),
+                                _ => c.0,
+                            }
+                        });
+                        self.conv_look = Some(ConvLook {
+                            owner: c.0,
+                            speaker: who,
+                            point: at.map(Vec3::from),
+                            at: at.map(Vec3::from),
+                            blend: blend.max(0.0),
+                            t: 0.0,
+                            limits: limits.map(|l| (l[0].to_radians(), l[1].to_radians())),
+                            // (a share of none: no zoom)
+                            zoom: zoom.filter(|z| *z > 0.0).map(|z| (z / 100.0).clamp(0.005, 1.0)),
+                            left: duration.filter(|d| *d > 0.0),
+                        });
+                        if self.trace {
+                            info!("kismet: conversation {}: the player looks at {:?}", cv.label, who.map(|a| g.actors.get(a as usize).map(|x| x.name.clone())).unwrap_or_else(|| at.map(|p| format!("{p:?}"))));
+                        }
+                    }
+                    dhcook::format::KDialogStep::StopLook => {
+                        if self.conv_look.as_ref().is_some_and(|l| l.owner == c.0) {
+                            self.conv_look = None;
+                        }
+                    }
                     // the player answers (or, not answering, the conversation ends)
                     dhcook::format::KDialogStep::Choice(_) if ending => {
                         c.3 = steps.len();
@@ -5372,6 +5454,16 @@ impl Vm {
         }
         convs.retain(|c| c.3 < g.dialog_trees.get(c.1).and_then(|t| t.conversations.get(c.2)).map(|cv| cv.steps.len()).unwrap_or(0) || c.4 > 0.0);
         self.convs.extend(convs);
+        // (the view let go with its conversation, or its time out)
+        if let Some(l) = self.conv_look.as_mut() {
+            l.t += dt;
+            if let Some(left) = l.left.as_mut() {
+                *left -= dt;
+            }
+        }
+        if self.conv_look.as_ref().is_some_and(|l| l.left.is_some_and(|t| t <= 0.0) || !self.convs.iter().any(|c| c.0 == l.owner)) {
+            self.conv_look = None;
+        }
     }
 
     /// The output a branch takes now, with the state it leaves (`DisConvGlobalMan`'s rules:
@@ -7160,6 +7252,7 @@ fn world_events(
     });
     let mut speaking: Vec<u32> = vm.speaker_tree.keys().chain(vm.pawn_oneshot.keys()).copied().collect();
     speaking.extend(vm.convs.iter().map(|c| c.0));
+    speaking.extend(vm.conv_look.as_ref().and_then(|l| l.speaker));
     speaking.sort_unstable();
     speaking.dedup();
     for a in speaking {
@@ -7194,6 +7287,12 @@ fn world_events(
             } else {
                 vm.speaker_busy.remove(&a);
             }
+        }
+    }
+    // the speaker the player's view is held on: its head (`DHR_HEAD`), where it is now
+    if let Some(head) = vm.conv_look.as_ref().and_then(|l| l.speaker).and_then(|a| vm.speaker_at(a).first().copied()).map(|p| p + Vec3::Y * 0.75) {
+        if let Some(l) = vm.conv_look.as_mut() {
+            l.at = Some(head);
         }
     }
     // touch volumes (those attached to a character move with it)

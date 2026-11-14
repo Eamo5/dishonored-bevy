@@ -814,6 +814,14 @@ pub enum KDialogStep {
     /// the end of a way that goes on as another conversation of the tree
     /// (`DisConv_ConversationRef`: that conversation's object path)
     Goto(String),
+    /// the player's view turned to a speaker (`DisConv_PlayerLookAtSpeaker`: its slot) or a
+    /// thing (`DisConv_PlayerLookAtActor`: where it stands, Bevy space) over `blend` seconds
+    /// (`m_fBlendTime`), then, with `m_bUseLookConstraints`, held within `limits` (degrees of
+    /// yaw and pitch, `m_fMaxYawDelta`, `m_fMaxPitchDelta`) of it, zoomed (`m_bUseZoom`) until it
+    /// fills `zoom` % of the screen (`m_fZoomPercentOnScreen`), for `duration` seconds if set
+    LookAt { speaker: Option<i32>, at: Option<[f32; 3]>, blend: f32, limits: Option<[f32; 2]>, zoom: Option<f32>, duration: Option<f32> },
+    /// the view let go (`DisConv_PlayerStopLookAt`)
+    StopLook,
 }
 
 /// What a branch within a conversation goes by.

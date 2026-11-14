@@ -563,7 +563,7 @@ fn player_look(
     (wheel, zoom, aim, paused): (Res<crate::wheel::Wheel>, Res<crate::zoom::Zoom>, Res<crate::aim::Aim>, Res<Paused>),
     mut last: Local<Vec2>,
     pad: Option<Res<crate::pad::Pad>>,
-    (peek, game_settings): (Option<Res<crate::keyhole::Peek>>, Option<Res<crate::settings::Settings>>),
+    (peek, game_settings, vm): (Option<Res<crate::keyhole::Peek>>, Option<Res<crate::settings::Settings>>, Option<Res<crate::kismet::Vm>>),
     (data, over): (Option<Res<crate::gamedata::Data>>, Option<Res<crate::crosshair::OverEnemy>>),
     mut slowed: Local<bool>,
     (lean_view, choking, time): (Option<Res<LeanView>>, Query<&crate::combat::Choking>, Res<Time>),
@@ -640,6 +640,27 @@ fn player_look(
             p.pitch = (p.pitch + step).min(CHOKE_LOOK.3);
         } else if p.pitch > CHOKE_LOOK.2 {
             p.pitch = (p.pitch - step).max(CHOKE_LOOK.2);
+        }
+    }
+    // (a conversation holding the view on a speaker or a thing: turned to it over its blend,
+    // then, constrained, kept within its limits of it; `kismet::ConvLook`)
+    if let (Some(l), Ok(ct)) = (vm.as_ref().and_then(|v| v.conv_look.as_ref()), cam.single()) {
+        let eye = t.translation + Vec3::Y * ct.translation.y;
+        if let Some(d) = l.at.map(|at| at - eye).filter(|d| d.length() > 0.2) {
+            let (pi, tau) = (std::f32::consts::PI, std::f32::consts::TAU);
+            let wrap = |a: f32| (a + pi).rem_euclid(tau) - pi;
+            let (ty, tp) = ((-d.x).atan2(-d.z), d.y.atan2(d.xz().length()).clamp(VIEW_PITCH.0, VIEW_PITCH.1));
+            let dt = time.delta_secs();
+            let left = l.blend - l.t;
+            if left > -0.1 {
+                // (the rest of the turn spread over the blend's time left: there at its end)
+                let k = (dt / left.max(dt).max(1e-4)).min(1.0);
+                p.yaw += wrap(ty - p.yaw) * k;
+                p.pitch += (tp - p.pitch) * k;
+            } else if let Some((ly, lp)) = l.limits {
+                p.yaw = ty + wrap(p.yaw - ty).clamp(-ly, ly);
+                p.pitch = p.pitch.clamp(tp - lp, tp + lp);
+            }
         }
     }
     t.rotation = Quat::from_rotation_y(p.yaw);
@@ -1360,9 +1381,10 @@ fn update_camera_offset(
     stats: Res<PlayerStats>,
     mut q: Query<(Entity, &mut Player, &Transform), Without<PlayerCamera>>,
     mut cam: Query<(&mut Transform, &mut Projection), With<PlayerCamera>>,
-    (swim, settings, zoom, possession): (Res<crate::swim::Swim>, Res<crate::settings::Settings>, Res<crate::zoom::Zoom>, Res<crate::possession::Possession>),
+    (swim, settings, zoom, possession, vm): (Res<crate::swim::Swim>, Res<crate::settings::Settings>, Res<crate::zoom::Zoom>, Res<crate::possession::Possession>, Option<Res<crate::kismet::Vm>>),
     mut world_light: Option<ResMut<crate::world_light::WorldLighting>>,
     death_fall: Res<crate::arms::DeathFall>,
+    mut conv_zoom: Local<f32>,
 ) {
     let Ok((entity, mut p, t)) = q.single_mut() else { return };
     let Ok((mut ct, mut proj)) = cam.single_mut() else { return };
@@ -1370,7 +1392,24 @@ fn update_camera_offset(
         // the options' field of view (horizontal, as UE3's), widened by Blink's kick, narrowed by
         // the mask's lens; the arms keep the unzoomed one (the zoom's `m_bLockArms`)
         let base = ue_fov(settings.fov.clamp(55.0, 110.0) + 14.0 * powers.fov_kick, pp.aspect_ratio);
-        pp.fov = 2.0 * ((base * 0.5).tan() / zoom.factor.max(1.0)).atan();
+        // (and by a conversation's zoom on what it holds the view on, till that fills its share
+        // of the screen's height: our reading of `m_fZoomPercentOnScreen`, a head taken as 0.3 m
+        // across and a thing as 1 m; eased in and out, never widened)
+        let want = vm
+            .as_ref()
+            .and_then(|v| v.conv_look.as_ref())
+            .and_then(|l| Some((l.zoom?, l.at?, if l.speaker.is_some() { 0.3 } else { 1.0 })))
+            .map(|(share, at, size)| {
+                let dist = at.distance(t.translation + Vec3::Y * ct.translation.y).max(0.3);
+                let needed = 2.0 * (size * 0.5 / dist).atan() / share;
+                ((base * 0.5).tan() / (needed * 0.5).min(1.5).tan()).clamp(1.0, 4.0)
+            })
+            .unwrap_or(1.0);
+        if *conv_zoom < 1.0 {
+            *conv_zoom = 1.0;
+        }
+        *conv_zoom += (want - *conv_zoom) * (time.delta_secs() * 3.0).min(1.0);
+        pp.fov = 2.0 * ((base * 0.5).tan() / (zoom.factor.max(1.0) * *conv_zoom)).atan();
         if let Some(wl) = world_light.as_mut() {
             let arms = 1.0 / (base * 0.5).tan();
             if (wl.ue_entries.get(2).map_or(0.0, |e| e[0]) - arms).abs() > 1e-4 {

@@ -1153,10 +1153,14 @@ fn main() -> Result<()> {
             // Installer's `<name>.upkBackup`, the first found by sorted path): each
             // conversation whose steps are the cooked ones but for the ways that now go on as
             // another (`Goto` where an `End` was) takes them, and conversations they go on as
-            // that weren't cooked are added. Nothing else of the map changes.
+            // that weren't cooked are added. Nothing else of the map changes. With --force, every
+            // conversation of a tree found takes the cook's steps (once a map is known to have
+            // been cooked from the same packages: none differing but for its ends).
             let found = package_index(&PathBuf::from(&args[2]))?;
             let root = PathBuf::from("cache").join("maps");
-            for m in cooked_maps(&root, &args[3..])? {
+            let force = args.iter().any(|a| a == "--force");
+            let named: Vec<String> = args[3..].iter().filter(|a| !a.starts_with("--")).cloned().collect();
+            for m in cooked_maps(&root, &named)? {
                 let path = root.join(format!("{m}.json"));
                 let mut scene: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
                 let names: Vec<String> = scene["packages"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
@@ -1194,6 +1198,11 @@ fn main() -> Result<()> {
                         // (step for step, or with a last step going on where the cook had none)
                         let tail_goto = newa.len() == old.len() + 1 && newa.last().is_some_and(|n| n.get("Goto").is_some());
                         let same = (old.len() == newa.len() || tail_goto) && old.iter().zip(newa).all(|(o, n)| o == n || (*o == end && n.get("Goto").is_some()));
+                        if !same && force {
+                            convs[j]["steps"] = new;
+                            patched += 1;
+                            continue;
+                        }
                         if !same {
                             differ += 1;
                             ok = false;
