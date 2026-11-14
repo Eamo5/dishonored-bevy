@@ -2446,8 +2446,9 @@ fields no longer show their stand-in "WW" behind the title.
   to find one; with it, the slaughterhouse; our reading of the scripts, its usable tweak, which
   names the item, being uncooked for an object with nothing to animate). Likewise one the
   scripts unlock (`DisSeqAct_Lock`'s Unlock, on a story flag) whose use answers "Used But Locked"
-  starts locked, says "Locked", and used answers so until the scripts let it open (the Golden
-  Cat district's doors in Dunwall's streets, Galvani's, the Tower's; our reading, as their
+  starts locked, says "Locked", and used answers so until the scripts let it open (the
+  Distillery District's doors into the art dealer's, Galvani's and the Golden Cat, open from the
+  street once Corvo has come out through them; the Tower's; our reading, as their
   `m_bLocked` isn't cooked); the scripts' locks on them hold and are kept in saves. Before, all
   of them opened at once, the way ahead before the scripts allowed it; a whale oil tank "Whale Oil Tank" over "[F] Carry", a
   receptacle rewired by hand "Circuitry" over "[F] Rewire" (`SecuritySystems_twk`). Usable
