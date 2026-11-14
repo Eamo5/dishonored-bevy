@@ -6545,7 +6545,7 @@ fn setup(
             let label = t.text.trim().trim_start_matches("`GBA_Use`").trim();
             let mut ec = commands.spawn((
                 Usable { actor: i as u32, label: if label.is_empty() { "Use".into() } else { label.to_string() }, name: t.name.clone() },
-                crate::interact::NeedsItem { item: t.item.clone(), quantity: t.quantity, remove: t.remove },
+                crate::interact::NeedsItem { item: t.item.clone(), quantity: t.quantity, remove: t.remove, radius: t.radius },
                 Transform::from_translation(Vec3::from(a.position)),
                 DespawnOnExit(GameState::InGame),
             ));

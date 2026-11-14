@@ -735,7 +735,10 @@ are in the settings file, `pad_binding_set` 0-3):
     whether it starts on (`m_bEnabled`), and its words (its tweak's `m_InteractText`: "Heretic's
     Brand" over High Overseer Campbell). It can be used only while the scripts have it on
     (`SeqAct_Toggle`) and the item is carried. Before, Campbell's chair and Granny Rags' furnace
-    could not be used at all.
+    could not be used at all. With the crosshair through its cylinder (its cooked reach) it is
+    focused before what holds it: in The Brigmore Witches' opening, Daud's open chest offers
+    "Equip Gear", not "Close" for its lid, which before kept the focus so the gear could never be
+    taken and the mission stood there.
 - **Piero's Spiritual Remedies laid about the levels** (`DisElixirMana`, `Elixir_Mana_twk`: 117
   in the campaign, more in the stories and the trials) are cooked and taken. Before, only
   Sokolov's elixirs were, and mana remedies could only be bought or found in containers.

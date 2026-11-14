@@ -80,23 +80,23 @@ mod capacity_tests {
     fn a_trigger_asks_for_its_item_and_takes_it_if_it_says() {
         let mut stats = PlayerStats::default();
         stats.coins = 3;
-        let coins = NeedsItem { item: "AbstractItems.Coins_AbsItm".into(), quantity: 1, remove: true };
+        let coins = NeedsItem { item: "AbstractItems.Coins_AbsItm".into(), quantity: 1, remove: true, radius: 0.0 };
         assert!(coins.carried(&stats));
         coins.give_up(&mut stats);
         assert_eq!(stats.coins, 2);
-        let brand = NeedsItem { item: "HereticBrand_AbsItm".into(), quantity: 1, remove: false };
+        let brand = NeedsItem { item: "HereticBrand_AbsItm".into(), quantity: 1, remove: false, radius: 0.0 };
         assert!(!brand.carried(&stats));
         stats.items.insert("HereticBrand_AbsItm".into(), 1);
         assert!(brand.carried(&stats));
         brand.give_up(&mut stats);
         assert_eq!(stats.items["HereticBrand_AbsItm"], 1);
-        let tool = NeedsItem { item: "DLC06_AbsItm_RewireTool".into(), quantity: 1, remove: true };
+        let tool = NeedsItem { item: "DLC06_AbsItm_RewireTool".into(), quantity: 1, remove: true, radius: 0.0 };
         stats.items.insert(crate::gadgets::REWIRE.into(), 1);
         assert!(tool.carried(&stats));
         tool.give_up(&mut stats);
         assert!(!tool.carried(&stats));
-        assert!(NeedsItem { item: "AbstractItems.Coins_AbsItm".into(), quantity: 0, remove: false }.carried(&PlayerStats::default()));
-        let card = NeedsItem { item: "AbstractInv_Graphs.DLC07_Mill_AG_LabKey".into(), quantity: 1, remove: false };
+        assert!(NeedsItem { item: "AbstractItems.Coins_AbsItm".into(), quantity: 0, remove: false, radius: 0.0 }.carried(&PlayerStats::default()));
+        let card = NeedsItem { item: "AbstractInv_Graphs.DLC07_Mill_AG_LabKey".into(), quantity: 1, remove: false, radius: 0.0 };
         assert!(!card.carried(&stats));
         stats.notes.push("ag:AbstractInv_Graphs.DLC07_Mill_AG_LabKey".into());
         assert!(card.carried(&stats));
@@ -333,6 +333,8 @@ pub struct NeedsItem {
     pub item: String,
     pub quantity: u32,
     pub remove: bool,
+    /// its cylinder's reach (m): the crosshair through it focuses it
+    pub radius: f32,
 }
 
 impl NeedsItem {
@@ -858,7 +860,17 @@ fn find_focus(
         let d = to.length();
         // (one with a mesh: the crosshair on it, nothing before it; else its place ahead)
         let on_mesh = bounds.and_then(|b| ray_box(eye, fwd, b.0 - Vec3::splat(0.05), b.1 + Vec3::splat(0.05))).filter(|hit| *hit <= 2.4 && !blocked(fwd * hit.max(0.36)));
-        let score = if let Some(hit) = on_mesh {
+        // (a trigger's cylinder the crosshair passes through, before what holds it: the gear in
+        // Daud's open chest is taken, "Equip Gear", not the chest's lid closed on it)
+        let in_cylinder = need.filter(|n| n.radius > 0.0 && bounds.is_none()).and_then(|n| {
+            let s = to.dot(fwd).clamp(0.0, 2.4);
+            let q = eye + fwd * s - t.translation;
+            let entry = s - n.radius;
+            (q.xz().length() <= n.radius && q.y.abs() <= 1.0 && (entry <= 0.36 || !blocked(fwd * entry))).then_some(s)
+        });
+        let score = if let Some(s) = in_cylinder {
+            s * 0.5
+        } else if let Some(hit) = on_mesh {
             hit + 0.1
         } else {
             if d > 2.4 {
