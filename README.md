@@ -218,7 +218,9 @@ are in the settings file, `pad_binding_set` 0-3):
   it was silent. Taken up and put away it has its own sounds (`m_pEquipSoundEvent`,
   `Heart_Gadget_Equipped`; `m_pUnequipSoundEvent`, `Heart_Gadget_Unequipped`, its beats fading).
   It whispers the original secrets about
-  the person targeted (by story group) or the place (by mission progress), its murmur
+  the person targeted (by story group) or the place (by mission progress), or about the rats or
+  the River Krusts when one is aimed at (the targeted hook's first two ways, the heart's
+  `m_ValidAmbientTargetTypes`; before, they had the place's lines), its murmur
   (`m_FlavorSoundEvents`: `Snd_UI_Heart_Whisper`, a loop hushing the world's sound by 25 dB)
   stopped as the line ends (`Snd_UI_Heart_Whisper_Stop`, the world's sound back up); before, the
   murmur looped on, and the world stayed hushed, after the first whisper. Held, it marks the
@@ -4552,9 +4554,13 @@ input), for example:
 DH_SCRIPT="wait 2; behind lone; attack; wait 1; log; shot kill; exit" ./target/release/dishonored
 ```
 
+`DH_HIDDEN` draws the game without showing its window (screenshots still work). On a machine
+with no display attached Windows never asks a shown window to redraw, and the game would sit on
+its first frame.
+
 Commands: `wait S`, `goto X Y Z [S]` (walk there over the level's navmesh, using, swinging at
 or jumping onto what holds it up; `DH_GOTO_LOG`), `gototask [N] [S]` (to the N-th objective marker), `hoptask [N]` (put down on the walkable floor beside it and use what is there), `under` (what Corvo stands on), `tp/fly X Y Z YAW PITCH`, `look YAW PITCH`, `lookat X Y Z`, `walk S`,
-`attack`, `block S`, `key K`, `hold K S`, `rmb`, `rmbhold S`, `mmbhold S`, `behind [N|lone]`,
+`attack`, `lmbhold S`, `block S`, `key K`, `hold K S`, `rmb`, `rmbhold S`, `mmbhold S`, `behind [N|lone]`,
 `front N|NAME [D]` / `behind N|NAME [D]` (D m before or behind a character: beyond 3 m, the
 furthest spot with a floor and a clear line to it), `ledge [LOW] [HIGH] [crouch]` (before the nearest edge Corvo could mantle onto, LOW-HIGH m
 high; `crouch`, only one he'd arrive crouched on; `DH_MANTLE_LOG` logs what blocks a mantle's

@@ -215,6 +215,7 @@ fn whisper(
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
     npcs: Query<(&Npc, &Transform)>,
     (mut sfx, mut subs): (MessageWriter<PostEvent>, MessageWriter<crate::barks::Subtitle>),
+    (rats, krusts): (Query<&GlobalTransform, With<crate::swarm::Rat>>, Query<&GlobalTransform, With<crate::krust::Krust>>),
 ) {
     let grabbed = cursor.grab_mode != CursorGrabMode::None || scripted.is_some();
     if powers.selected != Power::Heart || !grabbed || !bind.just_pressed(crate::bindings::Act::Secondary) || heart.cooldown > 0.0 {
@@ -233,9 +234,22 @@ fn whisper(
         .max_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(n, _)| n);
     let flags = |f: &str| vm.as_ref().is_some_and(|v| v.flag(f));
-    let (hook, out, group) = match target {
-        Some(n) => ("HEART_TARGET_WHISPER", 2usize, n.story_group.clone()),
-        None => ("HEART_WORLD_AMBIENT_WHISPER", 0, String::new()),
+    // (else a rat or a River Krust aimed at: the targeted hook's first two ways, its rats' lines
+    // and its Krusts', `m_ValidAmbientTargetTypes`; before, they had the place's lines)
+    let aimed = |at: Vec3| at.distance(eye) < 60.0 && (at - eye).normalize_or_zero().dot(fwd) > 0.985;
+    let creature = if target.is_some() {
+        None
+    } else if rats.iter().any(|t| aimed(t.translation() + Vec3::Y * 0.1)) {
+        Some(0usize)
+    } else if krusts.iter().any(|t| aimed(t.translation() + Vec3::Y * 0.3)) {
+        Some(1)
+    } else {
+        None
+    };
+    let (hook, out, group) = match (target, creature) {
+        (Some(n), _) => ("HEART_TARGET_WHISPER", 2usize, n.story_group.clone()),
+        (None, Some(k)) => ("HEART_TARGET_WHISPER", k, String::new()),
+        (None, None) => ("HEART_WORLD_AMBIENT_WHISPER", 0, String::new()),
     };
     let Some(&h) = g.hooks.get(hook) else { return };
     let start = g.nodes[h as usize].outputs.get(out).or(g.nodes[h as usize].outputs.first()).copied().unwrap_or(-1);
@@ -244,7 +258,7 @@ fn whisper(
     heart.seq = seq;
     let Some(line) = line else { return };
     let n = &g.nodes[line as usize];
-    info!("heart: {} ({group}): {}", if group.is_empty() { "world" } else { "target" }, n.text);
+    info!("heart: {} ({group}): {}", if group.is_empty() && creature.is_none() { "world" } else { "target" }, n.text);
     sfx.write(PostEvent::named("Snd_UI_Heart_Whisper", None));
     if !n.event.is_empty() {
         sfx.write(PostEvent::named(&n.event, None));

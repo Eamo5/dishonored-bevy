@@ -233,6 +233,10 @@ fn main() -> AppExit {
                         present_mode: if std::env::var("DH_NOVSYNC").is_ok() { PresentMode::AutoNoVsync } else { PresentMode::AutoVsync },
                         // scripted test runs shouldn't steal focus from whoever is using the machine
                         focused: std::env::var("DH_SCRIPT").is_err(),
+                        // (`DH_HIDDEN`, tests: drawn without being shown; on a machine with no
+                        // display Windows never asks a shown window to redraw, and the game would
+                        // never run a frame)
+                        visible: std::env::var_os("DH_HIDDEN").is_none(),
                         ..default()
                     }),
                     ..default()
