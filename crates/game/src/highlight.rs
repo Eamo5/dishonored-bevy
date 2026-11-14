@@ -101,8 +101,11 @@ fn highlight(
         if let Ok(p) = pickups.get(f) {
             want.extend(p.entities.iter().copied());
         } else if let Ok(u) = usables.get(f) {
-            // (nor the scripts' doors out to other maps, which are doors too)
-            if !travel.as_ref().is_some_and(|t| t.0.contains(&u.actor)) {
+            // (nor the scripts' doors: those out to other maps, and those that are a door's mesh)
+            let door_mesh = level.scene.kismet.actors.get(u.actor as usize).is_some_and(|a| {
+                a.instances.iter().filter_map(|&i| level.scene.instances.get(i as usize)).filter_map(|i| level.scene.meshes.get(i.mesh as usize)).any(|m| m.name.to_ascii_lowercase().contains("door"))
+            });
+            if !door_mesh && !travel.as_ref().is_some_and(|t| t.0.contains(&u.actor)) {
                 actor_meshes(u.actor, &mut want);
             }
         } else if meshes.contains(f) {
