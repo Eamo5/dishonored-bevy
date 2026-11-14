@@ -354,6 +354,44 @@ mod flow_tests {
         assert!(vm.queue.iter().any(|q| q.0 == 1), "let go, it plays out");
     }
 
+    /// An empty object list gives no object: a loop taking entries at random until none is left
+    /// ends.
+    #[test]
+    fn an_empty_object_list_gives_none() {
+        use dhcook::format::{KLink, KVar};
+        let mut g = Graph::default();
+        g.vars.push(KVar { class: "SeqVar_ObjectList".into(), ..Default::default() });
+        g.vars.push(KVar { class: "SeqVar_Object".into(), props: [("ObjValue".to_string(), KVal::Actor(0))].into_iter().collect(), ..Default::default() });
+        g.actors.push(Default::default());
+        g.ops.push(KOp {
+            class: "SeqAct_AccessObjectList".into(),
+            inputs: ["Random", "First", "Last", "At Index"].iter().map(|d| KInput { desc: d.to_string(), ..Default::default() }).collect(),
+            vars: vec![KLink { desc: "Object List".into(), vars: vec![0], write: false }, KLink { desc: "Output Object".into(), vars: vec![1], write: true }],
+            ..Default::default()
+        });
+        // (and an empty object is an empty object)
+        g.vars.push(KVar { class: "SeqVar_Object".into(), ..Default::default() });
+        g.ops.push(KOp {
+            class: "SeqCond_CompareObject".into(),
+            inputs: vec![KInput { desc: "In".into(), ..Default::default() }],
+            outputs: ["A == B", "A != B"].iter().enumerate().map(|(k, d)| KOutput { desc: d.to_string(), links: vec![(2 + k as u32, 0, 0.0)], linked: None }).collect(),
+            vars: vec![KLink { desc: "A".into(), vars: vec![1], write: false }, KLink { desc: "B".into(), vars: vec![2], write: false }],
+            ..Default::default()
+        });
+        for _ in 0..2 {
+            g.ops.push(KOp { class: "SeqAct_Log".into(), inputs: vec![KInput { desc: "In".into(), ..Default::default() }], ..Default::default() });
+        }
+        let mut vm = Vm::new(Arc::new(g), &[]);
+        assert!(matches!(vm.vals[1], Val::Actor(0)));
+        vm.exec(1, 0);
+        assert_eq!(vm.queue.drain(..).map(|q| q.0).collect::<Vec<_>>(), [3], "an object isn't none");
+        vm.exec(0, 0);
+        assert!(matches!(vm.vals[1], Val::None), "the last object stayed");
+        vm.queue.clear();
+        vm.exec(1, 0);
+        assert_eq!(vm.queue.drain(..).map(|q| q.0).collect::<Vec<_>>(), [2], "none is none");
+    }
+
     /// A scripts' own usable object they unlock, whose use answers "Used But Locked", starts
     /// locked; used locked, it answers so and nothing else; unlocked, it is used.
     #[test]
@@ -2628,9 +2666,21 @@ impl Vm {
                 }
             }
             "SeqCond_CompareObject" => {
-                let a = self.read(op, "A");
-                let b = self.read(op, "B");
-                let eq = !a.is_empty() && a == b;
+                // every A against every B, an empty object as much as any (none is none: the
+                // scripts' loops end when the entry they took is none; before, an empty A never
+                // matched, and Corvo's blink-point search in The Brigmore Witches' opening fight
+                // never ended)
+                let raw = |desc: &str| -> Vec<Val> {
+                    self.link_vars(op, desc)
+                        .into_iter()
+                        .flat_map(|v| match self.value(v) {
+                            Val::List(l) => l,
+                            x => vec![x],
+                        })
+                        .collect()
+                };
+                let (a, b) = (raw("A"), raw("B"));
+                let eq = a.iter().all(|x| b.iter().all(|y| x == y));
                 self.fire_desc(op, if eq { "A == B" } else { "A != B" });
             }
             "SeqCond_IsAlive" => self.fire(op, 0),
@@ -3176,6 +3226,12 @@ impl Vm {
                         }
                     };
                     self.write(op, "Output Object", list[i].clone());
+                } else {
+                    // (an empty list gives nothing: the scripts' loops that take an entry at
+                    // random and remove it until none is left end on it; before, the last entry
+                    // stayed, and Corvo's blink-point search in The Brigmore Witches' opening ran
+                    // 20000 steps in a frame)
+                    self.write(op, "Output Object", Val::None);
                 }
                 self.fire(op, 0);
             }

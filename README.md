@@ -2328,7 +2328,11 @@ fields no longer show their stand-in "WW" behind the title.
   `DisSeqCond_CompareTweaks` compares a character's pawn tweak (exact, or a variant);
   `DisSeqCond_IsDoorOpen`. Also `DisSeqAct_SetPlayerHealth` / `Mana`, `ModifyElixirCount`,
   `GiveUpgrade`, `RemoveKey`, `SetObjectiveHidden`, `TogglePowerWheel`,
-  `SeqAct_AccessObjectList` and `DisSeqAct_TriggerExplosion` (the explosion tweak's blast
+  `SeqAct_AccessObjectList` (an empty list gives no object, and `SeqCond_CompareObject` finds no
+  object equal to no object, every A against every B as UE3 compares them, as the scripts' loops
+  that take an entry and remove it until none is left need to end; before, the last entry stayed,
+  an empty A never matched, and Corvo's blink-point search in The Brigmore Witches' opening fight
+  spun 20000 steps in a frame) and `DisSeqAct_TriggerExplosion` (the explosion tweak's blast
   cooked onto the op: the Prison's outer door). Also
   `SeqAct_SetPhysics` on props, `DisSeqAct_OverridePossess` (the possession tweak cooked onto
   the op through Arkane's tweak inheritance, `m_FallbackChainCooked` and `m_FallbackSkip`:
