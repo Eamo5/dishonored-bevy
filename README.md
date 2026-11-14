@@ -2784,6 +2784,14 @@ fields no longer show their stand-in "WW" behind the title.
   over the game cover those. Before, the epilogue's tableaux (`L_Out_P`'s `Scene1_Cam` and the
   rest, played without the scripts' cinematic mode) showed his health and mana, his blade and
   his outstretched hand over the Outsider's last words.
+- **Movement tracks in the world's frame**: a move track whose first key lies within 8 m of its
+  actor follows its keys where they are (`InterpTrackMove`'s `MoveFrame` at its default,
+  `IMF_World`, which the cook doesn't see stored and so marked relative); one further off is
+  relative to where its actor stands (the Tower's boat lowered from its dock). Our reading of the
+  data: Kingsparrow's arrival has the same keys in both chaos versions with Samuel's boat placed a
+  little differently in each, 3 to 5 m and 18 degrees from its first key. Before, the boat's
+  course was turned about that offset and ran 20 m off it into the island's rocks, where Corvo
+  and Samuel stood black in the rocks' unlit light samples; now it comes in to the pier.
 - **Scenes**: matinees move, show, hide and switch actors, cut cameras, fade, play the
   characters' animations and lines, and walk them to their marks (`InterpTrackLocomotion`, at
   the key's gait), turn them to face one another (`InterpTrackFaceTo`) and turn their heads to

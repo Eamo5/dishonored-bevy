@@ -263,10 +263,20 @@ fn move_tm(pos: &[KCurvePoint], rot: &[KCurvePoint], relative: bool, init: Mat4,
         let k = 65536.0 / 360.0;
         Mat4::from_translation(p) * rot_matrix([(e[1] * k) as i32, (e[2] * k) as i32, (e[0] * k) as i32])
     };
-    if relative {
+    // (a track the cook marks relative whose keys are world places, its first beside the actor:
+    // `MoveFrame` left at its default, `IMF_World`, isn't stored, and the cook read its absence as
+    // relative. Taken as relative, a track whose actor stands off its first key was turned about
+    // that offset: Kingsparrow's boat, placed 3 m and 18 degrees from its first key, the same keys
+    // in both chaos versions with the boat placed differently in each, ran 20 m off its course
+    // into the island's rocks. Our reading: those with the first key within 8 m of the actor
+    // follow their keys; those further, as the Tower's boat lowered from its dock, are relative)
+    let first = key(f32::MIN);
+    let (p0, i0) = (first.w_axis.truncate(), init.w_axis.truncate());
+    let world_keys = p0.length() > 100.0 && p0.distance(i0) < 800.0;
+    if relative && !world_keys {
         // relative to where the actor stood when it began: the first key is that place (the
         // Tower's boat is lowered from the dock, sails, and rises in the waterlock)
-        init * key(f32::MIN).inverse() * key(t)
+        init * first.inverse() * key(t)
     } else {
         key(t)
     }
