@@ -354,6 +354,49 @@ mod flow_tests {
         assert!(vm.queue.iter().any(|q| q.0 == 1), "let go, it plays out");
     }
 
+    /// Bent time holds the scripts' delays and links' delays at the world's pace, those marked
+    /// `m_bAlwaysOutOfBendTime` going on at Corvo's.
+    #[test]
+    fn delays_keep_the_world_pace_unless_out_of_bend_time() {
+        let mut g = Graph::default();
+        let delay = |flag: bool| KOp {
+            class: "SeqAct_Delay".into(),
+            inputs: vec![KInput { desc: "Start".into(), ..Default::default() }],
+            outputs: vec![KOutput { desc: "Finished".into(), links: vec![(2, 0, 0.0)], linked: None }],
+            props: [("Duration".to_string(), KVal::Float(1.0)), ("m_bAlwaysOutOfBendTime".to_string(), KVal::Bool(flag))].into_iter().collect(),
+            ..Default::default()
+        };
+        g.ops.push(delay(false));
+        g.ops.push(delay(true));
+        g.ops.push(KOp { class: "SeqAct_Log".into(), inputs: vec![KInput { desc: "In".into(), ..Default::default() }], ..Default::default() });
+        // (a log out of bent time, reached over a linked delay of 1 s, and one in it)
+        let mut flagged_log = KOp { class: "SeqAct_Log".into(), inputs: vec![KInput { desc: "In".into(), ..Default::default() }], ..Default::default() };
+        flagged_log.props.insert("m_bAlwaysOutOfBendTime".into(), KVal::Bool(true));
+        g.ops.push(flagged_log);
+        g.ops.push(KOp { class: "SeqAct_Log".into(), inputs: vec![KInput { desc: "In".into(), ..Default::default() }], ..Default::default() });
+        g.ops.push(KOp { class: "SeqAct_Log".into(), outputs: vec![KOutput { desc: "Out".into(), links: vec![(3, 0, 1.0), (4, 0, 1.0)], linked: None }], ..Default::default() });
+        let mut vm = Vm::new(Arc::new(g), &[]);
+        vm.exec(0, 0);
+        vm.exec(1, 0);
+        vm.fire(5, 0);
+        vm.queue.clear();
+        // Bend Time at its second level: the world stopped, Corvo at 0.9
+        let mut reached: Vec<u32> = Vec::new();
+        for _ in 0..20 {
+            vm.tick_dilated(0.1, 0.0, 0.9);
+            reached.extend(vm.queue.drain(..).map(|q| q.0));
+        }
+        reached.sort();
+        assert_eq!(reached, [2, 3], "only the ops out of bent time went on");
+        reached.clear();
+        for _ in 0..12 {
+            vm.tick_dilated(0.1, 1.0, 1.0);
+            reached.extend(vm.queue.drain(..).map(|q| q.0));
+        }
+        reached.sort();
+        assert_eq!(reached, [2, 4], "the world's go on once time is itself again");
+    }
+
     /// A scene's event tracks fire as their flags say: played forwards only those that fire
     /// forwards, skipped only those that fire when jumped over.
     #[test]
@@ -5792,7 +5835,18 @@ impl Vm {
     }
 
     fn tick(&mut self, dt: f32) {
+        self.tick_dilated(dt, 1.0, 1.0);
+    }
+
+    /// One step of `dt` real seconds with the world's time scale and Corvo's own (bent time,
+    /// slow motion): the ops' delays, playing matinees, timed ops and their links' delays go at
+    /// the world's pace, or at his where the op (a link's: the op it leads to) is
+    /// `m_bAlwaysOutOfBendTime` (as roshan's r614/blink research decoded the sequence's tick,
+    /// 0x00700740: an unflagged op's time the world's dilation, a flagged one's the player's).
+    fn tick_dilated(&mut self, dt: f32, world: f32, own: f32) {
         self.proximity_hooks();
+        let g = self.g.clone();
+        let op_dt = |op: u32| dt * if out_of_bend(&g, op) { own } else { world };
         self.time += dt;
         // DH_INTERP_LOG: the matinees running, once a second
         if std::env::var("DH_INTERP_LOG").is_ok() && (self.time - dt).floor() != self.time.floor() {
@@ -5805,7 +5859,7 @@ impl Vm {
         self.tick_conversations(dt);
         let mut due = Vec::new();
         self.timers.retain_mut(|t| {
-            t.0 -= dt;
+            t.0 -= op_dt(t.1);
             if t.0 <= 0.0 {
                 due.push((t.1, t.2));
                 false
@@ -5826,12 +5880,11 @@ impl Vm {
         let mut skipped = false;
         let mut subtitles: Vec<(String, f32)> = Vec::new();
         let paused: Vec<bool> = self.st.iter().map(|s| s.paused).collect();
-        let g = self.g.clone();
         let disturbed = std::mem::take(&mut self.disturbed);
         self.latent.retain_mut(|l| match l {
             Latent::Delay { op, left } => {
                 if !paused[*op as usize] {
-                    *left -= dt;
+                    *left -= op_dt(*op);
                 }
                 if *left <= 0.0 {
                     done.push((*op, 0));
@@ -5858,7 +5911,7 @@ impl Vm {
                     }
                 }
                 let prev = *t;
-                *t = (*t + dt * *rate).clamp(0.0, *len);
+                *t = (*t + op_dt(*op) * *rate).clamp(0.0, *len);
                 // its sections hold it till their pins are pulled: looping (Lizzy Stride asleep
                 // in the pillory), or paused at their start; one with a count of its own loops
                 // that many times. (`wrap`: the stretch looped over, its keys played again.)
@@ -5965,7 +6018,7 @@ impl Vm {
                 }
             }
             Latent::Spawn { op, left, .. } => {
-                *left -= dt;
+                *left -= op_dt(*op);
                 if *left <= 0.0 {
                     done.push((*op, 2));
                     done.push((*op, 1));
@@ -5975,7 +6028,7 @@ impl Vm {
                 }
             }
             Latent::After { op, out, left } => {
-                *left -= dt;
+                *left -= op_dt(*op);
                 if *left <= 0.0 {
                     done.push((*op, *out));
                     false
@@ -7541,9 +7594,14 @@ mod power_used_tests {
     }
 }
 
-fn run(time: Res<Time>, mut vm: ResMut<Vm>) {
+/// Whether an op goes on at Corvo's pace through bent time (its `m_bAlwaysOutOfBendTime`).
+fn out_of_bend(g: &Graph, op: u32) -> bool {
+    g.ops.get(op as usize).is_some_and(|o| matches!(o.props.get("m_bAlwaysOutOfBendTime"), Some(KVal::Bool(true))))
+}
+
+fn run(time: Res<Time>, tc: Res<crate::gameplay::TimeControl>, mut vm: ResMut<Vm>) {
     vm.pump();
-    vm.tick(time.delta_secs());
+    vm.tick_dilated(time.delta_secs(), tc.world_scale(), tc.own_scale());
     vm.pump();
 }
 
