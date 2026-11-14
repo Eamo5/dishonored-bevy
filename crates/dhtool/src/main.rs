@@ -1186,7 +1186,10 @@ fn main() -> Result<()> {
                     let mut ok = true;
                     for (j, c) in t.conversations.iter().enumerate().take(had) {
                         let new = serde_json::to_value(&c.steps)?;
-                        let (Some(old), Some(newa)) = (convs[j]["steps"].as_array(), new.as_array()) else { continue };
+                        // (the cooked steps through the same types, so their numbers compare alike)
+                        let Ok(old) = serde_json::from_value::<Vec<dhcook::format::KDialogStep>>(convs[j]["steps"].clone()).map(|s| serde_json::to_value(s)) else { continue };
+                        let old = old?;
+                        let (Some(old), Some(newa)) = (old.as_array(), new.as_array()) else { continue };
                         let end = serde_json::json!("End");
                         // (step for step, or with a last step going on where the cook had none)
                         let tail_goto = newa.len() == old.len() + 1 && newa.last().is_some_and(|n| n.get("Goto").is_some());
@@ -1194,6 +1197,10 @@ fn main() -> Result<()> {
                         if !same {
                             differ += 1;
                             ok = false;
+                            if std::env::var_os("DH_PATCH_LOG").is_some() {
+                                let at = old.iter().zip(newa).position(|(o, n)| o != n && !(*o == end && n.get("Goto").is_some())).unwrap_or(old.len().min(newa.len()));
+                                println!("  {} {}: {} steps cooked, {} now; first unlike at {at}: {:?} / {:?}", t.path, c.label, old.len(), newa.len(), old.get(at), newa.get(at));
+                            }
                             continue;
                         }
                         if old != newa {
