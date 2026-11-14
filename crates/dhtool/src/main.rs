@@ -1147,6 +1147,63 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Some("patch-barks") => {
+            // dhtool patch-barks <dir> [map...] [--force]: a cooked map's barks (its characters'
+            // voices' hook graphs) taken again from the voices in its level packages under <dir>,
+            // where the cook's are the same; with --force wherever they differ
+            let found = package_index(&PathBuf::from(&args[2]))?;
+            let root = PathBuf::from("cache").join("maps");
+            let force = args.iter().any(|a| a == "--force");
+            let named: Vec<String> = args[3..].iter().filter(|a| !a.starts_with("--")).cloned().collect();
+            for m in cooked_maps(&root, &named)? {
+                let path = root.join(format!("{m}.json"));
+                let mut scene: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+                let names: Vec<String> = scene["packages"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                let levels: Vec<upk::Package> = names
+                    .iter()
+                    .filter_map(|n| found.get(&n.to_ascii_lowercase()).and_then(|p| std::fs::read(p).ok().and_then(|b| upk::Package::from_bytes(n.clone(), p.clone(), b).ok())))
+                    .collect();
+                let Some(barks) = scene["barks"].as_array_mut() else { continue };
+                let (mut renewed, mut same, mut differ, mut missing) = (0, 0, 0, 0);
+                for b in barks.iter_mut() {
+                    let Some(name) = b["name"].as_str().map(str::to_string) else { continue };
+                    let voice = levels.iter().find_map(|pkg| {
+                        (1..=pkg.exports.len() as i32).find(|&i| pkg.class_name(i).starts_with("DisDialogVoiceData") && pkg.obj_path(i) == name).and_then(|i| dhcook::kismet::bark_voice(pkg, i))
+                    });
+                    let Some(v) = voice else {
+                        missing += 1;
+                        continue;
+                    };
+                    let new = serde_json::to_value(&v)?;
+                    let old = serde_json::from_value::<dhcook::format::BarkVoice>(b.clone()).ok().map(|o| serde_json::to_value(o)).transpose()?;
+                    // (the new as the cook had it before it knew the speaker's and Corvo's branches:
+                    // those passed through)
+                    let mut before = new.clone();
+                    for h in before["hooks"].as_array_mut().into_iter().flatten() {
+                        for n in h["nodes"].as_array_mut().into_iter().flatten() {
+                            let br = n["step"].get("Branch");
+                            if br.is_some_and(|b| b.get("Seen").or(b.get("Equipped")).or(b.get("Tweaks")).is_some() || *b == serde_json::json!("Available")) {
+                                n["step"] = serde_json::json!("Pass");
+                            }
+                        }
+                    }
+                    if old.as_ref() == Some(&new) {
+                        same += 1;
+                    } else if force || old.as_ref() == Some(&before) {
+                        *b = new;
+                        renewed += 1;
+                    } else {
+                        differ += 1;
+                    }
+                }
+                println!("{m}: {same} as cooked, {renewed} renewed, {differ} differ, {missing} not found");
+                if renewed > 0 {
+                    let tmp = path.with_extension("json.tmp");
+                    std::fs::write(&tmp, serde_json::to_vec(&scene)?)?;
+                    std::fs::rename(&tmp, &path)?;
+                }
+            }
+        }
         Some("patch-dialogs") => {
             // dhtool patch-dialogs <dir> [map...]: a cooked map's conversations brought up to the
             // cook's, from the level packages found under <dir> (`<name>.upk`, or a TFC

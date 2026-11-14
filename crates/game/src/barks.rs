@@ -228,7 +228,7 @@ pub struct BarkMemory {
 /// suspicion, who it is (the one who set it off being Corvo, or what he possesses),
 /// time limits, the story's state. Its voice and hook are `key`. None: it says nothing.
 #[allow(clippy::too_many_arguments)]
-fn walk_bark(bark: &dhcook::format::BarkHook, key: (u32, usize), out: usize, (e, suspicious, group): (Entity, bool, &str), vm: Option<&crate::kismet::Vm>, mem: &mut BarkMemory, now: f32) -> Option<usize> {
+fn walk_bark(bark: &dhcook::format::BarkHook, key: (u32, usize), out: usize, (e, suspicious, group, tweaks): (Entity, bool, &str, &[String]), vm: Option<&crate::kismet::Vm>, mem: &mut BarkMemory, now: f32) -> Option<usize> {
     use dhcook::format::{BarkStep, KBranch};
     let mut node = *bark.roots.get(out)?;
     for _ in 0..64 {
@@ -240,7 +240,11 @@ fn walk_bark(bark: &dhcook::format::BarkHook, key: (u32, usize), out: usize, (e,
                 let st = mem.branches.entry((key.0, key.1, node as usize, owner)).or_default();
                 crate::kismet::pick_turn(b, st, false)?
             }
-            // (the story's state: a flag, a conversation had, a task; not so without the scripts)
+            // (the speaker's own tweaks: its character's, the first matching entry's way, else the
+            // last)
+            BarkStep::Branch(KBranch::Tweaks { initiator: false, tweaks: list }) => list.iter().position(|(t, exact)| if *exact { tweaks.first() == Some(t) } else { tweaks.contains(t) }).unwrap_or(list.len()),
+            // (the story's state: a flag, a conversation had, a task; what Corvo holds; not so
+            // without the scripts)
             BarkStep::Branch(b) => vm.and_then(|v| v.condition(b, None)).unwrap_or(0),
             BarkStep::Suspicion => suspicious as usize,
             BarkStep::StoryGroup { initiator, groups } => {
@@ -688,7 +692,8 @@ fn npc_barks(
                     };
                     (!pool.is_empty()).then(|| pool[rand::random_range(0..pool.len())])
                 } else {
-                    walk_bark(bark, (npc.voice.unwrap_or(0), r.hook), out_k.unwrap_or(0), (e, npc.suspecting, &npc.story_group), vm.as_deref(), &mut memory, now)
+                    let tweaks = npc.npc_type.and_then(|i| level.scene.npc_types.get(i as usize)).map(|ty| ty.lineage.as_slice()).unwrap_or(&[]);
+                    walk_bark(bark, (npc.voice.unwrap_or(0), r.hook), out_k.unwrap_or(0), (e, npc.suspecting, &npc.story_group, tweaks), vm.as_deref(), &mut memory, now)
                 };
                 let Some((i, (event, text))) = line.and_then(|i| bark.lines.get(i).map(|l| (i, l))) else {
                     if log {
@@ -774,22 +779,27 @@ mod walk_tests {
         let mut mem = BarkMemory::default();
         // suspicion: 0 -> line 0, 1 -> nothing said
         let h = hook(vec![(BarkStep::Suspicion, vec![1, -1]), (BarkStep::Line(0), vec![])], vec![0]);
-        assert_eq!(walk_bark(&h, (0, 0), 0, (e, false, ""), None, &mut mem, 0.0), Some(0));
-        assert_eq!(walk_bark(&h, (0, 0), 0, (e, true, ""), None, &mut mem, 0.0), None);
+        assert_eq!(walk_bark(&h, (0, 0), 0, (e, false, "", &[]), None, &mut mem, 0.0), Some(0));
+        assert_eq!(walk_bark(&h, (0, 0), 0, (e, true, "", &[]), None, &mut mem, 0.0), None);
         // the speaker's story group, else its "everyone else" way; one who set it off is Corvo
         let groups = vec!["Twk_ID_CityGuard".to_string(), "Twk_ID_LowerGuard".to_string()];
         let h = hook(vec![(BarkStep::StoryGroup { initiator: false, groups: groups.clone() }, vec![1, 2, 3]), (BarkStep::Line(1), vec![]), (BarkStep::Line(2), vec![]), (BarkStep::Line(3), vec![])], vec![0]);
-        assert_eq!(walk_bark(&h, (0, 1), 0, (e, false, "Twk_ID_LowerGuard"), None, &mut mem, 0.0), Some(2));
-        assert_eq!(walk_bark(&h, (0, 1), 0, (e, false, "Twk_ID_Thug"), None, &mut mem, 0.0), Some(3));
+        assert_eq!(walk_bark(&h, (0, 1), 0, (e, false, "Twk_ID_LowerGuard", &[]), None, &mut mem, 0.0), Some(2));
+        assert_eq!(walk_bark(&h, (0, 1), 0, (e, false, "Twk_ID_Thug", &[]), None, &mut mem, 0.0), Some(3));
         let h2 = hook(vec![(BarkStep::StoryGroup { initiator: true, groups }, vec![1, 2, 3]), (BarkStep::Line(1), vec![]), (BarkStep::Line(2), vec![]), (BarkStep::Line(3), vec![])], vec![0]);
-        assert_eq!(walk_bark(&h2, (0, 2), 0, (e, false, "Twk_ID_CityGuard"), None, &mut mem, 0.0), Some(3));
+        assert_eq!(walk_bark(&h2, (0, 2), 0, (e, false, "Twk_ID_CityGuard", &[]), None, &mut mem, 0.0), Some(3));
+        // the speaker's tweaks: the first entry it is or derives from, else the last way
+        let tw = vec![("Twk_Pawn_Weeper".to_string(), false), ("Twk_Pawn_CityGuard".to_string(), false)];
+        let h3 = hook(vec![(BarkStep::Branch(KBranch::Tweaks { initiator: false, tweaks: tw }), vec![1, 2, 3]), (BarkStep::Line(1), vec![]), (BarkStep::Line(2), vec![]), (BarkStep::Line(3), vec![])], vec![0]);
+        assert_eq!(walk_bark(&h3, (0, 5), 0, (e, false, "", &["Twk_Pawn_CityGuard_A".to_string(), "Twk_Pawn_CityGuard".to_string()]), None, &mut mem, 0.0), Some(2));
+        assert_eq!(walk_bark(&h3, (0, 5), 0, (e, false, "", &[]), None, &mut mem, 0.0), Some(3));
         // a random branch by its weights: all on the second way
         let h = hook(vec![(BarkStep::Branch(KBranch::Random { weights: vec![0.0, 100.0], unique: false }), vec![1, 2]), (BarkStep::Line(0), vec![]), (BarkStep::Line(1), vec![])], vec![0]);
-        assert!((0..20).all(|_| walk_bark(&h, (0, 3), 0, (e, false, ""), None, &mut mem, 0.0) == Some(1)));
+        assert!((0..20).all(|_| walk_bark(&h, (0, 3), 0, (e, false, "", &[]), None, &mut mem, 0.0) == Some(1)));
         // a time limit: once, then its other way until the time is up
         let h = hook(vec![(BarkStep::TimeLimit(10.0), vec![1, -1]), (BarkStep::Line(0), vec![])], vec![0]);
-        assert_eq!(walk_bark(&h, (0, 4), 0, (e, false, ""), None, &mut mem, 1.0), Some(0));
-        assert_eq!(walk_bark(&h, (0, 4), 0, (e, false, ""), None, &mut mem, 5.0), None);
-        assert_eq!(walk_bark(&h, (0, 4), 0, (e, false, ""), None, &mut mem, 12.0), Some(0));
+        assert_eq!(walk_bark(&h, (0, 4), 0, (e, false, "", &[]), None, &mut mem, 1.0), Some(0));
+        assert_eq!(walk_bark(&h, (0, 4), 0, (e, false, "", &[]), None, &mut mem, 5.0), None);
+        assert_eq!(walk_bark(&h, (0, 4), 0, (e, false, "", &[]), None, &mut mem, 12.0), Some(0));
     }
 }

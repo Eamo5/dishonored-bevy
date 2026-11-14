@@ -40,6 +40,7 @@ cargo run --release -p dhtool -- cook-gamedata    # powers, charms, stores, text
 #  cook's from the level packages under DIR, `<name>.upk` or TFC Installer's `.upkBackup`)
 cargo run --release -p dhtool -- patch-dialogs DIR [map...]
 cargo run --release -p dhtool -- patch-post DIR [map...]     # the same for the level's grade
+cargo run --release -p dhtool -- patch-barks DIR [map...]    # and the characters' barks
 
 # 2. Play
 cargo run --release -p dishonored                      # main menu (New Game starts at Dunwall Tower)
@@ -2649,7 +2650,9 @@ fields no longer show their stand-in "WW" behind the title.
   entry's way, else the last, as the research decoded the group branches) and
   `DisConv_IsSpeakerAvailable` whether the speaker is there and up. Before, each took its first
   way: no label was ever seen, so the guests started over each time, and the guards always
-  spoke as to an unarmed man.
+  spoke as to an unarmed man. The characters' barks branch so too, a speaker's tweaks being its
+  character's (`dhtool patch-barks DIR` takes a cooked map's barks again from its packages, where
+  they differ from the cook's only by these branches).
   Within a conversation its own branch nodes pick the way as it reaches them: by a story flag
   (`DisConv_CheckStoryFlag`), a conversation had (`DisConv_ConversationFired`,
   `DisConv_HadConversation`), at random or in turn (below); they used to take their first way
@@ -4658,7 +4661,7 @@ Known outstanding gameplay gaps from source and original-data inspection:
 | --- | --- |
 | `crates/upk` | UE3 package reader: LZO/zlib chunks, name/import/export tables, tagged properties, static/skeletal meshes, textures (incl. `.tfc` bulk data) |
 | `crates/dhcook` | Cooker: levels and their streaming sublevels, materials and shaders, lightmaps, light volumes, NPC archetypes and factions, Kismet/Matinee, security devices, Wwise audio, Scaleform UI, game data |
-| `crates/dhtool` | CLI for cooking and inspecting packages (`cook`, `cook-all`, `cook-ui`, `cook-audio`, `cook-gamedata`, `patch-dialogs`, `patch-post`, `list`, `props`, `findprop`, `swfdump`, `mat`, `graph`, ...) |
+| `crates/dhtool` | CLI for cooking and inspecting packages (`cook`, `cook-all`, `cook-ui`, `cook-audio`, `cook-gamedata`, `patch-dialogs`, `patch-post`, `patch-barks`, `list`, `props`, `findprop`, `swfdump`, `mat`, `graph`, ...) |
 | `crates/game` | The Bevy game |
 
 ### Cache format (`./cache`)
