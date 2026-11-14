@@ -107,6 +107,7 @@ fn script_goto(
     doors: Query<&GlobalTransform, With<crate::interact::Door>>,
     things: Query<(&Transform, Option<&crate::interact::Pickup>, Option<&crate::interact::Usable>), Or<(With<crate::interact::Pickup>, With<crate::interact::Usable>)>>,
     rigs: Query<&crate::usables::UsableRig>,
+    (npcs, vm): (Query<(&Npc, &Transform, Option<&crate::npc::FromSpawner>), Without<Player>>, Option<Res<crate::kismet::Vm>>),
 ) {
     // arrived where something is to be taken or used: facing it, then [F]
     if let Some(left) = goto.use_in {
@@ -145,6 +146,11 @@ fn script_goto(
                 .and_then(|i| things.iter().find(|(_, p, _)| p.is_some_and(|p| p.index == i)).map(|(x, _, _)| x.translation))
                 .or_else(|| actor.and_then(|a| rigs.iter().find(|r| r.actor() == Some(a)).map(|r| r.center())))
                 .or_else(|| actor.and_then(|a| things.iter().find(|(_, p, u)| p.is_none() && u.is_some_and(|u| u.actor == a)).map(|(x, _, _)| x.translation)))
+                // (a character: spoken to, facing its chest)
+                .or_else(|| {
+                    let s = actor.and_then(|a| vm.as_ref()?.g.actors.get(a as usize)?.spawner)?;
+                    npcs.iter().find(|(n, _, f)| !n.is_down() && f.is_some_and(|f| f.0 == s)).map(|(_, nt, _)| nt.translation + Vec3::Y * 0.5)
+                })
                 .filter(|x| x.distance(eye) < 2.5);
             if let Some(at) = own.or_else(|| things.iter().map(|(x, _, _)| x.translation).filter(|x| x.distance(goal) < 2.5).min_by(|a, b| a.distance(goal).total_cmp(&b.distance(goal)))) {
                 let to = at - eye;
@@ -202,6 +208,9 @@ fn script_goto(
                 script.held.push((Input::Key(KeyCode::KeyF), 0.05));
                 "use"
             }
+            // (a swing at what blocks the way; not with a friend at hand: the walk to Teague Martin
+            // assassinated him, and the mission was lost)
+            2 if npcs.iter().any(|(n, nt, _)| !n.is_down() && !n.hostile() && nt.translation.distance(t.translation) < 3.5) => "nothing (a friend at hand)",
             2 => {
                 script.held.push((Input::Mouse(MouseButton::Left), 0.05));
                 "attack"
@@ -222,7 +231,8 @@ fn script_goto(
             }
         };
         p.pitch = -0.2;
-        info!("script: goto held up at {feet:.2}: {what}");
+        let near = npcs.iter().filter(|(n, _, _)| !n.is_down()).map(|(n, nt, _)| (nt.translation.distance(t.translation), n.hostile())).min_by(|a, b| a.0.total_cmp(&b.0));
+        info!("script: goto held up at {feet:.2}: {what} (nearest character {near:.2?})");
     }
     match script.held.iter_mut().find(|(i, _)| *i == Input::Key(KeyCode::KeyW)) {
         Some(h) => h.1 = 0.2,
