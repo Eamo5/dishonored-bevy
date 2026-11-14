@@ -9634,33 +9634,46 @@ fn post_process(pp: &Props) -> PostProcess {
     let cb = sub(&uber, "m_CBParameters");
     let hdr = sub(&uber, "m_HDRParameters");
     let bloom = sub(pp, "m_PpBloomParameters");
-    if let Some(v) = cb.vector("m_CrMgYbShadTones") {
+    // (a field counts when its group's override flag and its own are set, each at
+    // `ArkUberPpParameters`' default when the settings leave it: on, but for the
+    // post-desaturation, grain, brightness and contrast)
+    let on = |p: &Props, n: &str, d: bool| p.bool(n).unwrap_or(d);
+    let (cb_on, hdr_on, dof_on) = (on(&uber, "m_bOverrideCBParameters", true), on(&uber, "m_bOverrideHDRParameters", true), on(&uber, "m_bOverrideDOFParameters", true));
+    let cb_f = |n: &str, d: bool| cb_on && on(&cb, &format!("m_bOverride{n}"), d);
+    let hdr_f = |n: &str, d: bool| hdr_on && on(&hdr, &format!("m_bOverride{n}"), d);
+    let dof_f = |n: &str| dof_on && on(&dof, &format!("m_bOverride{n}"), true);
+    if let Some(v) = cb.vector("m_CrMgYbShadTones").filter(|_| cb_f("CrMgYbShadTones", true)) {
         out.shadows = v;
     }
-    if let Some(v) = cb.vector("m_CrMgYbMidTones") {
+    if let Some(v) = cb.vector("m_CrMgYbMidTones").filter(|_| cb_f("CrMgYbMidTones", true)) {
         out.midtones = v;
     }
-    if let Some(v) = cb.vector("m_CrMgYbHighTones") {
+    if let Some(v) = cb.vector("m_CrMgYbHighTones").filter(|_| cb_f("CrMgYbHighTones", true)) {
         out.highlights = v;
     }
-    let f = |p: &Props, n: &str, d: f32| p.float(n).unwrap_or(d);
-    out.balance_opacity = f(&cb, "m_Opacity", out.balance_opacity);
-    out.pre_desaturation = f(&cb, "m_PreDesaturation", out.pre_desaturation);
-    out.post_desaturation = f(&cb, "m_PostDesaturation", out.post_desaturation);
-    out.exposure = f(&hdr, "m_Exposure", out.exposure);
-    out.gamma = f(&hdr, "m_GammaAdjustment", out.gamma);
-    out.film_grain = f(&hdr, "m_FilmGrainNoise", out.film_grain);
-    out.brightness = f(&hdr, "m_GimpBrightness", out.brightness);
-    out.contrast = f(&hdr, "m_GimpContrast", out.contrast);
+    let f = |p: &Props, n: &str, d: f32, use_it: bool| if use_it { p.float(n).unwrap_or(d) } else { d };
+    out.balance_opacity = f(&cb, "m_Opacity", out.balance_opacity, cb_f("Opacity", true));
+    out.pre_desaturation = f(&cb, "m_PreDesaturation", out.pre_desaturation, cb_f("PreDesaturation", true));
+    out.post_desaturation = f(&cb, "m_PostDesaturation", out.post_desaturation, cb_f("PostDesaturation", false));
+    out.exposure = f(&hdr, "m_Exposure", out.exposure, hdr_f("Exposure", true));
+    out.gamma = f(&hdr, "m_GammaAdjustment", out.gamma, hdr_f("GammaAdjustment", true));
+    out.film_grain = f(&hdr, "m_FilmGrainNoise", out.film_grain, hdr_f("FilmGrainNoise", false));
+    out.brightness = f(&hdr, "m_GimpBrightness", out.brightness, hdr_f("GimpBrightness", false));
+    out.contrast = f(&hdr, "m_GimpContrast", out.contrast, hdr_f("GimpContrast", false));
+    out.flags_read = true;
     out.bloom = bloom.bool("m_bEnable").unwrap_or(out.bloom);
     if let Some(Value::LinearColor(c)) = bloom.get("m_Tint") {
         out.bloom_tint = [c[0], c[1], c[2]];
     }
-    out.bloom_threshold = f(&bloom, "m_Threshold", out.bloom_threshold);
-    out.bloom_scale = f(&bloom, "m_Scale", out.bloom_scale);
-    out.focus_distance = f(&dof, "m_FocusDistance", 1000.0) * UNIT;
-    out.in_focus_radius = f(&dof, "m_InFocusRadius", 300.0) * UNIT;
-    out.far_blur = f(&dof, "m_FarBlurAmount", out.far_blur);
+    out.bloom_threshold = f(&bloom, "m_Threshold", out.bloom_threshold, true);
+    out.bloom_scale = f(&bloom, "m_Scale", out.bloom_scale, true);
+    if dof_f("FocusDistance") {
+        out.focus_distance = f(&dof, "m_FocusDistance", 1000.0, true) * UNIT;
+    }
+    if dof_f("InFocusRadius") {
+        out.in_focus_radius = f(&dof, "m_InFocusRadius", 300.0, true) * UNIT;
+    }
+    out.far_blur = f(&dof, "m_FarBlurAmount", out.far_blur, dof_f("FarBlurAmount"));
     out
 }
 

@@ -1958,6 +1958,7 @@ fn spawn_level(
     commands.insert_resource(crate::fxlight::RuntimeLights(dyn_lights.iter().map(|(li, p, pos, r, params)| (*li as u32, *p, *pos, *r, *params)).collect()));
     let mut scene = scene;
     scene.kill_y = fall_out_height(&scene);
+    scene.post = scene.post.sanitized();
     commands.insert_resource(LevelInfo { scene });
 }
 

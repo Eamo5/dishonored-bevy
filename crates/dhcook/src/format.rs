@@ -412,6 +412,9 @@ pub struct PostProcess {
     pub focus_distance: f32,
     pub in_focus_radius: f32,
     pub far_blur: f32,
+    /// cooked with the settings' override flags read (older caches: without)
+    #[serde(default)]
+    pub flags_read: bool,
 }
 
 impl Default for PostProcess {
@@ -435,7 +438,25 @@ impl Default for PostProcess {
             focus_distance: 10.0,
             in_focus_radius: 3.0,
             far_blur: 0.0,
+            flags_read: false,
         }
+    }
+}
+
+impl PostProcess {
+    /// A cache cooked before the override flags were read: the fields whose flags are off by
+    /// `ArkUberPpParameters`' defaults dropped where the settings hold no sensible value (the
+    /// post-desaturation; a depth of field focused nowhere, all blurred: Eminent Domain's estate,
+    /// whose level settings hold 100 % desaturation and a far blur from 0 m that its flags leave
+    /// off, was drawn grey and blurred throughout).
+    pub fn sanitized(mut self) -> Self {
+        if !self.flags_read {
+            self.post_desaturation = 0.0;
+            if self.in_focus_radius <= 0.0 {
+                self.far_blur = 0.0;
+            }
+        }
+        self
     }
 }
 
