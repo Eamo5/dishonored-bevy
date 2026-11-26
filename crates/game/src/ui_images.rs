@@ -7,9 +7,44 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 #[derive(Resource, Default)]
-pub struct UiImages(HashMap<(String, u32), Option<(Handle<Image>, Vec2)>>);
+pub struct UiImages(HashMap<(String, u32), Option<(Handle<Image>, Vec2)>>, HashMap<String, HashMap<u32, u32>>);
 
 impl UiImages {
+    /// An image of the game's own movie by the id it has there (laid out by hand from it: the
+    /// gauges' shards, the target card's frame): in a story pack's version of the movie, the
+    /// picture standing in its place there (`flash::bitmap_map`), else the game's own.
+    pub fn base(&mut self, images: &mut Assets<Image>, movie: &str, id: u32) -> Option<(Handle<Image>, Vec2)> {
+        let pack = crate::flash::movie_variant(movie);
+        if pack == movie {
+            return self.get(images, movie, id);
+        }
+        let map = self.1.entry(pack.clone()).or_insert_with(|| {
+            let read = |m: &str| -> Option<dhcook::format::Timelines> { serde_json::from_slice(&std::fs::read(crate::loading::cache_dir().join("ui").join(m).join("timeline.json")).ok()?).ok() };
+            match (read(movie), read(&pack)) {
+                (Some(a), Some(b)) => crate::flash::bitmap_map_all(&a, &b),
+                _ => HashMap::new(),
+            }
+        });
+        match map.get(&id).copied() {
+            Some(p) => self.get(images, &pack, p),
+            None => self.exact(images, movie, id),
+        }
+    }
+
+    /// An image of the movie of this very name (not a story pack's version).
+    fn exact(&mut self, images: &mut Assets<Image>, movie: &str, id: u32) -> Option<(Handle<Image>, Vec2)> {
+        self.0
+            .entry((format!("{movie}#own"), id))
+            .or_insert_with(|| {
+                let path = crate::loading::cache_dir().join("ui").join(movie).join(format!("{id}.png"));
+                let bytes = std::fs::read(&path).ok()?;
+                let img = Image::from_buffer(&bytes, ImageType::Extension("png"), CompressedImageFormats::NONE, true, ImageSampler::linear(), RenderAssetUsages::RENDER_WORLD).ok()?;
+                let size = img.size_f32();
+                Some((images.add(img), size))
+            })
+            .clone()
+    }
+
     /// An image of a movie and its pixel size (None if not cooked).
     pub fn get(&mut self, images: &mut Assets<Image>, movie: &str, id: u32) -> Option<(Handle<Image>, Vec2)> {
         // (the story pack's own version of the movie, as its timeline is)

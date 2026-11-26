@@ -276,7 +276,8 @@ fn spawn_gauges(
         fc.m = [DISC_SCALE, 0.0, 0.0, DISC_SCALE, 0.0, 0.0];
         fc
     });
-    let mut img = |id: u32| ui.get(&mut images, "HUD", id).map(|(h, _)| h);
+    // (the game's movie's ids; a story pack's own art where it has its HUD: Daud's shards)
+    let mut img = |id: u32| ui.base(&mut images, "HUD", id).map(|(h, _)| h);
     let node = || Node { position_type: PositionType::Absolute, ..default() };
     let piece = |min: Vec2, size: Vec2, turn: f32| Piece { min, size, turn, stage: true };
     let local = |min: Vec2, size: Vec2| Piece { min, size, turn: 0.0, stage: false };

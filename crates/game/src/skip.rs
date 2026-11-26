@@ -74,7 +74,7 @@ struct Pointer;
 
 fn spawn_gauge(mut commands: Commands, mut ui: ResMut<crate::ui_images::UiImages>, mut images: ResMut<Assets<Image>>, mut mats: ResMut<Assets<RadialFill>>) {
     spawn_choke_gauge(&mut commands, &mut ui, &mut images, &mut mats);
-    let mut img = |id: u32| ui.get(&mut images, "HUD", id).map(|(h, _)| h);
+    let mut img = |id: u32| ui.base(&mut images, "HUD", id).map(|(h, _)| h);
     let (Some(stroke), Some(outer), Some(ring), Some(fill), Some(shine)) = (img(STROKE), img(RING_OUTER), img(RING), img(FILL), img(SHINE)) else { return };
     let pointer = img(POINTER);
     commands
@@ -116,7 +116,7 @@ fn spawn_choke_gauge(commands: &mut Commands, ui: &mut crate::ui_images::UiImage
 }
 
 fn spawn_ring_gauge(commands: &mut Commands, ui: &mut crate::ui_images::UiImages, images: &mut Assets<Image>, mats: &mut Assets<RadialFill>, fill: u32, tag: impl Component) {
-    let mut img = |id: u32| ui.get(images, "HUD", id).map(|(h, _)| h);
+    let mut img = |id: u32| ui.base(images, "HUD", id).map(|(h, _)| h);
     let (Some(ring), Some(fill), Some(outer)) = (img(CH_RING), img(fill), img(CH_OUTER)) else { return };
     let pointer = img(POINTER);
     commands

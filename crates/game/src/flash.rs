@@ -116,7 +116,11 @@ pub struct MovieTimelines(HashMap<String, Option<Arc<Timelines>>>);
 impl MovieTimelines {
     pub fn get(&mut self, movie: &str) -> Option<Arc<Timelines>> {
         let movie = movie_variant(movie);
-        let movie = movie.as_str();
+        self.exact(&movie)
+    }
+
+    /// The movie of this very name (not a story pack's version).
+    pub fn exact(&mut self, movie: &str) -> Option<Arc<Timelines>> {
         self.0
             .entry(movie.to_string())
             .or_insert_with(|| {
@@ -132,6 +136,46 @@ impl MovieTimelines {
             })
             .clone()
     }
+}
+
+/// The bitmaps of a story pack's version of a movie that stand where the game's movie has its
+/// own: the two movies' display lists walked side by side from their main timelines and every
+/// symbol both export (frame by frame, placement by placement, into their sprites; a shape's
+/// fills in turn). The packs' movies are the game's with their art replaced and their
+/// characters renumbered (`UI_HUD_DLC07`'s shards two below the game's), so the game's ids,
+/// laid out by hand from its movie, are found again in the pack's.
+pub fn bitmap_map_all(base: &Timelines, pack: &Timelines) -> HashMap<u32, u32> {
+    let mut roots = vec![(0u16, 0u16)];
+    roots.extend(base.exports.iter().filter_map(|(n, a)| pack.exports.get(n).map(|b| (*a, *b))));
+    walk_pairs(base, pack, roots)
+}
+
+fn walk_pairs(base: &Timelines, pack: &Timelines, mut stack: Vec<(u16, u16)>) -> HashMap<u32, u32> {
+    let mut out = HashMap::new();
+    let mut seen = std::collections::HashSet::new();
+    while let Some((a, b)) = stack.pop() {
+        if !seen.insert((a, b)) {
+            continue;
+        }
+        if let (Some(sa), Some(sb)) = (base.shapes.get(&a), pack.shapes.get(&b)) {
+            for (fa, fb) in sa.iter().zip(sb) {
+                out.entry(fa.bitmap as u32).or_insert(fb.bitmap as u32);
+            }
+            continue;
+        }
+        let (Some(sa), Some(sb)) = (base.sprites.get(&a), pack.sprites.get(&b)) else { continue };
+        for (fa, fb) in sa.frames.iter().zip(&sb.frames) {
+            let ids = |f: &dhcook::format::TlFrame| -> Vec<(u16, u16)> {
+                f.ops.iter().filter_map(|op| if let dhcook::format::TlOp::Place { depth, id: Some(id), .. } = op { Some((*depth, *id)) } else { None }).collect()
+            };
+            for ((da, ia), (db, ib)) in ids(fa).into_iter().zip(ids(fb)) {
+                if da == db {
+                    stack.push((ia, ib));
+                }
+            }
+        }
+    }
+    out
 }
 
 /// A Flash matrix: x' = a x + c y + tx, y' = b x + d y + ty.

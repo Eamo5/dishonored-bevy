@@ -2226,10 +2226,10 @@ fn menu_build(
     let gold = Color::srgb(0.86, 0.80, 0.66);
     let white = Color::srgb(0.98, 0.96, 0.92);
     let title_font: bevy::text::FontSource = fonts.title.clone().into();
-    let logo = ui.get(&mut images, "MainMenu", 162).map(|x| x.0);
-    let sel_bar = ui.get(&mut images, "MainMenu", 2).map(|x| x.0);
-    let title_bar = ui.get(&mut images, "PauseMenu", 1).map(|x| x.0);
-    let mask = ui.get(&mut images, "PauseMenu", 77).map(|x| x.0);
+    let logo = ui.base(&mut images, "MainMenu", 162).map(|x| x.0);
+    let sel_bar = ui.base(&mut images, "MainMenu", 2).map(|x| x.0);
+    let title_bar = ui.base(&mut images, "PauseMenu", 1).map(|x| x.0);
+    let mask = ui.base(&mut images, "PauseMenu", 77).map(|x| x.0);
     let over_game = kind != MenuKind::Main;
     let bg = if over_game { Color::srgba(0.01, 0.01, 0.015, 0.72) } else { Color::NONE };
     let root = commands

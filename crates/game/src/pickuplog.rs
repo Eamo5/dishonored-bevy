@@ -87,7 +87,7 @@ struct SlotStroke;
 
 fn spawn_log(mut commands: Commands, mut ui: ResMut<crate::ui_images::UiImages>, mut images: ResMut<Assets<Image>>, mut log: ResMut<PickupLog>) {
     *log = PickupLog::default();
-    let stroke = ui.get(&mut images, "HUD", STROKE).map(|(h, _)| h);
+    let stroke = ui.base(&mut images, "HUD", STROKE).map(|(h, _)| h);
     for i in 0..4 {
         commands
             .spawn((Slot(i), Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden, GlobalZIndex(4), Pickable::IGNORE, DespawnOnExit(GameState::InGame), crate::hud::HudPart("DHE_Equipment")))

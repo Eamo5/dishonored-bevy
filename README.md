@@ -777,6 +777,19 @@ own picture (`m_BackgroundImagePath`: Corvo in Daud's dream) and count The Brigm
 corrupted charms (`ePlayerStat_CrackedCharmFound`) on the FOUND panel. The loading screen names
 the map as `[MapNames]` does ("Rothwild Slaughterhouse", "Drapers Ward"). A pack movie's own
 versions of a symbol stand in for it (`sh_listPanelWithTabs_DLC06`, `p_pauseMenu_DLC07`). The
+pictures laid out by hand from the game's movie (the health and mana shards, the target card's,
+the skip and chokehold gauges', the keyhole's, the pause menu's) are found again in a pack's
+movie by walking the two movies' display lists side by side (`flash::bitmap_map_all`): the
+packs' movies renumber their characters (`UI_HUD_DLC07`'s shards two below the game's), and
+taken by the game's numbers they were other pictures or none. Whose map it is (and so which
+movies) is now known as the map starts loading, not once it is in: before, the HUD built as a
+level came in took the last map's, so Daud's first map drew Corvo's movie's art, and after his
+trip from his base to Coldridge his shards were the Brigmore movie's other pictures, washed out.
+A pack's pause screen is laid out the pack's way (`p_pauseMenu_DLC06` / `_DLC07`: Daud's
+portrait on the right, `p_pauseMenu_DLC06_item`s with mirrored brushes and right-aligned labels
+ending at `_menu_mc`, sliding left when chosen (our reading of the mirrored items), clipped to the
+mirrored mask's span, the game over's reason right-aligned, Daud's portrait sliced); before, it
+took Corvo's list and spacing, and the list ran under the title and over Daud's face. The
 journal knows Daud's chapters (`DLC06_ChapterInfoList`, `DLC07_ChapterInfoList`, from the
 stories' whole-game packages: "A Stay of Execution for Lizzy" with Lizzy Stride's portrait,
 `UI_portraits_objectives_DLC07`); before, his chapter pane was empty. A tutorial page's title

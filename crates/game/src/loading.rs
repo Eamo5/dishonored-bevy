@@ -17,7 +17,7 @@ pub struct LoadingPlugin;
 
 impl Plugin for LoadingPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(GameState::Loading), (start_loading, spawn_loading_ui))
+        app.add_systems(OnEnter(GameState::Loading), (start_loading, spawn_loading_ui).chain())
             .add_systems(Update, (poll_loading, hold_loading, await_movie, relayout_title).run_if(in_state(GameState::Loading)))
             .add_systems(OnExit(GameState::Loading), despawn_loading_ui);
     }
@@ -93,7 +93,12 @@ pub fn cache_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("cache"))
 }
 
-fn start_loading(mut commands: Commands, config: Res<Config>) {
+fn start_loading(mut commands: Commands, config: Res<Config>, mut data: ResMut<crate::gamedata::Data>) {
+    // (whose map it is, before anything of it is drawn: the interface's art is the story's own,
+    // Daud's HUD on The Brigmore Witches' maps; set only once the level was in, the HUD built as it
+    // came in took the last map's, and after the trip from Daud's base to Coldridge his health and
+    // mana shards were drawn with the Brigmore movie's other pictures, washed out)
+    data.use_profile(&config.map);
     let (tx, rx) = channel();
     let cfg = config.clone();
     std::thread::Builder::new()

@@ -115,6 +115,34 @@ pub struct Frontend {
     /// time since it opened (s), and each button's over-ness (0..1) and whether it is over
     t: f32,
     over: Vec<(f32, bool)>,
+    /// the pause screen of a story pack's movie (`p_pauseMenu_DLC06`, `_DLC07`): drawn the other
+    /// way about, Daud on the right, the list right-aligned at `_menu_mc`
+    mirrored: bool,
+}
+
+/// A story pack's pause list items (`p_pauseMenu_DLC06_item`: their brushes mirrored, their
+/// label right-aligned, ending at the item's origin: `_txt_mc` -242, `txt` -222.45 in a field
+/// 466.95 wide less its 2 px gutter).
+const PM_DAUD_ITEM: &str = "p_pauseMenu_DLC06_item";
+const PM_DAUD_TEXT_RIGHT: f32 = -242.0 - 222.45 + 466.95 - 2.0;
+/// and their game over's reason, right-aligned too (its `_txt_mc` -94.25, `txt` -872.7 in a
+/// field 872.7 wide)
+const GO_DAUD_TEXT_RIGHT: Vec2 = Vec2::new(-94.25 - 872.7 + 872.7 - 2.0, -0.9 - 18.7 + 2.0);
+
+/// The list's mask (`_maskMenu_mc`: its 204-unit square under the clip's placement, at the stage's
+/// middle) across, at height `y` on the stage: its left and right there.
+fn mask_across(m: &Mat, y: f32) -> Option<(f32, f32)> {
+    let c = [Vec2::ZERO, Vec2::new(204.0, 0.0), Vec2::new(204.0, 204.0), Vec2::new(0.0, 204.0)].map(|p| PAUSE_AT + apply(m, p));
+    let mut xs: Vec<f32> = Vec::new();
+    for k in 0..4 {
+        let (a, b) = (c[k], c[(k + 1) % 4]);
+        if (a.y - y) * (b.y - y) <= 0.0 && (b.y - a.y).abs() > 1e-3 {
+            xs.push(a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y));
+        }
+    }
+    let lo = xs.iter().copied().fold(f32::INFINITY, f32::min);
+    let hi = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    (lo <= hi).then_some((lo, hi))
 }
 
 #[derive(Component)]
@@ -226,10 +254,13 @@ fn build(
                     // the reason's backing shows for a game over; the mask is sliced then
                     // (`OpenCorvo`: `anim_slice`, else its first frame)
                     fc.set_visible("_gameOver_mc", over);
-                    if over {
-                        fc.goto("_corvo_mc", "anim_slice", true);
-                    } else if let Some(c) = fc.clip.child_mut("_corvo_mc") {
-                        c.goto(&ptl, 0, false);
+                    // (Daud's portrait in a story pack's: `_daud_mc`)
+                    for who in ["_corvo_mc", "_daud_mc"] {
+                        if over {
+                            fc.goto(who, "anim_slice", true);
+                        } else if let Some(c) = fc.clip.child_mut(who) {
+                            c.goto(&ptl, 0, false);
+                        }
                     }
                     // (the backdrop drifts: `AnimatedBackground`)
                     let bg = crate::animbg::AnimatedBackground::new(&fc, "");
@@ -241,8 +272,11 @@ fn build(
             }
             // the list, clipped to its mask
             let clip_box = commands.spawn((ClipBox, Node { position_type: PositionType::Absolute, overflow: Overflow::clip(), ..default() }, Pickable::IGNORE, ChildOf(root))).id();
+            // (a story pack's own items: Daud's, mirrored)
+            fe.mirrored = ptl.exports.contains_key(PM_DAUD_ITEM);
+            let item = if fe.mirrored { PM_DAUD_ITEM } else { "p_pauseMenu_item" };
             for (i, label) in items.iter().enumerate() {
-                if let Some(c) = Clip::export(&ptl, "p_pauseMenu_item") {
+                if let Some(c) = Clip::export(&ptl, item) {
                     let mut fc = FlashClip::new(PAUSE_MOVIE, ptl.clone(), c).real();
                     fc.alpha = 0.0;
                     let t2 = fc.tl.clone();
@@ -329,7 +363,7 @@ fn pause(dt: f32, s: f32, off: Vec2, box_at: Vec2, open: f32, menu: &Menu, fe: &
         }
         let size = cn.size() * cn.inverse_scale_factor();
         let sc = (go_m[0] * go_m[0] + go_m[1] * go_m[1]).sqrt();
-        let local = GO_TEXT_AT + Vec2::new(size.x / s * 0.5, size.y / s * 0.5);
+        let local = if fe.mirrored { GO_DAUD_TEXT_RIGHT + Vec2::new(-size.x / s * 0.5, size.y / s * 0.5) } else { GO_TEXT_AT + Vec2::new(size.x / s * 0.5, size.y / s * 0.5) };
         let c = off + (PAUSE_AT + apply(&go_m, local)) * s;
         node.left = Val::Px(c.x - size.x * 0.5);
         node.top = Val::Px(c.y - size.y * 0.5);
@@ -344,9 +378,12 @@ fn pause(dt: f32, s: f32, off: Vec2, box_at: Vec2, open: f32, menu: &Menu, fe: &
         let rate = if o.1 { dt / 0.25 } else { -dt / 0.25 };
         o.0 = (o.0 + rate).clamp(0.0, 1.0);
     }
-    // bottom-aligned: the list ends at `_menu_mc`
+    // bottom-aligned: the list ends at `_menu_mc` (a story pack's slides the other way: our
+    // reading of its mirrored items)
+    let mirrored = fe.mirrored;
+    let slide = if mirrored { -PM_OVER_X } else { PM_OVER_X };
     let total = n as f32 * PM_ITEM_H + (n.saturating_sub(1)) as f32 * PM_ITEM_GAP;
-    let at = |i: usize, e: f32| PAUSE_AT + menu_at + Vec2::new(PM_OVER_X * e, i as f32 * (PM_ITEM_H + PM_ITEM_GAP) + PM_ITEM_H * 0.5 - total);
+    let at = |i: usize, e: f32| PAUSE_AT + menu_at + Vec2::new(slide * e, i as f32 * (PM_ITEM_H + PM_ITEM_GAP) + PM_ITEM_H * 0.5 - total);
     let over = fe.over.clone();
     for (b, mut fc, mut node) in btns.iter_mut() {
         let (k, on) = over.get(b.0).copied().unwrap_or((0.0, false));
@@ -364,14 +401,20 @@ fn pause(dt: f32, s: f32, off: Vec2, box_at: Vec2, open: f32, menu: &Menu, fe: &
             fc.goto("", "out", true);
         }
     }
-    for (t, mut f, mut col, mut node, mut ut, _) in texts.iter_mut() {
+    for (t, mut f, mut col, mut node, mut ut, cn) in texts.iter_mut() {
         let (k, on) = over.get(t.0).copied().unwrap_or((0.0, false));
         let e = if on { back_out(k) } else { strong_out(k) };
         let fs = bevy::text::FontSize::Px(TEXT_SIZE * s);
         if f.font_size != fs {
             f.font_size = fs;
         }
-        let p = off + (at(t.0, e) + PM_TEXT_AT) * s;
+        let p = if mirrored {
+            // (right-aligned: its end at the item's)
+            let w = cn.size().x * cn.inverse_scale_factor();
+            off + (at(t.0, e) + Vec2::new(PM_DAUD_TEXT_RIGHT, PM_TEXT_AT.y)) * s - Vec2::new(w, 0.0)
+        } else {
+            off + (at(t.0, e) + PM_TEXT_AT) * s
+        };
         node.left = Val::Px(p.x);
         node.top = Val::Px(p.y);
         ut.scale = Vec2::new(1.0, 1.2);
@@ -379,7 +422,7 @@ fn pause(dt: f32, s: f32, off: Vec2, box_at: Vec2, open: f32, menu: &Menu, fe: &
         col.0 = c.with_alpha(open);
     }
     for (h, _, mut node) in hits.iter_mut() {
-        let p = off + at(h.0, 0.0) * s;
+        let p = off + at(h.0, 0.0) * s - if mirrored { Vec2::new(480.0 * s, 0.0) } else { Vec2::ZERO };
         node.left = Val::Px(p.x);
         node.top = Val::Px(p.y - PM_ITEM_H * 0.5 * s);
         node.width = Val::Px(480.0 * s);
@@ -579,12 +622,24 @@ fn layout(
         fc.alpha = open;
     }
     if screen == Screen::Pause || screen == Screen::GameOver {
-        let origin = off + Vec2::new(PM_MASK[0], PM_MASK[1]) * s;
+        // (a story pack's, mirrored: the mask's span across the list's middle, from its own
+        // placement)
+        let mut mask = PM_MASK;
+        if fe.mirrored {
+            let n = fe.over.len() as f32;
+            let total = n * PM_ITEM_H + (n - 1.0).max(0.0) * PM_ITEM_GAP;
+            let placed = |name: &str| main.iter().find_map(|(fc, _)| fc.clip.placed(name).map(|(m, _)| m));
+            let menu_y = placed("_menu_mc").map_or(229.2, |m| m[5]);
+            if let Some((lo, hi)) = placed("_maskMenu_mc").and_then(|m| mask_across(&m, PAUSE_AT.y + menu_y - total * 0.5)) {
+                mask = [lo.max(0.0), PM_MASK[1], hi.min(1280.0), PM_MASK[3]];
+            }
+        }
+        let origin = off + Vec2::new(mask[0], mask[1]) * s;
         for mut n in &mut boxes {
             n.left = Val::Px(origin.x);
             n.top = Val::Px(origin.y);
-            n.width = Val::Px((PM_MASK[2] - PM_MASK[0]) * s);
-            n.height = Val::Px((PM_MASK[3] - PM_MASK[1]) * s);
+            n.width = Val::Px((mask[2] - mask[0]) * s);
+            n.height = Val::Px((mask[3] - mask[1]) * s);
         }
         pause(dt, s, off, origin, open, &menu, &mut fe, &mut main, &mut btns, &mut texts, &mut hits, &mut title, &mut desc);
         return;

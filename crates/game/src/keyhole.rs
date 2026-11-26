@@ -73,7 +73,7 @@ fn mark_doors(mut commands: Commands, level: Option<Res<LevelInfo>>, doors: Quer
 
 /// The keyhole's frame: black all round the HUD movie's keyhole shape.
 fn spawn_mask(mut commands: Commands, mut ui: ResMut<crate::ui_images::UiImages>, mut images: ResMut<Assets<Image>>) {
-    let shape = ui.get(&mut images, "HUD", HUD_KEYHOLE).and_then(|(h, _)| {
+    let shape = ui.base(&mut images, "HUD", HUD_KEYHOLE).and_then(|(h, _)| {
         let img = images.get(&h)?;
         let mut out = img.clone();
         let data = out.data.as_mut()?;

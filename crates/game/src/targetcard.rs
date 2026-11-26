@@ -54,7 +54,7 @@ struct StateText;
 
 fn spawn_card(mut commands: Commands, mut ui: ResMut<crate::ui_images::UiImages>, mut images: ResMut<Assets<Image>>, mut card: ResMut<Card>) {
     *card = Card::default();
-    let mut img = |id: u32| ui.get(&mut images, "HUD", id).map(|(h, _)| h);
+    let mut img = |id: u32| ui.base(&mut images, "HUD", id).map(|(h, _)| h);
     let (stroke, f0, f1) = (img(STROKE), img(FRAME0), img(FRAME1));
     commands
         .spawn((CardRoot, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden, GlobalZIndex(4), Pickable::IGNORE, DespawnOnExit(GameState::InGame)))

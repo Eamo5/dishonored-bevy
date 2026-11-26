@@ -2394,8 +2394,8 @@ fn run_script(
                 info!("script: {path} {v:.3}");
             }
             info!(
-                "script: player pos {:.2} grounded {} locked {} vel {:.2} hp {:.0} mana {:.0} kills {} ko {} dead {}",
-                t.translation, p.grounded, p.locked, p.velocity, stats.health, stats.mana, stats.kills, stats.knockouts, stats.dead
+                "script: player pos {:.2} grounded {} locked {} vel {:.2} hp {:.0}/{:.0} mana {:.0}/{:.0} kills {} ko {} dead {}",
+                t.translation, p.grounded, p.locked, p.velocity, stats.health, stats.max_health, stats.mana, stats.max_mana, stats.kills, stats.knockouts, stats.dead
             );
             info!("script: runes {} coins {} powers {:?} charms {:?} items {:?} chapter {:?} elixirs {}/{}", stats.runes, stats.coins, stats.powers, stats.charms_owned, stats.items, stats.chapter, stats.health_elixirs, stats.mana_elixirs);
             commands.queue(|w: &mut World| {
