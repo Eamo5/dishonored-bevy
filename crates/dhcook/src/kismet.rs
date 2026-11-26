@@ -766,37 +766,7 @@ pub fn cook(levels: &[Arc<Package>], refs: &HashMap<ActorKey, KActor>) -> Kismet
         ex.out.dialogs.push(crate::format::KDialog { actor, tree, me, others });
     }
     // objectives (their texts are cooked in English)
-    for pkg in levels {
-        for i in 1..=pkg.exports.len() as i32 {
-            if pkg.class_name(i) != "DishonoredObjective" {
-                continue;
-            }
-            let Some(props) = read_props(pkg, i) else { continue };
-            let path = pkg.obj_path(i);
-            if ex.out.objectives.iter().any(|o| o.path == path) {
-                continue;
-            }
-            let mut obj = crate::format::KObjective {
-                path,
-                text: str_of(&props, "m_Description"),
-                tasks: Vec::new(),
-                optional: matches!(props.get("m_bOptional"), Some(Value::Bool(true))),
-                no_markers: matches!(props.get("m_bShowHUDMarkers"), Some(Value::Bool(false))),
-            };
-            for t in obj_list(pkg, &props, "m_Tasks") {
-                if t <= 0 {
-                    continue;
-                }
-                let Some(tp) = read_props(pkg, t) else { continue };
-                obj.tasks.push(crate::format::KTask {
-                    path: pkg.obj_path(t),
-                    text: str_of(&tp, "m_Description"),
-                    hidden: matches!(tp.get("m_bInitiallyHidden"), Some(Value::Bool(true))),
-                });
-            }
-            ex.out.objectives.push(obj);
-        }
-    }
+    ex.out.objectives = objectives_of(levels);
     // the pickups too, scripted or not: what Corvo uses is named to the scripts listening to
     // everything (`DisSeqEvent_Interact`: the Prison's "Take a weapon")
     // (and the props playing a clip of themselves, to be animated)
@@ -1199,6 +1169,55 @@ pub fn bark_voice(pkg: &Package, voice: i32) -> Option<crate::format::BarkVoice>
         }
     }
     (!out.hooks.is_empty()).then_some(out)
+}
+
+/// The levels' objectives and their tasks, each once (the first package's), in the cook's order:
+/// for patching a cooked map's without cooking it again too.
+pub fn objectives_of(levels: &[Arc<Package>]) -> Vec<crate::format::KObjective> {
+    let mut out: Vec<crate::format::KObjective> = Vec::new();
+    for pkg in levels {
+        for i in 1..=pkg.exports.len() as i32 {
+            if pkg.class_name(i) != "DishonoredObjective" {
+                continue;
+            }
+            let Some(props) = read_props(pkg, i) else { continue };
+            let path = pkg.obj_path(i);
+            if out.iter().any(|o| o.path == path) {
+                continue;
+            }
+            let mut obj = crate::format::KObjective {
+                path,
+                text: str_of(&props, "m_Description"),
+                tasks: Vec::new(),
+                optional: matches!(props.get("m_bOptional"), Some(Value::Bool(true))),
+                no_markers: matches!(props.get("m_bShowHUDMarkers"), Some(Value::Bool(false))),
+                manual: matches!(props.get("m_bCompleteWhenAllTasksComplete"), Some(Value::Bool(false))),
+            };
+            for t in obj_list(pkg, &props, "m_Tasks") {
+                if t <= 0 {
+                    continue;
+                }
+                let Some(tp) = read_props(pkg, t) else { continue };
+                obj.tasks.push(crate::format::KTask {
+                    path: pkg.obj_path(t),
+                    text: str_of(&tp, "m_Description"),
+                    hidden: matches!(tp.get("m_bInitiallyHidden"), Some(Value::Bool(true))),
+                    initial: task_initial(&tp),
+                });
+            }
+            out.push(obj);
+        }
+    }
+    out
+}
+
+/// A task's starting state when it sets its own (`m_InitialState`, an `EDisTaskState` name); the
+/// class's `DTS_Active` is left unset.
+fn task_initial(tp: &Props) -> Option<String> {
+    match tp.get("m_InitialState") {
+        Some(Value::Enum(s)) | Some(Value::Name(s)) if s != "DTS_Active" && !s.is_empty() => Some(s.clone()),
+        _ => None,
+    }
 }
 
 fn str_of(p: &Props, n: &str) -> String {

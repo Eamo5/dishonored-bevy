@@ -41,6 +41,7 @@ cargo run --release -p dhtool -- cook-gamedata    # powers, charms, stores, text
 cargo run --release -p dhtool -- patch-dialogs DIR [map...]
 cargo run --release -p dhtool -- patch-post DIR [map...]     # the same for the level's grade
 cargo run --release -p dhtool -- patch-barks DIR [map...]    # and the characters' barks
+cargo run --release -p dhtool -- patch-objectives DIR [map...]  # and the objectives' tasks
 
 # 2. Play
 cargo run --release -p dishonored                      # main menu (New Game starts at Dunwall Tower)
@@ -1525,7 +1526,22 @@ fields no longer show their stand-in "WW" behind the title.
   rewrite used to show is off; `DH_TALLY=1` brings it back.)
 - **Objectives** come up at the top right as they change (`New Objective`, `COMPLETED:`, the
   HUD tweak's titles), stay 6 s and fade, as the original's objectives window opens and closes;
-  the journal keeps them (`DH_OBJECTIVES=1` keeps the list up). Game messages show at the
+  the journal keeps them (`DH_OBJECTIVES=1` keeps the list up). An objective's tasks start in
+  the state each sets (`DishonoredTask.m_InitialState`, the class's `DTS_Active`; 1,158 tasks
+  across the maps start `DTS_Inactive`) and come up as the scripts make them active. Before,
+  every task started active, so the journal listed a mission's tasks before they were given, and
+  Coldridge stalled: "Learn Lizzy Stride's location" never came up after "Enter Coldridge
+  Prison", its script showing it only when it found it inactive. A `DisSeqAct_SetTaskState`
+  without a state sets the class's `DTS_Inactive` (as roshan's r614/blink research found; the
+  scripts use it to retire a task), not active as before, and leaves the task hidden or shown as
+  it was. The task actions (`DisSeqAct_SetTaskState`, `_SetTaskHidden`, `_UpdateTaskTarget`)
+  touch only tasks of an objective given and under way unless they turn
+  `m_bOnlyOnTasksInActiveObjectives` off (The Brigmore Witches' opening does, to complete a
+  task of an objective given later), and tell the HUD only with `m_bShowHUDNotification`. An
+  objective is completed with its last task (`m_bCompleteWhenAllTasksComplete`, the class's way;
+  27 objectives turn it off, the prison's, the Tower's, the challenges') and told once, however
+  often its script completes it after. `dhtool patch-objectives DIR` brings cooked maps' objectives
+  up to this from their packages. Game messages show at the
   bottom of the screen like the movie's `gameMsg_mc`, for the HUD tweak's
   `m_fGameMessageDuration` (5 s); the scripts' tutorials (`DisSeqAct_SetTutorialMessage`) stay
   their `m_fDuration` while on screen, and unset (all but one) until the scripts hide them (its
@@ -4674,7 +4690,7 @@ Known outstanding gameplay gaps from source and original-data inspection:
 | --- | --- |
 | `crates/upk` | UE3 package reader: LZO/zlib chunks, name/import/export tables, tagged properties, static/skeletal meshes, textures (incl. `.tfc` bulk data) |
 | `crates/dhcook` | Cooker: levels and their streaming sublevels, materials and shaders, lightmaps, light volumes, NPC archetypes and factions, Kismet/Matinee, security devices, Wwise audio, Scaleform UI, game data |
-| `crates/dhtool` | CLI for cooking and inspecting packages (`cook`, `cook-all`, `cook-ui`, `cook-audio`, `cook-gamedata`, `patch-dialogs`, `patch-post`, `patch-barks`, `list`, `props`, `findprop`, `swfdump`, `mat`, `graph`, ...) |
+| `crates/dhtool` | CLI for cooking and inspecting packages (`cook`, `cook-all`, `cook-ui`, `cook-audio`, `cook-gamedata`, `patch-dialogs`, `patch-post`, `patch-barks`, `patch-objectives`, `list`, `props`, `findprop`, `swfdump`, `mat`, `graph`, ...) |
 | `crates/game` | The Bevy game |
 
 ### Cache format (`./cache`)

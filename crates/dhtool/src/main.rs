@@ -1147,6 +1147,64 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Some("patch-objectives") => {
+            // dhtool patch-objectives <dir> [map...]: a cooked map's objectives given the states
+            // their tasks start in and whether their tasks complete them, from their packages
+            // under <dir> (each objective whose tasks are the cooked ones)
+            let found = package_index(&PathBuf::from(&args[2]))?;
+            let root = PathBuf::from("cache").join("maps");
+            for m in cooked_maps(&root, &args[3..])? {
+                let path = root.join(format!("{m}.json"));
+                let mut scene: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+                let names: Vec<String> = scene["packages"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                let levels: Vec<std::sync::Arc<upk::Package>> = names
+                    .iter()
+                    .filter_map(|n| found.get(&n.to_ascii_lowercase()).and_then(|p| std::fs::read(p).ok().and_then(|b| upk::Package::from_bytes(n.clone(), p.clone(), b).ok())))
+                    .map(std::sync::Arc::new)
+                    .collect();
+                let fresh = dhcook::kismet::objectives_of(&levels);
+                let Some(objs) = scene["kismet"]["objectives"].as_array_mut() else { continue };
+                let (mut changed, mut differ, mut missing) = (0, 0, 0);
+                for o in objs.iter_mut() {
+                    let Some(f) = o["path"].as_str().and_then(|p| fresh.iter().find(|f| f.path == p)) else {
+                        missing += 1;
+                        continue;
+                    };
+                    let tasks: Vec<&str> = o["tasks"].as_array().map(|a| a.iter().filter_map(|t| t["path"].as_str()).collect()).unwrap_or_default();
+                    if tasks != f.tasks.iter().map(|t| t.path.as_str()).collect::<Vec<_>>() {
+                        differ += 1;
+                        continue;
+                    }
+                    let new = serde_json::to_value(f)?;
+                    let mut keep = o.clone();
+                    // (its texts as cooked; the states and the completing taken)
+                    for (k, t) in keep["tasks"].as_array_mut().into_iter().flatten().zip(&f.tasks) {
+                        match &t.initial {
+                            Some(s) => k["initial"] = serde_json::json!(s),
+                            None => {
+                                k.as_object_mut().map(|m| m.remove("initial"));
+                            }
+                        }
+                    }
+                    match new.get("manual") {
+                        Some(v) => keep["manual"] = v.clone(),
+                        None => {
+                            keep.as_object_mut().map(|m| m.remove("manual"));
+                        }
+                    }
+                    if keep != *o {
+                        *o = keep;
+                        changed += 1;
+                    }
+                }
+                println!("{m}: {changed} objectives given their tasks' states, {differ} differ, {missing} not found");
+                if changed > 0 {
+                    let tmp = path.with_extension("json.tmp");
+                    std::fs::write(&tmp, serde_json::to_vec(&scene)?)?;
+                    std::fs::rename(&tmp, &path)?;
+                }
+            }
+        }
         Some("patch-barks") => {
             // dhtool patch-barks <dir> [map...] [--force]: a cooked map's barks (its characters'
             // voices' hook graphs) taken again from the voices in its level packages under <dir>,

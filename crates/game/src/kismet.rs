@@ -304,6 +304,17 @@ pub enum TaskState {
     Failed,
 }
 
+/// A task state by its `EDisTaskState` name.
+fn task_state(name: Option<&str>) -> Option<TaskState> {
+    match name? {
+        "DTS_Inactive" => Some(TaskState::Inactive),
+        "DTS_Active" => Some(TaskState::Active),
+        "DTS_Completed" => Some(TaskState::Completed),
+        "DTS_Failed" => Some(TaskState::Failed),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod flow_tests {
     use super::*;
@@ -374,6 +385,57 @@ mod flow_tests {
             vm.tick(0.1);
         }
         assert!(vm.queue.iter().any(|q| q.0 == 1), "let go, it plays out");
+    }
+
+    /// Tasks start as their objective has them start, the task actions touch only tasks of an
+    /// objective given (unless told otherwise), a state left unset is the class's inactive one,
+    /// and an objective is done with its last task.
+    #[test]
+    fn tasks_start_as_set_and_complete_their_objective() {
+        use dhcook::format::{KLink, KObjective, KTask, KVar};
+        let mut g = Graph::default();
+        g.objectives.push(KObjective {
+            path: "Obj".into(),
+            text: "Objective".into(),
+            tasks: vec![
+                KTask { path: "Obj.A".into(), text: "A".into(), initial: Some("DTS_Inactive".into()), ..Default::default() },
+                KTask { path: "Obj.B".into(), text: "B".into(), ..Default::default() },
+            ],
+            ..Default::default()
+        });
+        let var = |class: &str, k: &str, v: &str| KVar { class: class.into(), props: [(k.to_string(), KVal::Str(v.into()))].into_iter().collect(), ..Default::default() };
+        g.vars.push(var("SeqVar_Object", "ObjValue", "Obj"));
+        g.vars.push(var("DisSeqVar_Task", "m_pDummyTask", "Obj.A"));
+        g.vars.push(var("DisSeqVar_Task", "m_pDummyTask", "Obj.B"));
+        let op = |class: &str, var: u32, props: &[(&str, KVal)]| KOp {
+            class: class.into(),
+            inputs: vec![KInput { desc: "In".into(), ..Default::default() }],
+            outputs: vec![KOutput { desc: "Out".into(), links: vec![], linked: None }],
+            vars: vec![KLink { desc: if class.contains("Objective") { "Objective".into() } else { "Task".into() }, vars: vec![var], write: false }],
+            props: props.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
+            ..Default::default()
+        };
+        let state = |s: &str| ("m_TaskState", KVal::Str(s.into()));
+        g.ops.push(op("DisSeqAct_SetTaskState", 1, &[state("DTS_Completed")]));
+        g.ops.push(op("DisSeqAct_AddObjective", 0, &[]));
+        g.ops.push(op("DisSeqAct_SetTaskState", 1, &[state("DTS_Active")]));
+        g.ops.push(op("DisSeqAct_SetTaskState", 2, &[]));
+        g.ops.push(op("DisSeqAct_SetTaskState", 1, &[state("DTS_Completed")]));
+        g.ops.push(op("DisSeqAct_SetTaskState", 2, &[state("DTS_Completed")]));
+        let mut vm = Vm::new(Arc::new(g), &[]);
+        let st = |vm: &Vm, p: &str| vm.tasks.get(p).map(|t| t.0);
+        // (before its objective is given: nothing)
+        vm.exec(0, 0);
+        assert_eq!(st(&vm, "Obj.A"), None);
+        vm.exec(1, 0);
+        assert_eq!((st(&vm, "Obj.A"), st(&vm, "Obj.B")), (Some(TaskState::Inactive), Some(TaskState::Active)));
+        vm.exec(2, 0);
+        vm.exec(3, 0);
+        assert_eq!((st(&vm, "Obj.A"), st(&vm, "Obj.B")), (Some(TaskState::Active), Some(TaskState::Inactive)));
+        vm.exec(4, 0);
+        assert_eq!(st(&vm, "Obj"), Some(TaskState::Active), "one task left");
+        vm.exec(5, 0);
+        assert_eq!(st(&vm, "Obj"), Some(TaskState::Completed));
     }
 
     /// Giving his things back goes on past "Out (Instant)": "Finished (After Unequip)" with a
@@ -4391,8 +4453,11 @@ impl Vm {
                     if let Val::Str(path) = v {
                         if !self.objectives.contains(&path) {
                             if let Some(o) = g.objectives.iter().find(|o| o.path == path) {
+                                // (each in the state it starts in, `m_InitialState`: Coldridge's
+                                // "Learn Lizzy Stride's location" waits inactive till the prison
+                                // is entered, its script asking for that before it shows it)
                                 for t in &o.tasks {
-                                    self.tasks.entry(t.path.clone()).or_insert((TaskState::Active, t.hidden));
+                                    self.tasks.entry(t.path.clone()).or_insert((task_state(t.initial.as_deref()).unwrap_or(TaskState::Active), t.hidden));
                                 }
                                 // (its tasks to do, shown one after another)
                                 let tasks = o.tasks.iter().filter(|t| self.tasks.get(&t.path).is_some_and(|s| s.0 == TaskState::Active && !s.1)).map(|t| (t.text.clone(), crate::objnotify::ObjState::Added)).collect();
@@ -4412,18 +4477,7 @@ impl Vm {
                             self.objectives.retain(|o| *o != path);
                         } else {
                             let s = if class.contains("Complete") { TaskState::Completed } else { TaskState::Failed };
-                            if let Some(o) = g.objectives.iter().find(|o| o.path == path) {
-                                let state = if s == TaskState::Completed { crate::objnotify::ObjState::Completed } else { crate::objnotify::ObjState::Failed };
-                                self.effects.push(Effect::Objective(crate::objnotify::ObjectiveNotice { name: o.text.clone(), state, tasks: Vec::new() }));
-                            }
-                            self.tasks.insert(path.clone(), (s, false));
-                            for ev in 0..g.ops.len() as u32 {
-                                if g.ops[ev as usize].class == "DisSeqEvent_ObjectiveCompleted"
-                                    && matches!(g.ops[ev as usize].props.get("m_pObjective"), Some(KVal::Str(p)) if *p == path)
-                                {
-                                    self.event(ev, 0, None);
-                                }
-                            }
+                            self.end_objective(&path, s);
                         }
                     }
                 }
@@ -4439,8 +4493,12 @@ impl Vm {
                     Some("DTTVP_Never") => 2,
                     _ => 0,
                 };
+                let only_active = self.pb(op, "m_bOnlyOnTasksInActiveObjectives").unwrap_or(true);
                 for v in self.read(op, "Task") {
                     let Val::Str(path) = v else { continue };
+                    if only_active && self.task_objective(&path).is_some_and(|(_, on)| !on) {
+                        continue;
+                    }
                     let key = if index > 0 { format!("{path}#{index}") } else { path };
                     let set = match (input, target) {
                         (0, Some(a)) => Some(a),
@@ -4466,21 +4524,28 @@ impl Vm {
                 self.fire(op, 0);
             }
             "DisSeqAct_SetTaskState" | "DisSeqAct_SetTaskHidden" => {
-                let state = match self.ps(op, "m_TaskState").as_deref() {
-                    Some("DTS_Completed") => TaskState::Completed,
-                    Some("DTS_Failed") => TaskState::Failed,
-                    Some("DTS_Inactive") => TaskState::Inactive,
-                    _ => TaskState::Active,
-                };
+                // (none set: the class's, `DTS_Inactive`, the enum's first, as roshan's r614/blink
+                // research found; the scripts use it to retire a task)
+                let state = task_state(self.ps(op, "m_TaskState").as_deref()).unwrap_or(TaskState::Inactive);
+                // (by the class, only tasks of objectives given and under way, and told on the
+                // HUD: `m_bOnlyOnTasksInActiveObjectives`, `m_bShowHUDNotification`; The Brigmore
+                // Witches' opening completes a task of an objective not yet given only by turning
+                // the first off)
+                let only_active = self.pb(op, "m_bOnlyOnTasksInActiveObjectives").unwrap_or(true);
+                let notify = self.pb(op, "m_bShowHUDNotification").unwrap_or(true);
                 for v in self.read(op, "Task") {
                     let Val::Str(path) = v else { continue };
+                    if only_active && self.task_objective(&path).is_some_and(|(_, on)| !on) {
+                        continue;
+                    }
+                    let own_hidden = g.objectives.iter().flat_map(|o| o.tasks.iter()).find(|t| t.path == path).is_some_and(|t| t.hidden);
                     if class == "DisSeqAct_SetTaskHidden" {
                         let hide = self.pb(op, "m_bHidden").unwrap_or(input == 0);
                         let e = self.tasks.entry(path.clone()).or_insert((TaskState::Active, hide));
                         let shown = e.1 && !hide && e.0 == TaskState::Active;
                         e.1 = hide;
                         // a task coming out: the objective updated
-                        if shown {
+                        if shown && notify {
                             if let Some((o, t)) = g.objectives.iter().find_map(|o| o.tasks.iter().find(|t| t.path == path).map(|t| (o, t))) {
                                 if self.objectives.contains(&o.path) {
                                     self.effects.push(Effect::Objective(crate::objnotify::ObjectiveNotice { name: o.text.clone(), state: crate::objnotify::ObjState::Updated, tasks: vec![(t.text.clone(), crate::objnotify::ObjState::Added)] }));
@@ -4489,8 +4554,12 @@ impl Vm {
                         }
                         continue;
                     }
-                    let prev = self.tasks.get(&path).map(|t| t.0);
-                    self.tasks.insert(path.clone(), (state, false));
+                    // (its state alone: whether it is shown is the hiding action's)
+                    let (prev, hidden) = match self.tasks.get(&path) {
+                        Some(t) => (Some(t.0), t.1),
+                        None => (None, own_hidden),
+                    };
+                    self.tasks.insert(path.clone(), (state, hidden));
                     if prev != Some(state) {
                         // the objective updated with the task (one shown, not hidden)
                         let ev = match state {
@@ -4499,9 +4568,9 @@ impl Vm {
                             TaskState::Active if prev.is_some_and(|p| p == TaskState::Inactive) => Some(crate::objnotify::ObjState::Added),
                             _ => None,
                         };
-                        if let Some(ev) = ev {
+                        if let Some(ev) = ev.filter(|_| notify && !hidden) {
                             if let Some((o, t)) = g.objectives.iter().find_map(|o| o.tasks.iter().find(|t| t.path == path).map(|t| (o, t))) {
-                                if self.objectives.contains(&o.path) && !t.hidden {
+                                if self.objectives.contains(&o.path) {
                                     self.effects.push(Effect::Objective(crate::objnotify::ObjectiveNotice { name: o.text.clone(), state: crate::objnotify::ObjState::Updated, tasks: vec![(t.text.clone(), ev)] }));
                                 }
                             }
@@ -4512,6 +4581,17 @@ impl Vm {
                                 if let Some(i) = self.output_index(ev, &format!("{state:?}")) {
                                     self.event(ev, i, None);
                                 }
+                            }
+                        }
+                        // (its objective done with its last task: `m_bCompleteWhenAllTasksComplete`,
+                        // the class's way, unless the objective turns it off)
+                        if state == TaskState::Completed {
+                            let done = self.task_objective(&path).filter(|(o, on)| *on && !o.manual && o.tasks.iter().all(|t| self.tasks.get(&t.path).is_some_and(|s| s.0 == TaskState::Completed))).map(|(o, _)| o.path.clone());
+                            if let Some(o) = done {
+                                if self.trace {
+                                    info!("kismet: objective {o} done with its tasks");
+                                }
+                                self.end_objective(&o, TaskState::Completed);
                             }
                         }
                     }
@@ -5616,6 +5696,34 @@ impl Vm {
         all.extend(self.pawn_oneshot.iter().filter(|(_, o)| **o == actor).map(|(p, _)| self.speaker_busy.get(p).copied()));
         let all: Vec<Busy> = all.into_iter().flatten().collect();
         [Busy::Down, Busy::Fighting, Busy::Noticing].into_iter().find(|b| all.contains(b))
+    }
+
+    /// An objective completed or failed: its notice, its state, and the scripts told
+    /// (`DisSeqEvent_ObjectiveCompleted`). One already so is left be (completed by its tasks, then
+    /// by its script as well, it is told once).
+    fn end_objective(&mut self, path: &str, s: TaskState) {
+        if self.tasks.get(path).is_some_and(|t| t.0 == s) {
+            return;
+        }
+        let g = self.g.clone();
+        if let Some(o) = g.objectives.iter().find(|o| o.path == path) {
+            let state = if s == TaskState::Completed { crate::objnotify::ObjState::Completed } else { crate::objnotify::ObjState::Failed };
+            self.effects.push(Effect::Objective(crate::objnotify::ObjectiveNotice { name: o.text.clone(), state, tasks: Vec::new() }));
+        }
+        self.tasks.insert(path.to_string(), (s, false));
+        for ev in 0..g.ops.len() as u32 {
+            if g.ops[ev as usize].class == "DisSeqEvent_ObjectiveCompleted" && matches!(g.ops[ev as usize].props.get("m_pObjective"), Some(KVal::Str(p)) if p == path) {
+                self.event(ev, 0, None);
+            }
+        }
+    }
+
+    /// The objective a task is of, when known, and whether it is given and under way (the task
+    /// actions' `m_bOnlyOnTasksInActiveObjectives`: by the class, only such tasks are touched).
+    fn task_objective(&self, task: &str) -> Option<(&dhcook::format::KObjective, bool)> {
+        let o = self.g.objectives.iter().find(|o| o.tasks.iter().any(|t| t.path == task))?;
+        let on = self.objectives.contains(&o.path) && self.tasks.get(&o.path).is_none_or(|s| s.0 == TaskState::Active);
+        Some((o, on))
     }
 
     /// Start a conversation of a tree, spoken by `actor` (it stops what it was saying).

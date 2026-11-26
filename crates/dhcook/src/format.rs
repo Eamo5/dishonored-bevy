@@ -887,6 +887,10 @@ pub struct KObjective {
     pub optional: bool,
     #[serde(default)]
     pub no_markers: bool,
+    /// one not completed by its tasks all being done (`m_bCompleteWhenAllTasksComplete` off:
+    /// only by its scripts)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -894,6 +898,10 @@ pub struct KTask {
     pub path: String,
     pub text: String,
     pub hidden: bool,
+    /// the state it starts in when its objective is given (`m_InitialState`: `DTS_Inactive`,
+    /// ...; none: the class's, `DTS_Active`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
