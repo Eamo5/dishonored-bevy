@@ -68,6 +68,9 @@ pub struct UsableRig {
     holding: bool,
     rewinding: bool,
     at_end: bool,
+    /// the scripts moving it (`DisSeqAct_ActivateUsable`): the stage its next use is to be, and
+    /// the moves left at most
+    goal: Option<(usize, usize)>,
 }
 
 impl UsableRig {
@@ -156,7 +159,7 @@ fn spawn_usables(
             commands.entity(root).add_child(m);
         }
         let mut ec = commands.entity(root);
-        ec.insert(UsableRig { index: ui as u32, stage: 0, done: false, actor: actor_of.get(&(ui as u32)).copied(), center, locked: u.locked, progress: 0.0, holding: false, rewinding: false, at_end: false });
+        ec.insert(UsableRig { index: ui as u32, stage: 0, done: false, actor: actor_of.get(&(ui as u32)).copied(), center, locked: u.locked, progress: 0.0, holding: false, rewinding: false, at_end: false, goal: None });
         if let Some(lib) = vis.anims.clone() {
             ec.insert(Animator::new(lib, &vis.skeleton, joints));
         }
@@ -207,9 +210,40 @@ fn restore_usables(mut log: ResMut<UsableLog>, level: Option<Res<LevelInfo>>, mu
     }
 }
 
-/// `DisSeqAct_ActivateUsable`: the scripts move it (into a given stage, else the next).
-fn scripted_stages(vm: Option<ResMut<crate::kismet::Vm>>, level: Option<Res<LevelInfo>>, mut rigs: Query<(&mut UsableRig, Option<&mut Animator>)>, mut log: ResMut<UsableLog>) {
+/// `DisSeqAct_ActivateUsable`: the scripts move it, used stage by stage till its next use is the
+/// op's `m_TargetStageIndex` (one already there is left, unless `m_bForceAdvance` takes it round),
+/// else on by one; each move plays its stage and tells the scripts (`DisSeqEvent_Used`, its
+/// output), as roshan's r614/blink research decoded the op (0x00b9aae0 / 0x00b9ac90) and the
+/// event (0x00a57640). Before, the goal was never read and the moves went untold: the Coldridge
+/// cell control's lever, pulled, turned its dials on a notch each instead of back to zero, their
+/// readings left as they were, so the cell set on them was not the cell that opened.
+fn scripted_stages(
+    vm: Option<ResMut<crate::kismet::Vm>>,
+    level: Option<Res<LevelInfo>>,
+    mut rigs: Query<(&mut UsableRig, Option<&mut Animator>)>,
+    mut log: ResMut<UsableLog>,
+    mut used: MessageWriter<Interaction>,
+) {
     let (Some(mut vm), Some(level)) = (vm, level) else { return };
+    // the moves under way: the next once the last has played
+    for (mut r, a) in &mut rigs {
+        let Some((goal, left)) = r.goal else { continue };
+        let n = level.scene.usables.get(r.index as usize).map_or(0, |u| u.stages.len());
+        if left == 0 || n == 0 {
+            r.goal = None;
+            continue;
+        }
+        if a.as_ref().is_some_and(|a| a.current().is_some_and(|p| !p.looping) && !a.finished()) {
+            continue;
+        }
+        let stage = r.stage;
+        enter(&mut r, a.map(|a| a.into_inner()), &level, stage, &mut log, false);
+        // (the stage's output alone: no one used it, so no one saw it used)
+        if let Some(actor) = r.actor {
+            used.write(Interaction::UsableOut { actor, out: stage });
+        }
+        r.goal = (r.stage != goal && left > 1).then_some((goal, left - 1));
+    }
     // the scripts lock and unlock them (`DisSeqAct_Lock`)
     for (actor, lock) in std::mem::take(&mut vm.usable_locks) {
         for (mut r, _) in &mut rigs {
@@ -222,12 +256,24 @@ fn scripted_stages(vm: Option<ResMut<crate::kismet::Vm>>, level: Option<Res<Leve
     if vm.usable_stages.is_empty() {
         return;
     }
-    for (actor, stage) in std::mem::take(&mut vm.usable_stages) {
-        for (mut r, a) in &mut rigs {
-            if r.actor == Some(actor) {
-                let s = stage.map(|s| s.max(0) as usize).unwrap_or(r.stage);
-                enter(&mut r, a.map(|a| a.into_inner()), &level, s, &mut log, false);
+    for (actor, stage, force) in std::mem::take(&mut vm.usable_stages) {
+        for (mut r, _) in &mut rigs {
+            if r.actor != Some(actor) {
+                continue;
             }
+            let n = level.scene.usables.get(r.index as usize).map_or(0, |u| u.stages.len());
+            if n == 0 {
+                continue;
+            }
+            // (none given: the next; one past its stages is left)
+            let goal = match stage {
+                Some(s) if s as usize >= n => continue,
+                Some(s) => s as usize,
+                None => (r.stage + 1) % n,
+            };
+            let moves = (goal + n - r.stage) % n;
+            let moves = if moves == 0 { if force || stage.is_none() { n } else { continue } } else { moves };
+            r.goal = Some((goal, moves));
         }
     }
 }
@@ -299,10 +345,19 @@ fn usable_focus(
         level.scene.usables.get(r.index as usize).and_then(|u| u.stages.get(r.stage)).is_some_and(|st| st.text.contains("Close"))
             && centers.iter().any(|c| c.distance(r.center) > 1e-3 && c.distance(r.center) < 0.5)
     };
+    // (the one nearest the crosshair, as the original's use trace finds what it is aimed at: off
+    // the view's line by the least, the nearer of those as close; nearest the eye before, so of
+    // Coldridge's cell control system, three dials and a lever within a metre, the lever could
+    // not be had, a dial nearer taking every press)
+    let off = |r: &UsableRig| {
+        let to = r.center - eye;
+        let along = to.dot(fwd).max(0.0);
+        ((to - fwd * along).length() * 20.0).round() / 20.0
+    };
     let near = rigs
         .iter_mut()
         .filter(|(r, _, v)| seen(r, v.as_deref()) && !open_box(r))
-        .min_by(|a, b| a.0.center.distance(eye).total_cmp(&b.0.center.distance(eye)));
+        .min_by(|a, b| off(&a.0).total_cmp(&off(&b.0)).then(a.0.center.distance(eye).total_cmp(&b.0.center.distance(eye))));
     let Some((mut r, a, _)) = near else { return };
     let Some(u) = level.scene.usables.get(r.index as usize) else { return };
     let Some(st) = u.stages.get(r.stage) else { return };

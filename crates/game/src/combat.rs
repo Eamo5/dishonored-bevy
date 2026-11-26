@@ -314,6 +314,14 @@ fn versus(
     let clip = ["", "Sword_Ready_Versus_BigWin", "Sword_Ready_Versus_MediumWin", "Sword_Ready_Versus_MediumLose", "Sword_Ready_Versus_BigLose"][v.outcome as usize];
     let unlock = arms.iter().next().zip(level.as_ref()).and_then(|(anim, l)| anim.lib.find(clip).and_then(|c| anim.lib.marks(&l.scene).remove(&c)).and_then(|m| m.unlock));
     v.reeling = unlock.unwrap_or(if v.outcome == 4 { VERSUS_BIG_LOSE } else { 0.0 });
+    // (a big win's guard broken still when his hands are his own again: a second for the
+    // finisher after his win's swing, our reading; before, its 2 s ran out in the 1.46 s his own
+    // win's clip holds him, and no big win ever led to a finisher, so The Brigmore Witches'
+    // dream Corvo, kept from dying and sent back in aware once his blink points were found, could
+    // not be beaten)
+    if v.outcome == 1 {
+        npc.stagger = npc.stagger.max(v.reeling + 2.0);
+    }
     info!("sword lock: {} presses in {:.2} s -> {} (his hands back in {:.2} s)", v.presses, v.t, ["", "big win", "win", "loss", "big loss"][v.outcome as usize], v.reeling);
 }
 

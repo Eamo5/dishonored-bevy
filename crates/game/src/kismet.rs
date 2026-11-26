@@ -387,6 +387,32 @@ mod flow_tests {
         assert!(vm.queue.iter().any(|q| q.0 == 1), "let go, it plays out");
     }
 
+    /// A named variable inside a subsequence finds the sequence's own external link of that name
+    /// (each Coldridge cell locker's `Solution01`), standing for what its caller links there.
+    #[test]
+    fn a_named_variable_finds_its_sequences_external_link() {
+        use dhcook::format::{KLink, KVar};
+        let mut g = Graph::default();
+        let int = |v: i32, parent: Option<u32>| KVar { class: "SeqVar_Int".into(), parent, props: [("IntValue".to_string(), KVal::Int(v))].into_iter().collect(), ..Default::default() };
+        g.vars.push(int(5, None));
+        g.vars.push(KVar { class: "SeqVar_External".into(), name: "Solution".into(), parent: Some(0), props: [("VariableLabel".to_string(), KVal::Str("Solution".into()))].into_iter().collect() });
+        g.vars.push(KVar { class: "SeqVar_Named".into(), parent: Some(0), props: [("FindVarName".to_string(), KVal::Str("Solution".into()))].into_iter().collect(), ..Default::default() });
+        g.vars.push(int(5, Some(0)));
+        g.ops.push(KOp { class: "Sequence".into(), vars: vec![KLink { desc: "Solution".into(), vars: vec![0], write: false }], ..Default::default() });
+        g.ops.push(KOp {
+            class: "SeqCond_CompareInt".into(),
+            parent: Some(0),
+            inputs: vec![KInput { desc: "In".into(), ..Default::default() }],
+            outputs: vec![KOutput { desc: "A == B".into(), links: vec![(2, 0, 0.0)], linked: None }, KOutput { desc: "A != B".into(), links: vec![], linked: None }],
+            vars: vec![KLink { desc: "A".into(), vars: vec![2], write: false }, KLink { desc: "B".into(), vars: vec![3], write: false }],
+            ..Default::default()
+        });
+        g.ops.push(KOp { class: "SeqAct_Log".into(), parent: Some(0), ..Default::default() });
+        let mut vm = Vm::new(Arc::new(g), &[]);
+        vm.exec(1, 0);
+        assert!(vm.queue.iter().any(|q| q.0 == 2), "matched its caller's solution");
+    }
+
     /// Tasks start as their objective has them start, the task actions touch only tasks of an
     /// objective given (unless told otherwise), a state left unset is the class's inactive one,
     /// and an objective is done with its last task.
@@ -1330,8 +1356,9 @@ pub struct Vm {
     pub ai_fx: Vec<crate::script_world::AiFx>,
     /// the spawner of the character Corvo possesses
     pub possessed: Option<u32>,
-    /// usable objects the scripts move (`DisSeqAct_ActivateUsable`): actor, stage (else the next)
-    pub usable_stages: Vec<(u32, Option<i32>)>,
+    /// usable objects the scripts move (`DisSeqAct_ActivateUsable`): actor, the stage it is to be
+    /// left at (else the next), and whether it goes round to it when there already
+    pub usable_stages: Vec<(u32, Option<i32>, bool)>,
     /// river krusts told to spit at something (`DisSeqAct_RiverKrustSpitAtTarget`): krust, where
     pub krust_spits: Vec<(u32, Vec3)>,
     /// Bend Time's desaturation as the trials set it (`DisSeqAct_DLC05_SetBendTimeDesaturation`:
@@ -1873,8 +1900,10 @@ impl Vm {
                 }
             }
         }
+        // (a subsequence's external variable under a name of its own too: the Coldridge cell
+        // lockers' `Solution01`, each its own sequence's link)
         for (i, v) in g.vars.iter().enumerate() {
-            if !v.name.is_empty() && !v.class.contains("Named") && !v.class.contains("External") {
+            if !v.name.is_empty() && !v.class.contains("Named") {
                 vm.named.entry(v.name.to_ascii_lowercase()).or_default().push(i as u32);
             }
         }
@@ -1980,8 +2009,9 @@ impl Vm {
                     hops += 1;
                     scope = self.g.ops.get(sq as usize).and_then(|o| o.parent);
                 }
+                // (else any but a subsequence's own link, which stands for its caller's)
                 if found.is_empty() {
-                    found = all;
+                    found = all.into_iter().filter(|w| self.g.vars.get(*w as usize).is_some_and(|x| !x.class.contains("External"))).collect();
                 }
                 for w in found {
                     self.storage(w, depth + 1, out);
@@ -2974,10 +3004,14 @@ impl Vm {
                 self.fire(op, 0);
             }
             "DisSeqAct_ActivateUsable" => {
-                let stage = self.read(op, "m_TargetStageIndex").into_iter().find_map(|v| if let Val::Int(i) = v { Some(i) } else { None });
+                // (its goal is the op's own `m_TargetStageIndex`, -1 for the next, and
+                // `m_bForceAdvance`, as roshan's r614/blink research decoded 0x00b9aae0; read as a
+                // variable link before, never set, so every one moved a single stage on)
+                let stage = self.pi(op, "m_TargetStageIndex").filter(|s| *s >= 0);
+                let force = self.pb(op, "m_bForceAdvance").unwrap_or(false);
                 for t in self.read(op, "Target") {
                     if let Val::Actor(a) = t {
-                        self.usable_stages.push((a, stage));
+                        self.usable_stages.push((a, stage, force));
                     }
                 }
                 self.fire(op, 0);

@@ -1782,9 +1782,14 @@ fn run_script(
             let want = cmd.get(1).map(|s| s.to_ascii_lowercase());
             let dist = if cmd.len() > 2 { f(2) } else { 1.3 };
             let label = |r: &crate::usables::UsableRig| level.as_ref().and_then(|l| l.scene.usables.get(r.index() as usize)).map(|u| u.label.to_ascii_lowercase()).unwrap_or_default();
+            // (`#N`: the usable of that index)
+            let index = want.as_ref().and_then(|w| w.strip_prefix('#')).and_then(|n| n.parse::<u32>().ok());
             let near = usable_rigs
                 .iter()
-                .filter(|r| want.as_ref().is_none_or(|w| label(r).contains(w.as_str())))
+                .filter(|r| match index {
+                    Some(n) => r.index() == n,
+                    None => want.as_ref().is_none_or(|w| label(r).contains(w.as_str())),
+                })
                 .min_by(|a, b| a.center().distance(t.translation).total_cmp(&b.center().distance(t.translation)));
             if let Some(r) = near {
                 let c = r.center();
