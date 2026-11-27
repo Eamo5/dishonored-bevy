@@ -534,6 +534,9 @@ pub struct Npc {
     pub attn_fill: f32,
     /// noises of Corvo's it has heard (the scripts' `DisSeqEvent_PlayerHeard`)
     pub heard_player: u32,
+    /// what last sent it to look by ear was a danger (a blast, a shot: its word on it is
+    /// `SEARCH_ADETECTION_DANGER`)
+    pub heard_danger: bool,
     /// the scripts' brain flags (`DisSeqAct_AISetBrainFlags`, bits of `EDisAIBrainFlags`)
     pub brain_flags: u8,
     /// dead, its body turns to ash (`DisSeqAct_BodyShadowKill`: Daud's Whalers)
@@ -2906,6 +2909,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         attn_level: 0,
         attn_fill: 0.0,
         heard_player: 0,
+        heard_danger: false,
         brain_flags: 0,
         ash_on_death: false,
         out_of_bend: ty.is_some_and(|t| t.out_of_bend),
@@ -3889,6 +3893,9 @@ fn npc_hearing(
                 if npc.awareness >= att.levels[2][0] {
                     npc.alert = Alert::Suspicious;
                     npc.target = Some(n.pos);
+                    if npc.mode != Mode::Investigate {
+                        npc.heard_danger = n.kind == NoiseKind::Danger;
+                    }
                     if npc.mode != Mode::Investigate || runs_to(n.kind) {
                         npc.search_run = runs_to(n.kind);
                     }
@@ -4168,7 +4175,7 @@ pub(crate) fn npc_perception(
     mut found: Local<std::collections::HashSet<Entity>>,
     (froms, mut events, swarms): (Query<&FromSpawner>, MessageWriter<crate::interact::Interaction>, Query<(&Transform, &crate::swarm::Swarm), Without<Npc>>),
     (level, pvis, settings, notarget): (Option<Res<LevelInfo>>, Res<crate::stealth::PlayerVisibility>, Res<crate::settings::Settings>, Option<Res<crate::script::NoTarget>>),
-    (body_lights, carry, handled, heads): (Query<&BodyLight>, Res<crate::carry::Carry>, Res<HandledBodies>, Query<&HeadTrack>),
+    (body_lights, carry, handled, heads, walled_dead): (Query<&BodyLight>, Res<crate::carry::Carry>, Res<HandledBodies>, Query<&HeadTrack>, Query<(), With<Electrocuted>>),
 ) {
     // (rat swarms about that would attack: Corvo's, or a level's grown to its
     // `m_InitialRatCountToBeAggressive`; a stray rat or two only scurries off)
@@ -4550,9 +4557,16 @@ pub(crate) fn npc_perception(
                             npc.witnessed_death = true;
                             // (unsuspecting, its attention at investigating at most: taken
                             // aback, `DART_Surprise`)
-                            if !npc.suspecting && npc.attn_level <= 3 {
+                            let taken_aback = !npc.suspecting && npc.attn_level <= 3;
+                            if taken_aback {
                                 npc.bark_req = (npc.bark_req.0.wrapping_add(1), "COMBAT_SURPRISED");
                                 npc.startle = Some(*b);
+                            }
+                            // (one a wall of light burnt away: its own cry, `DDH_NOTICE_DEATH_BY_WOL`,
+                            // 108 voices' "By the Outsider!", whatever it knew; our reading of the
+                            // hook's name, none said before)
+                            if walled_dead.contains(*f) {
+                                npc.bark_req = (npc.bark_req.0.wrapping_add(1), "NOTICE_DEATH_BY_WOL");
                             }
                             break;
                         }

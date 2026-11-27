@@ -456,6 +456,8 @@ fn npc_barks(
             // `_ADETECTION_`: 59 of the 173 with those have no `SEARCH_FROM_ALLY`, and kept quiet)
             want = Some(match npc.bark_req.1 {
                 "SEARCH_FROM_ALLY" => &["SEARCH_FROM_ALLY", "SEARCH_VDETECTION_FROM_ALLY", "SEARCH_ADETECTION_FROM_ALLY"],
+                // (a voice without a cry for a wall's kill has its others for a death seen)
+                "NOTICE_DEATH_BY_WOL" => &["NOTICE_DEATH_BY_WOL", "SEARCH_WITNESS_DEATH", "COMBAT_SURPRISED"],
                 _ => std::slice::from_ref(&npc.bark_req.1),
             });
         } else if !down && npc.health < st.health - 0.5 {
@@ -526,6 +528,9 @@ fn npc_barks(
             want = Some(match (npc.hostile(), npc.sees_player) {
                 (true, true) if near => &["SEARCH_NEAR_VDETECTION", "ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"],
                 (true, true) => &["SEARCH_FAR_VDETECTION", "ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"],
+                // (heard: a danger, a blast or a shot, its own startled word first,
+                // `SEARCH_ADETECTION_DANGER`: "What the... !", 174 voices, none said before)
+                (true, false) if npc.heard_danger => &["SEARCH_ADETECTION_DANGER", "SEARCH_ADETECTION", "ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"],
                 (true, false) => &["SEARCH_ADETECTION", "ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"],
                 _ => &["ATTENTION_INVESTIGATE", "ATTENTION_NOTICE_BEGIN"],
             });

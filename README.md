@@ -1884,10 +1884,13 @@ fields no longer show their stand-in "WW" behind the title.
   its `PATROL_MISC` (`PATROL_MISC_GROUP` among others of its side), noticing something
   `ATTENTION_NOTICE_BEGIN`, a notice come to nothing `ATTENTION_NOTICE_END`, finding a body
   `SEARCH_DETECT_CORPSE` (its `Hook_DeathMode` lines for a dead one, "A body! Murder!", or one
-  knocked out, "Hey, wake up!") and a death before its eyes `SEARCH_WITNESS_DEATH`; a guard
+  knocked out, "Hey, wake up!") and a death before its eyes `SEARCH_WITNESS_DEATH` (one a wall of
+  light burnt away `NOTICE_DEATH_BY_WOL`, "By the Outsider!", 108 voices; our reading of the
+  hook's name); a guard
   going to look says what set it off (Corvo seen near, within `m_fVisualDetectionRatioNear` 0.3
   of its sight, `SEARCH_NEAR_VDETECTION`, or far `SEARCH_FAR_VDETECTION`, or heard
-  `SEARCH_ADETECTION`), a search begun `SEARCH`, an enemy it can't see `COMBAT_THREAT_OFFSCREEN`,
+  `SEARCH_ADETECTION`, a danger heard, a blast or a shot, `SEARCH_ADETECTION_DANGER`, "What the...
+  !", 174 voices; neither said before), a search begun `SEARCH`, an enemy it can't see `COMBAT_THREAT_OFFSCREEN`,
   and giving up after a body `SEARCH_GIVEUP_POSTCORPSE`, after Corvo seen `SEARCH_STOPHUNTING`,
   after a sound looked into `SEARCH_MUSTHAVEBEENARAT` (the cause each transition names, as
   roshan's r614/blink research laid them out); turning on Corvo with others of its side within
