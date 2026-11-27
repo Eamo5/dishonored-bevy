@@ -2555,7 +2555,9 @@ fields no longer show their stand-in "WW" behind the title.
   - It walks its route by type (0x00afa730): a circle (the class's default) round and round,
     `ERT_PingPong` back and forth, `ERT_Linear` to its end and no further, `ERT_Random` from point
     to random point. Each time round to where it began counts; after `m_PatrolAttentionSpan` (3)
-    it goes over to a neglected route if there is one.
+    it goes over to a neglected route if there is one, saying so ("Why is no one making rounds over
+    here?", `DDH_PATROL_SWITCH_ROUTE`, 94 voices, the ambient barks' route-switch hook as roshan's
+    r614/blink research found it; none said before).
   - It stops only at a point it guards (`m_bGuardForever`, `m_fGuardDuration`, watch points).
     There it faces the point's way (`m_bDirectionMatters`) for exactly its time, or for ever.
     With watch points (`DisGuardWatchPoint`) it looks at each in turn instead, for

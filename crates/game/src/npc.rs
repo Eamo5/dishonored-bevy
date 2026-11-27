@@ -5179,6 +5179,12 @@ pub(crate) fn npc_brain(
                     let route = patrol.route.and_then(|r| level.scene.routes.get(r)).map_or("none", |r| r.name.as_str());
                     info!("patrol: {} ({squad}) {route} point {}{}", npc.name, patrol.idx, if patrol.guard.is_some() { ", guarding" } else { "" });
                 }
+                // (gone over to a route no one walks: "Why is no one making rounds over here?",
+                // `DDH_PATROL_SWITCH_ROUTE`, as roshan's r614/blink research found the ambient
+                // barks raise it on the route switch)
+                if std::mem::take(&mut patrol.switched) {
+                    npc.bark_req = (npc.bark_req.0.wrapping_add(1), "PATROL_SWITCH_ROUTE");
+                }
                 npc.patrol = patrol;
                 if order.goal != npc.target {
                     // (on to the next: not there till it gets there)

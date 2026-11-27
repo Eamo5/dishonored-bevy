@@ -104,6 +104,10 @@ pub struct Patrol {
     pub face: Option<f32>,
     #[serde(skip)]
     pub look: Option<Vec3>,
+    /// it just went over to a neglected route, its rounds done (the ambient barks' route-switch
+    /// flag: `DDH_PATROL_SWITCH_ROUTE`)
+    #[serde(skip)]
+    pub switched: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -269,6 +273,7 @@ impl Patrol {
             self.reps += 1;
             let span = r.span.unwrap_or(SPAN);
             if span >= 0 && self.reps >= span && self.adopt(routes, st, squad, pos, true) {
+                self.switched = true;
                 return true;
             }
         }
@@ -531,6 +536,29 @@ mod tests {
         assert_eq!(q.step(&routes, &mut st, "a", Vec3::new(5.0, 0.0, 0.0), 1.5), Order::default());
         let o = q.step(&routes, &mut st, "a", Vec3::new(5.0, 0.0, 0.0), 1.0);
         assert_eq!(o.goal, Some(Vec3::ZERO));
+    }
+
+    /// Its rounds done, a guard goes over to a route no one has walked for a while, and says so.
+    #[test]
+    fn a_guard_done_with_its_rounds_goes_over_to_a_neglected_route() {
+        let mut a = route("ERT_Circle", &[[0.0; 3], [1.0, 0.0, 0.0]], &[]);
+        a.span = Some(1);
+        let b = route("ERT_Circle", &[[20.0, 0.0, 0.0], [21.0, 0.0, 0.0]], &[]);
+        let routes = vec![a, b];
+        let mut st = Patrols::of(&routes);
+        let mut p = Patrol::default();
+        p.begin(&mut st, None);
+        // (taken up the nearest, the first; the second just walked, not neglected)
+        p.step(&routes, &mut st, "a", Vec3::ZERO, 0.1);
+        assert_eq!(p.route, Some(0));
+        st.routes[1].neglect = 0.0;
+        p.step(&routes, &mut st, "a", Vec3::new(1.0, 0.0, 0.0), 0.1);
+        p.step(&routes, &mut st, "a", Vec3::ZERO, 0.1);
+        assert_eq!((p.route, p.switched), (Some(0), false), "a round, none neglected");
+        st.routes[1].neglect = NEGLECT + 1.0;
+        p.step(&routes, &mut st, "a", Vec3::new(1.0, 0.0, 0.0), 0.1);
+        p.step(&routes, &mut st, "a", Vec3::ZERO, 0.1);
+        assert_eq!((p.route, p.switched), (Some(1), true));
     }
 
     #[test]
