@@ -267,7 +267,7 @@ fn witch_powers(
 fn witch_spells(
     mut commands: Commands,
     mut spells: MessageReader<WitchSpell>,
-    npcs: Query<&Npc>,
+    mut npcs: Query<&mut Npc>,
     player: Query<&Transform, With<Player>>,
     settings: Res<crate::settings::Settings>,
     (mut hits, mut fx, mut summon): (MessageWriter<crate::gameplay::PlayerHit>, MessageWriter<SpawnEffect>, MessageWriter<crate::tentacle::SummonTentacle>),
@@ -277,6 +277,7 @@ fn witch_spells(
         return;
     };
     let d = (settings.difficulty as usize).min(3);
+    let mut called = Vec::new();
     for s in spells.read() {
         let Ok(npc) = npcs.get(s.witch) else { continue };
         let Some(sp) = npc.arms.witch.as_ref() else { continue };
@@ -309,7 +310,15 @@ fn witch_spells(
             Spell::Summon => {
                 fx.write(SpawnEffect::at("witch_summon", s.from + Vec3::Y * 0.6 + s.facing * 0.4));
                 summon.write(crate::tentacle::SummonTentacle { witch: s.witch, witch_at: s.from, near: pt.translation, reach: sp.summon_near_target });
+                called.push(s.witch);
             }
+        }
+    }
+    // (her word as she calls one up: "I call you from the Void!", `DDH_SUMMON_TENTACLE`, the
+    // witches' 10 voices; none said before)
+    for w in called {
+        if let Ok(mut npc) = npcs.get_mut(w) {
+            npc.bark_req = (npc.bark_req.0.wrapping_add(1), "SUMMON_TENTACLE");
         }
     }
 }

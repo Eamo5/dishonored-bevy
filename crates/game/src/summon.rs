@@ -191,6 +191,9 @@ fn summoned(
             if std::env::var_os("DH_SUMMON_LOG").is_some() {
                 info!("summon: assassin departs ({clip}, {:.1} s)", len.unwrap_or(0.0));
             }
+            // (and its word as it goes, the winner's or not, as its salute:
+            // `DDH_SUMMONEDASSASSIN_LEAVE_WIN` / `_LOSE`, 18 voices; none said before)
+            npc.bark_req = (npc.bark_req.0.wrapping_add(1), if s.fought && near { "SUMMONEDASSASSIN_LEAVE_WIN" } else { "SUMMONEDASSASSIN_LEAVE_LOSE" });
             s.leaving = Some(len.unwrap_or(0.0));
         }
     }

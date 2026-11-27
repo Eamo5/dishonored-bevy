@@ -3365,8 +3365,12 @@ fields no longer show their stand-in "WW" behind the title.
     of a fight; one at a time; with Arcane Bond II he moves through bent time. As he goes he
     turns to Daud and salutes (`DLC06_TweaksBehavior_AssnSalute`): having fought and within
     `m_fWinAnimMaxRange` (20 m), the winner's `Sword_DepartureSalute` (`m_WinAnim`), else
-    `Sword_DepartureSalute_NoFight` (`m_LoseAnim`), and vanishes once it is done. Before, he
-    vanished where he stood. The summoned are named "Assassin", not "Citizen".
+    `Sword_DepartureSalute_NoFight` (`m_LoseAnim`), with the word for it
+    (`DDH_SUMMONEDASSASSIN_LEAVE_WIN`, "It is done.", "Master Daud.", else `_LEAVE_LOSE`,
+    "Another time...", 18 voices; none said before), and vanishes once it is done. Before, he
+    vanished where he stood. The summoned are named "Assassin", not "Citizen". The Brigmore
+    witches calling up a tentacle say so too (`DDH_SUMMON_TENTACLE`: "I call you from the
+    Void!").
     - In The Brigmore Witches he summons that pack's own assassins (his pawn's
       `m_pSummonAssassinPowerTweaks`: `DLC07_Pwr_Assassummon`, `DLC07_Pwn_SummonedAssn`, of his
       own faction, `DLC07_Fctn_Daud`, with their own blades and hand). Before, The Knife of
