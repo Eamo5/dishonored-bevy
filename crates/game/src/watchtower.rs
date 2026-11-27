@@ -318,7 +318,7 @@ fn towers(
     player: Query<(Entity, &Transform), With<Player>>,
     cam: Query<&GlobalTransform, With<PlayerCamera>>,
     props: Query<(Entity, &crate::props::Prop, &Transform), (Without<Player>, Without<Tower>)>,
-    (stats, mut blinding, mut sfx, mut fx): (Res<PlayerStats>, ResMut<Blinding>, MessageWriter<PostEvent>, MessageWriter<SpawnEffect>),
+    (stats, mut blinding, mut sfx, mut fx, notarget): (Res<PlayerStats>, ResMut<Blinding>, MessageWriter<PostEvent>, MessageWriter<SpawnEffect>, Option<Res<crate::script::NoTarget>>),
     mut vm: Option<ResMut<crate::kismet::Vm>>,
     (mut devices, npcs, mut zones): (ResMut<crate::security::Devices>, Query<(Entity, &crate::npc::Npc, &Transform), (Without<Player>, Without<crate::props::Prop>, Without<Tower>)>, ResMut<crate::danger::DangerZones>),
     (mut noise, mut rtpcs, mut tagged): (MessageWriter<crate::gameplay::Noise>, ResMut<crate::audio::Rtpcs>, Query<(&crate::particles::EffectTag, &mut crate::particles::ParticleEmitter)>),
@@ -504,7 +504,8 @@ fn towers(
         let v = chest - lamp;
         let along = v.dot(dir);
         let perp = (v - dir * along).length();
-        let in_beam = (hacked || !stats.dead) && along > 0.0 && along < hit + 2.0 && perp < along / hit * spot + 0.6;
+        // (the tests' `notarget`: no tower takes him either)
+        let in_beam = (hacked || (!stats.dead && notarget.is_none())) && along > 0.0 && along < hit + 2.0 && perp < along / hit * spot + 0.6;
         let clear = in_beam && ctx.cast_ray(lamp + v.normalize_or_zero() * OUT, v.normalize_or_zero(), v.length() - 0.5 - OUT, true, walls).is_none();
         let sees = in_beam && clear;
         // a body in its beam, once each: its owners' ("Ally Corpse Seen"), else another's

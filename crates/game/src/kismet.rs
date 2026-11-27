@@ -581,6 +581,46 @@ mod flow_tests {
         assert_eq!(locked.into_iter().collect::<Vec<_>>(), vec![0]);
     }
 
+    /// The scripts' damage is told to the target's damage events as it is dealt: an event the
+    /// scripts attach just after it doesn't hear it, and hears the next.
+    #[test]
+    fn scripted_damage_is_heard_only_by_the_events_attached_before_it() {
+        use dhcook::format::{KActor, KLink, KVar};
+        let mut g = Graph::default();
+        g.actors.push(KActor { spawner: Some(0), ..Default::default() });
+        g.vars.push(KVar { class: "SeqVar_Object".into(), props: [("ObjValue".to_string(), KVal::Actor(0))].into_iter().collect(), ..Default::default() });
+        let target = |d: &str| vec![KLink { desc: d.into(), vars: vec![0], write: false }];
+        g.ops.push(KOp {
+            class: "SeqAct_ModifyHealth".into(),
+            inputs: vec![KInput { desc: "In".into(), ..Default::default() }],
+            outputs: vec![KOutput { desc: "Out".into(), links: vec![(1, 0, 0.0)], linked: None }],
+            vars: target("Target"),
+            props: [("Amount".to_string(), KVal::Float(1.0))].into_iter().collect(),
+            ..Default::default()
+        });
+        g.ops.push(KOp {
+            class: "SeqAct_AttachToEvent".into(),
+            inputs: vec![KInput { desc: "In".into(), ..Default::default() }],
+            vars: target("Attachee"),
+            props: [("EventLinks".to_string(), KVal::List(vec![KVal::Op(2)]))].into_iter().collect(),
+            ..Default::default()
+        });
+        g.ops.push(KOp {
+            class: "SeqEvent_TakeDamage".into(),
+            outputs: vec![KOutput { desc: "Out".into(), links: vec![(3, 0, 0.0)], linked: None }],
+            props: [("DamageThreshold".to_string(), KVal::Float(1.0)), ("bPlayerOnly".to_string(), KVal::Bool(false))].into_iter().collect(),
+            ..Default::default()
+        });
+        g.ops.push(KOp { class: "SeqAct_Log".into(), inputs: vec![KInput { desc: "In".into(), ..Default::default() }], ..Default::default() });
+        let mut vm = Vm::new(Arc::new(g), &[]);
+        vm.exec(0, 0);
+        vm.pump();
+        assert_eq!(vm.st[2].fired, 0, "attached after the blow");
+        assert!(vm.events_of.get(&0).is_some_and(|e| e.contains(&2)), "attached: {:?}", vm.events_of);
+        vm.exec(0, 0);
+        assert_eq!(vm.st[2].fired, 1, "the next blow");
+    }
+
     /// Bent time holds the scripts' delays and links' delays at the world's pace, those marked
     /// `m_bAlwaysOutOfBendTime` going on at Corvo's.
     #[test]
@@ -1683,6 +1723,9 @@ pub struct Vm {
     factory_ambients: HashMap<u32, usize>,
     /// characters struck by a typed blow lately (when): their health's drop was that blow
     pub recent_hits: HashMap<Entity, f32>,
+    /// characters the scripts hurt lately (`SeqAct_ModifyHealth`, when): their damage events
+    /// were told as it was dealt
+    scripted_hurt: HashMap<u32, f32>,
 }
 
 impl Vm {
@@ -1915,6 +1958,7 @@ impl Vm {
             factory_sounds: HashMap::new(),
             factory_ambients: HashMap::new(),
             recent_hits: HashMap::new(),
+            scripted_hurt: HashMap::new(),
             explosions: Vec::new(),
             projectiles: Vec::new(),
             npc_materials: Vec::new(),
@@ -3976,7 +4020,20 @@ impl Vm {
                 let heal = self.pb(op, "bHeal").unwrap_or(false);
                 // (a sleep that harms nothing: Lizzy Stride put to sleep in her pillory)
                 let sleep = !heal && self.ps(op, "DamageType").is_some_and(|d| d.ends_with("InstantSleep"));
+                // (its damage told to the target's damage events as it is dealt, by its type and
+                // its instigator, as UE3's `TakeDamage` does: one the scripts attach after it
+                // doesn't hear it. Before, it was told a frame on, as Corvo's: Samuel, hurt by
+                // a point as the Golden Cat's way back to the boat begins, then given the event
+                // that kills him if Corvo hurts him, died at the dock and the mission stalled)
+                let by_player = self.read(op, "Instigator").iter().any(|v| matches!(v, Val::Player));
+                let class = self.ps(op, "DamageType").map(|d| d.rsplit('.').next().unwrap_or("").to_string()).unwrap_or_else(|| "DamageType".into());
                 for t in self.read(op, "Target") {
+                    if let Val::Actor(a) = &t {
+                        if !heal && !sleep && g.actors.get(*a as usize).is_some_and(|ka| ka.spawner.is_some()) {
+                            self.scripted_hurt.insert(*a, self.time);
+                            self.take_damage(*a, &class, amount, by_player);
+                        }
+                    }
                     // a thing (a PA speaker): worn down, broken
                     if let Some(ka) = if let Val::Actor(a) = t { g.actors.get(a as usize) } else { None } {
                         if ka.spawner.is_none() && !ka.instances.is_empty() {
@@ -7925,7 +7982,7 @@ fn world_events(
         }
         // hurt by something other than a blow of known type (a fall, a trap): of no
         // particular type
-        if npc.health < health0 - 0.1 && vm.recent_hits.get(&e).is_none_or(|t| vm.time - t > 0.5) {
+        if npc.health < health0 - 0.1 && vm.recent_hits.get(&e).is_none_or(|t| vm.time - t > 0.5) && vm.scripted_hurt.get(&actor).is_none_or(|t| vm.time - t > 0.5) {
             vm.take_damage(actor, "DishonoredDamageType", health0 - npc.health, true);
         }
     }

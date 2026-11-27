@@ -3084,7 +3084,14 @@ fields no longer show their stand-in "WW" behind the title.
   event's `DamageTypes` / `IgnoreDamageTypes`, summed to its `DamageThreshold` (100) past
   `MinDamageAmount`, Corvo's only where `bPlayerOnly`, and `SeqAct_SetDamageInstigator` makes
   him answerable for what follows (`DH_DAMAGE_LOG`). People's damage events take their blows'
-  types the same way.
+  types the same way. The scripts' own damage (`SeqAct_ModifyHealth` on a character) is told to
+  its damage events as it is dealt, by its `DamageType` and as Corvo's only when the op's
+  Instigator is the player, as UE3's `TakeDamage` does: an event the scripts attach just after
+  the blow (`SeqAct_AttachToEvent`) doesn't hear it. Before, it was told a frame later, as
+  Corvo's: at the end of the House of Pleasure the scripts nick Samuel for a point, then attach
+  the event that poisons him should Corvo hurt him; he heard the nick, died at the dock, and the
+  mission could not end. It now ends at the boat with its statistics. The tests' `notarget`
+  keeps the watch towers off Corvo too.
 - **PA speakers**: their prefab hums (`ActorFactoryAkAmbientSound`'s `Amb_Speaker_Noise`,
   started and stopped by `SeqAct_AkStartAmbientSound`); shot or struck, the script destroys the
   joint they hang by (`RB_BSJointActor`: props held by joints fall once their joints are gone),
