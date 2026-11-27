@@ -1085,6 +1085,15 @@ fn run_script(
             stats.mana = cmd.get(1).and_then(|v| v.parse().ok()).unwrap_or(stats.max_mana);
             stats.mana_cap = stats.max_mana;
         }
+        "givekey" => {
+            // (tests) givekey NAME...: a key on his ring by the name doors know it by ("Lighthouse
+            // Elevator Key")
+            let name = cmd[1..].join(" ");
+            if !name.is_empty() && !stats.keys.contains(&name) {
+                info!("script: key {name} on the ring");
+                stats.keys.push(name);
+            }
+        }
         "adrenaline" => {
             // adrenaline [N]: Blood Thirst's adrenaline (as the original's `PlayerFillAdrenaline`:
             // full, `Attribute_AdrenalineMax` 250 on every difficulty)

@@ -8049,6 +8049,13 @@ fn world_events(
                     vm.actor_event(a, &["DisSeqEvent_Tripwire"], OutSel::All, Some(Val::Player));
                 }
             }
+            // (a door unlocked with its key: its scripts hear it, `DisSeqEvent_Lock` "Unlocked":
+            // Emily's room at the Lighthouse, whose unlocking starts the way to her rescue)
+            Interaction::DoorUnlocked(instance) => {
+                for a in vm.instance_actor.get(instance).cloned().unwrap_or_default() {
+                    vm.actor_event(a, &["DisSeqEvent_Lock"], OutSel::Desc("Unlocked"), Some(Val::Player));
+                }
+            }
             Interaction::DoorLocked(instance) => {
                 for a in vm.instance_actor.get(instance).cloned().unwrap_or_default() {
                     vm.actor_event(a, &["DisSeqEvent_Used"], OutSel::Desc("Used But Locked"), Some(Val::Player));

@@ -2507,7 +2507,11 @@ fields no longer show their stand-in "WW" behind the title.
 - **Locks and keys**: doors locked in the level (`m_bLocked`) stay shut until Corvo has one
   of their keys (`m_MatchingKeys`, by name: "Golden Cat Master Key"); keys come from key
   pickups (`DisKey_Base.m_Name`), pockets and the scripts (`DisSeqAct_AddKey`), go on his
-  ring (kept in saves) and unlock the door on use. A door says what its tweaks say: its name
+  ring (kept in saves) and unlock the door on use, its scripts told (`DisSeqEvent_Lock`
+  "Unlocked", which 19 doors' scripts in 13 maps listen for; before, only usable objects told
+  theirs, and the Lighthouse's ending never came: Emily's room unlocked with the key from
+  Havelock starts her rescue, the end of the mission and the epilogue, which now play through).
+  A door says what its tweaks say: its name
   (`m_Name`: "Door", "Unbreakable Door") over "[F] Open" (`m_InteractText`), "[F] Close" (its
   close move's `m_InteractTextOverride`), "[F] Unlock" with the key (`m_UnlockInteractText`),
   and locked its own line (`m_FocusLockedMessage`: "Locked", "Blocked from the other side",

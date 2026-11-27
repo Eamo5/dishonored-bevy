@@ -411,6 +411,8 @@ pub enum Interaction {
     /// door instance, opened (else closed), swung clockwise
     Door { instance: u32, opened: bool, cw: bool },
     DoorLocked(u32),
+    /// a door (its instance) unlocked with a key on his ring
+    DoorUnlocked(u32),
     /// a usable (its actor) used into a stage (its `DisSeqEvent_Used` output; 0 for one
     /// without stages)
     Usable(u32, usize),
@@ -1240,6 +1242,7 @@ pub fn use_focus(
                 if let Some(s) = sounds.filter(|s| !s.unlocked.is_empty()) {
                     timed.schedule(&[(0.0, s.unlocked.clone())], at);
                 }
+                used.write(Interaction::DoorUnlocked(li.index));
             } else {
                 if let Some(s) = sounds.filter(|s| !s.locked.is_empty()) {
                     timed.schedule(&[(0.0, s.locked.clone())], at);
