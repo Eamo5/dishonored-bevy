@@ -3747,7 +3747,11 @@ against the install's own data where it carries them, then implemented independe
   - `SeqAct_Toggle` on a volume or a trigger turns its collision on, off or over, as
     `Volume.OnToggle`'s `SetCollision` does. On a forbidden zone (`DisForbiddenZone`) it enables
     or disables the zone, keeping its factions: Boyle's guards turn on Corvo by the balloons once
-    they are popped. Before, these toggles went nowhere.
+    they are popped. Before, these toggles went nowhere. Coming up to a zone forbidden him (within
+    3 m of its edge, not yet in), its owners within 15 m who face him and are unaware warn him off
+    once as he comes (`DDH_PATROL_PROXIMITY_WARNING`: "This area is off limits. Move along.",
+    "You're not allowed here. You'll want to be leaving now.", 87 voices; our reading of when, none
+    said before); inside, they take him for an enemy as before.
   - `SeqAct_Destroy` on a volume or a trigger leaves it colliding with nothing. Before, the 30
     triggers the stories destroy kept firing.
   - `DynamicBlockingVolume`s are solid now, and switch with the scripts too. These are Boyle's

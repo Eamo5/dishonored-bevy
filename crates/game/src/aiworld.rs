@@ -78,6 +78,9 @@ pub struct AiWorld {
     whistled: HashMap<u32, Vec3>,
 }
 
+/// How near (m) the edge of a zone forbidden him Corvo is warned off by its owners.
+const WARN_REACH: f32 = 3.0;
+
 fn inside(hulls: &[Collider], p: Vec3) -> bool {
     hulls.iter().any(|c| c.contains_point(Vec3::ZERO, Quat::IDENTITY, p))
 }
@@ -240,16 +243,34 @@ fn script_commands(vm: Option<ResMut<crate::kismet::Vm>>, mut ai: ResMut<AiWorld
 }
 
 /// Corvo where he mustn't be: the zone's owners that see him take him for an enemy there.
-fn trespass(ai: Res<AiWorld>, player: Query<&Transform, With<Player>>, mut npcs: Query<&mut Npc>) {
+fn trespass(ai: Res<AiWorld>, player: Query<&Transform, With<Player>>, mut npcs: Query<(&mut Npc, &Transform), Without<Player>>, mut near_before: Local<bool>) {
     let Ok(pt) = player.single() else { return };
     let at = pt.translation;
     // (touching it: his cylinder, feet to head, in it)
     let reach = crate::player::STAND_HALF + crate::player::RADIUS;
     let touching = |h: &[Collider]| [-reach, -reach * 0.5, 0.0, reach * 0.5, reach].iter().any(|dy| inside(h, at + Vec3::Y * *dy));
-    let zones: Vec<&Zone> = ai.zones.iter().filter(|z| z.enabled && z.forbidden.iter().any(|f| dhcook::format::is_player_faction(f)) && touching(&z.hulls)).collect();
-    for mut n in &mut npcs {
+    let forbidding = |z: &&Zone| z.enabled && z.forbidden.iter().any(|f| dhcook::format::is_player_faction(f));
+    let zones: Vec<&Zone> = ai.zones.iter().filter(forbidding).filter(|z| touching(&z.hulls)).collect();
+    // at its edge, not yet in: its owners who see him warn him off once as he comes up
+    // ("Stay away. Cross the line and have your throat cut.", `DDH_PATROL_PROXIMITY_WARNING`, 87
+    // voices; our reading of when, none said before)
+    let edge: Vec<&Zone> = if zones.is_empty() {
+        ai.zones
+            .iter()
+            .filter(forbidding)
+            .filter(|z| (0..8).any(|k| [-reach, 0.0, reach].iter().any(|dy| inside(&z.hulls, at + Vec3::Y * *dy + Quat::from_rotation_y(k as f32 * std::f32::consts::FRAC_PI_4) * Vec3::Z * WARN_REACH))))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let warn = !edge.is_empty() && !*near_before;
+    *near_before = !edge.is_empty();
+    for (mut n, nt) in &mut npcs {
         if n.is_down() {
             continue;
+        }
+        if warn && !n.enemy && n.alert == Alert::Unaware && nt.translation.distance(at) < 15.0 && edge.iter().any(|z| z.owners.iter().any(|o| o.eq_ignore_ascii_case(&n.faction))) && n.forward().dot((at - nt.translation).with_y(0.0).normalize_or_zero()) > 0.0 {
+            n.bark_req = (n.bark_req.0.wrapping_add(1), "PATROL_PROXIMITY_WARNING");
         }
         let owner = zones.iter().any(|z| z.owners.iter().any(|o| o.eq_ignore_ascii_case(&n.faction)));
         match (owner, n.trespass) {
