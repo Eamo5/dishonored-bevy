@@ -492,9 +492,11 @@ fn run_script(
             script.timer = secs + 1.0;
         }
         "hoptask" => {
-            // (tests) hoptask [N]: Corvo put down 0.8 m short of the N-th objective marker (on his
-            // way to it), then he takes or uses what is there (as gototask, without the walk)
-            let pick = f(1) as usize;
+            // (tests) hoptask [N|main]: Corvo put down 0.8 m short of the N-th objective marker (on
+            // his way to it; `main`: the first not optional), then he takes or uses what is there
+            // (as gototask, without the walk)
+            let main = cmd.get(1).is_some_and(|a| a == "main");
+            let mut pick = if main { 0 } else { f(1) as usize };
             let here = t.translation;
             commands.queue(move |w: &mut World| {
                 let npcs: Vec<(u32, Vec3)> = w.query::<(&crate::npc::FromSpawner, &Transform, &crate::npc::Npc)>().iter(w).filter(|(_, _, n)| !n.is_down()).map(|(f, t, _)| (f.0, t.translation)).collect();
@@ -503,6 +505,9 @@ fn run_script(
                     .get_resource::<crate::kismet::Vm>()
                     .map(|vm| crate::markers::task_targets(vm, |s| npcs.iter().find(|(f, _)| *f == s).map(|(_, p)| *p), |i| items.iter().find(|(k, _)| *k == i).map(|(_, p)| *p)))
                     .unwrap_or_default();
+                if main {
+                    pick = pts.iter().position(|m| !m.optional).unwrap_or(0);
+                }
                 match pts.get(pick).map(|m| (m.at, m.pickup, m.actor)) {
                     Some((p, pickup, actor)) => {
                         let back = (here - p).with_y(0.0).normalize_or(Vec3::X);
