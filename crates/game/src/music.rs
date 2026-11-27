@@ -27,6 +27,8 @@ enum Situation {
     Combat(usize),
     /// pursuers near (0) / far (1)
     Chase(usize),
+    /// a wild swarm at him, with no one else (`m_pStartRatAttack`)
+    Rats,
 }
 
 #[derive(Resource, Default)]
@@ -76,11 +78,12 @@ fn direct_music(
     level: Option<Res<LevelInfo>>,
     mut dir: ResMut<Director>,
     npcs: Query<(&Npc, &Transform)>,
-    player: Query<&Transform, With<Player>>,
+    player: Query<(Entity, &Transform), With<Player>>,
+    swarms: Query<&crate::swarm::Swarm>,
     mut out: MessageWriter<PostEvent>,
 ) {
     let Some(m) = level.as_ref().and_then(|l| l.scene.music.as_ref()) else { return };
-    let Ok(pt) = player.single() else { return };
+    let Ok((pe, pt)) = player.single() else { return };
     let dt = time.delta_secs();
     dir.tick -= dt;
     if dir.tick > 0.0 {
@@ -110,6 +113,9 @@ fn direct_music(
         dir.chase_left = m.chase_time;
         let level = m.combat_intensity.iter().filter(|&&t| intensity >= t).count().clamp(1, m.combat.len().max(1)) - 1;
         Situation::Combat(level)
+    } else if !m.rat_attack.is_empty() && swarms.iter().any(|s| s.wild.is_some() && s.target == Some(pe)) {
+        // (rats at him: their own fight music)
+        Situation::Rats
     } else if pursuer < far_range || dir.chase_left > 0.0 {
         dir.chase_left = if pursuer < far_range { m.chase_time } else { dir.chase_left - step };
         Situation::Chase(if pursuer < fight_range { 0 } else { 1 })
@@ -126,6 +132,7 @@ fn direct_music(
     let escalate = match (want, dir.current) {
         (Situation::Combat(a), Some(Situation::Combat(b))) => a > b,
         (Situation::Combat(_), _) => true,
+        (Situation::Rats, Some(Situation::Explore | Situation::Suspense) | None) => true,
         (Situation::Suspense, Some(Situation::Explore) | None) => true,
         _ => false,
     };
@@ -142,6 +149,7 @@ fn direct_music(
         Situation::Suspense => Some(&m.suspense),
         Situation::Combat(k) => m.combat.get(k),
         Situation::Chase(k) => m.chase.get(k).or(m.chase.first()),
+        Situation::Rats => Some(&m.rat_attack),
     };
     if let Some(e) = event.filter(|e| !e.is_empty()) {
         if std::env::var("DH_AUDIO_LOG").is_ok() {

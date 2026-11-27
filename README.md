@@ -3117,6 +3117,8 @@ fields no longer show their stand-in "WW" behind the title.
   (`Music_State_Boyle_Fight_4`), an elite guard or an overseer 2, a guard or a thug 1, a
   wolfhound 0.5. Before, an elite guard's 2 for any whose name sounded strong, tallboys
   included, else a thug's 1. `dhtool patch-music DIR` brings cooked maps' characters up to this.
+  A wild swarm at Corvo with no one else fighting him brings the tweak's rat fight
+  (`m_pStartRatAttack`: `Music_State_Streets_Fight_Rat`), which was cooked but never played.
 - **Whale oil tanks** hold their charge (`DisTweaks_WhaleOilBattery`: 50 full); walls of light,
   arc pylons and watchtowers spend it from the tank feeding them (a kill, a shot) and stop when
   it runs dry; the scripts refill them (`DisSeqAct_RefillWhaleOilBattery`; the Refinery's start
