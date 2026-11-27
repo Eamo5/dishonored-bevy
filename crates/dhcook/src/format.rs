@@ -2355,6 +2355,11 @@ pub struct BarkHook {
     pub nodes: Vec<BarkNode>,
     #[serde(default)]
     pub roots: Vec<i32>,
+    /// what each output answers, for a hook that picks its output by where the speaker is
+    /// (`DisConv_Hook_Distraction.m_DistractionLinks`: the distractor actor's name, else its
+    /// category, "Art", "TableSearch"...)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<(String, String)>,
 }
 
 /// A node of a bark's graph and its outputs (node indices, -1 unlinked: nothing said).
@@ -3238,6 +3243,10 @@ pub struct Distractor {
     /// without a scene: the animation (prefix + `In`, `Loop`, `Out`) and how long it loops
     pub anim: String,
     pub time: [f32; 2],
+    /// what it is (`m_DistractionCategory`: "Art", "Fireplace", "TableSearch"; empty for none),
+    /// which the passer-by's word on it answers (else `anim` past its `Distraction_`)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
     /// the chance a calm / a wary passer-by looks at it instead, for `time`
     /// (`m_fChanceToLook`)
     #[serde(default)]

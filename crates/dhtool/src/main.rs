@@ -1238,6 +1238,8 @@ fn main() -> Result<()> {
                     // those passed through)
                     let mut before = new.clone();
                     for h in before["hooks"].as_array_mut().into_iter().flatten() {
+                        // (and before it knew what a distraction's outputs answer)
+                        h.as_object_mut().map(|o| o.remove("links"));
                         for n in h["nodes"].as_array_mut().into_iter().flatten() {
                             let br = n["step"].get("Branch");
                             if br.is_some_and(|b| b.get("Seen").or(b.get("Equipped")).or(b.get("Tweaks")).or(b.get("HasItem")).or(b.get("Faction")).or(b.get("Spawner")).is_some() || *b == serde_json::json!("Available") || *b == serde_json::json!("CombatStatus")) {
@@ -1245,13 +1247,26 @@ fn main() -> Result<()> {
                             }
                         }
                     }
+                    // (or as it had it once it knew those branches, all but the distractions' links)
+                    let mut unlinked = new.clone();
+                    for h in unlinked["hooks"].as_array_mut().into_iter().flatten() {
+                        h.as_object_mut().map(|o| o.remove("links"));
+                    }
                     if old.as_ref() == Some(&new) {
                         same += 1;
-                    } else if force || old.as_ref() == Some(&before) {
+                    } else if force || old.as_ref() == Some(&before) || old.as_ref() == Some(&unlinked) {
                         *b = new;
                         renewed += 1;
                     } else {
                         differ += 1;
+                        if std::env::var("DH_PATCH_LOG").is_ok() {
+                            // (where: the first hook that differs, and how)
+                            let (o, b) = (old.as_ref().map(|o| o["hooks"].clone()).unwrap_or_default(), before["hooks"].clone());
+                            let (oa, ba) = (o.as_array().cloned().unwrap_or_default(), b.as_array().cloned().unwrap_or_default());
+                            let first = (0..oa.len().max(ba.len())).find(|&k| oa.get(k) != ba.get(k));
+                            let show = |h: Option<&serde_json::Value>| h.map(|h| format!("{} lines {} nodes {}", h["hook"], h["lines"].as_array().map_or(0, |a| a.len()), h["nodes"].as_array().map_or(0, |a| a.len()))).unwrap_or_default();
+                            println!("  {name}: {} hooks cooked, {} now; first differing {first:?}: {} | {}", oa.len(), ba.len(), first.map(|k| show(oa.get(k))).unwrap_or_default(), first.map(|k| show(ba.get(k))).unwrap_or_default());
+                        }
                     }
                 }
                 println!("{m}: {same} as cooked, {renewed} renewed, {differ} differ, {missing} not found");

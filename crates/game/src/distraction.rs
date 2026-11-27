@@ -53,7 +53,7 @@ pub struct ScriptDistractions(pub Vec<(u32, usize)>);
 /// A character playing a distractor's scene.
 #[derive(Component)]
 pub struct Distracted {
-    d: usize,
+    pub(crate) d: usize,
     t: f32,
     /// the animation key playing
     key: Option<usize>,
@@ -172,6 +172,9 @@ fn distract(
                 commands.entity(e).try_insert(ScriptedAnim);
                 // (Start: on arriving, 0x00b84d60 -> 0x00b84750 / 0x00b84670)
                 used.write(Interaction::Distracted { distractor: d.name.clone(), at: Vec3::from(d.position), spawner: npc.spawner, out: "Distracted Start" });
+                // its word on what it stops at as it starts (`DDH_DISTRACT_ANIMATE_STARTANIM`:
+                // "Look at this...", 123 voices, 1,569 lines, none said before)
+                npc.bark_req = (npc.bark_req.0.wrapping_add(1), "DISTRACT_ANIMATE_STARTANIM");
                 if std::env::var("DH_DISTRACT_LOG").is_ok() {
                     info!("distraction: {} at {} arrives at {:.2} after {w:.1} s", npc.name, d.name, tf.translation);
                 }

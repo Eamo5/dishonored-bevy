@@ -1773,7 +1773,10 @@ fields no longer show their stand-in "WW" behind the title.
   - A searcher come to its spot looks it over (its check's 10 s cooldown permitting) and tells
     those within 20 m. One investigating the same spot (within 2.5 m) gives up its own look
     and searches on, a body it went to handled all the same (`SearchReachedProxy`).
-  - One answering a search request says so (`SEARCH_FROM_ALLY`).
+  - One answering a search request says so (`SEARCH_FROM_ALLY`). A voice with no line of its own
+    for that answers with its line to an ally who saw, or who heard (`SEARCH_VDETECTION_FROM_ALLY`,
+    `_ADETECTION_`: "What is it?", "See something?"); 59 of the 173 voices with those have no
+    `SEARCH_FROM_ALLY` and kept quiet before.
 - **Allies seen** (`npc.rs`; 0x00B435F0, decoded for this rewrite). A guard newly sighting one
   of its side reacts to what that one is doing, once a sighting:
   - fighting: it suspects and joins in (before, only those within 10 m as the fight began did);
@@ -2556,7 +2559,14 @@ fields no longer show their stand-in "WW" behind the title.
   (`DistractionSoiree.*`: leaning on a railing, scavenging, a smoke, retching), their "Loop"
   repeated the distractor's count - then go on; anything alarming breaks it off. The level
   scripts hear of it (`DisSeqEvent_Distracted`: Start on arriving, End as the scene ends or
-  breaks off) and run the props' scenes. The scripts' `DisSeqAct_AIStartDistraction` sends
+  breaks off) and run the props' scenes. Arriving, the character may say something of what it
+  stopped at (`DDH_DISTRACT_ANIMATE_STARTANIM`, 123 voices, 1,569 lines, none said before): its
+  voice's `DisConv_Hook_Distraction` takes the output of the distractor's category
+  (`m_DistractionCategory`, by its `m_DistractionLinks`, as roshan's r614/blink research found
+  0x00cb0e80 picks it), so a guard at a painting says "Someday, I'll be the one who can afford
+  this stuff." or "People have the worst taste.", and searching a table "I know you're here
+  somewhere, scum!"; at a distractor of no category (1,606 of the maps' 1,782) nothing.
+  `dhtool patch-barks` brings cooked maps' voices up to this. The scripts' `DisSeqAct_AIStartDistraction` sends
   a character to its distractor to play the same scene, from wherever it is, its cooldown and
   chance aside (0x00b63ed0, as roshan's r614/blink research found); its brain's behaviour is
   then `DisBehaviorInteract`. (It had sent them to look about the spot instead: the Tower's
@@ -4764,7 +4774,9 @@ Corvo's side; `camat -` lets go). `DH_INTRO=1` keeps the new game's intro in scr
 `DH_MOVIE_SHOT=SECS:PATH` screenshots a movie that far in; `DH_NPC_CLIP_LOG` logs the clips
 of the characters near Corvo; `DH_ANIM_CHECK` how each anim set binds to its skeleton. `kuwa` (or
 `DH_KUWA=1`) turns on the painterly branch; `DH_AUDIO_LOG` logs the events posted and, each
-second, how many sounds play; `DH_RTPC_LOG` the sounds whose RTPC curves change them.
+second, how many sounds play (and the barks said); `DH_BARK_TRACE` the barks asked for and not
+said, and why (no line of the voice's for it, held by distance or by the manager, nothing to say
+of a distractor); `DH_RTPC_LOG` the sounds whose RTPC curves change them.
 `dhtool mapshader <map> [exprs|VF TYPE]` prints a material shader map's uniform expressions
 or one of its shaders translated to WGSL (`-` as the vertex factory: its non-mesh shaders);
 `dhtool findmap NAME` lists the shader maps of materials by name, `dhtool mattex PKG MAT` the

@@ -181,6 +181,14 @@ pub fn hook_name(name: &str) -> &'static str {
     n
 }
 
+/// The output of a distraction's hook (`DisConv_Hook_Distraction`) for where the speaker stopped
+/// (the distractor's name and category): its first link naming that distractor, or naming none
+/// and its category. None: the hook can't start (most distractors have no category, and the
+/// guards speak only of the art and of a table searched).
+fn distraction_output(bark: &dhcook::format::BarkHook, (name, category): (&str, &str)) -> Option<usize> {
+    bark.links.iter().position(|(actor, cat)| if actor.is_empty() { !cat.is_empty() && cat.eq_ignore_ascii_case(category) } else { actor.eq_ignore_ascii_case(name) })
+}
+
 fn hook_output(class: &str, npc: &Npc) -> Option<usize> {
     match class {
         "SuspicionLevel" | "SuspicionDist" => Some(npc.suspecting as usize),
@@ -282,7 +290,7 @@ fn npc_barks(
     stats: Res<PlayerStats>,
     mut man: ResMut<BarkMan>,
     player: Query<&Transform, With<Player>>,
-    mut npcs: Query<(Entity, &Npc, &Transform, Option<&mut BarkState>, Option<&crate::anim::Animator>, Option<&crate::npc::NpcAnim>, Has<crate::audio::Speaking>)>,
+    mut npcs: Query<(Entity, &Npc, &Transform, Option<&mut BarkState>, Option<&crate::anim::Animator>, Option<&crate::npc::NpcAnim>, Has<crate::audio::Speaking>, Option<&crate::distraction::Distracted>)>,
     mut out: MessageWriter<PostEvent>,
     mut subs: MessageWriter<Subtitle>,
     data: Res<crate::gamedata::Data>,
@@ -314,13 +322,14 @@ fn npc_barks(
     }
     let mut requests: Vec<Request> = Vec::new();
     let log = std::env::var("DH_AUDIO_LOG").is_ok();
+    let trace = std::env::var("DH_BARK_TRACE").is_ok();
     // (who a bolt or bullet struck this frame)
     let shot: Vec<Entity> = hits.read().filter(|h| matches!(h.kind, HitKind::Bolt | HitKind::Bullet | HitKind::ExplosiveBullet | HitKind::ExplosiveBolt)).map(|h| h.npc).collect();
     // (who stands where, for the barks said in a group: those of one side within reach)
     let standing: Vec<(Entity, Vec3, String, bool)> = npcs.iter().filter(|(_, n, ..)| !n.is_down()).map(|(e, n, t, ..)| (e, t.translation, n.faction.clone(), n.alert == Alert::Combat)).collect();
     // (and the bodies: dead or knocked out)
     let bodies: Vec<(Vec3, bool)> = npcs.iter().filter(|(_, n, ..)| n.is_down()).map(|(_, n, t, ..)| (t.translation, n.mode == Mode::Dead)).collect();
-    for (e, npc, t, state, anim, clips, speaking) in &mut npcs {
+    for (e, npc, t, state, anim, clips, speaking, distracted) in &mut npcs {
         let Some(mut st) = state else {
             if log {
                 info!("bark voice {} ({}, {} at {:.1}): {:?}", npc.name, npc.pawn, npc.faction, t.translation, npc.voice.and_then(|v| level.scene.barks.get(v as usize)).map(|v| &v.name));
@@ -442,7 +451,13 @@ fn npc_barks(
         } else if npc.bark_req.0 != st.bark_seen {
             // a bark asked for (a shove's "personal space")
             st.bark_seen = npc.bark_req.0;
-            want = Some(std::slice::from_ref(&npc.bark_req.1));
+            // (an ally's call answered: the voices that have no answer of their own to it answer
+            // the one to an ally who saw, or who heard, `SEARCH_VDETECTION_FROM_ALLY` /
+            // `_ADETECTION_`: 59 of the 173 with those have no `SEARCH_FROM_ALLY`, and kept quiet)
+            want = Some(match npc.bark_req.1 {
+                "SEARCH_FROM_ALLY" => &["SEARCH_FROM_ALLY", "SEARCH_VDETECTION_FROM_ALLY", "SEARCH_ADETECTION_FROM_ALLY"],
+                _ => std::slice::from_ref(&npc.bark_req.1),
+            });
         } else if !down && npc.health < st.health - 0.5 {
             let big = st.health - npc.health >= npc.arms.big_hit;
             want = Some(if big { &["COMBAT_OUCH_BIG", "COMBAT_OUCH_SMALL"] } else { &["COMBAT_OUCH_SMALL", "COMBAT_OUCH_BIG"] });
@@ -620,7 +635,12 @@ fn npc_barks(
         st.aiming = npc.aim.is_some();
         st.act_seen = npc.act.1;
         let Some(hooks) = want else { continue };
-        let Some((hi, bark)) = hooks.iter().find_map(|h| voice.hooks.iter().enumerate().find(|(_, x)| x.hook == *h)) else { continue };
+        let Some((hi, bark)) = hooks.iter().find_map(|h| voice.hooks.iter().enumerate().find(|(_, x)| x.hook == *h)) else {
+            if trace {
+                info!("bark trace {} {hooks:?}: its voice has none", npc.name);
+            }
+            continue;
+        };
         let rule = rules.hooks.get(&bark.hook);
         let (group, flags, refire) = rule.map(|r| (r.group, r.flags, r.refire)).unwrap_or((0, 0x80, [1.0, 1.0]));
         let quiet = d >= loud_d;
@@ -640,9 +660,27 @@ fn npc_barks(
         let per_initiator = rules.groups.get(group as usize).map(|g| g.per_initiator[quiet as usize]).unwrap_or(-1);
         let crowded = corvo && per_initiator > 0 && man.firing.iter().filter(|f| f.group == group && f.quiet == quiet && f.corvo).count() as i32 >= per_initiator;
         if d > max_d || shut || again || !free || crowded {
+            if trace {
+                info!("bark trace {} {}: held (d {d:.0}, shut {shut}, again {again}, free {free}, crowded {crowded})", npc.name, bark.hook);
+            }
             continue;
         }
-        requests.push(Request { who: e, hook: hi, group, quiet, corvo, flags, refire, d, out: out_hint.or_else(|| hook_output(&bark.class, &npc)) });
+        let out = if bark.class == "Distraction" {
+            // (where it stopped: the distractor, and what it is)
+            let at = distracted.and_then(|dz| level.scene.distractors.get(dz.d)).map(|x| (x.name.as_str(), if x.category.is_empty() { x.anim.strip_prefix("Distraction_").unwrap_or("") } else { x.category.as_str() }));
+            match at.and_then(|at| distraction_output(bark, at)) {
+                Some(k) => Some(k),
+                None => {
+                    if trace {
+                        info!("bark trace {} {}: nothing to say of {at:?}", npc.name, bark.hook);
+                    }
+                    continue;
+                }
+            }
+        } else {
+            out_hint.or_else(|| hook_output(&bark.class, &npc))
+        };
+        requests.push(Request { who: e, hook: hi, group, quiet, corvo, flags, refire, d, out });
     }
     // the manager's turn: the groups from the most important down, near then far; each group's
     // requests by weight (nearer first, a little random), while the group has room (its cap
@@ -668,6 +706,9 @@ fn npc_barks(
                 .map(|(i, r)| (1.0 - (r.d / max_d).clamp(0.0, 1.0) + rand::random::<f32>() * rules.weight_rand, i))
                 .collect();
             if room <= 0 || (slots[quiet as usize] < 1 && !ignore) || pending.is_empty() {
+                if trace && !pending.is_empty() {
+                    info!("bark trace: group {g} quiet {quiet}: {} held (room {room}, slots {})", pending.len(), slots[quiet as usize]);
+                }
                 continue;
             }
             pending.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -782,7 +823,21 @@ mod walk_tests {
             by_output: Vec::new(),
             nodes: nodes.into_iter().map(|(step, outs)| BarkNode { step, outs }).collect(),
             roots,
+            links: Vec::new(),
         }
+    }
+
+    /// A distraction's word is the output of the distractor, else of its category; none, and
+    /// the hook can't start.
+    #[test]
+    fn a_distraction_bark_answers_what_was_stopped_at() {
+        let mut h = hook(vec![], vec![]);
+        h.links = vec![(String::new(), "Fireplace".into()), (String::new(), "Art".into()), ("DisNPCDistractor_3".into(), String::new())];
+        assert_eq!(distraction_output(&h, ("DisNPCDistractor_9", "Art")), Some(1));
+        assert_eq!(distraction_output(&h, ("DisNPCDistractor_3", "Art")), Some(1));
+        assert_eq!(distraction_output(&h, ("DisNPCDistractor_3", "")), Some(2));
+        assert_eq!(distraction_output(&h, ("DisNPCDistractor_9", "")), None);
+        assert_eq!(distraction_output(&h, ("DisNPCDistractor_9", "Piano")), None);
     }
 
     #[test]

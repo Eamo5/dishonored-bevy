@@ -5229,7 +5229,8 @@ impl<'a> Cooker<'a> {
             }
         }
         // without a scene: its animation and time
-        d.anim = cc.name("m_DistractionAnimPrefix").unwrap_or("Distraction_").to_string() + cc.name("m_DistractionCategory").filter(|c| *c != "None").unwrap_or("");
+        d.category = cc.name("m_DistractionCategory").filter(|c| *c != "None").unwrap_or("").to_string();
+        d.anim = cc.name("m_DistractionAnimPrefix").unwrap_or("Distraction_").to_string() + &d.category;
         if let Some(Value::Struct(_, t)) = cc.get("m_DistractionTime") {
             let t = Props(t.clone());
             if let Some(dist) = t.object("Distribution").filter(|o| *o != 0).and_then(|o| self.assets.resolve(&comp.pkg, o)) {

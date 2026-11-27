@@ -1168,7 +1168,20 @@ pub fn bark_voice(pkg: &Package, voice: i32) -> Option<crate::format::BarkVoice>
                         x.by_output[k].extend(mine.into_iter().map(|i| i + base));
                     }
                 }
-                None => out.hooks.push(BarkHook { hook, lines, reach, class, by_output, nodes, roots }),
+                None => {
+                    // (a distraction's word picks its output by where the speaker stopped, as
+                    // roshan's r614/blink research found 0x00cb0e80 does: the distractor itself,
+                    // else its category)
+                    let links = if cls == "DisConv_Hook_Distraction" {
+                        struct_array(pkg, &hp, "m_DistractionLinks")
+                            .iter()
+                            .map(|l| (l.object("m_pActor").filter(|o| *o != 0).map(|o| pkg.obj_name(o).to_string()).unwrap_or_default(), l.name("m_DistractionCategory").filter(|c| *c != "None").unwrap_or("").to_string()))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    out.hooks.push(BarkHook { hook, lines, reach, class, by_output, nodes, roots, links })
+                }
             }
         }
     }
