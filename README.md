@@ -4839,7 +4839,8 @@ the nearest whose name holds NAME, moved D m before him), `stream NAME [out]` (a
 `charms N`, `mana`, `ammo TYPE N` (0 bullets .. 6 grenades, 7 sticky), `fx EFFECT [DIST]`,
 `slay [NAME]` (the nearest standing character whose name or pawn holds NAME, `NAME$` whose pawn ends with it, run through by his
 blade, wherever it is: a mission's target dealt with, the scripts and statistics told as for any
-death), `unplug` (the whale oil tank in the receptacle nearest him taken away), `usable
+death), `unplug` (the whale oil tank in the receptacle nearest him taken away), `givekey NAME`
+(a key on his ring by the name doors know it by), `usable
 [LABEL|#INDEX] [D]` (before a usable object), `noise KIND [RADIUS]`,
 `remote EVENT` (a level-script remote event, e.g. `ChangeLvl_fromStreets1_toHub`), `chaos N`,
 `ko [NAME]` (a sleep dart into the nearest, or the nearest whose name or pawn holds NAME),
