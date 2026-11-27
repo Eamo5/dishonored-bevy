@@ -734,6 +734,9 @@ pub enum KDialogNodeKind {
     /// the chaos level against this one (`DisConv_CompareDarknessLevel`): output 0 the same,
     /// 1 lower, 2 higher
     Darkness(i32),
+    /// nothing here: the speaker's next tree is asked (`DisConv_TryFallbackTree`: a one-shot's
+    /// words giving way to the character's own); a walk that ends any other way ends the search
+    Fallback,
 }
 
 /// What a hook node watches for, polled as the player moves (`DisConv_Hook_*`).

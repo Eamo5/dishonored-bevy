@@ -2643,7 +2643,12 @@ fields no longer show their stand-in "WW" behind the title.
   character talked to answers from the one-shot it speaks for, `m_MeSpeaker`, when that has
   something to say, else from its own voice's tree: before, one with a voice never spoke its
   one-shot's words, and Samuel at the Hound Pits' dock gossiped instead of offering to set out,
-  so no mission could be left from the hub); lines
+  so no mission could be left from the hub. Its own tree answers only where the one-shot's walk
+  gives way to it (`DisConv_TryFallbackTree`, 41 across the maps); a one-shot that answers but
+  says nothing ends it, as roshan's r614/blink research found the hook search goes (0x00ca5150,
+  0x00ca7b20). Before, any one-shot with nothing left to say handed over: the Hound Pits'
+  servants and loyalists, their few in-turn remarks run out, went on in their voices' generic
+  lines where the original leaves them quiet); lines
   are voiced from the speaker and subtitled, and conversations set
   their story flags and raise their Kismet outputs. Each sublevel's dialogue actors have their
   own trees: the sublevels' `PersistentLevel`s repeat each other's names

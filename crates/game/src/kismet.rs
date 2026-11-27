@@ -387,6 +387,29 @@ mod flow_tests {
         assert!(vm.queue.iter().any(|q| q.0 == 1), "let go, it plays out");
     }
 
+    /// Talked to, a character's one-shot words answer first; where they give way
+    /// (`DisConv_TryFallbackTree`) its own tree answers, and where they end otherwise it says
+    /// nothing.
+    #[test]
+    fn a_one_shot_gives_way_to_the_speakers_own_tree_only_by_its_fallback_node() {
+        use dhcook::format::{KConversation, KDialogNode, KDialogNodeKind as K, KDialogTree};
+        let hook = || KDialogNode { kind: K::Hook { hook: "DDH_PLAYER_USED".into(), inputs: Vec::new(), poll: None }, outs: vec![1] };
+        let conv = |p: &str, once: bool| KConversation { label: p.into(), path: p.into(), once, ..Default::default() };
+        for (end, answers) in [(K::Fallback, true), (K::Conversation(0), false)] {
+            let mut g = Graph::default();
+            g.dialog_trees.push(KDialogTree { path: "OneShot".into(), conversations: vec![conv("Moment", true)], nodes: vec![hook(), KDialogNode { kind: end, outs: vec![] }] });
+            g.dialog_trees.push(KDialogTree { path: "Own".into(), conversations: vec![conv("Chatter", false)], nodes: vec![hook(), KDialogNode { kind: K::Conversation(0), outs: vec![] }] });
+            let mut vm = Vm::new(Arc::new(g), &[]);
+            vm.speaker_tree.insert(6, 0);
+            vm.speaker_tree.insert(5, 1);
+            vm.pawn_oneshot.insert(5, 6);
+            // (the moment's words already said)
+            vm.fired_convs.insert("Moment".into());
+            assert_eq!(vm.talk(5), answers);
+            assert_eq!(vm.convs.iter().any(|c| c.0 == 5 && c.1 == 1), answers);
+        }
+    }
+
     /// A named variable inside a subsequence finds the sequence's own external link of that name
     /// (each Coldridge cell locker's `Solution01`), standing for what its caller links there.
     #[test]
@@ -1527,6 +1550,8 @@ pub struct Vm {
     pub explosions: Vec<(Vec3, u32)>,
     /// the speaker whose tree is being walked (its dialogue outputs)
     walk_speaker: Option<u32>,
+    /// the walk came to a `DisConv_TryFallbackTree`: the speaker's next tree is asked
+    walk_fallback: bool,
     /// characters speaking for a one-shot dialogue actor (`DisSeqAct_DialogInputs` Target with a
     /// DialogOneShot): talking to the character uses the one-shot's tree (the Empress)
     pawn_oneshot: HashMap<u32, u32>,
@@ -1806,6 +1831,7 @@ impl Vm {
             door_open: HashMap::new(),
             // the characters answering for one-shot dialogue actors, from the scripts' links
             walk_speaker: None,
+            walk_fallback: false,
             pawn_oneshot: {
                 let mut m = HashMap::new();
                 let actor_of = |v: &u32| match g.vars.get(*v as usize).and_then(|v| v.props.get("ObjValue")) {
@@ -2396,8 +2422,11 @@ impl Vm {
             let Some(tree) = self.speaker_tree.get(&actor).copied() else { continue };
             let Some(t) = g.dialog_trees.get(tree) else { continue };
             self.walk_speaker = Some(actor);
+            self.walk_fallback = false;
+            let mut hooked = false;
             for (ni, n) in t.nodes.iter().enumerate() {
                 if matches!(&n.kind, dhcook::format::KDialogNodeKind::Hook { hook, .. } if hook == "DDH_PLAYER_USED") {
+                    hooked = true;
                     if let Some(c) = self.walk_tree(tree, ni as i32, 0) {
                         self.start_conversation(actor, tree, c);
                         return true;
@@ -2407,6 +2436,13 @@ impl Vm {
                         info!("kismet: talk to {} ({}): nothing to say along {:?}", actor, t.path, path);
                     }
                 }
+            }
+            // (a tree that answers but says nothing ends it, unless its walk gave way to the next,
+            // `DisConv_TryFallbackTree`, as roshan's r614/blink research found the hook search
+            // goes, 0x00ca5150 / 0x00ca7b20: a one-shot's words for a moment, once said, leave the
+            // character silent where they don't hand back to its own)
+            if hooked && !self.walk_fallback {
+                return false;
             }
         }
         false
@@ -5902,6 +5938,10 @@ impl Vm {
                 self.walk_tree(tree, out(0), depth + 1)
             }
             K::Darkness(level) => self.walk_tree(tree, out(darkness_branch(self.darkness, *level)), depth + 1),
+            K::Fallback => {
+                self.walk_fallback = true;
+                None
+            }
             K::Hook { .. } | K::Pass => linked.into_iter().find_map(|o| self.walk_tree(tree, o, depth + 1)),
         }
     }

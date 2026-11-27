@@ -932,6 +932,7 @@ fn dialog_tree(pkg: &Package, t: i32, voices: &HashMap<[u32; 4], Vec<String>>) -
                     Some(Value::Name(e)) | Some(Value::Str(e)) => KDialogNodeKind::Remote(e.clone()),
                     _ => KDialogNodeKind::Pass,
                 },
+                "DisConv_TryFallbackTree" => KDialogNodeKind::Fallback,
                 _ => KDialogNodeKind::Pass,
             }
         };
