@@ -2518,7 +2518,10 @@ fields no longer show their stand-in "WW" behind the title.
   "[F] Loot" (`m_InteractionTexts[30]`). What the scripts make usable says the HUD's "[F] Use"
   (`m_InteractionTexts[27]`), with the crosshair on its mesh and nothing before it (before, the
   line of sight ran to its origin, which for a cabinet lies within it: the Rothwild
-  slaughterhouse's time clock, Daud's way in by the main door, could never be used); one whose
+  slaughterhouse's time clock, Daud's way in by the main door, could never be used; and the big
+  double doors, 5 m high, were taken for walls and focused only looking down at the foot of the
+  doorway: 29 ways out to other maps, Boyle's front doors, Galvani's, the art dealer's, the
+  Tower's and Brigmore's among them); one whose
   scripts answer its use without an item ("Used But Missing Abstract Item") wants the item whose
   pickup sets the story flag they ask after (the clock wants the Time Card: without it, its task
   to find one; with it, the slaughterhouse; our reading of the scripts, its usable tweak, which

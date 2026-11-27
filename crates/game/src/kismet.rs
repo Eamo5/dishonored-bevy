@@ -7066,8 +7066,10 @@ fn setup(
         let (lo, hi) = (Vec3::from(m.min), Vec3::from(m.max));
         let corners = (0..8).map(|k| xf.transform_point3(Vec3::new(if k & 1 == 0 { lo.x } else { hi.x }, if k & 2 == 0 { lo.y } else { hi.y }, if k & 4 == 0 { lo.z } else { hi.z })));
         let (wlo, whi) = corners.fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(l, h), p| (l.min(p), h.max(p)));
-        // (not a level's whole wall or floor)
-        ((whi - wlo).max_element() < 4.0).then_some(crate::interact::UsableBounds(wlo, whi))
+        // (not a level's whole wall or floor; the big double doors, 5 m high, are the largest the
+        // scripts use: before, at 4 m, their 29 ways out to other maps were only focused looking
+        // down at the foot of the doorway)
+        ((whi - wlo).max_element() < 6.0).then_some(crate::interact::UsableBounds(wlo, whi))
     };
     for (i, a) in g.actors.iter().enumerate() {
         let used = vm_events(&g, i as u32).any(|c| c == "DisSeqEvent_Used" || c == "SeqEvent_Used");
