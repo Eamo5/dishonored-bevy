@@ -1349,7 +1349,10 @@ fields no longer show their stand-in "WW" behind the title.
   for a locked door that can be broken down (its tweak's `m_pBreakSteps` authored, 187 of the
   383 doors) and the barred padlock for one that can't, a door with an arrow for a way out to
   another map (whatever its use goes on to set or go to the player's travel destination,
-  `CHS_OVER_DOOR_LEVEL_TRANSITION`: 47 exits on 14 maps), a ring for anything else) keeping
+  `CHS_OVER_DOOR_LEVEL_TRANSITION`, or raise a `ChangeLvl_*` remote event, which the campaign
+  scripts answer with the map change: 103 exits on 37 maps; before, only the first, 47 on 14,
+  and the Flooded District's, the Overseers', the bridge's, the Hound Pits', the Prison's and
+  Brigmore's ways out showed the plain ring), a ring for anything else) keeping
   the dot where the tweak does; otherwise
   the left hand's reticle (pistol, crossbow, grenade, sticky grenade, spring razor, power) in
   its `EDisCrosshairState`: ready, empty (no ammunition, too little mana) or red over an enemy.

@@ -581,6 +581,34 @@ mod flow_tests {
         assert_eq!(locked.into_iter().collect::<Vec<_>>(), vec![0]);
     }
 
+    /// A usable whose use asks the campaign scripts for a map change (`ChangeLvl_*`) is a way
+    /// out, as one that sets the travel destination itself; one that raises another event isn't.
+    #[test]
+    fn change_level_events_make_ways_out() {
+        use dhcook::format::KActor;
+        let mut g = Graph::default();
+        g.actors.push(KActor::default());
+        g.actors.push(KActor::default());
+        let used = |a: u32, to: u32| KOp {
+            class: "DisSeqEvent_Used".into(),
+            outputs: vec![KOutput { desc: "USED".into(), links: vec![(to, 0, 0.0)], linked: None }],
+            props: [("Originator".to_string(), KVal::Actor(a))].into_iter().collect(),
+            ..Default::default()
+        };
+        let remote = |n: &str| KOp {
+            class: "SeqAct_ActivateRemoteEvent".into(),
+            inputs: vec![KInput { desc: "In".into(), ..Default::default() }],
+            props: [("EventName".to_string(), KVal::Str(n.into()))].into_iter().collect(),
+            ..Default::default()
+        };
+        g.ops.push(used(0, 2));
+        g.ops.push(used(1, 3));
+        g.ops.push(remote("ChangeLvl_fromStreetSewer_toHub7"));
+        g.ops.push(remote("OpenTheGate"));
+        let out = travel_actors(&g);
+        assert_eq!(out.into_iter().collect::<Vec<_>>(), vec![0]);
+    }
+
     /// The scripts' damage is told to the target's damage events as it is dealt: an event the
     /// scripts attach just after it doesn't hear it, and hears the next.
     #[test]
@@ -7227,9 +7255,15 @@ pub fn travel_actors(g: &dhcook::format::Kismet) -> std::collections::HashSet<u3
                 "Sequence" | "PrefabSequence" | "PrefabSequenceContainer" => {
                     queue.extend(g.ops.iter().enumerate().filter(|(_, e)| e.parent == Some(i) && e.class == "SeqEvent_SequenceActivated").map(|(k, _)| k as u32));
                 }
-                // a remote event: its listeners
+                // a remote event: its listeners; a `ChangeLvl_*` one asks the campaign scripts
+                // for the map change (the Flooded District's, the Overseers', the bridge's, the
+                // Hound Pits': 27 maps whose ways out the map's own scripts never name)
                 "SeqAct_ActivateRemoteEvent" => {
                     if let Some(name) = o.props.get("EventName") {
+                        if matches!(name, KVal::Str(n) if n.get(..10).is_some_and(|p| p.eq_ignore_ascii_case("ChangeLvl_"))) {
+                            found = true;
+                            break;
+                        }
                         queue.extend(g.ops.iter().enumerate().filter(|(_, e)| e.class == "SeqEvent_RemoteEvent" && e.props.get("EventName") == Some(name)).map(|(k, _)| k as u32));
                     }
                 }
