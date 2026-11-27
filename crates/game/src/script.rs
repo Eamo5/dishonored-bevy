@@ -1508,6 +1508,21 @@ fn run_script(
                 }
             });
         }
+        "slay" => {
+            // (tests) slay [NAME]: the nearest standing character (whose name or pawn holds NAME)
+            // run through by Corvo's blade, wherever it is (its death as any other: the scripts
+            // told, the statistics kept)
+            let at = t.translation;
+            let named = cmd.get(1).cloned().unwrap_or_default();
+            commands.queue(move |w: &mut World| {
+                let mut q = w.query::<(Entity, &Npc, &Transform)>();
+                let found = q.iter(w).filter(|(_, n, _)| !n.is_down() && (n.name.contains(&named) || n.pawn.contains(&named))).min_by(|a, b| a.2.translation.distance(at).total_cmp(&b.2.translation.distance(at))).map(|(e, n, nt)| (e, n.pawn.clone(), nt.translation));
+                if let Some((e, pawn, nt)) = found {
+                    info!("script: {pawn} slain");
+                    w.write_message(crate::gameplay::NpcHit { npc: e, damage: 9999.0, kind: crate::gameplay::HitKind::Sword, from: nt + Vec3::Z });
+                }
+            });
+        }
         "pistol" | "bow" => {
             // (tests) pistol [NAME]: the nearest standing hostile character (whose name holds NAME)
             // carries a pistol (or a tallboy's bow), and fights (knowing where Corvo is)
