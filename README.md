@@ -3642,7 +3642,10 @@ against the install's own data where it carries them, then implemented independe
   person up to someone unwary, before it within 3 m, has them ask after the host
   (`DDH_FRIEND_APPROACHES` for one of its side or allied, else `DDH_NEUTRAL_APPROACHES`: "Hey, you
   don't look so good.", "You alright? Too much whiskey?", 150 voices; our reading of who sets it
-  off, none said before). The power is
+  off, none said before). The host says nothing of its own while he is in it (before, a
+  possessed guard coughed and muttered its patrol's chatter as he walked it); thrown off, its
+  daze's clip cues its confusion (`DDH_COMBAT_CONFUSION`, `PossessionConfused`: "Where am I?").
+  The power is
   aimed while held and cast as it is let go, as its component does it (decoded from the
   executable, `UDishonoredActivePowerComponent_Possess`: the tick 0x00BFD6D0 runs a state, the
   aim being state 1, 0x00BFD300; let go 0x00BF3790; given up 0x00BFB520), so a tap possesses as

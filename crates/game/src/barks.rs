@@ -673,6 +673,11 @@ fn npc_barks(
         }
         st.aiming = npc.aim.is_some();
         st.act_seen = npc.act.1;
+        // (Corvo in it: its brain, and its voice, out of it till he leaves; a host coughed and
+        // muttered its patrol's chatter as he walked it)
+        if possession.host == Some(e) {
+            continue;
+        }
         let Some(hooks) = want else { continue };
         let Some((hi, bark)) = hooks.iter().find_map(|h| voice.hooks.iter().enumerate().find(|(_, x)| x.hook == *h)) else {
             if trace {
