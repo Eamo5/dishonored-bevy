@@ -6892,6 +6892,9 @@ fn setup(
     // their tasks' states; the places their markers point to are the new map's scripts' to set)
     vm.flags = campaign.flags.clone();
     vm.scripted_locked = scripted_locks_at_start(&g);
+    // (and those locked of themselves, `m_bLocked`: a key on the ring opens them, the Golden
+    // Cat's VIP door the master key)
+    vm.scripted_locked.extend(g.actors.iter().enumerate().filter(|(_, a)| a.lock.is_some() && a.usable.is_none() && a.class == "DishonoredUsableObject").map(|(i, _)| i as u32));
     if !vm.scripted_locked.is_empty() {
         info!("level scripts: {:?} start locked", vm.scripted_locked.iter().map(|a| g.actors[*a as usize].name.as_str()).collect::<Vec<_>>());
     }
@@ -8017,6 +8020,9 @@ fn world_events(
             }
             Interaction::UsableOut { actor, out } => vm.used_out(*actor, *out),
             Interaction::UsableLock { actor, locked } => {
+                if !*locked {
+                    vm.scripted_locked.remove(actor);
+                }
                 vm.actor_event(*actor, &["DisSeqEvent_Lock"], OutSel::Desc(if *locked { "Locked" } else { "Unlocked" }), Some(Val::Player));
             }
             Interaction::Knocked { instance, speed } => {

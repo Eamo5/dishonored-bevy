@@ -1097,6 +1097,23 @@ pub struct KActor {
     /// the instances of actors attached to it (`Base`), which move with it: a gate's crusher
     #[serde(default)]
     pub riders: Vec<u32>,
+    /// a usable object that starts locked (its own `m_bLocked`: the Golden Cat's VIP door)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock: Option<ActorLock>,
+}
+
+/// A usable object's lock: the keys that open it (`m_MatchingKeys`: "Golden Cat Master Key"),
+/// and its tweak's sounds and words for it (`m_pUnlockSoundEvent`, `m_pUseWhileLockedSoundEvent`,
+/// `m_LockedMessage`: "`k needed").
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct ActorLock {
+    pub keys: Vec<String>,
+    #[serde(default)]
+    pub unlock_sound: String,
+    #[serde(default)]
+    pub locked_sound: String,
+    #[serde(default)]
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

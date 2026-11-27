@@ -884,7 +884,16 @@ fn find_focus(
         };
         if best.as_ref().map(|b| score < b.0).unwrap_or(true) {
             // (one of the scripts' own, locked: the door's word for it)
-            let text = if vm.as_ref().is_some_and(|v| v.scripted_locked(u.actor)) { "Locked".to_string() } else { format!("{} {}", crate::bindings::hint(crate::bindings::Act::Use), u.label) };
+            // (locked of itself: "Unlock" with its key on the ring; the HUD's `m_InteractionTexts`
+            // word for it)
+            let lock = level.as_ref().and_then(|l| l.scene.kismet.actors.get(u.actor as usize)).and_then(|a| a.lock.as_ref());
+            let text = if !vm.as_ref().is_some_and(|v| v.scripted_locked(u.actor)) {
+                format!("{} {}", crate::bindings::hint(crate::bindings::Act::Use), u.label)
+            } else if lock.is_some_and(|l| stats.keys.iter().any(|k| l.keys.iter().any(|m| m.eq_ignore_ascii_case(k)))) {
+                format!("{} Unlock", crate::bindings::hint(crate::bindings::Act::Use))
+            } else {
+                "Locked".to_string()
+            };
             best = Some((score, e, text, u.name.clone()));
         }
     }
@@ -936,7 +945,7 @@ pub fn use_focus(
     player: Query<&Transform, With<Player>>,
     (level, mut timed, data, mut ambients, mut read, attrs): (Option<Res<LevelInfo>>, ResMut<crate::audio::TimedSounds>, Res<crate::gamedata::Data>, ResMut<crate::audio::Ambients>, MessageWriter<crate::journal::ReadNote>, Res<crate::gamedata::Attrs>),
     (keyholes, peek, mut plog, mut tw, settings, switches): (Query<(), With<crate::keyhole::KeyholeDoor>>, Res<crate::keyhole::Peek>, ResMut<crate::pickuplog::PickupLog>, ResMut<crate::tutwindow::TutorialWindow>, Res<crate::settings::Settings>, Res<crate::kismet::ScriptSwitches>),
-    mut force: ResMut<ForceUse>,
+    (mut force, vm): (ResMut<ForceUse>, Option<Res<crate::kismet::Vm>>),
 ) {
     if paused.0 { return; }
     // (a pickup Pull drew to Daud's hand: taken as if used)
@@ -1189,6 +1198,26 @@ pub fn use_focus(
         return;
     }
     if let Ok((u, need, req)) = usables.get(e) {
+        // (one of the scripts' own, locked of itself: a key on the ring unlocks it, and its
+        // scripts hear it, `DisSeqEvent_Lock` "Unlocked"; else its locked sound and its words,
+        // "Golden Cat Master Key needed", and the scripts hear "Used But Locked")
+        let lock = level.as_ref().and_then(|l| l.scene.kismet.actors.get(u.actor as usize)).and_then(|a| a.lock.as_ref());
+        if let Some(lock) = lock.filter(|_| vm.as_ref().is_some_and(|v| v.scripted_locked(u.actor))) {
+            let at = player.single().ok().map(|t| t.translation);
+            if stats.keys.iter().any(|k| lock.keys.iter().any(|m| m.eq_ignore_ascii_case(k))) {
+                if !lock.unlock_sound.is_empty() {
+                    timed.schedule(&[(0.0, lock.unlock_sound.clone())], at);
+                }
+                used.write(Interaction::UsableLock { actor: u.actor, locked: false });
+                return;
+            }
+            if !lock.locked_sound.is_empty() {
+                timed.schedule(&[(0.0, lock.locked_sound.clone())], at);
+            }
+            if !lock.message.is_empty() && (!lock.message.contains("`k") || !lock.keys.is_empty()) {
+                msgs.push(crate::gamedata::readable(&lock.message.replace("`k", lock.keys.first().map(String::as_str).unwrap_or_default())));
+            }
+        }
         // (used without the item it wants: its "Used But Missing Abstract Item")
         if let Some(r) = req.filter(|r| stats.items.get(&r.item).copied().unwrap_or(0) == 0 && !stats.notes.contains(&r.item)) {
             used.write(Interaction::UsableOut { actor: u.actor, out: r.missing_out });

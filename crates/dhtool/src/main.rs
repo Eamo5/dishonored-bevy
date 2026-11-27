@@ -1205,6 +1205,76 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Some("patch-locks") => {
+            // dhtool patch-locks <dir> [map...]: a cooked map's scripted usable objects given the
+            // lock they start with and its keys (their own `m_bLocked`, `m_MatchingKeys`), from
+            // their packages under <dir>
+            init_classes();
+            let found = package_index(&PathBuf::from(&args[2]))?;
+            let root = PathBuf::from("cache").join("maps");
+            for m in cooked_maps(&root, &args[3..])? {
+                let path = root.join(format!("{m}.json"));
+                let mut scene: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+                let names: Vec<String> = scene["packages"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                // (each locked one: its name, place, lock)
+                let mut locks: Vec<(String, [f32; 3], dhcook::format::ActorLock)> = Vec::new();
+                for n in &names {
+                    let Some(p) = found.get(&n.to_ascii_lowercase()) else { continue };
+                    let Ok(pkg) = std::fs::read(p).map_err(anyhow::Error::from).and_then(|b| upk::Package::from_bytes(n.clone(), p.clone(), b)) else { continue };
+                    for i in 1..=pkg.exports.len() as i32 {
+                        if pkg.class_name(i) != "DishonoredUsableObject" || !pkg.obj_path(i).starts_with("TheWorld.PersistentLevel.") {
+                            continue;
+                        }
+                        let Ok(od) = upk::read_object(&pkg, i) else { continue };
+                        if od.props.bool("m_bLocked") != Some(true) {
+                            continue;
+                        }
+                        let keys = match od.props.get("m_MatchingKeys") {
+                            Some(upk::Value::Array { count, offset, .. }) => {
+                                let mut r = upk::Reader::at(&pkg.data, *offset);
+                                (0..*count).filter_map(|_| r.fstring().ok()).filter(|s| !s.is_empty()).collect()
+                            }
+                            _ => Vec::new(),
+                        };
+                        // (its tweak's sounds and words, where the tweak is the package's own)
+                        let mut lock = dhcook::format::ActorLock { keys, ..Default::default() };
+                        if let Some(tp) = od.props.object("m_pUsableObjTweaks").filter(|o| *o > 0).and_then(|o| upk::read_object(&pkg, o).ok()) {
+                            let sound = |k: &str| tp.props.object(k).filter(|o| *o != 0).map(|o| pkg.obj_name(o).to_string()).unwrap_or_default();
+                            lock.unlock_sound = sound("m_pUnlockSoundEvent");
+                            lock.locked_sound = sound("m_pUseWhileLockedSoundEvent");
+                            lock.message = match tp.props.get("m_LockedMessage") {
+                                Some(upk::Value::Str(s)) | Some(upk::Value::Name(s)) => s.clone(),
+                                _ => String::new(),
+                            };
+                        }
+                        locks.push((pkg.obj_name(i).to_string(), od.props.vector("Location").unwrap_or([0.0; 3]), lock));
+                    }
+                }
+                let Some(actors) = scene["kismet"]["actors"].as_array_mut() else { continue };
+                let mut set = 0;
+                for a in actors.iter_mut() {
+                    if a["class"].as_str() != Some("DishonoredUsableObject") {
+                        continue;
+                    }
+                    let at: Vec<f32> = a["ue_location"].as_array().map(|v| v.iter().filter_map(|x| x.as_f64().map(|f| f as f32)).collect()).unwrap_or_default();
+                    let d = |p: &[f32; 3]| at.iter().zip(p).map(|(a, b)| (a - b) * (a - b)).sum::<f32>();
+                    let near = locks.iter().filter(|l| a["name"].as_str() == Some(l.0.as_str())).min_by(|x, y| d(&x.1).total_cmp(&d(&y.1)));
+                    if let Some((_, _, lock)) = near.filter(|l| d(&l.1) < 100.0) {
+                        let v = serde_json::to_value(lock)?;
+                        if a["lock"] != v {
+                            a["lock"] = v;
+                            set += 1;
+                        }
+                    }
+                }
+                println!("{m}: {} locked usables in its packages, {set} of its scripts' given their lock", locks.len());
+                if set > 0 {
+                    let tmp = path.with_extension("json.tmp");
+                    std::fs::write(&tmp, serde_json::to_vec(&scene)?)?;
+                    std::fs::rename(&tmp, &path)?;
+                }
+            }
+        }
         Some("patch-music") => {
             // dhtool patch-music <dir> [map...]: a cooked map's characters given what a fight with
             // them adds to the music (their pawn tweak's `m_CombatIntensityType`), from their

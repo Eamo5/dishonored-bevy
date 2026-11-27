@@ -6608,8 +6608,16 @@ impl<'a> Cooker<'a> {
     /// A usable object: its stages, prompt, and its moving part as an animated type.
     fn usable_object(&mut self, actor: &Obj) -> Result<()> {
         let ch = self.chain(actor);
+        // (locked from the start, and its keys: what the scripts' own usables keep too)
+        let locked = ch.bool("m_bLocked") == Some(true);
+        let keys = str_array(&ch, "m_MatchingKeys");
         // (an audiograph player's are `m_pAudioLogPlayerTweaks`)
-        let Some(tweak) = ch.obj(self.assets, "m_pUsableObjTweaks").or_else(|| ch.obj(self.assets, "m_pAudioLogPlayerTweaks")) else { return Ok(()) };
+        let Some(tweak) = ch.obj(self.assets, "m_pUsableObjTweaks").or_else(|| ch.obj(self.assets, "m_pAudioLogPlayerTweaks")) else {
+            if locked {
+                self.actor_ref(actor).lock = Some(ActorLock { keys, ..Default::default() });
+            }
+            return Ok(());
+        };
         // the tweak, then its named fallbacks (`m_FallbackChainCooked`: "usable_twk+++UsableObject_twk Class")
         let mut chains = vec![self.chain(&tweak)];
         let fallbacks: Vec<String> = match chains[0].get_pkg("m_FallbackChainCooked") {
@@ -6625,6 +6633,16 @@ impl<'a> Cooker<'a> {
                 let c = self.chain(&o);
                 chains.push(c);
             }
+        }
+        if locked {
+            let sound = |k: &str| chains.iter().find_map(|c| c.obj(self.assets, k)).map(|o| o.name().to_string()).unwrap_or_default();
+            let lock = ActorLock {
+                keys: keys.clone(),
+                unlock_sound: sound("m_pUnlockSoundEvent"),
+                locked_sound: sound("m_pUseWhileLockedSoundEvent"),
+                message: chains.iter().find_map(|c| c.name("m_LockedMessage")).unwrap_or_default().to_string(),
+            };
+            self.actor_ref(actor).lock = Some(lock);
         }
         let mut stages = Vec::new();
         if let Some((pkg, Value::Array { count, offset, size })) = chains.iter().find_map(|c| c.get_pkg("m_Stages")) {

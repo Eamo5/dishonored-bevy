@@ -43,6 +43,7 @@ cargo run --release -p dhtool -- patch-post DIR [map...]     # the same for the 
 cargo run --release -p dhtool -- patch-barks DIR [map...]    # and the characters' barks
 cargo run --release -p dhtool -- patch-objectives DIR [map...]  # and the objectives' tasks
 cargo run --release -p dhtool -- patch-music DIR [map...]       # and the characters' fight music
+cargo run --release -p dhtool -- patch-locks DIR [map...]       # and the scripts' locked usables
 # (a map started directly takes the story so far as begun; DH_FLAGS=guid[,guid=0...] sets story
 #  flags as a campaign would have left them: The Brigmore Witches' store before Drapers Ward is
 #  b2d85b214c1f1c11dec77fb61830fcdf)
@@ -2527,7 +2528,16 @@ fields no longer show their stand-in "WW" behind the title.
   Distillery District's doors into the art dealer's, Galvani's and the Golden Cat, open from the
   street once Corvo has come out through them; the Tower's; our reading, as their
   `m_bLocked` isn't cooked); the scripts' locks on them hold and are kept in saves. Before, all
-  of them opened at once, the way ahead before the scripts allowed it; a whale oil tank "Whale Oil Tank" over "[F] Carry", a
+  of them opened at once, the way ahead before the scripts allowed it. Those locked of
+  themselves (the actor's own `m_bLocked`, 24 the scripts use across the maps) now start locked
+  too, with the keys that open them (`m_MatchingKeys`) and their tweak's unlock and locked sounds
+  and words (`m_pUnlockSoundEvent`, `m_pUseWhileLockedSoundEvent`, `m_LockedMessage`: "Golden Cat
+  Master Key needed"): with the key on his ring the prompt is "Unlock" and a use unlocks it, the
+  scripts hearing it (`DisSeqEvent_Lock` "Unlocked"). Before, the Golden Cat's VIP door let Corvo
+  out to the street before he had unlocked it with the Madam's master key, so the scripts never
+  heard it unlocked, Emily never left with him and the mission stopped at "Unlock the Golden Cat
+  VIP door"; now it goes on to "Meet Emily and Samuel at the boat". `dhtool patch-locks DIR`
+  brings cooked maps up to this. A whale oil tank "Whale Oil Tank" over "[F] Carry", a
   receptacle rewired by hand "Circuitry" over "[F] Rewire" (`SecuritySystems_twk`). Usable
   objects show their name over the prompt (`m_Name`: "Security Door Panel"); a security
   device's circuitry adds its own line under it, "Rewire Tools Remaining: 2" (its
@@ -4773,7 +4783,7 @@ Known outstanding gameplay gaps from source and original-data inspection:
 | --- | --- |
 | `crates/upk` | UE3 package reader: LZO/zlib chunks, name/import/export tables, tagged properties, static/skeletal meshes, textures (incl. `.tfc` bulk data) |
 | `crates/dhcook` | Cooker: levels and their streaming sublevels, materials and shaders, lightmaps, light volumes, NPC archetypes and factions, Kismet/Matinee, security devices, Wwise audio, Scaleform UI, game data |
-| `crates/dhtool` | CLI for cooking and inspecting packages (`cook`, `cook-all`, `cook-ui`, `cook-audio`, `cook-gamedata`, `patch-dialogs`, `patch-post`, `patch-barks`, `patch-objectives`, `patch-music`, `list`, `props`, `findprop`, `swfdump`, `mat`, `graph`, ...) |
+| `crates/dhtool` | CLI for cooking and inspecting packages (`cook`, `cook-all`, `cook-ui`, `cook-audio`, `cook-gamedata`, `patch-dialogs`, `patch-post`, `patch-barks`, `patch-objectives`, `patch-music`, `patch-locks`, `list`, `props`, `findprop`, `swfdump`, `mat`, `graph`, ...) |
 | `crates/game` | The Bevy game |
 
 ### Cache format (`./cache`)
