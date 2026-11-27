@@ -1514,16 +1514,20 @@ fn run_script(
             });
         }
         "slay" => {
-            // (tests) slay [NAME]: the nearest standing character (whose name or pawn holds NAME)
-            // run through by Corvo's blade, wherever it is (its death as any other: the scripts
-            // told, the statistics kept)
+            // (tests) slay [NAME]: the nearest standing character (whose name or pawn holds NAME;
+            // `NAME$`: whose pawn ends with it) run through by Corvo's blade, wherever it is (its
+            // death as any other: the scripts told, the statistics kept)
             let at = t.translation;
             let named = cmd.get(1).cloned().unwrap_or_default();
             commands.queue(move |w: &mut World| {
+                let fits = |n: &Npc| match named.strip_suffix('$') {
+                    Some(end) => n.pawn.ends_with(end),
+                    None => n.name.contains(&named) || n.pawn.contains(&named),
+                };
                 let mut q = w.query::<(Entity, &Npc, &Transform)>();
-                let found = q.iter(w).filter(|(_, n, _)| !n.is_down() && (n.name.contains(&named) || n.pawn.contains(&named))).min_by(|a, b| a.2.translation.distance(at).total_cmp(&b.2.translation.distance(at))).map(|(e, n, nt)| (e, n.pawn.clone(), nt.translation));
+                let found = q.iter(w).filter(|(_, n, _)| !n.is_down() && fits(n)).min_by(|a, b| a.2.translation.distance(at).total_cmp(&b.2.translation.distance(at))).map(|(e, n, nt)| (e, n.pawn.clone(), nt.translation));
                 if let Some((e, pawn, nt)) = found {
-                    info!("script: {pawn} slain");
+                    info!("script: {pawn} slain at {nt:.1}");
                     w.write_message(crate::gameplay::NpcHit { npc: e, damage: 9999.0, kind: crate::gameplay::HitKind::Sword, from: nt + Vec3::Z });
                 }
             });
