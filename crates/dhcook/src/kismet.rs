@@ -920,7 +920,11 @@ fn dialog_tree(pkg: &Package, t: i32, voices: &HashMap<[u32; 4], Vec<String>>) -
                 | "DisConv_SeenDialogLabel"
                 | "DisConv_HasInventoryItemEquipped"
                 | "DisConv_SpeakerHasTweaks"
-                | "DisConv_IsSpeakerAvailable" => match branch_of(pkg, &cls, &p) {
+                | "DisConv_IsSpeakerAvailable"
+                | "DisConv_SpeakerCombatStatus"
+                | "DisConv_HasInventoryItem"
+                | "DisConv_FactionBranch"
+                | "DisConv_SpawnerBranch" => match branch_of(pkg, &cls, &p) {
                     Some(b) => KDialogNodeKind::Branch(b),
                     None => KDialogNodeKind::Pass,
                 },
@@ -1641,6 +1645,21 @@ fn branch_of(pkg: &Package, cls: &str, p: &Props) -> Option<crate::format::KBran
                 .collect(),
         },
         "DisConv_IsSpeakerAvailable" => KBranch::Available,
+        // (as roshan's r614/blink research decoded their evaluations: 0x00caba70, 0x00cab690, the
+        // group branches 0x00cad560 / 0x00cad9d0)
+        "DisConv_SpeakerCombatStatus" => KBranch::CombatStatus,
+        "DisConv_HasInventoryItem" => KBranch::HasItem {
+            item: p.object("m_pItem").filter(|o| *o != 0).map(|o| pkg.obj_name(o).to_string()).unwrap_or_default(),
+            class: p.object("m_pItemClass").filter(|o| *o != 0).map(|o| pkg.obj_name(o).to_string()).unwrap_or_default(),
+        },
+        "DisConv_FactionBranch" => KBranch::Faction {
+            initiator: matches!(p.int("m_iSpeaker"), Some(1) | Some(2)),
+            factions: struct_array(pkg, p, "m_Branches").iter().map(|b| b.object("m_pFaction").filter(|o| *o != 0).map(|o| pkg.obj_name(o).to_string()).unwrap_or_default()).collect(),
+        },
+        "DisConv_SpawnerBranch" => KBranch::Spawner {
+            initiator: matches!(p.int("m_iSpeaker"), Some(1) | Some(2)),
+            spawners: obj_list(pkg, p, "m_Branches").into_iter().map(|o| if o != 0 { pkg.obj_name(o).to_string() } else { String::new() }).collect(),
+        },
         _ => return None,
     })
 }
@@ -1797,7 +1816,11 @@ fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<
             | "DisConv_SeenDialogLabel"
             | "DisConv_HasInventoryItemEquipped"
             | "DisConv_SpeakerHasTweaks"
-            | "DisConv_IsSpeakerAvailable" => {
+            | "DisConv_IsSpeakerAvailable"
+            | "DisConv_SpeakerCombatStatus"
+            | "DisConv_HasInventoryItem"
+            | "DisConv_FactionBranch"
+            | "DisConv_SpawnerBranch" => {
                 use crate::format::KBranch;
                 let kind = match cls.as_str() {
                     "DisConv_CheckStoryFlag" => Some(KBranch::StoryFlag(guid(&p, "m_StoryFlag").unwrap_or_default())),

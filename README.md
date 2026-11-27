@@ -2684,7 +2684,15 @@ fields no longer show their stand-in "WW" behind the title.
   entry's way, else the last, as the research decoded the group branches) and
   `DisConv_IsSpeakerAvailable` whether the speaker is there and up. Before, each took its first
   way: no label was ever seen, so the guests started over each time, and the guards always
-  spoke as to an unarmed man. The characters' barks branch so too, a speaker's tweaks being its
+  spoke as to an unarmed man. `DisConv_SpeakerCombatStatus` asks how the speaker stands to a
+  fight (`eDisConvCombatStatus`: 0 fighting or down, 1 searching or investigating, 2 fleeing, 3
+  otherwise, as roshan's r614/blink research decoded it at 0x00caba70 and read the behaviours
+  behind it), `DisConv_HasInventoryItem` whether the player has the thing or its class (the
+  sword, the pistol and crossbow once given, his gear; 0x00cab690), and `DisConv_FactionBranch` /
+  `DisConv_SpawnerBranch` the speaker's faction and the spawner it came from (the first matching
+  entry, else "Everyone Else", 0x00cad560 / 0x00cad9d0). Before, each took its first linked way:
+  Daud's summoned assassins chattered on through a fight, their idle talk asked only of the calm
+  ("otherwise"), and Boyle's elite guard on the stair spoke of Corvo's pistol as missing. The characters' barks branch so too, a speaker's tweaks being its
   character's (`dhtool patch-barks DIR` takes a cooked map's barks again from its packages, where
   they differ from the cook's only by these branches).
   Within a conversation its own branch nodes pick the way as it reaches them: by a story flag

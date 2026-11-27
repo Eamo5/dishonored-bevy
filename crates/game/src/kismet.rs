@@ -1291,6 +1291,12 @@ pub struct Vm {
     /// the speaking characters' pawn tweaks, their own first then those they derive from
     /// (`DisConv_SpeakerHasTweaks`)
     pub speaker_tweaks: HashMap<u32, Vec<String>>,
+    /// how each speaking character stands to a fight (`DisConv_SpeakerCombatStatus`) and its
+    /// faction (`DisConv_FactionBranch`)
+    pub speaker_status: HashMap<u32, u8>,
+    pub speaker_faction: HashMap<u32, String>,
+    /// what the player has, by thing and by class (`DisConv_HasInventoryItem`)
+    pub owned: Vec<String>,
     /// speakers and the tree they answer with (for the player approaching / loitering),
     /// their positions, and their approach and loiter hooks' watch (by speaker and node)
     speaker_tree: HashMap<u32, usize>,
@@ -1690,6 +1696,9 @@ impl Vm {
             labels: HashSet::new(),
             equipped: Vec::new(),
             speaker_tweaks: HashMap::new(),
+            speaker_status: HashMap::new(),
+            speaker_faction: HashMap::new(),
+            owned: Vec::new(),
             // one-shot dialogue actors answer from where they stand
             speaker_tree: g.dialogs.iter().map(|d| (d.actor, d.tree as usize)).collect(),
             speaker_pos: g.dialogs.iter().filter_map(|d| g.actors.get(d.actor as usize).map(|a| (d.actor, Vec3::from(a.position)))).collect(),
@@ -5685,6 +5694,23 @@ impl Vm {
                 tweaks.iter().position(|(t, exact)| if *exact { own.first() == Some(t) } else { own.contains(t) }).unwrap_or(tweaks.len())
             }
             KBranch::Available => speaker.is_some_and(|a| self.busy(a) != Some(Busy::Down) && !self.speaker_at(a).is_empty()) as usize,
+            // (none known: otherwise)
+            KBranch::CombatStatus => speaker.and_then(|a| self.speakers_of(a).iter().find_map(|p| self.speaker_status.get(p).copied())).unwrap_or(3) as usize,
+            KBranch::HasItem { item, class } => self.owned.iter().any(|o| (!item.is_empty() && o.eq_ignore_ascii_case(item)) || (!class.is_empty() && o.eq_ignore_ascii_case(class))) as usize,
+            KBranch::Faction { initiator, factions } => {
+                // (the one who set it off: the player's own faction, Corvo's or Daud's)
+                let pos = if *initiator {
+                    factions.iter().position(|f| dhcook::format::is_player_faction(f))
+                } else {
+                    let own = speaker.and_then(|a| self.speakers_of(a).iter().find_map(|p| self.speaker_faction.get(p).cloned())).unwrap_or_default();
+                    factions.iter().position(|f| !own.is_empty() && f.eq_ignore_ascii_case(&own))
+                };
+                pos.unwrap_or(factions.len())
+            }
+            KBranch::Spawner { initiator, spawners } => {
+                let names: Vec<&str> = if *initiator { Vec::new() } else { speaker.map(|a| self.speakers_of(a)).unwrap_or_default().iter().filter_map(|p| self.g.actors.get(*p as usize)).map(|x| x.name.as_str()).collect() };
+                spawners.iter().position(|s| names.iter().any(|n| n.eq_ignore_ascii_case(s))).unwrap_or(spawners.len())
+            }
         })
     }
 
@@ -7311,6 +7337,18 @@ fn world_events(
             _ => None,
         };
         vm.equipped.extend(left.map(String::from));
+        // (and what he has, `DisConv_HasInventoryItem`: his weapons by class, his gear by item)
+        vm.owned.clear();
+        if !stats.unarmed {
+            vm.owned.push("DishonoredWepSword".into());
+        }
+        if stats.weapons && !stats.no_pistol {
+            vm.owned.push("DishonoredWepPistol".into());
+        }
+        if stats.weapons && !stats.no_crossbow {
+            vm.owned.push("DishonoredWepCrossbow".into());
+        }
+        vm.owned.extend(stats.items.iter().filter(|(_, n)| **n > 0).map(|(k, _)| k.clone()));
     }
     vm.in_combat = npcs.iter().any(|(_, n, _, _)| !n.is_down() && n.hostile() && n.mode == Mode::Combat);
     vm.readings.0 = stats.health;
@@ -7504,6 +7542,19 @@ fn world_events(
             } else {
                 vm.speaker_suspecting.remove(&a);
             }
+            // (`eDisConvCombatStatus` by its behaviour, as roshan's r614/blink research read it:
+            // fighting, noticing, panicking, else)
+            vm.speaker_status.insert(
+                a,
+                match n.mode {
+                    _ if n.is_down() => 0,
+                    Mode::Combat | Mode::Choked => 0,
+                    Mode::Investigate | Mode::Search => 1,
+                    Mode::Flee => 2,
+                    _ => 3,
+                },
+            );
+            vm.speaker_faction.insert(a, n.faction.rsplit('.').next().unwrap_or("").to_string());
             let busy = match n.mode {
                 Mode::Combat | Mode::Flee | Mode::Choked => Some(Busy::Fighting),
                 Mode::Investigate | Mode::Search => Some(Busy::Noticing),
@@ -7517,6 +7568,7 @@ fn world_events(
             vm.speaker_pos.remove(&a);
             // (its character gone: down, or not yet come)
             if npcs.iter().any(|(_, n, f, _)| f.0 == s && n.is_down()) {
+                vm.speaker_status.insert(a, 0);
                 vm.speaker_busy.insert(a, Busy::Down);
             } else {
                 vm.speaker_busy.remove(&a);

@@ -1240,7 +1240,7 @@ fn main() -> Result<()> {
                     for h in before["hooks"].as_array_mut().into_iter().flatten() {
                         for n in h["nodes"].as_array_mut().into_iter().flatten() {
                             let br = n["step"].get("Branch");
-                            if br.is_some_and(|b| b.get("Seen").or(b.get("Equipped")).or(b.get("Tweaks")).is_some() || *b == serde_json::json!("Available")) {
+                            if br.is_some_and(|b| b.get("Seen").or(b.get("Equipped")).or(b.get("Tweaks")).or(b.get("HasItem")).or(b.get("Faction")).or(b.get("Spawner")).is_some() || *b == serde_json::json!("Available") || *b == serde_json::json!("CombatStatus")) {
                                 n["step"] = serde_json::json!("Pass");
                             }
                         }

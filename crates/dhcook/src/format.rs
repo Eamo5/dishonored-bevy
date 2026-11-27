@@ -874,6 +874,18 @@ pub enum KBranch {
     Tweaks { initiator: bool, tweaks: Vec<(String, bool)> },
     /// the speaker there to speak (`DisConv_IsSpeakerAvailable`): output 1 so, 0 not
     Available,
+    /// how the speaker stands to a fight (`DisConv_SpeakerCombatStatus`, `eDisConvCombatStatus`):
+    /// 0 in combat (or down), 1 suspicious, 2 fearful, 3 otherwise
+    CombatStatus,
+    /// the player having a thing (`DisConv_HasInventoryItem`: its tweak's name and its class's,
+    /// asked of the player's slot): output 1 so, 0 not
+    HasItem { item: String, class: String },
+    /// the speaker's, or the one who set it off's, faction (`DisConv_FactionBranch`: the
+    /// factions' names): the first match's output, else the last
+    Faction { initiator: bool, factions: Vec<String> },
+    /// the speaker one of a spawner's (`DisConv_SpawnerBranch`: the spawners' names): the first
+    /// match's output, else the last
+    Spawner { initiator: bool, spawners: Vec<String> },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
