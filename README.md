@@ -1885,7 +1885,9 @@ fields no longer show their stand-in "WW" behind the title.
   (`m_HookEnum`): the voices' `DisConv_Hook_*` nodes used to be lumped by their class, so a
   guard on patrol muttered search lines ("Let's find the little shit"). On patrol a guard says
   its `PATROL_MISC` (`PATROL_MISC_GROUP` among others of its side), noticing something
-  `ATTENTION_NOTICE_BEGIN`, a notice come to nothing `ATTENTION_NOTICE_END`, finding a body
+  `ATTENTION_NOTICE_BEGIN` (its `Hook_Notice` way by how: seen, heard, or a danger heard, the third
+  of which the guards' voices leave unsaid, as roshan's r614/blink research decoded 0x00cac450;
+  before, a danger heard took the "Heard something..." way), a notice come to nothing `ATTENTION_NOTICE_END`, finding a body
   `SEARCH_DETECT_CORPSE` (its `Hook_DeathMode` lines for a dead one, "A body! Murder!", or one
   knocked out, "Hey, wake up!") and a death before its eyes `SEARCH_WITNESS_DEATH` (one a wall of
   light burnt away `NOTICE_DEATH_BY_WOL`, "By the Outsider!", 108 voices; our reading of the
