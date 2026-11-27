@@ -2692,7 +2692,9 @@ fields no longer show their stand-in "WW" behind the title.
   `DisConv_SpawnerBranch` the speaker's faction and the spawner it came from (the first matching
   entry, else "Everyone Else", 0x00cad560 / 0x00cad9d0). Before, each took its first linked way:
   Daud's summoned assassins chattered on through a fight, their idle talk asked only of the calm
-  ("otherwise"), and Boyle's elite guard on the stair spoke of Corvo's pistol as missing. The characters' barks branch so too, a speaker's tweaks being its
+  ("otherwise"), and at the Boyle party's duel the second always had Corvo "select his weapon"
+  and handed him a pistol, where with his own he is told "Be it noted that Lord Pendleton's
+  representative has a pistol. You may proceed." and given its bullets. The characters' barks branch so too, a speaker's tweaks being its
   character's (`dhtool patch-barks DIR` takes a cooked map's barks again from its packages, where
   they differ from the cook's only by these branches).
   Within a conversation its own branch nodes pick the way as it reaches them: by a story flag
