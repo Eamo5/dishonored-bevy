@@ -42,6 +42,9 @@ cargo run --release -p dhtool -- patch-dialogs DIR [map...]
 cargo run --release -p dhtool -- patch-post DIR [map...]     # the same for the level's grade
 cargo run --release -p dhtool -- patch-barks DIR [map...]    # and the characters' barks
 cargo run --release -p dhtool -- patch-objectives DIR [map...]  # and the objectives' tasks
+# (a map started directly takes the story so far as begun; DH_FLAGS=guid[,guid=0...] sets story
+#  flags as a campaign would have left them: The Brigmore Witches' store before Drapers Ward is
+#  b2d85b214c1f1c11dec77fb61830fcdf)
 
 # 2. Play
 cargo run --release -p dishonored                      # main menu (New Game starts at Dunwall Tower)

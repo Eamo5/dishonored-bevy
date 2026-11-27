@@ -6845,6 +6845,12 @@ fn setup(
                 vm.flags.insert(n.flag.clone(), true);
             }
         }
+        // (tests: story flags as a campaign would have left them, `DH_FLAGS=guid[,guid=0...]`:
+        // The Brigmore Witches' store before Drapers Ward, `b2d85b21...`)
+        for f in std::env::var("DH_FLAGS").unwrap_or_default().split(',').filter(|f| !f.is_empty()) {
+            let (k, v) = f.split_once('=').unwrap_or((f, "1"));
+            vm.flags.insert(k.to_ascii_lowercase(), v != "0");
+        }
     }
     info!(
         "level scripts: {} ops, {} variables, {} actors, {} touch volumes, {} objectives",
