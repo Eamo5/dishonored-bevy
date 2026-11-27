@@ -1192,7 +1192,7 @@ fn swarm_brain(
     mut hits: MessageWriter<NpcHit>,
     (mut stagger, mut on): (MessageWriter<NpcStagger>, MessageWriter<SwarmOn>),
     mut sfx: MessageWriter<PostEvent>,
-    (player, mut stats, mut bites): (Query<(&Transform, &crate::player::Player), (Without<Swarm>, Without<Npc>)>, ResMut<crate::gameplay::PlayerStats>, ResMut<RatBites>),
+    (player, mut stats, mut bites): (Query<(Entity, &Transform, &crate::player::Player), (Without<Swarm>, Without<Npc>)>, ResMut<crate::gameplay::PlayerStats>, ResMut<RatBites>),
     (level, settings, mut severs): (Option<Res<LevelInfo>>, Res<crate::settings::Settings>, MessageWriter<crate::gore::SeverLimb>),
     (lights, mut shunned_seen, slide): (Query<(&crate::level::LevelLight, &Visibility)>, Local<usize>, Option<Res<crate::player::Slide>>),
 ) {
@@ -1216,7 +1216,7 @@ fn swarm_brain(
     // 250 uu: kept out of it as a repulsor's; before, he slid through them)
     let mut shunned = shunned;
     if slide.as_ref().is_some_and(|s| s.0.is_some()) {
-        if let Ok((pt, _)) = player.single() {
+        if let Ok((_, pt, _)) = player.single() {
             if data.pawn("m_bSlideRepulsesRats", 1.0) > 0.0 {
                 shunned.push((pt.translation, data.pawn("m_fSlideRatRepulseRadius", 250.0) * 0.01));
             }
@@ -1227,7 +1227,8 @@ fn swarm_brain(
     let Ok(ctx) = rapier.single() else { return };
     let ground = QueryFilter::default().exclude_sensors().groups(CollisionGroups::new(Group::ALL, GROUP_WORLD | GROUP_PROP));
     let scent = data.attribute("RatsAttackRadiusReduction", settings.difficulty, &stats.powers, &stats.charms);
-    let ppos = player.single().map(|(t, p)| (t.translation, player_bite_distance(&data, p.crouched, scent))).ok();
+    let ppos = player.single().map(|(_, t, p)| (t.translation, player_bite_distance(&data, p.crouched, scent))).ok();
+    let pe = player.single().map(|(e, _, _)| e).ok();
     for (se, mut s, mut st) in &mut swarms {
         if s.rats.is_empty() {
             commands.entity(se).despawn();
@@ -1243,12 +1244,14 @@ fn swarm_brain(
             let big = n >= w.aggressive;
             let mut goal: Option<Vec3> = None;
             let mut busy = false;
+            let mut on_corvo = false;
             // Corvo: a big swarm goes for him, a small one runs
             if let Some((pp, attack_distance)) = ppos.filter(|_| !stats.dead) {
                 let d = pp.distance(center);
                 if big && d < w.detect && swarm_target_visible(&ctx, center, pp) {
                     goal = Some(pp);
                     busy = true;
+                    on_corvo = true;
                     if d < attack_distance {
                         let swarm = &mut *s;
                         // (no wait before the first bite when it's Corvo: `m_fInitialDelayBeforeDealingDamage`
@@ -1341,7 +1344,8 @@ fn swarm_brain(
                 }
                 w.goal
             });
-            s.target = busy.then_some(se);
+            // (busy: itself, or Corvo when it is after him; the music's rat fight hears that)
+            s.target = if on_corvo { pe } else { busy.then_some(se) };
             let to = (goal - center).with_y(0.0);
             let speed = if busy { 3.4 } else { 1.6 };
             let step = to.normalize_or_zero() * (speed * dt).min(to.length());
