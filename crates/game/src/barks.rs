@@ -197,7 +197,9 @@ fn distraction_output(bark: &dhcook::format::BarkHook, (name, category): (&str, 
 fn hook_output(class: &str, npc: &Npc) -> Option<usize> {
     match class {
         "SuspicionLevel" | "SuspicionDist" => Some(npc.suspecting as usize),
-        "Notice" => Some(if npc.sees_player { 0 } else { 1 }),
+        // (seen; heard, an anomaly or a danger: `DHN_Visual`, `_Aural_Anomaly`, `_Aural_Danger`,
+        // as roshan's r614/blink research decoded 0x00cac450)
+        "Notice" => Some(if npc.sees_player { 0 } else if npc.heard_danger { 2 } else { 1 }),
         _ => None,
     }
 }

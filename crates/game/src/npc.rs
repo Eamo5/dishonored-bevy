@@ -534,8 +534,8 @@ pub struct Npc {
     pub attn_fill: f32,
     /// noises of Corvo's it has heard (the scripts' `DisSeqEvent_PlayerHeard`)
     pub heard_player: u32,
-    /// what last sent it to look by ear was a danger (a blast, a shot: its word on it is
-    /// `SEARCH_ADETECTION_DANGER`)
+    /// what it last heard was a danger (a blast, a shot: its word on it is
+    /// `SEARCH_ADETECTION_DANGER`, its notice's way the aural danger one)
     pub heard_danger: bool,
     /// the scripts' brain flags (`DisSeqAct_AISetBrainFlags`, bits of `EDisAIBrainFlags`)
     pub brain_flags: u8,
@@ -3869,6 +3869,10 @@ fn npc_hearing(
                 .min(cap);
                 npc.awareness = npc.awareness.max((npc.awareness + amount).max(floor).min(cap));
                 npc.last_seen = Some(n.pos);
+                // (what it last heard: a danger or not, for its word on it)
+                if !npc.sees_player {
+                    npc.heard_danger = n.kind == NoiseKind::Danger;
+                }
                 // (busted refused him unseen and untouched, it already at where it believes he is
                 // while he is farther off: `m_fMinRangeToUnsightedBustedProxy`, 2.5 m, as roshan's
                 // r614/blink research decoded the busted check; its value held at busted's start,
@@ -3893,9 +3897,6 @@ fn npc_hearing(
                 if npc.awareness >= att.levels[2][0] {
                     npc.alert = Alert::Suspicious;
                     npc.target = Some(n.pos);
-                    if npc.mode != Mode::Investigate {
-                        npc.heard_danger = n.kind == NoiseKind::Danger;
-                    }
                     if npc.mode != Mode::Investigate || runs_to(n.kind) {
                         npc.search_run = runs_to(n.kind);
                     }
