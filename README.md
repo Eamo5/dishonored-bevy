@@ -42,6 +42,7 @@ cargo run --release -p dhtool -- patch-dialogs DIR [map...]
 cargo run --release -p dhtool -- patch-post DIR [map...]     # the same for the level's grade
 cargo run --release -p dhtool -- patch-barks DIR [map...]    # and the characters' barks
 cargo run --release -p dhtool -- patch-objectives DIR [map...]  # and the objectives' tasks
+cargo run --release -p dhtool -- patch-music DIR [map...]       # and the characters' fight music
 # (a map started directly takes the story so far as begun; DH_FLAGS=guid[,guid=0...] sets story
 #  flags as a campaign would have left them: The Brigmore Witches' store before Drapers Ward is
 #  b2d85b214c1f1c11dec77fb61830fcdf)
@@ -3109,6 +3110,13 @@ fields no longer show their stand-in "WW" behind the title.
   game parameter (0x13xx, 0x14xx) set it, easing over their transition (the Lighthouse's
   ambience, `Set_State_Amb_LVL_Lighthouse_Ext`, its mix's parameter to 10). Before, the stingers
   played over the music at full, and those variants all sounded alike.
+- **Interactive music** (`music.rs`): the map's `DisTweaks_MusicEvents` states for exploring,
+  suspense, the fight by its intensity and the chase. A fight's intensity is what each enemy at
+  Corvo adds, its pawn's `m_CombatIntensityType` (`EDisCombatMusicIntensityObjectType`) into the
+  tweak's `m_fCombatIntensityContribution`: a tallboy 100, at once the fiercest fight music
+  (`Music_State_Boyle_Fight_4`), an elite guard or an overseer 2, a guard or a thug 1, a
+  wolfhound 0.5. Before, an elite guard's 2 for any whose name sounded strong, tallboys
+  included, else a thug's 1. `dhtool patch-music DIR` brings cooked maps' characters up to this.
 - **Whale oil tanks** hold their charge (`DisTweaks_WhaleOilBattery`: 50 full); walls of light,
   arc pylons and watchtowers spend it from the tank feeding them (a kill, a shot) and stop when
   it runs dry; the scripts refill them (`DisSeqAct_RefillWhaleOilBattery`; the Refinery's start
@@ -4746,7 +4754,7 @@ Known outstanding gameplay gaps from source and original-data inspection:
 | --- | --- |
 | `crates/upk` | UE3 package reader: LZO/zlib chunks, name/import/export tables, tagged properties, static/skeletal meshes, textures (incl. `.tfc` bulk data) |
 | `crates/dhcook` | Cooker: levels and their streaming sublevels, materials and shaders, lightmaps, light volumes, NPC archetypes and factions, Kismet/Matinee, security devices, Wwise audio, Scaleform UI, game data |
-| `crates/dhtool` | CLI for cooking and inspecting packages (`cook`, `cook-all`, `cook-ui`, `cook-audio`, `cook-gamedata`, `patch-dialogs`, `patch-post`, `patch-barks`, `patch-objectives`, `list`, `props`, `findprop`, `swfdump`, `mat`, `graph`, ...) |
+| `crates/dhtool` | CLI for cooking and inspecting packages (`cook`, `cook-all`, `cook-ui`, `cook-audio`, `cook-gamedata`, `patch-dialogs`, `patch-post`, `patch-barks`, `patch-objectives`, `patch-music`, `list`, `props`, `findprop`, `swfdump`, `mat`, `graph`, ...) |
 | `crates/game` | The Bevy game |
 
 ### Cache format (`./cache`)

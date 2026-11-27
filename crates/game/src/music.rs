@@ -48,11 +48,26 @@ fn start_music(level: Option<Res<LevelInfo>>, mut dir: ResMut<Director>, mut out
     }
 }
 
-/// Intensity an enemy adds to a fight.
+/// Intensity an enemy adds to a fight: the music tweak's `m_fCombatIntensityContribution` for its
+/// pawn's `m_CombatIntensityType` (a tallboy 100, at once the fiercest fight music; an elite
+/// guard 2, a wolfhound 0.5; as cooked). Before, an elite guard's for any whose name sounded
+/// strong, tallboys' included, else a thug's.
 fn contribution(npc: &Npc, table: &[f32]) -> f32 {
-    let n = npc.name.to_ascii_lowercase();
-    let strong = n.contains("elite") || n.contains("overseer") || n.contains("assassin") || n.contains("tallboy") || n.contains("officer");
-    let k = if strong { 5 } else { 3 };
+    let k = npc.arms.music.map(usize::from).unwrap_or_else(|| {
+        // (maps cooked before it was read: by its name)
+        let n = npc.name.to_ascii_lowercase();
+        if n.contains("tallboy") {
+            6
+        } else if n.contains("hound") {
+            2
+        } else if n.contains("weeper") {
+            7
+        } else if n.contains("elite") || n.contains("overseer") || n.contains("assassin") || n.contains("officer") {
+            5
+        } else {
+            3
+        }
+    });
     table.get(k).copied().unwrap_or(1.0)
 }
 

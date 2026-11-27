@@ -620,11 +620,13 @@ pub struct Arms {
     pub outer_only: Vec<String>,
     /// where it keeps outside that ring: its outer pattern's reach (m) and flank (degrees)
     pub outer_place: Option<(f32, f32)>,
+    /// what a fight with it adds to the music (m_CombatIntensityType), where known
+    pub music: Option<u8>,
 }
 
 impl Default for Arms {
     fn default() -> Self {
-        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, attract: None, fire: None, taunt: None, plague: None, whiskey: None, witch: None, saw: None, summon: None, vulnerable: [true; 2], responses: Vec::new(), pacing: None, danger: Default::default(), turning: LocoTurn::default(), throwing: None, outer_only: Vec::new(), outer_place: None }
+        Arms { melee: 15.0, ranged: 20.0, accuracy: [0.35, 0.1], parry: [0.5, 0.25, 3.0], block_break: [0.3, 0.6], regen: [5.0, 5.0, 15.0], big_hit: 10.0, dodge: 0.0, grenades: Vec::new(), moves: Vec::new(), tunes: None, attract: None, fire: None, taunt: None, plague: None, whiskey: None, witch: None, saw: None, summon: None, vulnerable: [true; 2], responses: Vec::new(), pacing: None, danger: Default::default(), turning: LocoTurn::default(), throwing: None, outer_only: Vec::new(), outer_place: None, music: None }
     }
 }
 
@@ -808,6 +810,7 @@ impl Arms {
         a.saw = st.saw.clone();
         a.summon = st.summon.clone();
         a.vulnerable = st.vulnerable.unwrap_or([true; 2]);
+        a.music = st.music;
         a.responses = st.responses.clone();
         a.pacing = st.pacing.clone();
         a.danger = st.danger.clone();

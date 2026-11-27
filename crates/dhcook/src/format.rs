@@ -1520,6 +1520,12 @@ pub struct NpcStats {
     /// `m_pDLC06SharedTweaks`' `m_pVulnerabilityExTweaks`: a saw butcher, Daud's Corvo neither)
     #[serde(default)]
     pub vulnerable: Option<[bool; 2]>,
+    /// what a fight with it adds to the music's intensity (`m_CombatIntensityType`,
+    /// `EDisCombatMusicIntensityObjectType`: 0 none, 1 rat, 2 wolfhound, 3 thug, 4 guard, 5 elite
+    /// guard, 6 tallboy, 7 weeper; the music tweak's `m_fCombatIntensityContribution` by it). None
+    /// for maps cooked before it was read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub music: Option<u8>,
     /// how it answers Corvo's acts (its brain's `m_pReactionTweaks`: `m_Response_<name>`)
     #[serde(default)]
     pub responses: Vec<NpcResponse>,

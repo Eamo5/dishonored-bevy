@@ -4777,6 +4777,10 @@ impl<'a> Cooker<'a> {
         }
         st.danger = self.danger_steering(pawn);
         st.loco = self.npc_loco(pawn);
+        st.music = Some(match self.tweak_prop(pawn, "m_CombatIntensityType", 0, 0) {
+            Some((_, Value::Enum(e))) | Some((_, Value::Name(e))) => music_intensity_type(&e),
+            _ => 0,
+        });
         // (drawn in by Pull: The Brigmore Witches' pawns)
         if let Some(force) = self.tweak_float(pawn, "m_fPullForce", 0) {
             let bone = match self.tweak_prop(pawn, "m_PullBoneName", 0, 0) {
@@ -9621,6 +9625,11 @@ fn mesh_sockets(mesh: &Obj) -> Vec<SocketDef> {
         });
     }
     out
+}
+
+/// `EDisCombatMusicIntensityObjectType` by name (`DCMIOT_EliteGuard`: 5), 0 for none or unknown.
+pub fn music_intensity_type(name: &str) -> u8 {
+    ["DCMIOT_None", "DCMIOT_Rat", "DCMIOT_Wolfhound", "DCMIOT_Thug", "DCMIOT_Guard", "DCMIOT_EliteGuard", "DCMIOT_Tallboy", "DCMIOT_Weeper"].iter().position(|n| *n == name).unwrap_or(0) as u8
 }
 
 /// Arkane post-process settings: the level only stores what differs from the defaults.

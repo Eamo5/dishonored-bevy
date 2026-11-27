@@ -1205,6 +1205,46 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Some("patch-music") => {
+            // dhtool patch-music <dir> [map...]: a cooked map's characters given what a fight with
+            // them adds to the music (their pawn tweak's `m_CombatIntensityType`), from their
+            // packages under <dir>
+            init_classes();
+            let found = package_index(&PathBuf::from(&args[2]))?;
+            let root = PathBuf::from("cache").join("maps");
+            for m in cooked_maps(&root, &args[3..])? {
+                let path = root.join(format!("{m}.json"));
+                let mut scene: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+                let names: Vec<String> = scene["packages"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                let levels: Vec<upk::Package> = names.iter().filter_map(|n| found.get(&n.to_ascii_lowercase()).and_then(|p| std::fs::read(p).ok().and_then(|b| upk::Package::from_bytes(n.clone(), p.clone(), b).ok()))).collect();
+                let Some(types) = scene["npc_types"].as_array_mut() else { continue };
+                let (mut set, mut lost) = (0, 0);
+                let mut kinds = std::collections::BTreeMap::new();
+                for ty in types.iter_mut() {
+                    let Some(name) = ty["name"].as_str().map(str::to_string) else { continue };
+                    let props = levels.iter().find_map(|pkg| pkg.find_export(&name).filter(|i| pkg.exports[*i as usize - 1].size > 0).and_then(|i| upk::read_object(pkg, i).ok()));
+                    let Some(od) = props else {
+                        lost += 1;
+                        continue;
+                    };
+                    let k = match od.props.get("m_CombatIntensityType") {
+                        Some(upk::Value::Enum(e)) | Some(upk::Value::Name(e)) => dhcook::music_intensity_type(e),
+                        _ => 0,
+                    };
+                    *kinds.entry(k).or_insert(0) += 1;
+                    if ty["stats"].is_object() && ty["stats"]["music"] != serde_json::json!(k) {
+                        ty["stats"]["music"] = serde_json::json!(k);
+                        set += 1;
+                    }
+                }
+                println!("{m}: {set} characters given their music, {lost} tweaks not found; by kind {kinds:?}");
+                if set > 0 {
+                    let tmp = path.with_extension("json.tmp");
+                    std::fs::write(&tmp, serde_json::to_vec(&scene)?)?;
+                    std::fs::rename(&tmp, &path)?;
+                }
+            }
+        }
         Some("patch-barks") => {
             // dhtool patch-barks <dir> [map...] [--force]: a cooked map's barks (its characters'
             // voices' hook graphs) taken again from the voices in its level packages under <dir>,
