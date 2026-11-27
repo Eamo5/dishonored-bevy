@@ -96,10 +96,14 @@ pub struct BarkState {
     shot: f32,
     /// the dead walls, pylons and towers it has remarked on (`security::Devices`' list)
     broken_seen: Vec<usize>,
+    /// the one Corvo possesses within reach of it (as last seen)
+    host_near: bool,
 }
 
 /// A guard this near (m) one of its walls, pylons or towers gone dead remarks on it.
 const BROKEN_REACH: f32 = 5.0;
+/// One this near (m) Corvo in someone else's body, before it, asks after them.
+const APPROACH_REACH: f32 = 3.0;
 
 /// The barks' manager (`DisConvGlobalMan`, as roshan's r614/blink research decoded it): each
 /// frame's requests, by fire group and by whether the speaker is near (loud) or far (quiet),
@@ -305,7 +309,7 @@ fn npc_barks(
     data: Res<crate::gamedata::Data>,
     burning: Query<(), With<crate::powers::Ignite>>,
     mut hits: MessageReader<crate::gameplay::NpcHit>,
-    (mut memory, vm, mut calls, devices): (ResMut<BarkMemory>, Option<Res<crate::kismet::Vm>>, MessageWriter<crate::npc::AllyCall>, Res<crate::security::Devices>),
+    (mut memory, vm, mut calls, devices, possession): (ResMut<BarkMemory>, Option<Res<crate::kismet::Vm>>, MessageWriter<crate::npc::AllyCall>, Res<crate::security::Devices>, Res<crate::possession::Possession>),
 ) {
     let Some(level) = level else { return };
     let Ok(pt) = player.single() else { return };
@@ -338,6 +342,8 @@ fn npc_barks(
     let standing: Vec<(Entity, Vec3, String, bool)> = npcs.iter().filter(|(_, n, ..)| !n.is_down()).map(|(e, n, t, ..)| (e, t.translation, n.faction.clone(), n.alert == Alert::Combat)).collect();
     // (and the bodies: dead or knocked out)
     let bodies: Vec<(Vec3, bool)> = npcs.iter().filter(|(_, n, ..)| n.is_down()).map(|(_, n, t, ..)| (t.translation, n.mode == Mode::Dead)).collect();
+    // (the one Corvo possesses, a person: its faction)
+    let host = possession.host.filter(|_| possession.body.is_none()).and_then(|h| npcs.get(h).ok().map(|(_, n, ..)| (h, n.faction.clone())));
     for (e, npc, t, state, anim, clips, speaking, distracted) in &mut npcs {
         let Some(mut st) = state else {
             if log {
@@ -375,6 +381,7 @@ fn npc_barks(
                 act_seen: npc.act.1,
                 shot: 10.0,
                 broken_seen: Vec::new(),
+                host_near: false,
             });
             continue;
         };
@@ -612,6 +619,12 @@ fn npc_barks(
             st.next_chatter = WEEP_BARK[0] + rand::random::<f32>() * (WEEP_BARK[1] - WEEP_BARK[0]);
             let moving = npc.velocity.with_y(0.0).length() > 0.3;
             want = Some(if moving { &["WEEP_FOLLOWING", "WEEP_MOAN"] } else { &["WEEP_STAND_STILL_WEEPING", "WEEP_MOAN"] });
+        } else if let Some((_, faction)) = host.as_ref().filter(|(h, _)| *h != e && !down && npc.alert == Alert::Unaware && d < APPROACH_REACH && !st.host_near && npc.forward().dot((pt.translation - t.translation).with_y(0.0).normalize_or_zero()) > 0.3) {
+            // Corvo in someone come up to it, a friend's or not (`DDH_FRIEND_APPROACHES`,
+            // `DDH_NEUTRAL_APPROACHES`: "You feelin' alright? You don't look so good.", 150
+            // voices, its `Hook_Distance`; our reading of who sets it off; none said before)
+            let friend = *faction == npc.faction || level.scene.allies.get(&npc.faction).is_some_and(|a| a.iter().any(|f| f == faction));
+            want = Some(if friend { &["FRIEND_APPROACHES"] } else { &["NEUTRAL_APPROACHES"] });
         } else if let Some(dev) = (!down && npc.alert == Alert::Unaware && matches!(npc.mode, Mode::Patrol | Mode::Idle | Mode::Return))
             .then(|| devices.starved_near(t.translation, BROKEN_REACH))
             .flatten()
@@ -631,6 +644,7 @@ fn npc_barks(
                 _ => None,
             };
         }
+        st.host_near = host.as_ref().is_some_and(|(h, _)| *h != e) && d < APPROACH_REACH;
         st.alert = npc.alert;
         st.swinging = npc.attack_t.is_some();
         st.attn = npc.attn_level;

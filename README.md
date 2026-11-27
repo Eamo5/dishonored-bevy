@@ -3638,7 +3638,11 @@ against the install's own data where it carries them, then implemented independe
   combat included. The target is chosen with the angle weighted ten times the distance, plus its
   priority: combatants over civilians over animals. Someone he comes out of is thrown off as he
   does (`Empty_Unpossess_Eject`), then dazed, with its line (`_Dizzy`, 3.5 s), or retching, with
-  its sick (`_Puke`, 6.1 s), one or the other (our reading), standing for it all. The power is
+  its sick (`_Puke`, 6.1 s), one or the other (our reading), standing for it all. Walking a
+  person up to someone unwary, before it within 3 m, has them ask after the host
+  (`DDH_FRIEND_APPROACHES` for one of its side or allied, else `DDH_NEUTRAL_APPROACHES`: "Hey, you
+  don't look so good.", "You alright? Too much whiskey?", 150 voices; our reading of who sets it
+  off, none said before). The power is
   aimed while held and cast as it is let go, as its component does it (decoded from the
   executable, `UDishonoredActivePowerComponent_Possess`: the tick 0x00BFD6D0 runs a state, the
   aim being state 1, 0x00BFD300; let go 0x00BF3790; given up 0x00BFB520), so a tap possesses as
