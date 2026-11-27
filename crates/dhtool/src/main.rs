@@ -1247,14 +1247,17 @@ fn main() -> Result<()> {
                             }
                         }
                     }
-                    // (or as it had it once it knew those branches, all but the distractions' links)
-                    let mut unlinked = new.clone();
-                    for h in unlinked["hooks"].as_array_mut().into_iter().flatten() {
-                        h.as_object_mut().map(|o| o.remove("links"));
-                    }
+                    // (or as it had it once it knew those branches, all but the hooks' links)
+                    let unlink = |v: &serde_json::Value| {
+                        let mut v = v.clone();
+                        for h in v["hooks"].as_array_mut().into_iter().flatten() {
+                            h.as_object_mut().map(|o| o.remove("links"));
+                        }
+                        v
+                    };
                     if old.as_ref() == Some(&new) {
                         same += 1;
-                    } else if force || old.as_ref() == Some(&before) || old.as_ref() == Some(&unlinked) {
+                    } else if force || old.as_ref() == Some(&before) || old.as_ref().map(unlink) == Some(unlink(&new)) {
                         *b = new;
                         renewed += 1;
                     } else {

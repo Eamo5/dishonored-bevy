@@ -377,6 +377,8 @@ pub struct Npc {
     pub magic_pending: Option<(f32, bool)>,
     pub magic_react: Option<(f32, bool)>,
     pub magic_bark: Option<bool>,
+    /// the power it last saw him use (its line's way: `DisConv_Hook_WitnessedMagic`)
+    pub magic_power: Option<crate::powers::Power>,
     /// the warnings it has given Corvo (`TweakAIResponse.m_iNumWarningsBeforeReaction`) and when the
     /// last was (s, the game's clock), by its answers (`RESPONSES`)
     pub warned: [(u32, f32); 3],
@@ -2831,6 +2833,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         magic_pending: None,
         magic_react: None,
         magic_bark: None,
+        magic_power: None,
         carry_bark: None,
         warned: [(0, 0.0); 3],
         suspecting: false,

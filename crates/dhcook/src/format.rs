@@ -2364,7 +2364,8 @@ pub struct BarkHook {
     pub roots: Vec<i32>,
     /// what each output answers, for a hook that picks its output by where the speaker is
     /// (`DisConv_Hook_Distraction.m_DistractionLinks`: the distractor actor's name, else its
-    /// category, "Art", "TableSearch"...)
+    /// category, "Art", "TableSearch"...) or by the magic it saw
+    /// (`DisConv_Hook_WitnessedMagic.m_MagicTypes`: the power's component class)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<(String, String)>,
 }

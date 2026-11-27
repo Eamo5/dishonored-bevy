@@ -1179,6 +1179,9 @@ pub fn bark_voice(pkg: &Package, voice: i32) -> Option<crate::format::BarkVoice>
                             .iter()
                             .map(|l| (l.object("m_pActor").filter(|o| *o != 0).map(|o| pkg.obj_name(o).to_string()).unwrap_or_default(), l.name("m_DistractionCategory").filter(|c| *c != "None").unwrap_or("").to_string()))
                             .collect()
+                    } else if cls == "DisConv_Hook_WitnessedMagic" {
+                        // (and a magic witnessed, by the power's component class: `m_MagicTypes`)
+                        obj_list(pkg, &hp, "m_MagicTypes").into_iter().map(|o| (if o != 0 { pkg.obj_name(o).to_string() } else { String::new() }, String::new())).collect()
                     } else {
                         Vec::new()
                     };

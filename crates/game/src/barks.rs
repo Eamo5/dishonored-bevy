@@ -690,7 +690,32 @@ fn npc_barks(
             }
             continue;
         }
-        let out = if bark.class == "Distraction" {
+        let out = if bark.class == "WitnessedMagic" && !bark.links.is_empty() {
+            // (the magic seen: the hook's way for the power's component class, none for a power
+            // it doesn't list; the guards say less of the swarm and the wind, one way in three)
+            // (Daud's blink his Transversal Assault, `DisDLC06ActivePowerComponent_Transversal`)
+            let daud = { let m = level.scene.name.to_ascii_lowercase(); m.starts_with("dlc06_") || m.starts_with("l_dlc07_") };
+            let class = match npc.magic_power {
+                Some(crate::powers::Power::BendTime) => "BendTime",
+                Some(crate::powers::Power::Blink) if daud => "Transversal",
+                Some(crate::powers::Power::Blink) => "Blink",
+                Some(crate::powers::Power::DevouringSwarm) => "DevouringSwarm",
+                Some(crate::powers::Power::Possess) => "Possess",
+                Some(crate::powers::Power::Windblast) => "WindBlast",
+                Some(crate::powers::Power::SummonAssassin) => "SummonAssassin",
+                Some(crate::powers::Power::Pull) => "Pull",
+                _ => "",
+            };
+            match bark.links.iter().position(|(c, _)| !class.is_empty() && c.ends_with(&format!("_{class}"))) {
+                Some(k) => Some(k),
+                None => {
+                    if trace {
+                        info!("bark trace {} {}: says nothing of {:?}", npc.name, bark.hook, npc.magic_power);
+                    }
+                    continue;
+                }
+            }
+        } else if bark.class == "Distraction" {
             // (where it stopped: the distractor, and what it is)
             let at = distracted.and_then(|dz| level.scene.distractors.get(dz.d)).map(|x| (x.name.as_str(), if x.category.is_empty() { x.anim.strip_prefix("Distraction_").unwrap_or("") } else { x.category.as_str() }));
             match at.and_then(|at| distraction_output(bark, at)) {

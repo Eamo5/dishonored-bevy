@@ -3826,7 +3826,12 @@ against the install's own data where it carries them, then implemented independe
     (`m_IncreaseForMagic`: a guard +0.1, to head-tracking) and gives it 3 s in which it reacts
     if it finds him.
   - Its reaction comes 0.2 to 0.3 s later (`m_MagicReactionDelay`): its line
-    (`DDH_MAGIC_WITNESSED`, or `DDH_MAGIC_DISAPPEARED` when he vanished). When he vanished from it
+    (`DDH_MAGIC_WITNESSED`, or `DDH_MAGIC_DISAPPEARED` when he vanished), the witnessed hook's way
+    by the power seen (`DisConv_Hook_WitnessedMagic.m_MagicTypes`, its component class: Bend Time,
+    Blink, the swarm, Possession, Wind Blast, and the packs' Summon Assassin, Transversal Assault
+    and Pull, as roshan's r614/blink research found the hook filters them; a power it doesn't list,
+    nothing; the guards' ways for the swarm and the wind say something one time in three). Before,
+    every power took its first way. When he vanished from it
     and it isn't his ally, it turns to where it saw him and is taken aback
     (`DisNPCAnim_MagicLostTarget`: `Sword_` / `Empty_Magic_OutOfSight`), in a fight too, the
     behaviour's slot standing above it (`EAISlot_Awe`). Before, every unwary guard seeing a Blink

@@ -141,6 +141,7 @@ fn witness(
             }
             // (each telling clears the while before)
             npc.magic_pending = None;
+            npc.magic_power = Some(m.power);
             match m.mode {
                 MagicMode::Cast if busted => react(&mut npc, false),
                 MagicMode::Appear if busted => react(&mut npc, false),
