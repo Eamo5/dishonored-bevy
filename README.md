@@ -2711,7 +2711,11 @@ fields no longer show their stand-in "WW" behind the title.
   behind it), `DisConv_HasInventoryItem` whether the player has the thing or its class (the
   sword, the pistol and crossbow once given, his gear; 0x00cab690), and `DisConv_FactionBranch` /
   `DisConv_SpawnerBranch` the speaker's faction and the spawner it came from (the first matching
-  entry, else "Everyone Else", 0x00cad560 / 0x00cad9d0). Before, each took its first linked way:
+  entry, else "Everyone Else", 0x00cad560 / 0x00cad9d0), and `DisConv_CheckSpeakerRelationship` how
+  the speaker takes the player (`m_CompareSpeaker`, the slots as roshan's r614/blink research
+  bound them: 0 the speaker, 1 the one who set it off, 2 the player; `EDisConvRelationship`'s 0
+  ally, 1 neutral, 2 enemy: hostile to Corvo, by faction or by what he did, else of his side or
+  allied to it, else neutral; Rudshore Gate's and the Hound Pits assault's). Before, each took its first linked way:
   Daud's summoned assassins chattered on through a fight, their idle talk asked only of the calm
   ("otherwise"), and at the Boyle party's duel the second always had Corvo "select his weapon"
   and handed him a pistol, where with his own he is told "Be it noted that Lord Pendleton's

@@ -924,7 +924,8 @@ fn dialog_tree(pkg: &Package, t: i32, voices: &HashMap<[u32; 4], Vec<String>>) -
                 | "DisConv_SpeakerCombatStatus"
                 | "DisConv_HasInventoryItem"
                 | "DisConv_FactionBranch"
-                | "DisConv_SpawnerBranch" => match branch_of(pkg, &cls, &p) {
+                | "DisConv_SpawnerBranch"
+                | "DisConv_CheckSpeakerRelationship" => match branch_of(pkg, &cls, &p) {
                     Some(b) => KDialogNodeKind::Branch(b),
                     None => KDialogNodeKind::Pass,
                 },
@@ -1674,6 +1675,7 @@ fn branch_of(pkg: &Package, cls: &str, p: &Props) -> Option<crate::format::KBran
             initiator: matches!(p.int("m_iSpeaker"), Some(1) | Some(2)),
             spawners: obj_list(pkg, p, "m_Branches").into_iter().map(|o| if o != 0 { pkg.obj_name(o).to_string() } else { String::new() }).collect(),
         },
+        "DisConv_CheckSpeakerRelationship" => KBranch::Relationship { a: p.int("m_iSpeaker").unwrap_or(0), b: p.int("m_CompareSpeaker").unwrap_or(0) },
         _ => return None,
     })
 }
@@ -1834,7 +1836,8 @@ fn walk_steps(pkg: &Package, start: Option<i32>, voices: &HashMap<[u32; 4], Vec<
             | "DisConv_SpeakerCombatStatus"
             | "DisConv_HasInventoryItem"
             | "DisConv_FactionBranch"
-            | "DisConv_SpawnerBranch" => {
+            | "DisConv_SpawnerBranch"
+            | "DisConv_CheckSpeakerRelationship" => {
                 use crate::format::KBranch;
                 let kind = match cls.as_str() {
                     "DisConv_CheckStoryFlag" => Some(KBranch::StoryFlag(guid(&p, "m_StoryFlag").unwrap_or_default())),

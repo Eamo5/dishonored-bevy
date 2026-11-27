@@ -961,6 +961,13 @@ mod conversation_tests {
         assert_eq!(pick(&vm, &KBranch::ObjectiveDone("Obj".into())), 0);
         vm.tasks.insert("Obj".into(), (TaskState::Completed, false));
         assert_eq!(pick(&vm, &KBranch::ObjectiveDone("Obj".into())), 1);
+        // how the speaker takes the player (unknown: neutral); the one who set it off against
+        // the player, the same
+        let rel = KBranch::Relationship { a: 0, b: 2 };
+        assert_eq!(pick(&vm, &rel), 1);
+        vm.speaker_relation.insert(0, 2);
+        assert_eq!(pick(&vm, &rel), 2);
+        assert_eq!(pick(&vm, &KBranch::Relationship { a: 1, b: 2 }), 0);
         assert_eq!(pick(&vm, &KBranch::HasObjective("Obj".into())), 0);
         vm.objectives.push("Obj".into());
         assert_eq!(pick(&vm, &KBranch::HasObjective("Obj".into())), 1);
@@ -1318,6 +1325,9 @@ pub struct Vm {
     /// faction (`DisConv_FactionBranch`)
     pub speaker_status: HashMap<u32, u8>,
     pub speaker_faction: HashMap<u32, String>,
+    /// how each speaking character takes Corvo (`EDisConvRelationship`: 0 ally, 1 neutral, 2
+    /// enemy)
+    pub speaker_relation: HashMap<u32, u8>,
     /// what the player has, by thing and by class (`DisConv_HasInventoryItem`)
     pub owned: Vec<String>,
     /// speakers and the tree they answer with (for the player approaching / loitering),
@@ -1723,6 +1733,7 @@ impl Vm {
             speaker_tweaks: HashMap::new(),
             speaker_status: HashMap::new(),
             speaker_faction: HashMap::new(),
+            speaker_relation: HashMap::new(),
             owned: Vec::new(),
             // one-shot dialogue actors answer from where they stand
             speaker_tree: g.dialogs.iter().map(|d| (d.actor, d.tree as usize)).collect(),
@@ -5743,6 +5754,15 @@ impl Vm {
                 };
                 pos.unwrap_or(factions.len())
             }
+            // (the speaker against the one who set it off or the player, Corvo: how its character
+            // takes him; two of the same, allies)
+            KBranch::Relationship { a, b } => {
+                if a == b || (*a != 0 && *b != 0) {
+                    0
+                } else {
+                    speaker.and_then(|s| self.speakers_of(s).iter().find_map(|p| self.speaker_relation.get(p).copied())).unwrap_or(1) as usize
+                }
+            }
             KBranch::Spawner { initiator, spawners } => {
                 let names: Vec<&str> = if *initiator { Vec::new() } else { speaker.map(|a| self.speakers_of(a)).unwrap_or_default().iter().filter_map(|p| self.g.actors.get(*p as usize)).map(|x| x.name.as_str()).collect() };
                 spawners.iter().position(|s| names.iter().any(|n| n.eq_ignore_ascii_case(s))).unwrap_or(spawners.len())
@@ -7595,6 +7615,7 @@ fn world_events(
                 },
             );
             vm.speaker_faction.insert(a, n.faction.rsplit('.').next().unwrap_or("").to_string());
+            vm.speaker_relation.insert(a, crate::npc::relation_to_corvo(&n, level.as_deref()));
             let busy = match n.mode {
                 Mode::Combat | Mode::Flee | Mode::Choked => Some(Busy::Fighting),
                 Mode::Investigate | Mode::Search => Some(Busy::Noticing),

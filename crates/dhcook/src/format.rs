@@ -889,6 +889,10 @@ pub enum KBranch {
     /// the speaker one of a spawner's (`DisConv_SpawnerBranch`: the spawners' names): the first
     /// match's output, else the last
     Spawner { initiator: bool, spawners: Vec<String> },
+    /// how two speakers stand to each other (`DisConv_CheckSpeakerRelationship`: `m_iSpeaker`
+    /// against `m_CompareSpeaker`, slots 0 the speaker, 1 the one who set it off, 2 the player;
+    /// `EDisConvRelationship`): output 0 allies, 1 neutral, 2 enemies
+    Relationship { a: i32, b: i32 },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

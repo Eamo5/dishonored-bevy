@@ -6407,6 +6407,19 @@ fn panic_rule(scene: Option<&dhcook::format::Scene>, npc: &Npc, rule: &str) -> b
         .is_some_and(|p| p.rules.iter().any(|r| r == rule))
 }
 
+/// How a character takes Corvo now (`EDisConvRelationship`): 2 an enemy (hostile to him, by its
+/// faction or by what he did), 0 an ally (of his side, or its faction allied to his), else 1
+/// neutral.
+pub(crate) fn relation_to_corvo(npc: &Npc, level: Option<&LevelInfo>) -> u8 {
+    if npc.enemy {
+        2
+    } else if dhcook::format::is_player_faction(&npc.faction) || level.and_then(|l| l.scene.allies.get(&npc.faction)).is_some_and(|a| a.iter().any(|f| dhcook::format::is_player_faction(f))) {
+        0
+    } else {
+        1
+    }
+}
+
 /// One that may start panicking now: not barred from it (`Panic_Civilian_Disable`), able to run,
 /// not already running or down, not of Corvo's side.
 fn may_flee(npc: &Npc) -> bool {
