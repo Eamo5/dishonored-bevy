@@ -2219,6 +2219,14 @@ fn run_script(
                 });
             }
         }
+        "unplug" => {
+            // (tests) unplug: the whale oil tank out of the receptacle nearest Corvo, taken away
+            let near = devices.list.iter().enumerate().filter(|(_, r)| r.def.kind == "Receptacle" && r.has_tank).min_by(|a, b| Vec3::from(a.1.def.position).distance(t.translation).total_cmp(&Vec3::from(b.1.def.position).distance(t.translation)));
+            if let Some(tank) = near.and_then(|(i, _)| devices.tank_of(i)) {
+                info!("script: unplug the tank of receptacle {}", near.map_or(0, |n| n.0));
+                commands.entity(tank).try_despawn();
+            }
+        }
         "noise" => {
             // (tests) noise KIND [RADIUS]: a noise where Corvo stands (anomaly, threat, danger,
             // rattle, help, alarm; 15 m)

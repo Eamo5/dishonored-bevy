@@ -1579,7 +1579,10 @@ fields no longer show their stand-in "WW" behind the title.
   Outsider's first meeting missed its `UnhidePlatforms` key, so the dream's platforms never
   appeared, and its mark's burn (`Tatoo_Appears`, `F_Firy_Amount`) was never set.
 - **Security**: walls of light, arc pylons and the whale oil tanks that power them; rewire
-  tools turn them on their owners. The scripts hear a tank's charge spent
+  tools turn them on their owners. A guard on its rounds coming within 5 m of one (or of a
+  watch tower) dead for want of oil, its tank taken or spent, remarks on it once
+  (`DDH_NOTICE_BROKEN_STUFF`: "Hm, the oil must be gone.", "The oil in these things doesn't last
+  long enough.", 136 voices; our reading of when, none said before). The scripts hear a tank's charge spent
   (`DisSeqEvent_WhaleOilBattery` "Charge Used", and "All Charges Used" as it runs dry: the
   Flooded District's refill theirs). Watch towers (`watchtower.rs`, `DisTweaks_WatchTower`)
   sweep the ground with their searchlight (the original `Regent_Light_Cone` beam from the

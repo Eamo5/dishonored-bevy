@@ -94,7 +94,12 @@ pub struct BarkState {
     attn: u8,
     act_seen: u32,
     shot: f32,
+    /// the dead walls, pylons and towers it has remarked on (`security::Devices`' list)
+    broken_seen: Vec<usize>,
 }
+
+/// A guard this near (m) one of its walls, pylons or towers gone dead remarks on it.
+const BROKEN_REACH: f32 = 5.0;
 
 /// The barks' manager (`DisConvGlobalMan`, as roshan's r614/blink research decoded it): each
 /// frame's requests, by fire group and by whether the speaker is near (loud) or far (quiet),
@@ -296,7 +301,7 @@ fn npc_barks(
     data: Res<crate::gamedata::Data>,
     burning: Query<(), With<crate::powers::Ignite>>,
     mut hits: MessageReader<crate::gameplay::NpcHit>,
-    (mut memory, vm, mut calls): (ResMut<BarkMemory>, Option<Res<crate::kismet::Vm>>, MessageWriter<crate::npc::AllyCall>),
+    (mut memory, vm, mut calls, devices): (ResMut<BarkMemory>, Option<Res<crate::kismet::Vm>>, MessageWriter<crate::npc::AllyCall>, Res<crate::security::Devices>),
 ) {
     let Some(level) = level else { return };
     let Ok(pt) = player.single() else { return };
@@ -365,6 +370,7 @@ fn npc_barks(
                 attn: npc.attn_level,
                 act_seen: npc.act.1,
                 shot: 10.0,
+                broken_seen: Vec::new(),
             });
             continue;
         };
@@ -602,6 +608,16 @@ fn npc_barks(
             st.next_chatter = WEEP_BARK[0] + rand::random::<f32>() * (WEEP_BARK[1] - WEEP_BARK[0]);
             let moving = npc.velocity.with_y(0.0).length() > 0.3;
             want = Some(if moving { &["WEEP_FOLLOWING", "WEEP_MOAN"] } else { &["WEEP_STAND_STILL_WEEPING", "WEEP_MOAN"] });
+        } else if let Some(dev) = (!down && npc.alert == Alert::Unaware && matches!(npc.mode, Mode::Patrol | Mode::Idle | Mode::Return))
+            .then(|| devices.starved_near(t.translation, BROKEN_REACH))
+            .flatten()
+            .filter(|i| !st.broken_seen.contains(i))
+        {
+            // a guard come by one of its walls, pylons or towers gone dead, its tank taken or
+            // spent: "Hm, the oil must be gone." (`DDH_NOTICE_BROKEN_STUFF`, 136 voices, none said
+            // before; once a device, our reading of when)
+            st.broken_seen.push(dev);
+            want = Some(&["NOTICE_BROKEN_STUFF"]);
         } else if !down && st.next_chatter <= 0.0 {
             st.next_chatter = if npc.alert == Alert::Combat { 6.0 + rand::random::<f32>() * 8.0 } else { 15.0 + rand::random::<f32>() * 30.0 };
             want = match npc.alert {

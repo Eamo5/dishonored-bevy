@@ -224,6 +224,22 @@ impl Devices {
             .collect()
     }
 
+    /// The tank sitting in a receptacle (its prop), if any.
+    pub fn tank_of(&self, i: usize) -> Option<Entity> {
+        self.list.get(i).and_then(|d| d.tank)
+    }
+
+    /// A wall of light, arc pylon or watchtower near `at` (within `reach`, m) gone dead for want of
+    /// oil: its tank taken, or spent (not one the scripts switched off).
+    pub fn starved_near(&self, at: Vec3, reach: f32) -> Option<usize> {
+        self.list.iter().enumerate().find_map(|(i, d)| {
+            let starved = matches!(d.def.kind.as_str(), "WallOfLight" | "ArcPylon" | "WatchTower")
+                && !d.off
+                && d.receptacle_idx.is_some_and(|r| !(self.list[r].has_tank && self.list[r].tank.is_none_or(|t| self.charged(t))));
+            (starved && Vec3::from(d.def.position).distance(at) < reach).then_some(i)
+        })
+    }
+
     fn powered(&self, d: &Device) -> bool {
         if d.off {
             return false;
