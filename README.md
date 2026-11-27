@@ -1541,7 +1541,14 @@ fields no longer show their stand-in "WW" behind the title.
   across the maps start `DTS_Inactive`) and come up as the scripts make them active. Before,
   every task started active, so the journal listed a mission's tasks before they were given, and
   Coldridge stalled: "Learn Lizzy Stride's location" never came up after "Enter Coldridge
-  Prison", its script showing it only when it found it inactive. A `DisSeqAct_SetTaskState`
+  Prison", its script showing it only when it found it inactive. Given, an objective registers
+  its tasks, and those starting under way raise their change to it (`DisSeqEvent_TaskStateChanged`
+  "Active", as roshan's r614/blink research found the objective manager's registration does);
+  setting a task to the state it is in raises nothing. Before, nothing was raised: The
+  Loyalists' "Find Callista and Samuel's signal flare" never got its marker (its script sets it
+  on hearing the task under way), so the mission could not be followed to its end, and the egg
+  thief's briefing ("Get inside the mansion to begin your search for the six eggs.") never
+  showed. A `DisSeqAct_SetTaskState`
   without a state sets the class's `DTS_Inactive` (as roshan's r614/blink research found; the
   scripts use it to retire a task), not active as before, and leaves the task hidden or shown as
   it was. The task actions (`DisSeqAct_SetTaskState`, `_SetTaskHidden`, `_UpdateTaskTarget`)

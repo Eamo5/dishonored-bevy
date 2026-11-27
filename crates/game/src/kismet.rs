@@ -487,6 +487,52 @@ mod flow_tests {
         assert_eq!(st(&vm, "Obj"), Some(TaskState::Completed));
     }
 
+    /// An objective given registers its tasks: those starting under way raise their state's
+    /// change ("Active"), those starting inactive don't; setting a task to the state it is in
+    /// raises nothing.
+    #[test]
+    fn giving_an_objective_tells_its_active_tasks() {
+        use dhcook::format::{KLink, KObjective, KTask, KVar};
+        let mut g = Graph::default();
+        g.objectives.push(KObjective {
+            path: "Obj".into(),
+            tasks: vec![
+                KTask { path: "Obj.A".into(), initial: Some("DTS_Inactive".into()), ..Default::default() },
+                KTask { path: "Obj.B".into(), hidden: true, ..Default::default() },
+            ],
+            ..Default::default()
+        });
+        let var = |class: &str, k: &str, v: &str| KVar { class: class.into(), props: [(k.to_string(), KVal::Str(v.into()))].into_iter().collect(), ..Default::default() };
+        g.vars.push(var("SeqVar_Object", "ObjValue", "Obj"));
+        g.vars.push(var("DisSeqVar_Task", "m_pDummyTask", "Obj.B"));
+        g.ops.push(KOp {
+            class: "DisSeqAct_AddObjective".into(),
+            inputs: vec![KInput { desc: "In".into(), ..Default::default() }],
+            vars: vec![KLink { desc: "Objective".into(), vars: vec![0], write: false }],
+            ..Default::default()
+        });
+        let changed = |task: &str| KOp {
+            class: "DisSeqEvent_TaskStateChanged".into(),
+            outputs: ["Inactive", "Active", "Completed", "Failed"].iter().map(|d| KOutput { desc: (*d).into(), links: vec![], linked: None }).collect(),
+            props: [("m_pTask".to_string(), KVal::Str(task.into())), ("MaxTriggerCount".to_string(), KVal::Int(0))].into_iter().collect(),
+            ..Default::default()
+        };
+        g.ops.push(changed("Obj.A"));
+        g.ops.push(changed("Obj.B"));
+        g.ops.push(KOp {
+            class: "DisSeqAct_SetTaskState".into(),
+            inputs: vec![KInput { desc: "In".into(), ..Default::default() }],
+            vars: vec![KLink { desc: "Task".into(), vars: vec![1], write: false }],
+            props: [("m_TaskState".to_string(), KVal::Str("DTS_Active".into()))].into_iter().collect(),
+            ..Default::default()
+        });
+        let mut vm = Vm::new(Arc::new(g), &[]);
+        vm.exec(0, 0);
+        assert_eq!((vm.st[1].fired, vm.st[2].fired), (0, 1));
+        vm.exec(3, 0);
+        assert_eq!(vm.st[2].fired, 1, "already under way");
+    }
+
     /// Giving his things back goes on past "Out (Instant)": "Finished (After Unequip)" with a
     /// backup, "No Backup Found" without.
     #[test]
@@ -2578,6 +2624,18 @@ impl Vm {
         }
     }
 
+    /// A task's state changed: its `DisSeqEvent_TaskStateChanged` events on the new state's output.
+    fn task_state_changed(&mut self, path: &str, state: TaskState) {
+        let g = self.g.clone();
+        for (ev, e) in g.ops.iter().enumerate() {
+            if e.class == "DisSeqEvent_TaskStateChanged" && matches!(e.props.get("m_pTask"), Some(KVal::Str(p)) if p == path) {
+                if let Some(i) = self.output_index(ev as u32, &format!("{state:?}")) {
+                    self.event(ev as u32, i, None);
+                }
+            }
+        }
+    }
+
     /// Something took damage (UE3 `SeqEvent_TakeDamage.HandleDamage`): each of its damage
     /// events taking that type (one of its `DamageTypes`, else none of its
     /// `IgnoreDamageTypes`, by class lineage) and at least its `MinDamageAmount` adds it up,
@@ -4627,12 +4685,17 @@ impl Vm {
                 for v in self.read(op, "Objective") {
                     if let Val::Str(path) = v {
                         if !self.objectives.contains(&path) {
+                            let mut registered = Vec::new();
                             if let Some(o) = g.objectives.iter().find(|o| o.path == path) {
                                 // (each in the state it starts in, `m_InitialState`: Coldridge's
                                 // "Learn Lizzy Stride's location" waits inactive till the prison
                                 // is entered, its script asking for that before it shows it)
                                 for t in &o.tasks {
-                                    self.tasks.entry(t.path.clone()).or_insert((task_state(t.initial.as_deref()).unwrap_or(TaskState::Active), t.hidden));
+                                    if !self.tasks.contains_key(&t.path) {
+                                        let s = task_state(t.initial.as_deref()).unwrap_or(TaskState::Active);
+                                        self.tasks.insert(t.path.clone(), (s, t.hidden));
+                                        registered.push((t.path.clone(), s));
+                                    }
                                 }
                                 // (its tasks to do, shown one after another)
                                 let tasks = o.tasks.iter().filter(|t| self.tasks.get(&t.path).is_some_and(|s| s.0 == TaskState::Active && !s.1)).map(|t| (t.text.clone(), crate::objnotify::ObjState::Added)).collect();
@@ -4640,6 +4703,16 @@ impl Vm {
                             }
                             self.objectives.push(path.clone());
                             self.tasks.insert(path, (TaskState::Active, false));
+                            // (its tasks registered, those under way told so: the objective
+                            // manager's registration raises their state's change, as roshan's
+                            // r614/blink research found (`TaskStateChanged`, 0x00AC6300). The
+                            // Loyalists' "Find Callista" sets its marker on hearing it, the egg
+                            // thief's "Get inside the mansion" its briefing)
+                            for (t, s) in registered {
+                                if s == TaskState::Active {
+                                    self.task_state_changed(&t, s);
+                                }
+                            }
                         }
                     }
                 }
@@ -4750,14 +4823,7 @@ impl Vm {
                                 }
                             }
                         }
-                        for ev in 0..g.ops.len() as u32 {
-                            let e = &g.ops[ev as usize];
-                            if e.class == "DisSeqEvent_TaskStateChanged" && matches!(e.props.get("m_pTask"), Some(KVal::Str(p)) if *p == path) {
-                                if let Some(i) = self.output_index(ev, &format!("{state:?}")) {
-                                    self.event(ev, i, None);
-                                }
-                            }
-                        }
+                        self.task_state_changed(&path, state);
                         // (its objective done with its last task: `m_bCompleteWhenAllTasksComplete`,
                         // the class's way, unless the objective turns it off)
                         if state == TaskState::Completed {
