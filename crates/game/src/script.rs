@@ -508,6 +508,10 @@ fn run_script(
                 if main {
                     pick = pts.iter().position(|m| !m.optional).unwrap_or(0);
                 }
+                if let Some(m) = pts.get(pick) {
+                    let actor = w.get_resource::<crate::kismet::Vm>().and_then(|vm| vm.g.actors.get(m.actor as usize).map(|a| a.name.clone())).unwrap_or_default();
+                    info!("script: task marker {pick} is \"{}\" ({actor})", m.name);
+                }
                 match pts.get(pick).map(|m| (m.at, m.pickup, m.actor)) {
                     Some((p, pickup, actor)) => {
                         let back = (here - p).with_y(0.0).normalize_or(Vec3::X);
