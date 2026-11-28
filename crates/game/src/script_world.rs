@@ -48,6 +48,9 @@ pub enum AiFx {
     /// cleared (1), all of the targets' cleared (2)
     Disposition { targets: Vec<Val>, recipients: Vec<Val>, input: u8, hostile: bool, reciprocate: bool },
     MinHealth { targets: Vec<Val>, min: f32 },
+    /// characters whose deaths go unnoticed (`DisSeqAct_SetIgnoreDeath`): by everyone, or by
+    /// the ignorers given ("Optional Ignorer")
+    IgnoreDeath { targets: Vec<Val>, ignorers: Vec<Val> },
     Collision { targets: Vec<Val>, block: bool },
     /// off (0), on (1), toggle (2), switch polarity (3)
     Wall { targets: Vec<Val>, cmd: usize },
@@ -160,6 +163,8 @@ pub struct SpawnerOverrides {
     pub senses: std::collections::HashMap<u32, (bool, bool, bool)>,
     pub min_health: std::collections::HashMap<u32, f32>,
     pub stance: std::collections::HashMap<(Party, Party), bool>,
+    /// those whose deaths go unnoticed, and by whom (their spawners; none: by everyone)
+    pub ignored_deaths: std::collections::HashMap<u32, Vec<u32>>,
 }
 
 /// The scripts' settings, for a save.
@@ -168,6 +173,8 @@ pub struct OverridesSave {
     senses: Vec<(u32, (bool, bool, bool))>,
     min_health: Vec<(u32, f32)>,
     stance: Vec<(Party, Party, bool)>,
+    #[serde(default)]
+    ignored_deaths: Vec<(u32, Vec<u32>)>,
 }
 
 impl SpawnerOverrides {
@@ -176,12 +183,19 @@ impl SpawnerOverrides {
             senses: self.senses.iter().map(|(k, v)| (*k, *v)).collect(),
             min_health: self.min_health.iter().map(|(k, v)| (*k, *v)).collect(),
             stance: self.stance.iter().map(|((a, b), h)| (a.clone(), b.clone(), *h)).collect(),
+            ignored_deaths: self.ignored_deaths.iter().map(|(k, v)| (*k, v.clone())).collect(),
         }
     }
     pub fn load(&mut self, s: OverridesSave) {
         self.senses = s.senses.into_iter().collect();
         self.min_health = s.min_health.into_iter().collect();
         self.stance = s.stance.into_iter().map(|(a, b, h)| ((a, b), h)).collect();
+        self.ignored_deaths = s.ignored_deaths.into_iter().collect();
+    }
+    /// Whether the death of a spawner's character goes unnoticed by another (its spawner, if
+    /// it has one).
+    pub fn death_ignored(&self, dead: u32, by: Option<u32>) -> bool {
+        self.ignored_deaths.get(&dead).is_some_and(|who| who.is_empty() || by.is_some_and(|b| who.contains(&b)))
     }
     /// Is a character (its spawner, faction) hostile to another side? Its own stance comes
     /// first, then its faction's, then the faction's enemies (`default`).
@@ -455,6 +469,25 @@ fn apply_ai_fx(
                         n.enemy = overrides.against_corvo(from.0, &n.faction, n.enemy_default);
                         if log && before != n.enemy {
                             info!("level scripts: {} ({}) {} Corvo", n.name, n.faction, if n.enemy { "turns on" } else { "stands with" });
+                        }
+                    }
+                }
+            }
+            AiFx::IgnoreDeath { targets, ignorers } => {
+                let by = spawners(&ignorers);
+                for s in spawners(&targets) {
+                    // (by everyone stays so; else these too)
+                    match overrides.ignored_deaths.get_mut(&s) {
+                        Some(who) if who.is_empty() => {}
+                        Some(who) if !by.is_empty() => {
+                            for b in &by {
+                                if !who.contains(b) {
+                                    who.push(*b);
+                                }
+                            }
+                        }
+                        _ => {
+                            overrides.ignored_deaths.insert(s, by.clone());
                         }
                     }
                 }
@@ -1679,5 +1712,27 @@ pub fn beg(mut commands: Commands, mut q: Query<(Entity, &mut Begging, &mut crat
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A death the scripts ignore goes unnoticed by everyone, or only by those named; a save
+    /// keeps it.
+    #[test]
+    fn ignored_deaths_by_everyone_or_the_named() {
+        let mut o = SpawnerOverrides::default();
+        o.ignored_deaths.insert(1, Vec::new());
+        o.ignored_deaths.insert(2, vec![7]);
+        assert!(o.death_ignored(1, Some(9)) && o.death_ignored(1, None));
+        assert!(o.death_ignored(2, Some(7)) && !o.death_ignored(2, Some(8)) && !o.death_ignored(2, None));
+        assert!(!o.death_ignored(3, Some(7)));
+        let mut back = SpawnerOverrides::default();
+        back.load(serde_json::from_value(serde_json::to_value(o.save()).unwrap()).unwrap());
+        assert!(back.death_ignored(2, Some(7)));
+        let old: OverridesSave = serde_json::from_str(r#"{"senses":[],"min_health":[],"stance":[]}"#).unwrap();
+        assert!(old.ignored_deaths.is_empty());
     }
 }

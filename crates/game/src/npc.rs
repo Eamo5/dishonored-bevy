@@ -4181,9 +4181,14 @@ pub(crate) fn npc_perception(
     possession: Res<crate::possession::Possession>,
     mut found: Local<std::collections::HashSet<Entity>>,
     (froms, mut events, swarms): (Query<&FromSpawner>, MessageWriter<crate::interact::Interaction>, Query<(&Transform, &crate::swarm::Swarm), Without<Npc>>),
-    (level, pvis, settings, notarget): (Option<Res<LevelInfo>>, Res<crate::stealth::PlayerVisibility>, Res<crate::settings::Settings>, Option<Res<crate::script::NoTarget>>),
+    (level, pvis, settings, notarget, overrides): (Option<Res<LevelInfo>>, Res<crate::stealth::PlayerVisibility>, Res<crate::settings::Settings>, Option<Res<crate::script::NoTarget>>, Option<Res<crate::script_world::SpawnerOverrides>>),
     (body_lights, carry, handled, heads, walled_dead): (Query<&BodyLight>, Res<crate::carry::Carry>, Res<HandledBodies>, Query<&HeadTrack>, Query<(), With<Electrocuted>>),
 ) {
+    // (a death the scripts have the onlooker ignore, `DisSeqAct_SetIgnoreDeath`)
+    let ignored = |body: Entity, onlooker: Entity| -> bool {
+        let Some(o) = overrides.as_ref() else { return false };
+        froms.get(body).is_ok_and(|b| o.death_ignored(b.0, froms.get(onlooker).ok().map(|f| f.0)))
+    };
     // (rat swarms about that would attack: Corvo's, or a level's grown to its
     // `m_InitialRatCountToBeAggressive`; a stray rat or two only scurries off)
     let swarm_at: Vec<Vec3> = swarms.iter().filter(|(_, s)| !s.rats.is_empty() && s.wild.as_ref().is_none_or(|w| s.rats.len() >= w.aggressive)).map(|(t, _)| t.translation).collect();
@@ -4555,6 +4560,9 @@ pub(crate) fn npc_perception(
             // (`m_fCorpseVis_VisLevelToSeeDeath`)
             if !npc.witnessed_death {
                 for (f, b) in &fresh {
+                    if ignored(*f, e) {
+                        continue;
+                    }
                     let light = bodies.iter().find(|x| x.0 == *f).map_or(0.0, |x| x.2);
                     if sight.is_some_and(|s| body_seen(s, eye, fwd, *b, light, SEE_DEATH, npc.in_convo)) || sight.is_none() && b.distance(eye) < 14.0 && (*b - eye).normalize_or_zero().dot(fwd) > 0.3 {
                         let d = b.distance(eye);
@@ -4591,7 +4599,7 @@ pub(crate) fn npc_perception(
             let protects = sight.is_some_and(|s| s.protect_neutrals);
             if !npc.saw_body && npc.alert != Alert::Combat && !flags.ignore {
                 for (body, b, light, faction, was_handled) in &bodies {
-                    if npc.found_bodies.contains(body) || *was_handled && !flags.handled_too {
+                    if npc.found_bodies.contains(body) || *was_handled && !flags.handled_too || ignored(*body, e) {
                         continue;
                     }
                     let rel = relation(scene, &npc.faction, faction);

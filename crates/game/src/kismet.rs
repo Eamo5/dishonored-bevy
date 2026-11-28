@@ -3152,7 +3152,9 @@ impl Vm {
                 self.fire(op, 0);
             }
             "DisSeqAct_LimitPawnMinHealth" => {
-                let min = self.pi(op, "m_MinimumHealth").unwrap_or(1) as f32;
+                // (unset: the class's 0, the limit lifted; 38 across the maps let their characters
+                // die again so. Before, they were kept at 1 for good)
+                let min = self.pi(op, "m_MinimumHealth").unwrap_or(0) as f32;
                 let targets = self.read(op, "Target");
                 self.ai_fx.push(crate::script_world::AiFx::MinHealth { targets, min });
                 self.fire(op, 0);
@@ -3951,9 +3953,12 @@ impl Vm {
                 self.fire(op, 0);
             }
             "DisSeqAct_SetIgnoreDeath" => {
-                // kept from dying (as `DisSeqAct_LimitPawnMinHealth` at 1)
-                let targets = self.read(op, "Target");
-                self.ai_fx.push(crate::script_world::AiFx::MinHealth { targets, min: 1.0 });
+                // their deaths go unnoticed, by everyone or by the "Optional Ignorer"s: Lord Shaw's
+                // in the duel the party allows, the guards' Corvo leaves in the Flooded District's
+                // gatehouse, the weepers' at the Hound Pits. (Before, this kept them from dying:
+                // Shaw's duel could not be won, nor the Hatters' hold on Thalia broken)
+                let (targets, ignorers) = (self.read(op, "Target"), self.read(op, "Optional Ignorer"));
+                self.ai_fx.push(crate::script_world::AiFx::IgnoreDeath { targets, ignorers });
                 self.fire(op, 0);
             }
             "DisSeqAct_AIRingAlarm" => {
