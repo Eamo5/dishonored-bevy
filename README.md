@@ -2680,8 +2680,7 @@ fields no longer show their stand-in "WW" behind the title.
   character whose tree answers being used, out of a fight, whatever side it is on: before, only
   those not against Corvo could be talked to, so Rothwild, of the butchers, could never be
   questioned, his scripts asking whether he had seen Daud first, and The Knife of Dunwall's
-  first mission stopped at "Question Bundry Rothwild"; the Prison's thugs plead from their
-  cells) enter through the trees' hooks, whose
+  first mission stopped at "Question Bundry Rothwild") enter through the trees' hooks, whose
   story-flag, conversation-already-had, time-limit and branch nodes pick what is said (a
   character talked to answers from the one-shot it speaks for, `m_MeSpeaker`, when that has
   something to say, else from its own voice's tree: before, one with a voice never spoke its

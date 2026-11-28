@@ -7405,8 +7405,8 @@ fn talk_prompts(
     for (e, npc, from, usable) in &npcs {
         let actor = vm.g.actors.iter().position(|a| a.spawner == Some(from.0)).map(|a| a as u32);
         // (whatever side it is on, out of a fight: Rothwild, of the butchers against Daud, is
-        // questioned where he stands, his scripts asking whether he has seen Daud first; the
-        // Prison's thugs plead from their cells; before, only those not against him answered)
+        // questioned where he stands, his scripts asking whether he has seen Daud first; before,
+        // only those not against him answered)
         let can = actor.filter(|&a| (vm.usable(a) || vm.talkable(a)) && !npc.is_down() && npc.alert != crate::npc::Alert::Combat);
         match (can, usable) {
             (Some(a), None) => {
