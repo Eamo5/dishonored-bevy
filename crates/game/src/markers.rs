@@ -89,6 +89,8 @@ pub struct TaskMarker {
     pub optional: bool,
     pub vanish: u8,
     pub name: String,
+    /// its task is an optional one ("(Optional) ...")
+    pub optional_task: bool,
 }
 
 /// The markers of the visible active tasks of the current objectives (and the challenges').
@@ -98,7 +100,7 @@ pub fn task_targets(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: im
     for &a in &vm.dlc_markers {
         let Some(ka) = vm.g.actors.get(a as usize) else { continue };
         let at = ka.spawner.and_then(&npc_at).map(|p| p + Vec3::Y * 1.1).unwrap_or(Vec3::from(ka.position) + Vec3::Y * 0.5);
-        points.push(TaskMarker { at, pickup: ka.pickup, actor: a, optional: false, vanish: 0, name: String::new() });
+        points.push(TaskMarker { at, pickup: ka.pickup, actor: a, optional: false, vanish: 0, name: String::new(), optional_task: false });
     }
     for path in &vm.objectives {
         let Some(o) = vm.g.objectives.iter().find(|o| o.path == *path) else { continue };
@@ -129,7 +131,7 @@ pub fn task_targets(vm: &Vm, npc_at: impl Fn(u32) -> Option<Vec3>, pickup_at: im
                     .or_else(|| pickup.flatten().map(|p| p + Vec3::Y * 0.3))
                     .unwrap_or(Vec3::from(ka.position) + Vec3::Y * 0.5);
                 if !points.iter().any(|p| p.at.distance(at) < 1.0) {
-                    points.push(TaskMarker { at, pickup: ka.pickup, actor: a, optional: o.optional, vanish: vm.task_vanish.get(key).copied().unwrap_or(0), name: name.clone() });
+                    points.push(TaskMarker { at, pickup: ka.pickup, actor: a, optional: o.optional, vanish: vm.task_vanish.get(key).copied().unwrap_or(0), name: name.clone(), optional_task: task.text.starts_with("(Optional)") });
                 }
             }
         }

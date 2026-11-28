@@ -506,7 +506,7 @@ fn run_script(
                     .map(|vm| crate::markers::task_targets(vm, |s| npcs.iter().find(|(f, _)| *f == s).map(|(_, p)| *p), |i| items.iter().find(|(k, _)| *k == i).map(|(_, p)| *p)))
                     .unwrap_or_default();
                 if main {
-                    pick = pts.iter().position(|m| !m.optional).unwrap_or(0);
+                    pick = pts.iter().position(|m| !m.optional && !m.optional_task).or_else(|| pts.iter().position(|m| !m.optional)).unwrap_or(0);
                 }
                 if let Some(m) = pts.get(pick) {
                     let actor = w.get_resource::<crate::kismet::Vm>().and_then(|vm| vm.g.actors.get(m.actor as usize).map(|a| a.name.clone())).unwrap_or_default();

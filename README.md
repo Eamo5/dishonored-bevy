@@ -4842,7 +4842,7 @@ with no display attached Windows never asks a shown window to redraw, and the ga
 its first frame.
 
 Commands: `wait S`, `goto X Y Z [S]` (walk there over the level's navmesh, using, swinging at
-or jumping onto what holds it up; `DH_GOTO_LOG`), `gototask [N] [S]` (to the N-th objective marker), `hoptask [N|main]` (put down on the walkable floor beside it and use what is there; `main`: the first marker of a task not optional), `under` (what Corvo stands on), `tp/fly X Y Z YAW PITCH`, `look YAW PITCH`, `lookat X Y Z`, `walk S`,
+or jumping onto what holds it up; `DH_GOTO_LOG`), `gototask [N] [S]` (to the N-th objective marker), `hoptask [N|main]` (put down on the walkable floor beside it and use what is there; `main`: the first marker of an objective not optional whose task is not "(Optional)", else of any objective not optional), `under` (what Corvo stands on), `tp/fly X Y Z YAW PITCH`, `look YAW PITCH`, `lookat X Y Z`, `walk S`,
 `attack`, `lmbhold S`, `block S`, `key K`, `hold K S`, `rmb`, `rmbhold S`, `mmbhold S`, `behind [N|lone]`,
 `front N|NAME [D]` / `behind N|NAME [D]` (D m before or behind a character: beyond 3 m, the
 furthest spot with a floor and a clear line to it), `ledge [LOW] [HIGH] [crouch]` (before the nearest edge Corvo could mantle onto, LOW-HIGH m
