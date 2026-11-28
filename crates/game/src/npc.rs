@@ -17,6 +17,23 @@ use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 pub struct NpcPlugin;
 
+/// Who the statistics count as a civilian, by its pawn tweaks' lineage
+/// (`Twk_PlayerStats.m_CivilianNPCInfo`: from `Pwn_Civ_Base`, not Lord Pendleton nor the weepers);
+/// without it cooked, those not against Corvo by their type. Before, Havelock at the Lighthouse,
+/// a guard by his tweaks but of the conspiracy, counted as a civilian killed.
+fn mark_civilians(data: Res<crate::gamedata::Data>, level: Option<Res<LevelInfo>>, mut npcs: Query<&mut Npc, Added<Npc>>) {
+    let set = &data.0.civilian_npcs;
+    if set.tweaks.is_empty() {
+        return;
+    }
+    let Some(level) = level else { return };
+    for mut n in &mut npcs {
+        if let Some(t) = n.npc_type.and_then(|t| level.scene.npc_types.get(t as usize)) {
+            n.civilian_type = set.holds(&t.lineage);
+        }
+    }
+}
+
 pub(crate) fn age_corpses(time: Res<Time>, tc: Res<TimeControl>, mut npcs: Query<&mut Npc>) {
     let dt = time.delta_secs() * tc.world_scale().max(0.0);
     for mut npc in &mut npcs {
@@ -50,7 +67,7 @@ impl Plugin for NpcPlugin {
                 Update,
                 (
                     record_trail,
-                    spawn_requested,
+                    (spawn_requested, mark_civilians).chain(),
                     npc_hits,
                     last_survivors,
                     age_corpses,
@@ -448,6 +465,9 @@ pub struct Npc {
     pub story_group: String,
     /// its type's own stance towards Corvo (the scripts' dispositions override `enemy`)
     pub enemy_default: bool,
+    /// counted a civilian by the statistics (`Twk_PlayerStats.m_CivilianNPCInfo`: its pawn tweaks
+    /// come down from `Pwn_Civ_Base`, not from Lord Pendleton's or the weepers')
+    pub civilian_type: bool,
     /// its squad (`m_Squad`), whether it can flee (`m_bCapableOfFleeing`), the volumes it keeps
     /// within (`m_TetherVolumes`: `aiworld`)
     pub squad: String,
@@ -922,7 +942,7 @@ impl Npc {
     /// One of the people, not of those against Corvo by their type (the statistics' civilians:
     /// what it is, however it stands to him now).
     pub fn civilian(&self) -> bool {
-        !self.enemy_default
+        self.civilian_type
     }
     /// Armed: a sword or a gun, bow or wrist bow.
     pub fn fighter(&self) -> bool {
@@ -2871,6 +2891,7 @@ pub fn spawn_npc_as(commands: &mut Commands, assets: &GameAssets, scene: &dhcook
         enemy,
         story_group: if sp.story_group.is_empty() { ty.map(|t| t.story_group.clone()).unwrap_or_default() } else { sp.story_group.clone() },
         enemy_default: enemy,
+        civilian_type: !enemy,
         squad: sp.squad.clone(),
         can_flee: sp.can_flee,
         tether: sp.tether.clone(),

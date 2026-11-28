@@ -44,6 +44,7 @@ cargo run --release -p dhtool -- patch-barks DIR [map...]    # and the character
 cargo run --release -p dhtool -- patch-objectives DIR [map...]  # and the objectives' tasks
 cargo run --release -p dhtool -- patch-music DIR [map...]       # and the characters' fight music
 cargo run --release -p dhtool -- patch-locks DIR [map...]       # and the scripts' locked usables
+cargo run --release -p dhtool -- patch-gamedata DIR               # and the statistics' civilians
 # (a map started directly takes the story so far as begun; DH_FLAGS=guid[,guid=0...] sets story
 #  flags as a campaign would have left them: The Brigmore Witches' store before Drapers Ward is
 #  b2d85b214c1f1c11dec77fb61830fcdf)
@@ -590,7 +591,12 @@ are in the settings file, `pad_binding_set` 0-3):
   illustration under Corvo and the shards, its name on the brush with its dark shadows, the
   statistics list (values, ticked boxes) turned with its section bands, and the things found
   (`FOUND`: runes, bone charms, shrines, paintings, coins with their icons, each out of how many
-  the mission holds: its tweak's `m_MissionStatsMaxValues`). When the mission's start is saved
+  the mission holds: its tweak's `m_MissionStatsMaxValues`). A kill counts among the civilians as
+  the player statistics' tweak says (`Twk_PlayerStats.m_CivilianNPCInfo`: pawn tweaks coming down
+  from `Pwn_Civ_Base`, not Lord Pendleton's nor the weepers', `Pwn_Weeper_Base`), else among the
+  hostiles; before, any not against Corvo by its type was a civilian, so Admiral Havelock at the
+  Lighthouse (a guard by his tweaks, of the conspiracy) showed as a civilian killed.
+  `dhtool patch-gamedata DIR` brings the cooked game data up to this. When the mission's start is saved
   (`bReplayAvailable`), the help bar offers `REPLAY MISSION` beside `CONTINUE`: asked first
   (`t_Q_ReplayMission`, "Replaying a mission will overwrite previous autosaves. Continue?"),
   yes plays the mission's start again (`OnReplayMissionClicked`).
@@ -4813,7 +4819,7 @@ Known outstanding gameplay gaps from source and original-data inspection:
 | --- | --- |
 | `crates/upk` | UE3 package reader: LZO/zlib chunks, name/import/export tables, tagged properties, static/skeletal meshes, textures (incl. `.tfc` bulk data) |
 | `crates/dhcook` | Cooker: levels and their streaming sublevels, materials and shaders, lightmaps, light volumes, NPC archetypes and factions, Kismet/Matinee, security devices, Wwise audio, Scaleform UI, game data |
-| `crates/dhtool` | CLI for cooking and inspecting packages (`cook`, `cook-all`, `cook-ui`, `cook-audio`, `cook-gamedata`, `patch-dialogs`, `patch-post`, `patch-barks`, `patch-objectives`, `patch-music`, `patch-locks`, `list`, `props`, `findprop`, `swfdump`, `mat`, `graph`, ...) |
+| `crates/dhtool` | CLI for cooking and inspecting packages (`cook`, `cook-all`, `cook-ui`, `cook-audio`, `cook-gamedata`, `patch-dialogs`, `patch-post`, `patch-barks`, `patch-objectives`, `patch-music`, `patch-locks`, `patch-gamedata`, `list`, `props`, `findprop`, `swfdump`, `mat`, `graph`, ...) |
 | `crates/game` | The Bevy game |
 
 ### Cache format (`./cache`)

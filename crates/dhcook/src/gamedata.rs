@@ -1,7 +1,7 @@
 //! Campaign-wide game data from the original tweak objects: Corvo's powers (active and
 //! passive), his attributes per difficulty, bone charms, upgrades and the stores.
 
-use crate::format::{AimAssist, AssistGroup, AssistInfo, AssistObject, AchievementDef, ActivePowerDef, AnimRumble, RumbleSample, BarkGroup, BarkHookRule, BarkRules, ChallengeDef, AttrMod, CharmDef, GalleryItemDef, GameData, PassiveLevel, PassivePowerDef, StatInfoDef, StoreDef, StoreItem, UpgradeDef};
+use crate::format::{AimAssist, AssistGroup, AssistInfo, AssistObject, AchievementDef, ActivePowerDef, AnimRumble, RumbleSample, BarkGroup, BarkHookRule, BarkRules, ChallengeDef, AttrMod, CharmDef, GalleryItemDef, GameData, NpcTypeSet, PassiveLevel, PassivePowerDef, StatInfoDef, StoreDef, StoreItem, UpgradeDef};
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -96,7 +96,27 @@ fn challenges(game: &Package, d: &mut GameData) {
     }
 }
 
+/// The characters the statistics count as civilians (`Twk_PlayerStats.m_CivilianNPCInfo`: the
+/// pawn tweaks `m_TweaksNamePairs`, less `m_ExcludedTweaksNamePairs`; by their last names).
+pub fn civilian_npcs(startup: &Package) -> NpcTypeSet {
+    let Some(p) = startup.find_export("Twk_PlayerStats.Twk_PlayerStats").and_then(|i| props(startup, i)) else { return NpcTypeSet::default() };
+    let Some(Value::Struct(_, f)) = p.get("m_CivilianNPCInfo") else { return NpcTypeSet::default() };
+    let f = Props(f.clone());
+    let names = |k: &str| -> Vec<String> {
+        match f.array(k) {
+            Some((c, off, sz)) => upk::props::parse_struct_array(startup, off, sz, c)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|x| x.name("m_TweaksName").filter(|n| *n != "None").map(|n| n.rsplit('.').next().unwrap_or(n).to_string()))
+                .collect(),
+            None => Vec::new(),
+        }
+    };
+    NpcTypeSet { tweaks: names("m_TweaksNamePairs"), excluded: names("m_ExcludedTweaksNamePairs") }
+}
+
 fn player_stats(game: &Package, startup: &Package, d: &mut GameData) {
+    d.civilian_npcs = civilian_npcs(startup);
     let Some(p) = startup.find_export("Twk_PlayerStats.Twk_PlayerStats").and_then(|i| props(startup, i)) else { return };
     let names_of = |pkg: &Package, props: &Props, name: &str| -> Vec<String> {
         upk::props::object_array(pkg, props, name).into_iter().filter(|&o| o != 0).map(|o| pkg.obj_path(o).rsplit('.').next().unwrap_or("").to_string()).collect()

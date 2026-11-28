@@ -4144,6 +4144,10 @@ pub struct GameData {
     /// achievements (`m_Achievements`, by `EAchievement`)
     #[serde(default)]
     pub stat_infos: Vec<StatInfoDef>,
+    /// the characters the statistics count as civilians (`Twk_PlayerStats.m_CivilianNPCInfo`):
+    /// those whose pawn tweaks come down from one of these, and from none of the excluded
+    #[serde(default)]
+    pub civilian_npcs: NpcTypeSet,
     #[serde(default)]
     pub achievements: Vec<AchievementDef>,
     pub actives: Vec<ActivePowerDef>,
@@ -4240,6 +4244,22 @@ pub struct GameData {
 
 /// A time-varying material parameter (`ScalarParameterValues[].ParameterValueCurve`): its
 /// value before it plays and its keys (seconds, value; linear).
+/// A set of characters by their pawn tweaks (`NPCTypeInfo`): those whose tweaks' lineage holds
+/// one of `tweaks` (by name: "Pwn_Civ_Base") and none of `excluded`.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct NpcTypeSet {
+    pub tweaks: Vec<String>,
+    pub excluded: Vec<String>,
+}
+
+impl NpcTypeSet {
+    /// Whether a character of this lineage (its tweaks' names, its own first) is in the set.
+    pub fn holds(&self, lineage: &[String]) -> bool {
+        let has = |n: &String| lineage.iter().any(|l| l.eq_ignore_ascii_case(n));
+        self.tweaks.iter().any(has) && !self.excluded.iter().any(has)
+    }
+}
+
 /// What a player statistic counts (`DisTweaks_PlayerStats.m_StatInfos`): its statistic
 /// (`ePlayerStat_NumKills`...), its label, the blows' damage types it counts (none: any), the
 /// characters it counts only, and those it leaves out (pawn tweaks: the Prison's assassins).
@@ -4956,5 +4976,20 @@ mod dist_param_tests {
         let abs = DistParam { mode: 1, input: [0.0, 10.0], output: [100.0, 200.0], ..p.clone() };
         assert_eq!(abs.map(-5.0), 150.0);
         assert_eq!(DistParam { mode: 2, ..p }.map(7.0), 7.0);
+    }
+}
+
+#[cfg(test)]
+mod npc_type_set_tests {
+    use super::NpcTypeSet;
+
+    /// The statistics' civilians: from `Pwn_Civ_Base`, less the excluded lineages.
+    #[test]
+    fn civilians_come_down_from_their_base_less_the_excluded() {
+        let set = NpcTypeSet { tweaks: vec!["Pwn_Civ_Base".into()], excluded: vec!["Pwn_Weeper_Base".into()] };
+        let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(set.holds(&l(&["Pwn_Aristo_F_1", "pwn_civ_base"])));
+        assert!(!set.holds(&l(&["Pwn_WeeperMiddle_F_1", "Pwn_Weeper_Base", "Pwn_Civ_Base"])));
+        assert!(!set.holds(&l(&["Twk_Pawn_Havelock_HC", "Pwn_Guard_Base"])));
     }
 }

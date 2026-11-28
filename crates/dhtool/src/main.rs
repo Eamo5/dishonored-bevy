@@ -1205,6 +1205,25 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Some("patch-gamedata") => {
+            // dhtool patch-gamedata <dir>: the cooked game data given what the statistics count
+            // as civilians (`Twk_PlayerStats.m_CivilianNPCInfo`), from Startup under <dir>
+            init_classes();
+            let found = package_index(&PathBuf::from(&args[2]))?;
+            let p = found.get("startup").ok_or_else(|| anyhow::anyhow!("no Startup under {}", args[2]))?;
+            let startup = upk::Package::from_bytes("Startup".into(), p.clone(), std::fs::read(p)?)?;
+            let set = dhcook::gamedata::civilian_npcs(&startup);
+            println!("civilians: {:?} less {:?}", set.tweaks, set.excluded);
+            let path = PathBuf::from("cache").join("game").join("gamedata.json");
+            let mut d: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+            let v = serde_json::to_value(&set)?;
+            if d["civilian_npcs"] != v {
+                d["civilian_npcs"] = v;
+                let tmp = path.with_extension("json.tmp");
+                std::fs::write(&tmp, serde_json::to_vec(&d)?)?;
+                std::fs::rename(&tmp, &path)?;
+            }
+        }
         Some("patch-locks") => {
             // dhtool patch-locks <dir> [map...]: a cooked map's scripted usable objects given the
             // lock they start with and its keys (their own `m_bLocked`, `m_MatchingKeys`), from
